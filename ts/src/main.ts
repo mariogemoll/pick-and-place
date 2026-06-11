@@ -7,16 +7,32 @@ import {
   type DummyVisualization,
   initDummyVisualization
 } from './visualizations/dummy';
+import {
+  type GripperVisualization,
+  initGripperVisualization
+} from './visualizations/gripper';
 
-let visualization: DummyVisualization | null = null;
+let dummyVisualization: DummyVisualization | null = null;
+let gripperVisualization: GripperVisualization | null = null;
 
 function initialize(): void {
-  const panel = document.getElementById('dummy-visualization');
-  if (panel) {
-    visualization?.destroy();
-    visualization = null;
-    void initDummyVisualization(panel).then(viz => {
-      visualization = viz;
+  const dummyPanel = document.getElementById('dummy-visualization');
+  if (dummyPanel) {
+    dummyVisualization?.destroy();
+    dummyVisualization = null;
+
+    void initDummyVisualization(dummyPanel).then(viz => {
+      dummyVisualization = viz;
+    });
+  }
+
+  const gripperPanel = document.getElementById('gripper-visualization');
+  if (gripperPanel) {
+    gripperVisualization?.destroy();
+    gripperVisualization = null;
+
+    void initGripperVisualization(gripperPanel).then(viz => {
+      gripperVisualization = viz;
     });
   }
 }

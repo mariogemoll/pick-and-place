@@ -6,9 +6,9 @@
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  color-scheme: light dark;
-  color: rgb(255 255 255 / 87%);
-  background-color: #242424;
+  color-scheme: light;
+  color: #1f2937;
+  background-color: #fff;
 }
 
 body {
@@ -21,11 +21,11 @@ body {
   width: 100%;
   max-width: 800px;
   aspect-ratio: 16 / 9;
-  background: #111;
+  background: #f4f8ff;
   border-radius: 8px;
   overflow: hidden;
   margin: 2rem auto;
-  box-shadow: 0 4px 20px rgb(0 0 0 / 30%);
+  box-shadow: 0 4px 20px rgb(31 41 55 / 15%);
 }
 
 canvas {
