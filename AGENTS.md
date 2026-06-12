@@ -30,6 +30,7 @@ Located in the `ts/` directory.
 
 ### Repository Scripts
 Located in the `scripts/` directory.
+- **Mesh Generation & Optimization:** `./scripts/convert_meshes.sh [dst_dir]` - Automates the two-step pipeline and copies the assets to a destination directory.
 - **License Check:** `pnpm run check-license-headers` (run from within the `scripts/` directory) - Verifies SPDX license headers across the project. Requires building the script first.
 
 ## Development Conventions
