@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mario Gemoll
 // SPDX-License-Identifier: 0BSD
 
+import { loadWebModel } from '../../web-model';
 import { createGripperScene } from './scene';
 import { buildUi } from './ui';
 
@@ -10,14 +11,16 @@ export interface GripperVisualization {
 
 export interface GripperVisualizationOptions {
   modelBasePath?: string;
+  modelUrl?: string;
 }
 
-export function initializeGripperVisualization(
+export async function initializeGripperVisualization(
   parent: HTMLElement,
   options: GripperVisualizationOptions = {}
 ): Promise<GripperVisualization> {
+  const model = await loadWebModel(options.modelUrl);
   const ui = buildUi(parent);
-  const vizScene = createGripperScene(ui.viewport, options.modelBasePath);
+  const vizScene = createGripperScene(ui.viewport, model, options.modelBasePath);
   const { renderer, camera, scene, orbitControls } = vizScene;
 
   let animationFrameId = 0;

@@ -19,9 +19,14 @@ from pick_and_place import build_robot
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.parse_args()
+    parser.add_argument(
+        "--no-wrist-camera",
+        action="store_true",
+        help="omit the wrist-camera mount and module",
+    )
+    args = parser.parse_args()
 
-    model = build_robot().compile()
+    model = build_robot(wrist_camera=not args.no_wrist_camera).compile()
     mujoco.viewer.launch(model)
 
 

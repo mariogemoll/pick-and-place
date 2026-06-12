@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mario Gemoll
 // SPDX-License-Identifier: 0BSD
 
-import { createRobotScene, JOINTS } from './scene';
+import { loadWebModel } from '../../web-model';
+import { createRobotScene } from './scene';
 import { buildUi, formatDegrees } from './ui';
 
 export interface RobotVisualization {
@@ -10,18 +11,30 @@ export interface RobotVisualization {
 
 export interface RobotVisualizationOptions {
   modelBasePath?: string;
+  modelUrl?: string;
 }
 
-export function initializeRobotVisualization(
+export async function initializeRobotVisualization(
   parent: HTMLElement,
   options: RobotVisualizationOptions = {}
 ): Promise<RobotVisualization> {
-  const ui = buildUi(parent, [...JOINTS]);
-  const vizScene = createRobotScene(ui.viewport, options.modelBasePath);
+  const model = await loadWebModel(options.modelUrl);
+  const joints = model.bodies.flatMap(body => body.joints).flatMap(joint => {
+    if (joint.type !== 'hinge' || joint.range === undefined) { return []; }
+    return [{
+      name: joint.name,
+      label: joint.name.replaceAll('_', ' '),
+      lower: joint.range[0],
+      upper: joint.range[1],
+      value: 0
+    }];
+  });
+  const ui = buildUi(parent, joints);
+  const vizScene = createRobotScene(ui.viewport, model, options.modelBasePath);
   const { renderer, camera, scene, orbitControls } = vizScene;
   const listeners: (() => void)[] = [];
 
-  for (const joint of JOINTS) {
+  for (const joint of joints) {
     const control = ui.controls.get(joint.name);
     if (!control) {continue;}
     const update = (): void => {
@@ -34,7 +47,7 @@ export function initializeRobotVisualization(
   }
 
   const reset = (): void => {
-    for (const joint of JOINTS) {
+    for (const joint of joints) {
       const control = ui.controls.get(joint.name);
       if (!control) {continue;}
       control.input.value = String(joint.value);

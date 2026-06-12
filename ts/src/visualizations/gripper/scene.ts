@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
-import { glbName, loadMesh } from '../../mesh-loader';
+import { buildWebModel, type WebModel } from '../../web-model';
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from './ui';
 
 export interface GripperScene {
@@ -18,6 +18,7 @@ export interface GripperScene {
 
 export function createGripperScene(
   viewport: HTMLElement,
+  model: WebModel,
   modelBasePath = '/so101_assets'
 ): GripperScene {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -51,38 +52,10 @@ export function createGripperScene(
   gridHelper.rotation.x = Math.PI / 2;
   scene.add(gridHelper);
 
-  const gripper = new THREE.Group();
+  const builtModel = buildWebModel(model, modelBasePath, 'gripper');
+  const gripper = builtModel.root;
   gripper.position.set(0, 0, 0.11);
   scene.add(gripper);
-
-  const material = new THREE.MeshStandardMaterial({ color: 0xffa500 });
-  const motorMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
-  const basePath = modelBasePath.endsWith('/') ? modelBasePath.slice(0, -1) : modelBasePath;
-
-  loadMesh(`${basePath}/${glbName('wrist_roll_follower_so101_v1.stl')}`).then(({ geometry }) => {
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.rotation.set(-Math.PI, 0, 0);
-    mesh.position.set(0, -0.0002, 0.0009);
-    gripper.add(mesh);
-  }).catch(console.error);
-
-  loadMesh(`${basePath}/${glbName('sts3215_03a_v1.stl')}`).then(({ geometry }) => {
-    const mesh = new THREE.Mesh(geometry, motorMaterial);
-    mesh.rotation.set(-Math.PI / 2, 0, 0);
-    mesh.position.set(0.0077, 0.0001, -0.0234);
-    gripper.add(mesh);
-  }).catch(console.error);
-
-  const jawGroup = new THREE.Group();
-  jawGroup.position.set(0.0202, 0.0188, -0.0234);
-  jawGroup.rotation.set(Math.PI / 2, 0, 0);
-  gripper.add(jawGroup);
-
-  loadMesh(`${basePath}/${glbName('moving_jaw_so101_v1.stl')}`).then(({ geometry }) => {
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.set(0, 0, 0.0189);
-    jawGroup.add(mesh);
-  }).catch(console.error);
 
   return {
     scene,
@@ -93,8 +66,7 @@ export function createGripperScene(
     destroy(): void {
       orbitControls.dispose();
       renderer.dispose();
-      material.dispose();
-      motorMaterial.dispose();
+      for (const material of builtModel.materials) { material.dispose(); }
     }
   };
 }

@@ -21,6 +21,7 @@ from pick_and_place.collision_boxes import (
     GRIP_SOLIMP,
     GRIP_SOLREF,
 )
+from pick_and_place.wrist_camera import add_wrist_camera
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 STOCK_XML = REPO_ROOT / "SO-ARM100" / "Simulation" / "SO101" / "so101_new_calib.xml"
@@ -30,12 +31,18 @@ STOCK_ASSETS_DIR = STOCK_XML.parent / "assets"
 _COLLISION_RGBA = (0.2, 0.8, 0.2, 0.5)
 
 
-def build_robot() -> mujoco.MjSpec:
-    """Stock SO-101 with box collisions; call ``.compile()`` on the result."""
+def build_robot(*, wrist_camera: bool = True) -> mujoco.MjSpec:
+    """Stock SO-101 with box collisions; call ``.compile()`` on the result.
+
+    The hex-nut wrist-camera mount and 32x32 UVC module are included by
+    default. Pass ``wrist_camera=False`` for the unmodified stock wrist.
+    """
     spec = mujoco.MjSpec.from_file(str(STOCK_XML))
     spec.meshdir = str(STOCK_ASSETS_DIR)
     _strip_mesh_collisions(spec)
     _add_collision_boxes(spec)
+    if wrist_camera:
+        add_wrist_camera(spec)
     return spec
 
 

@@ -4,8 +4,12 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
-import { glbName, loadMesh } from '../../mesh-loader';
-import { LINKS, type VisualDefinition } from '../robot/scene';
+import { loadMesh } from '../../mesh-loader';
+import {
+  loadWebModel,
+  primitiveGeometry,
+  type WebGeometry
+} from '../../web-model';
 
 export interface BodyTreeVisualization {
   destroy(): void;
@@ -28,7 +32,8 @@ function formatCount(count: number): string {
 }
 
 function metricsLabel(metrics: MeshMetrics): string {
-  return `${formatCount(metrics.triangles)} tris · ${formatBytes(metrics.bytes)}`;
+  const source = metrics.bytes === 0 ? 'generated' : formatBytes(metrics.bytes);
+  return `${formatCount(metrics.triangles)} tris · ${source}`;
 }
 
 function requiredElement(root: ParentNode, selector: string): HTMLElement {
@@ -37,18 +42,36 @@ function requiredElement(root: ParentNode, selector: string): HTMLElement {
   return element;
 }
 
-export function initializeBodyTreeVisualization(
+function isMotor(geometry: WebGeometry): boolean {
+  return geometry.rgba[0] < 0.5 && geometry.rgba[1] < 0.5 && geometry.rgba[2] < 0.5;
+}
+
+function setQuaternion(
+  object: THREE.Object3D,
+  [w, x, y, z]: [number, number, number, number]
+): void {
+  object.quaternion.set(x, y, z, w);
+}
+
+export async function initializeBodyTreeVisualization(
   parent: HTMLElement,
-  modelBasePath = '/so101_assets'
+  modelBasePath = '/so101_assets',
+  modelUrl = '/so101.json'
 ): Promise<BodyTreeVisualization> {
+  const model = await loadWebModel(modelUrl);
+  const bodiesWithVisuals = model.bodies.map(body => ({
+    ...body,
+    visuals: body.geometries.filter(geometry => geometry.role === 'visual')
+  }));
+  const visualCount = bodiesWithVisuals.reduce((n, body) => n + body.visuals.length, 0);
   const root = document.createElement('div');
   root.className = 'body-tree-root';
   root.innerHTML = `
     <aside class="body-tree-sidebar">
       <header>
-        <strong>Mesh complexity</strong>
-        <span>${LINKS.length} bodies ·
-          ${LINKS.reduce((n, link) => n + link.visuals.length, 0)} geoms</span>
+        <strong>Geometry complexity</strong>
+        <span>${bodiesWithVisuals.length} bodies ·
+          ${visualCount} geoms</span>
       </header>
       <input class="body-tree-search" type="search"
         placeholder="Filter bodies and geoms…" aria-label="Filter bodies and geoms">
@@ -57,8 +80,8 @@ export function initializeBodyTreeVisualization(
     <section class="body-tree-inspector">
       <div class="body-tree-viewport"></div>
       <div class="body-tree-info">
-        <strong>Loading mesh diagnostics…</strong>
-        <span>File size and polygon counts are calculated from the served Meshopt GLBs.</span>
+        <strong>Loading geometry diagnostics…</strong>
+        <span>Polygon counts include generated primitives and served Meshopt GLBs.</span>
       </div>
     </section>`;
   parent.querySelector('.placeholder')?.replaceWith(root);
@@ -106,8 +129,8 @@ export function initializeBodyTreeVisualization(
   const select = (id: string, title: string, details: string, object: THREE.Object3D): void => {
     selectedId = id;
     for (const [meshId, mesh] of meshes) {
-      const visual = mesh.userData.visual as VisualDefinition;
-      mesh.material = meshId === id ? selected : visual.motor === true ? motor : printed;
+      const visual = mesh.userData.visual as WebGeometry;
+      mesh.material = meshId === id ? selected : isMotor(visual) ? motor : printed;
     }
     for (const [rowId, row] of rows) { row.classList.toggle('selected', rowId === id); }
     info.innerHTML = `<strong>${title}</strong><span>${details}</span>`;
@@ -121,16 +144,15 @@ export function initializeBodyTreeVisualization(
     }
   };
 
-  for (const link of LINKS) {
+  for (const link of bodiesWithVisuals) {
     const group = new THREE.Group();
     bodies.set(link.name, group);
-    if (link.joint) {
-      const origin = new THREE.Group();
-      origin.position.set(...link.joint.position);
-      origin.rotation.set(...link.joint.rotation, 'ZYX');
-      origin.add(group);
-      bodies.get(link.joint.parent)?.add(origin);
-    } else { scene.add(group); }
+    const origin = new THREE.Group();
+    origin.position.set(...link.position);
+    setQuaternion(origin, link.quaternion);
+    origin.add(group);
+    const parentBody = bodies.get(link.parent);
+    if (parentBody !== undefined) { parentBody.add(origin); } else { scene.add(origin); }
 
     const bodyRow = document.createElement('details');
     bodyRow.className = 'body-tree-body';
@@ -143,9 +165,11 @@ export function initializeBodyTreeVisualization(
     bodyRow.appendChild(summary);
     rows.set(link.name, summary);
     summary.addEventListener('click', () => {
-      const joint = link.joint;
+      const joint = link.joints.at(0);
       const metrics = bodyMetrics.get(link.name);
-      const hierarchy = joint ? `joint ${joint.name} · parent ${joint.parent}` : 'root body';
+      const hierarchy = joint !== undefined
+        ? `joint ${joint.name} · parent ${link.parent}`
+        : 'root body';
       select(link.name, link.name, metrics
         ? `${hierarchy} · ${metricsLabel(metrics)} · ${formatCount(metrics.vertices)} vertices`
         : `${hierarchy} · loading mesh diagnostics…`, group);
@@ -167,18 +191,19 @@ export function initializeBodyTreeVisualization(
     });
 
     link.visuals.forEach((visual, index) => {
+      const visualName = visual.mesh ?? visual.name;
       const id = `${link.name}/${index}`;
       const row = document.createElement('button');
       row.className = 'body-tree-geom';
       row.type = 'button';
       row.innerHTML = `<span class="body-tree-icon">G</span>
-        <span>${visual.mesh}</span>
+        <span>${visualName}</span>
         <small>loading…</small>
         <span class="body-tree-toggle" role="switch" tabindex="0"
-          title="Hide geom" aria-label="Hide ${visual.mesh}" aria-checked="true">●</span>`;
+          title="Hide geom" aria-label="Hide ${visualName}" aria-checked="true">●</span>`;
       bodyRow.appendChild(row);
       rows.set(id, row);
-      loadMesh(`${basePath}/${glbName(visual.mesh)}`).then(({ bytes, geometry }) => {
+      const addGeometry = (geometry: THREE.BufferGeometry, bytes: number): void => {
         const metrics = {
           bytes,
           triangles: geometry.index
@@ -194,33 +219,47 @@ export function initializeBodyTreeVisualization(
         bodyMetrics.set(link.name, total);
         requiredElement(row, 'small').textContent = metricsLabel(metrics);
         requiredElement(summary, 'small').textContent = metricsLabel(total);
-        const mesh = new THREE.Mesh(geometry, visual.motor === true ? motor : printed);
+        const mesh = new THREE.Mesh(geometry, isMotor(visual) ? motor : printed);
         mesh.position.set(...visual.position);
-        mesh.rotation.set(...visual.rotation, 'ZYX');
+        setQuaternion(mesh, visual.quaternion);
         mesh.userData.visual = visual;
         group.add(mesh);
         meshes.set(id, mesh);
         mesh.visible = !hiddenBodies.has(link.name) && !hiddenMeshes.has(id);
         if (selectedId === id) { mesh.material = selected; }
-        if (meshMetrics.size === LINKS.reduce((n, item) => n + item.visuals.length, 0)) {
+        if (meshMetrics.size === visualCount) {
           const all = [...meshMetrics.values()].reduce((sum, item) => ({
             bytes: sum.bytes + item.bytes,
             triangles: sum.triangles + item.triangles,
             vertices: sum.vertices + item.vertices
           }), { bytes: 0, triangles: 0, vertices: 0 });
-          info.innerHTML = `<strong>Full robot mesh set</strong>
+          info.innerHTML = `<strong>Full robot visual set</strong>
             <span>${metricsLabel(all)} · ${formatCount(all.vertices)} vertices ·
-              ${meshMetrics.size} GLB instances</span>`;
+              ${meshMetrics.size} visual geoms</span>`;
         }
-      }).catch((error: unknown) => {
-        requiredElement(row, 'small').textContent = 'load error';
-        console.error(error);
-      });
+      };
+      if (visual.type === 'mesh' && visual.mesh !== undefined) {
+        loadMesh(`${basePath}/${visual.mesh}`).then(({ bytes, geometry }) => {
+          addGeometry(geometry, bytes);
+        }).catch((error: unknown) => {
+          requiredElement(row, 'small').textContent = 'load error';
+          console.error(error);
+        });
+      } else {
+        const geometry = primitiveGeometry(visual);
+        if (geometry !== undefined) {
+          addGeometry(geometry, 0);
+        } else {
+          requiredElement(row, 'small').textContent = 'unsupported';
+        }
+      }
       row.addEventListener('click', () => {
         const mesh = meshes.get(id) ?? group;
-        const type = visual.motor === true ? 'motor' : 'printed part';
+        const type = visual.type === 'mesh'
+          ? isMotor(visual) ? 'motor' : 'printed part'
+          : `${visual.type} primitive`;
         const metrics = meshMetrics.get(id);
-        select(id, visual.mesh, metrics
+        select(id, visualName, metrics
           ? `${type} · ${metricsLabel(metrics)} · ${formatCount(metrics.vertices)} vertices`
           : `${type} · loading mesh diagnostics…`, mesh);
       });
