@@ -46,6 +46,7 @@ export interface BuiltWebModel {
   bodies: Map<string, THREE.Group>;
   jointPivots: Map<string, THREE.Group>;
   materialsByName: Map<string, THREE.MeshStandardMaterial[]>;
+  ready: Promise<void>;
 }
 
 const cache = new Map<string, Promise<WebModel>>();
@@ -132,6 +133,7 @@ export function buildWebModel(
   const bodies = new Map<string, THREE.Group>();
   const jointPivots = new Map<string, THREE.Group>();
   const materialsByName = new Map<string, THREE.MeshStandardMaterial[]>();
+  const meshLoads: Promise<void>[] = [];
   const basePath = modelBasePath.replace(/\/$/, '');
   const included = new Set<string>();
 
@@ -185,9 +187,12 @@ export function buildWebModel(
       slot.push(material);
       materialsByName.set(geometry.material, slot);
       if (geometry.type === 'mesh' && geometry.mesh !== undefined) {
-        void loadMesh(`${basePath}/${geometry.mesh}`).then(({ geometry: bufferGeometry }) => {
-          addVisual(bodyGroup, geometry, bufferGeometry, material);
-        }).catch(console.error);
+        const meshLoad = loadMesh(`${basePath}/${geometry.mesh}`).then(
+          ({ geometry: bufferGeometry }) => {
+            addVisual(bodyGroup, geometry, bufferGeometry, material);
+          }
+        );
+        meshLoads.push(meshLoad);
       } else {
         const bufferGeometry = primitiveGeometry(geometry);
         if (bufferGeometry !== undefined) {
@@ -197,7 +202,13 @@ export function buildWebModel(
     }
   }
 
-  return { root, bodies, jointPivots, materialsByName };
+  return {
+    root,
+    bodies,
+    jointPivots,
+    materialsByName,
+    ready: Promise.all(meshLoads).then(() => undefined)
+  };
 }
 
 export function setJointAngle(

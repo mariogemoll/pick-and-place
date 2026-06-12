@@ -53,6 +53,7 @@ export function createGripperScene(
   scene.add(gridHelper);
 
   const builtModel = buildWebModel(model, modelBasePath, 'gripper');
+  void builtModel.ready.catch(console.error);
   const gripper = builtModel.root;
   gripper.position.set(0, 0, 0.11);
   scene.add(gripper);

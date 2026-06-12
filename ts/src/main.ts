@@ -16,11 +16,21 @@ import {
   initGripperVisualization
 } from './visualizations/gripper';
 import {
+  initPregraspPoseVisualization,
+  type PregraspPoseVisualization
+} from './visualizations/pregrasp-pose';
+import {
+  initPregraspPoseBreakdownVisualization,
+  type PregraspPoseBreakdownVisualization
+} from './visualizations/pregrasp-pose-breakdown';
+import {
   initRobotVisualization,
   type RobotVisualization
 } from './visualizations/robot';
 
 let dummyVisualization: DummyVisualization | null = null;
+let pregraspPoseVisualization: PregraspPoseVisualization | null = null;
+let pregraspPoseBreakdownVisualization: PregraspPoseBreakdownVisualization | null = null;
 let gripperVisualization: GripperVisualization | null = null;
 let robotVisualization: RobotVisualization | null = null;
 let bodyTreeVisualization: BodyTreeVisualization | null = null;
@@ -33,6 +43,27 @@ function initialize(): void {
 
     void initDummyVisualization(dummyPanel).then(viz => {
       dummyVisualization = viz;
+    });
+  }
+
+  const pregraspPosePanel = document.getElementById('pregrasp-pose-visualization');
+  if (pregraspPosePanel) {
+    pregraspPoseVisualization?.destroy();
+    pregraspPoseVisualization = null;
+
+    void initPregraspPoseVisualization(pregraspPosePanel).then(viz => {
+      pregraspPoseVisualization = viz;
+    });
+  }
+
+  const pregraspPoseBreakdownPanel =
+    document.getElementById('pregrasp-pose-breakdown-visualization');
+  if (pregraspPoseBreakdownPanel) {
+    pregraspPoseBreakdownVisualization?.destroy();
+    pregraspPoseBreakdownVisualization = null;
+
+    void initPregraspPoseBreakdownVisualization(pregraspPoseBreakdownPanel).then(viz => {
+      pregraspPoseBreakdownVisualization = viz;
     });
   }
 
