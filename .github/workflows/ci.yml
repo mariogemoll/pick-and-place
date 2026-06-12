@@ -26,13 +26,19 @@ jobs:
       - name: "Install script dependencies"
         working-directory: scripts
         run: pnpm i
-      - name: "Run ruff"
+      - name: "Run ruff on simulation package"
         working-directory: py
+        run: uv run ruff check .
+      - name: "Run simulation package tests"
+        working-directory: py
+        run: uv run pytest
+      - name: "Run ruff on mesh optimization package"
+        working-directory: mesh_optimization
         run: uv run ruff check .
       - name: "Install mesh generation system dependencies"
         run: sudo apt-get update && sudo apt-get install -y libopengl0
       - name: "Generate meshes"
-        working-directory: py
+        working-directory: mesh_optimization
         run: uv run python scripts/simplify_meshes.py
       - name: "Optimize meshes"
         working-directory: ts

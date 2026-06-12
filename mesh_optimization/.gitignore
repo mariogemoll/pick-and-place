@@ -3,4 +3,3 @@ __pycache__
 *.egg-info
 .venv/
 uv.lock
-out/

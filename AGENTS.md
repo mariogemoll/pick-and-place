@@ -5,10 +5,11 @@
 
 The **pick-and-place** project is a comprehensive toolkit for the **Standard Open SO-101 robot arm*. It spans hardware design (3D printing, CAD), simulation (URDF, MJCF), and software (mesh optimization and web-based 3D visualization).
 
-The project is divided into three main components:
-1.  **Hardware & Simulation (`SO-ARM100/`):** Contains documentation, bill of materials, 3D printing files (STL, STEP), and simulation models (URDF, MJCF).
-2.  **Mesh Optimization (`py/`):** A Python subproject used to simplify high-poly STL meshes into optimized GLB files for web visualization.
-3.  **Robot Inspection & Simulation (`ts/`):** A TypeScript/Vite application that provides a browser-based environment for inspecting the robot's physical structure. It includes:
+The project is divided into four main components:
+1.  **Hardware & Simulation (`SO-ARM100/`):** Contains documentation, bill of materials, 3D printing files (STL, STEP), and simulation models (URDF, MJCF). This vendored directory is upstream truth and is never modified.
+2.  **Mesh Optimization (`mesh_optimization/`):** A Python subproject used to simplify high-poly STL meshes into optimized GLB files for web visualization.
+3.  **Simulation (`py/`):** The pick-and-place Python package. Composes MuJoCo models programmatically with `MjSpec`: it loads the stock MJCF from `SO-ARM100/` and replaces the full-mesh collision geoms with a hand-tuned box collision model (`pick_and_place.collision_boxes`). `python -m pick_and_place.export` writes standalone MJCF files (machine-local, gitignored `py/out/`) for external consumers such as the `simulate` viewer or the Isaac importer. The collision box values are a tuned asset — do not regenerate or "clean up" the numbers.
+4.  **Robot Inspection & Simulation (`ts/`):** A TypeScript/Vite application that provides a browser-based environment for inspecting the robot's physical structure. It includes:
     -   **Kinematic Definitions:** Hardcoded link and joint properties matching calibrated URDFs.
     -   **Interactive Simulation:** UI for manipulating joint values in a 3D scene.
     -   **Mesh Diagnostics:** Real-time calculation of polygon counts and asset sizes for performance auditing.
@@ -17,7 +18,7 @@ The project is divided into three main components:
 
 ### Mesh Optimization Pipeline
 The project uses a mandatory two-step process to transform raw hardware assets into web-ready visualizations:
-1.  **Step 1 (Python):** Run `python py/scripts/simplify_meshes.py`. This decimates high-poly STL files from `SO-ARM100/Simulation/SO101/assets/` into simplified GLB files in `intermediary-glb/`.
+1.  **Step 1 (Python):** Run `python mesh_optimization/scripts/simplify_meshes.py`. This decimates high-poly STL files from `SO-ARM100/Simulation/SO101/assets/` into simplified GLB files in `intermediary-glb/`.
 2.  **Step 2 (TypeScript):** Run `npm run optimize-meshes` in the `ts/` directory. This uses `gltf-transform` and `meshopt` to further compress the GLB files and move them from `intermediary-glb/` to `ts/public/so101_assets/` for delivery by the web app.
 
 ### Visualization (TypeScript)
@@ -50,6 +51,9 @@ Located in the `scripts/` directory.
 
 -   `SO-ARM100/README.md`: Main hardware documentation and assembly guide.
 -   `SO-ARM100/Simulation/`: Simulation models for SO100 and SO101.
--   `py/scripts/simplify_meshes.py`: Core logic for mesh decimation.
+-   `mesh_optimization/scripts/simplify_meshes.py`: Core logic for mesh decimation.
+-   `py/src/pick_and_place/builder.py`: MuJoCo model composition (`build_robot`).
+-   `py/src/pick_and_place/collision_boxes.py`: Hand-tuned box collision model (the values are the asset).
+-   `py/scripts/view_robot.py`: Interactive MuJoCo viewer for the composed model.
 -   `ts/src/main.ts`: Entry point for the 3D visualization app.
 -   `ts/src/visualizations/`: Modular visualization components (robot, gripper, body-tree).

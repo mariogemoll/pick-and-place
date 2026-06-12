@@ -3,24 +3,22 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pick-and-place"
+name = "mesh-optimization"
 version = "0.0.0"
 dependencies = [
-    "mujoco",
-    "numpy",
+    "numpy>=2.0",
+    "pymeshlab>=2023.12",
+    "tqdm>=4.67",
+    "trimesh[easy]>=4.0",
 ]
 
 [tool.ruff]
 line-length = 100
 
-[tool.setuptools.packages.find]
-where = ["src"]
-
-[tool.setuptools.package-data]
-pick_and_place = ["*.xml"]
+[tool.setuptools]
+packages = []
 
 [dependency-groups]
 dev = [
-    "pytest",
     "ruff>=0.9.0",
 ]

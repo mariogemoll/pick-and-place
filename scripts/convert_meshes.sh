@@ -18,7 +18,7 @@ DST_DIR="${1:-$PICK_AND_PLACE_DIR/dist_assets}"
 mkdir -p "$DST_DIR"
 
 # 1. Generate intermediary GLBs
-cd "$PICK_AND_PLACE_DIR/py"
+cd "$PICK_AND_PLACE_DIR/mesh_optimization"
 python scripts/simplify_meshes.py
 
 # 2. Optimize GLBs
