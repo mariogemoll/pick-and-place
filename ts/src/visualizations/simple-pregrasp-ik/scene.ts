@@ -32,6 +32,7 @@ export interface SimplePregraspIkScene {
   renderer: THREE.WebGLRenderer;
   camera: THREE.PerspectiveCamera;
   orbitControls: OrbitControls;
+  cube: THREE.Object3D;
   setJoint(name: string, radians: number): void;
   updateCubePose(pose: CubePose): void;
   resize(): void;
@@ -98,6 +99,7 @@ export function createSimplePregraspIkScene(
     renderer,
     camera,
     orbitControls,
+    cube: cubePart.body,
     setJoint(name: string, radians: number): void {
       setJointAngle(model, builtModel.jointPivots, name, radians);
     },

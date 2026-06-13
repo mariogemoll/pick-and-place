@@ -11,6 +11,7 @@ import {
   framePregraspPoseScene
 } from '../pregrasp-pose-shared/scene';
 import { displayMatrix } from '../pregrasp-pose-shared/ui';
+import { createXyDragControls } from '../xy-drag-controls';
 import { createSimplePregraspMatrix } from './pose';
 import { buildUi } from './ui';
 
@@ -35,6 +36,7 @@ export async function initializeSimplePregraspPoseVisualization(
     ui.pane.viewport, model, options.modelBasePath, 'combined'
   );
   const gripper = vizScene.bodies.root.getObjectByName('gripper_body');
+  const cube = vizScene.bodies.root.getObjectByName('cube_body');
 
   function updateScene(): void {
     vizScene.bodies.updateCubePose(currentPose);
@@ -81,6 +83,23 @@ export async function initializeSimplePregraspPoseVisualization(
     return listener;
   });
 
+  const clampToInput = (input: HTMLInputElement, value: number): number =>
+    Math.min(Number(input.max), Math.max(Number(input.min), value));
+  const dragControls = cube
+    ? createXyDragControls({
+      camera: vizScene.camera,
+      domElement: vizScene.renderer.domElement,
+      object: cube,
+      orbitControls: vizScene.orbitControls,
+      onDrag(x, y): void {
+        ui.xInput.value = String(Math.round(clampToInput(ui.xInput, x * 1000)));
+        ui.yInput.value = String(Math.round(clampToInput(ui.yInput, y * 1000)));
+        ui.xInput.dispatchEvent(new Event('input'));
+        ui.yInput.dispatchEvent(new Event('input'));
+      }
+    })
+    : undefined;
+
   const resetListener = (): void => {
     currentFace = '+x';
     currentPose = { ...DEFAULT_CUBE_POSE };
@@ -119,6 +138,7 @@ export async function initializeSimplePregraspPoseVisualization(
     destroy(): void {
       destroyed = true;
       window.cancelAnimationFrame(animationFrameId);
+      dragControls?.destroy();
       vizScene.destroy();
       for (const [index, input] of ui.faceInputs.entries()) {
         input.removeEventListener('change', faceListeners[index]);

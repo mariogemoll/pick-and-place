@@ -22,6 +22,7 @@ import {
 // viz both derive the gripper pose from the same function.
 import { createSimplePregraspMatrix } from '../simple-pregrasp-pose/pose';
 import { buildWorkspaceOverlaySpecs } from '../workspace-overlay';
+import { createXyDragControls } from '../xy-drag-controls';
 import { createSimplePregraspIkScene } from './scene';
 import {
   buildUi,
@@ -232,6 +233,21 @@ export async function initializeSimplePregraspIkVisualization(
   ui.radiusInput.addEventListener('input', applyRadial);
   ui.azimuthInput.addEventListener('input', applyRadial);
 
+  const clampToInput = (input: HTMLInputElement, value: number): number =>
+    Math.min(Number(input.max), Math.max(Number(input.min), value));
+  const dragControls = createXyDragControls({
+    camera: vizScene.camera,
+    domElement: vizScene.renderer.domElement,
+    object: vizScene.cube,
+    orbitControls: vizScene.orbitControls,
+    onDrag(x, y): void {
+      ui.xInput.value = String(Math.round(clampToInput(ui.xInput, x * 1000)));
+      ui.yInput.value = String(Math.round(clampToInput(ui.yInput, y * 1000)));
+      ui.xInput.dispatchEvent(new Event('input'));
+      ui.yInput.dispatchEvent(new Event('input'));
+    }
+  });
+
   const coordModeListeners = ui.coordModeInputs.map(input => {
     const listener = (): void => {
       if (!input.checked) { return; }
@@ -295,6 +311,7 @@ export async function initializeSimplePregraspIkVisualization(
       destroyed = true;
       window.cancelAnimationFrame(animationFrameId);
       resizeObserver.disconnect();
+      dragControls.destroy();
       vizScene.destroy();
       for (const [index, input] of ui.faceInputs.entries()) {
         input.removeEventListener('change', faceListeners[index]);
