@@ -15,9 +15,18 @@ export interface PickAndPlaceCubeInputs {
 export interface PickAndPlaceDom {
   root: HTMLDivElement;
   viewport: HTMLDivElement;
+  controls: HTMLElement;
+  setupControls: HTMLDivElement;
+  setupActions: HTMLDivElement;
+  runControls: HTMLDivElement;
   sourceInputs: PickAndPlaceCubeInputs;
   targetInputs: PickAndPlaceCubeInputs;
   resetButton: HTMLButtonElement;
+  runButton: HTMLButtonElement;
+  playPauseButton: HTMLButtonElement;
+  cancelButton: HTMLButtonElement;
+  seekInput: HTMLInputElement;
+  playbackTime: HTMLOutputElement;
 }
 
 export interface PickAndPlaceUiOptions {
@@ -66,24 +75,68 @@ export function buildUi(
   viewport.className =
     'simple-pregrasp-ik-viz-viewport pick-and-place-viz-viewport';
 
-  const controls = document.createElement('div');
-  controls.className = 'simple-pregrasp-ik-viz-controls';
+  const controls = document.createElement('aside');
+  controls.className = 'pick-and-place-viz-controls';
+  const setupControls = document.createElement('div');
+  setupControls.className = 'pick-and-place-viz-setup-controls';
+  const sourceControls = document.createElement('section');
+  sourceControls.className = 'pick-and-place-viz-setup-panel';
+  const targetControls = document.createElement('section');
+  targetControls.className = 'pick-and-place-viz-setup-panel';
   const sourceInputs = appendCubeInputs(
-    controls, 'source', 'Source cube', options, options.source
+    sourceControls, 'source', 'Source cube', options, options.source
   );
   const targetInputs = appendCubeInputs(
-    controls, 'target', 'Target cube', options, options.target
+    targetControls, 'target', 'Target cube', options, options.target
   );
 
   const resetButton = document.createElement('button');
   resetButton.className = 'simple-pregrasp-ik-viz-reset';
   resetButton.type = 'button';
   resetButton.textContent = 'Reset';
-  controls.appendChild(resetButton);
+  const runButton = document.createElement('button');
+  runButton.className = 'pick-and-place-viz-run-button';
+  runButton.type = 'button';
+  runButton.textContent = 'Run';
+  const setupActions = document.createElement('div');
+  setupActions.className = 'pick-and-place-viz-setup-actions';
+  setupActions.appendChild(runButton);
+  setupControls.append(sourceControls, targetControls, resetButton);
+
+  const runControls = document.createElement('div');
+  runControls.className = 'pick-and-place-viz-run-controls';
+  runControls.hidden = true;
+  const cancelButton = document.createElement('button');
+  cancelButton.className = 'pick-and-place-viz-cancel-button';
+  cancelButton.type = 'button';
+  cancelButton.textContent = 'X';
+  cancelButton.setAttribute('aria-label', 'Cancel trajectory playback');
+  const playbackRow = document.createElement('div');
+  playbackRow.className = 'pick-and-place-viz-playback-row';
+  const playPauseButton = document.createElement('button');
+  playPauseButton.className = 'pick-and-place-viz-play-button';
+  playPauseButton.type = 'button';
+  playPauseButton.textContent = 'Play';
+  playPauseButton.setAttribute('aria-label', 'Play trajectory');
+  const playbackTime = document.createElement('output');
+  playbackTime.className = 'pick-and-place-viz-playback-time';
+  playbackTime.textContent = '0:00.0 / 0:03.0';
+  const seekInput = document.createElement('input');
+  seekInput.className = 'pick-and-place-viz-seek';
+  seekInput.type = 'range';
+  seekInput.min = '0';
+  seekInput.max = '3';
+  seekInput.step = '0.01';
+  seekInput.value = '0';
+  seekInput.setAttribute('aria-label', 'Trajectory playback position');
+  playbackRow.append(playPauseButton, playbackTime, cancelButton);
+  runControls.append(seekInput, playbackRow);
+  controls.appendChild(setupControls);
+  viewport.append(controls, setupActions, runControls);
 
   const layout = document.createElement('div');
   layout.className = 'simple-pregrasp-ik-viz-layout';
-  layout.append(viewport, controls);
+  layout.appendChild(viewport);
   root.appendChild(layout);
 
   const placeholder = parent.querySelector('.placeholder');
@@ -93,5 +146,20 @@ export function buildUi(
     parent.appendChild(root);
   }
 
-  return { root, viewport, sourceInputs, targetInputs, resetButton };
+  return {
+    root,
+    viewport,
+    controls,
+    setupControls,
+    setupActions,
+    runControls,
+    sourceInputs,
+    targetInputs,
+    resetButton,
+    runButton,
+    playPauseButton,
+    cancelButton,
+    seekInput,
+    playbackTime
+  };
 }

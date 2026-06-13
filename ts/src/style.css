@@ -594,7 +594,68 @@ canvas {
   font-size: 0.8rem;
 }
 
+.pick-and-place-viz-controls {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 1;
+  width: 220px;
+  max-height: calc(100% - 5.5rem);
+  overflow-y: auto;
+}
+
+.pick-and-place-viz-controls[hidden] {
+  display: none;
+}
+
+.pick-and-place-viz-root .simple-pregrasp-ik-viz-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.pick-and-place-viz-setup-controls[hidden] {
+  display: none;
+}
+
+.pick-and-place-viz-setup-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.pick-and-place-viz-setup-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0.35rem;
+  padding: 0.55rem 0.65rem;
+  color: #334155;
+  font-size: 0.75rem;
+  background: rgb(255 255 255 / 90%);
+  border: 1px solid rgb(203 213 225 / 80%);
+  border-radius: 7px;
+  box-shadow: 0 2px 8px rgb(15 23 42 / 15%);
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+}
+
+.pick-and-place-viz-setup-panel .pick-and-place-viz-cube-heading {
+  margin-top: 0;
+}
+
+.pick-and-place-viz-setup-panel :where(
+  .pregrasp-pose-breakdown-viz-controls-group
+) {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr) 3.5rem;
+  gap: 0.3rem;
+}
+
+.pick-and-place-viz-setup-panel .pregrasp-pose-breakdown-viz-control-slider {
+  width: 100%;
+}
+
 .pick-and-place-viz-viewport {
+  position: relative;
   height: 560px;
 }
 
@@ -612,4 +673,130 @@ canvas {
 .pick-and-place-viz-swatch.target {
   background: rgb(34 197 94 / 28%);
   border: 1px solid #22c55e;
+}
+
+.pick-and-place-viz-setup-actions {
+  position: absolute;
+  bottom: 0.75rem;
+  left: 0.75rem;
+  z-index: 1;
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.45rem;
+  background: rgb(255 255 255 / 90%);
+  border: 1px solid rgb(203 213 225 / 80%);
+  border-radius: 7px;
+  box-shadow: 0 2px 8px rgb(15 23 42 / 15%);
+  backdrop-filter: blur(8px);
+}
+
+.pick-and-place-viz-setup-actions[hidden] {
+  display: none;
+}
+
+.pick-and-place-viz-run-button {
+  min-width: 4.5rem;
+  padding: 0.3rem 0.85rem;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  background: #2563eb;
+  border: 1px solid #1d4ed8;
+  border-radius: 4px;
+}
+
+.pick-and-place-viz-setup-controls > .simple-pregrasp-ik-viz-reset {
+  align-self: flex-end;
+}
+
+.pick-and-place-viz-run-button:hover {
+  background: #1d4ed8;
+}
+
+.pick-and-place-viz-run-controls {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 2.5rem 0.8rem 0.65rem;
+  color: #fff;
+  font-size: 0.8rem;
+  background: linear-gradient(transparent, rgb(15 23 42 / 82%));
+  pointer-events: none;
+}
+
+.pick-and-place-viz-cancel-button {
+  width: 1.8rem;
+  height: 1.8rem;
+  margin-left: auto;
+  padding: 0;
+  color: #fff;
+  font-size: 0.8rem;
+  cursor: pointer;
+  background: rgb(255 255 255 / 12%);
+  border: 0;
+  border-radius: 50%;
+  pointer-events: auto;
+}
+
+.pick-and-place-viz-cancel-button:hover {
+  background: rgb(255 255 255 / 25%);
+}
+
+.pick-and-place-viz-run-controls[hidden] {
+  display: none;
+}
+
+.pick-and-place-viz-playback-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.pick-and-place-viz-play-button {
+  min-width: 4rem;
+  padding: 0.3rem 0.65rem;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+  background: #2563eb;
+  border: 1px solid #1d4ed8;
+  border-radius: 4px;
+  pointer-events: auto;
+}
+
+.pick-and-place-viz-play-button:hover {
+  background: #1d4ed8;
+}
+
+.pick-and-place-viz-playback-time {
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 2px rgb(15 23 42 / 80%);
+}
+
+.pick-and-place-viz-seek {
+  width: 100%;
+  margin: 0;
+  cursor: pointer;
+  accent-color: #ef4444;
+  pointer-events: auto;
+}
+
+@media (width <= 600px) {
+  .pick-and-place-viz-controls {
+    top: 0.5rem;
+    right: 0.5rem;
+    width: min(220px, calc(100% - 1rem));
+    max-height: calc(100% - 5rem);
+  }
+
+  .pick-and-place-viz-setup-actions {
+    bottom: 0.5rem;
+    left: 0.5rem;
+  }
 }

@@ -14,6 +14,7 @@ export interface XyDragControlsOptions {
 
 export interface XyDragControls {
   destroy(): void;
+  setEnabled(enabled: boolean): void;
 }
 
 export interface XyDragTarget {
@@ -41,6 +42,7 @@ export function createXyMultiDragControls({
   const offset = new THREE.Vector3();
   let pointerId: number | null = null;
   let activeTarget: XyDragTarget | null = null;
+  let enabled = true;
 
   function updateRaycaster(event: PointerEvent): void {
     const bounds = domElement.getBoundingClientRect();
@@ -83,7 +85,7 @@ export function createXyMultiDragControls({
   }
 
   const pointerDownListener = (event: PointerEvent): void => {
-    if (pointerId !== null || event.button !== 0) { return; }
+    if (!enabled || pointerId !== null || event.button !== 0) { return; }
     const target = targetUnderPointer(event);
     if (!target) { return; }
     dragPlane.constant = -target.object.position.z;
@@ -97,6 +99,7 @@ export function createXyMultiDragControls({
     event.preventDefault();
   };
   const pointerMoveListener = (event: PointerEvent): void => {
+    if (!enabled) { return; }
     if (pointerId === null) {
       domElement.style.cursor = targetUnderPointer(event) ? 'grab' : '';
       return;
@@ -129,6 +132,13 @@ export function createXyMultiDragControls({
       domElement.removeEventListener('pointerup', pointerUpListener);
       domElement.removeEventListener('pointercancel', pointerUpListener);
       domElement.removeEventListener('pointerleave', pointerLeaveListener);
+    },
+    setEnabled(nextEnabled: boolean): void {
+      enabled = nextEnabled;
+      if (!enabled) {
+        finishDrag();
+        domElement.style.cursor = '';
+      }
     }
   };
 }

@@ -35,6 +35,15 @@ export interface PickAndPlaceOptions {
 
 const DEFAULT_SOURCE = { x: 0.2, y: -0.08, yaw: 0 };
 const DEFAULT_TARGET = { x: 0.2, y: 0.08, yaw: 0 };
+const PLACEHOLDER_TRAJECTORY_DURATION_SECONDS = 3;
+
+type PickAndPlaceStage = 'setup' | 'run';
+
+function formatPlaybackTime(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = (seconds % 60).toFixed(1).padStart(4, '0');
+  return `${minutes}:${remainingSeconds}`;
+}
 
 function fixedCubePose(position: Readonly<{
   x: number;
@@ -209,6 +218,66 @@ export async function PickAndPlace(
     ]
   });
 
+  let stage: PickAndPlaceStage = 'setup';
+  let playbackSeconds = 0;
+  let playing = false;
+  let previousFrameTime: number | null = null;
+  const renderPlayback = (): void => {
+    ui.seekInput.value = String(playbackSeconds);
+    ui.playbackTime.textContent =
+      `${formatPlaybackTime(playbackSeconds)} / ` +
+      formatPlaybackTime(PLACEHOLDER_TRAJECTORY_DURATION_SECONDS);
+    ui.playPauseButton.textContent = playing ? 'Pause' : 'Play';
+    ui.playPauseButton.setAttribute(
+      'aria-label', playing ? 'Pause trajectory' : 'Play trajectory'
+    );
+  };
+  const setPlaying = (nextPlaying: boolean): void => {
+    playing = nextPlaying;
+    previousFrameTime = null;
+    renderPlayback();
+  };
+  const setStage = (nextStage: PickAndPlaceStage): void => {
+    stage = nextStage;
+    const isSetup = stage === 'setup';
+    ui.root.classList.toggle('is-running', !isSetup);
+    ui.controls.hidden = !isSetup;
+    ui.setupActions.hidden = !isSetup;
+    ui.setupControls.hidden = !isSetup;
+    ui.runControls.hidden = isSetup;
+    for (const input of [
+      ...cubeInputs(ui.sourceInputs), ...cubeInputs(ui.targetInputs)
+    ]) {
+      input.disabled = !isSetup;
+    }
+    dragControls.setEnabled(isSetup);
+    if (isSetup) {
+      playbackSeconds = 0;
+      setPlaying(false);
+    } else {
+      playbackSeconds = 0;
+      setPlaying(true);
+    }
+  };
+  const runListener = (): void => { setStage('run'); };
+  const cancelListener = (): void => { setStage('setup'); };
+  const playPauseListener = (): void => {
+    if (playbackSeconds >= PLACEHOLDER_TRAJECTORY_DURATION_SECONDS) {
+      playbackSeconds = 0;
+    }
+    setPlaying(!playing);
+  };
+  const seekListener = (): void => {
+    playbackSeconds = Number(ui.seekInput.value);
+    previousFrameTime = null;
+    renderPlayback();
+  };
+  ui.runButton.addEventListener('click', runListener);
+  ui.cancelButton.addEventListener('click', cancelListener);
+  ui.playPauseButton.addEventListener('click', playPauseListener);
+  ui.seekInput.addEventListener('input', seekListener);
+  renderPlayback();
+
   const resetListener = (): void => {
     sourcePose = { ...initialSource };
     targetPose = { ...initialTarget };
@@ -224,9 +293,23 @@ export async function PickAndPlace(
 
   let animationFrameId = 0;
   let destroyed = false;
-  function animate(): void {
+  function animate(time: number): void {
     if (destroyed) { return; }
     animationFrameId = window.requestAnimationFrame(animate);
+    if (stage === 'run' && playing) {
+      if (previousFrameTime !== null) {
+        playbackSeconds = Math.min(
+          PLACEHOLDER_TRAJECTORY_DURATION_SECONDS,
+          playbackSeconds + (time - previousFrameTime) / 1000
+        );
+        if (playbackSeconds >= PLACEHOLDER_TRAJECTORY_DURATION_SECONDS) {
+          setStage('setup');
+        } else {
+          renderPlayback();
+        }
+      }
+      previousFrameTime = time;
+    }
     vizScene.orbitControls.update();
     vizScene.renderer.render(vizScene.scene, vizScene.camera);
   }
@@ -245,6 +328,10 @@ export async function PickAndPlace(
         input.removeEventListener('input', targetInputListener);
       }
       ui.resetButton.removeEventListener('click', resetListener);
+      ui.runButton.removeEventListener('click', runListener);
+      ui.cancelButton.removeEventListener('click', cancelListener);
+      ui.playPauseButton.removeEventListener('click', playPauseListener);
+      ui.seekInput.removeEventListener('input', seekListener);
       vizScene.destroy();
       ui.root.remove();
     }
