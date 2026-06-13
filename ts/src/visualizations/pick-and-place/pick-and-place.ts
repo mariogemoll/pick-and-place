@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mario Gemoll
 // SPDX-License-Identifier: 0BSD
 
-import { deriveSo101Kinematics } from '../../ik/kinematics';
+import { ARM_JOINT_NAMES, deriveSo101Kinematics } from '../../ik/kinematics';
 import {
   anyYawCubeCenterBand,
   computeSimpleWorkspaceForCubeZ,
@@ -16,6 +16,7 @@ import {
 } from '../pregrasp-pose-shared/body-factories';
 import { createXyMultiDragControls } from '../xy-drag-controls';
 import { createPickAndPlaceScene } from './scene';
+import { computeTrajectory, NEUTRAL_FRAME, type Trajectory } from './trajectory';
 import {
   buildUi,
   type PickAndPlaceCubeInputs
@@ -35,7 +36,6 @@ export interface PickAndPlaceOptions {
 
 const DEFAULT_SOURCE = { x: 0.2, y: -0.08, yaw: 0 };
 const DEFAULT_TARGET = { x: 0.2, y: 0.08, yaw: 0 };
-const PLACEHOLDER_TRAJECTORY_DURATION_SECONDS = 3;
 
 type PickAndPlaceStage = 'setup' | 'run';
 
@@ -219,14 +219,31 @@ export async function PickAndPlace(
   });
 
   let stage: PickAndPlaceStage = 'setup';
+  let trajectory: Trajectory | null = null;
   let playbackSeconds = 0;
   let playing = false;
   let previousFrameTime: number | null = null;
+
+  const applyFrame = (t: number): void => {
+    if (trajectory === null) { return; }
+    const frame = trajectory.evaluate(t);
+    for (const name of ARM_JOINT_NAMES) {
+      vizScene.setJoint(name, frame.joints[name]);
+    }
+    vizScene.setJoint('gripper', frame.gripper);
+  };
+  const resetFrame = (): void => {
+    for (const name of ARM_JOINT_NAMES) {
+      vizScene.setJoint(name, NEUTRAL_FRAME.joints[name]);
+    }
+    vizScene.setJoint('gripper', NEUTRAL_FRAME.gripper);
+  };
+
   const renderPlayback = (): void => {
     ui.seekInput.value = String(playbackSeconds);
     ui.playbackTime.textContent =
       `${formatPlaybackTime(playbackSeconds)} / ` +
-      formatPlaybackTime(PLACEHOLDER_TRAJECTORY_DURATION_SECONDS);
+      formatPlaybackTime(trajectory?.duration ?? 0);
     ui.playPauseButton.textContent = playing ? 'Pause' : 'Play';
     ui.playPauseButton.setAttribute(
       'aria-label', playing ? 'Pause trajectory' : 'Play trajectory'
@@ -252,9 +269,14 @@ export async function PickAndPlace(
     }
     dragControls.setEnabled(isSetup);
     if (isSetup) {
+      trajectory = null;
       playbackSeconds = 0;
       setPlaying(false);
+      resetFrame();
     } else {
+      trajectory = computeTrajectory(kinematics, sourcePose);
+      if (trajectory === null) { setStage('setup'); return; }
+      ui.seekInput.max = String(trajectory.duration);
       playbackSeconds = 0;
       setPlaying(true);
     }
@@ -262,7 +284,7 @@ export async function PickAndPlace(
   const runListener = (): void => { setStage('run'); };
   const cancelListener = (): void => { setStage('setup'); };
   const playPauseListener = (): void => {
-    if (playbackSeconds >= PLACEHOLDER_TRAJECTORY_DURATION_SECONDS) {
+    if (trajectory !== null && playbackSeconds >= trajectory.duration) {
       playbackSeconds = 0;
     }
     setPlaying(!playing);
@@ -270,6 +292,7 @@ export async function PickAndPlace(
   const seekListener = (): void => {
     playbackSeconds = Number(ui.seekInput.value);
     previousFrameTime = null;
+    applyFrame(playbackSeconds);
     renderPlayback();
   };
   ui.runButton.addEventListener('click', runListener);
@@ -296,16 +319,16 @@ export async function PickAndPlace(
   function animate(time: number): void {
     if (destroyed) { return; }
     animationFrameId = window.requestAnimationFrame(animate);
-    if (stage === 'run' && playing) {
+    if (stage === 'run' && playing && trajectory !== null) {
       if (previousFrameTime !== null) {
         playbackSeconds = Math.min(
-          PLACEHOLDER_TRAJECTORY_DURATION_SECONDS,
+          trajectory.duration,
           playbackSeconds + (time - previousFrameTime) / 1000
         );
-        if (playbackSeconds >= PLACEHOLDER_TRAJECTORY_DURATION_SECONDS) {
-          setStage('setup');
-        } else {
-          renderPlayback();
+        applyFrame(playbackSeconds);
+        renderPlayback();
+        if (playbackSeconds >= trajectory.duration) {
+          setPlaying(false);
         }
       }
       previousFrameTime = time;
