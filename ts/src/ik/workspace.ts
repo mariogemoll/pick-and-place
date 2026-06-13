@@ -4,12 +4,17 @@
 import * as THREE from 'three';
 
 import {
+  CUBE_HALF_SIZE,
   DEFAULT_CUBE_POSE,
   GRIPPER_TARGET_POSITION
 } from '../visualizations/pregrasp-pose-shared/body-factories';
 import { createSimplePregraspMatrix } from '../visualizations/simple-pregrasp-pose/pose';
 import { type So101Kinematics } from './kinematics';
 import { solveSimplePregraspIk } from './simple-ik';
+
+// Cube-center z where the gripper tip (IK contact) is exactly 1 cm above the
+// top of a ground cube: top-of-ground-cube (2×half) + 1 cm clearance.
+export const CUBE_Z_1CM_OVER_GROUND_TOP = CUBE_HALF_SIZE * 2 + 0.010;
 
 // Reachable workspace for the *simple* vertical pregrasp with a cube resting on
 // the ground. Because the cube is on the floor and the pose keeps the gripper
@@ -47,6 +52,23 @@ export interface SimpleWorkspaceSector {
   // True when every cube yaw has at least one graspable face throughout the
   // sector (the wrist_roll argument above).
   anyYawReachable: boolean;
+}
+
+// Derive the IK target height and face offset for a cube whose center is at
+// `cubeCenterZ`. The target height equals the cube-center z (face-center z for
+// a vertical face). The face offset (cube-center → IK target, horizontal) is
+// z-independent but is computed from the pregrasp geometry to stay in sync.
+function deriveSampleGeometry(cubeCenterZ: number): { height: number; faceOffset: number } {
+  const samplePose = { ...DEFAULT_CUBE_POSE, z: cubeCenterZ };
+  const worldFromGripper = createSimplePregraspMatrix('+x', samplePose);
+  if (worldFromGripper === undefined) {
+    throw new Error(`Simple pregrasp matrix undefined at cubeCenterZ=${cubeCenterZ}`);
+  }
+  const sampleTarget = GRIPPER_TARGET_POSITION.clone().applyMatrix4(worldFromGripper);
+  return {
+    height: sampleTarget.z,
+    faceOffset: Math.hypot(sampleTarget.x - samplePose.x, sampleTarget.y - samplePose.y)
+  };
 }
 
 // Build the world-from-gripper matrix for a vertical grasp whose IK target lands
@@ -103,25 +125,21 @@ function bisectRadial(
 }
 
 export function computeSimpleWorkspace(k: So101Kinematics): SimpleWorkspaceSector {
-  // Derive the target height and the cube-center -> target offset from the real
-  // simple-pose math rather than hard-coding. Grasp the +x face of the default
-  // (ground) cube: the target is the jaw contact projected onto the roll axis.
-  const worldFromGripper = createSimplePregraspMatrix('+x', DEFAULT_CUBE_POSE);
-  if (worldFromGripper === undefined) {
-    throw new Error('Simple pregrasp matrix undefined for the default ground cube');
-  }
-  const sampleTarget = GRIPPER_TARGET_POSITION.clone().applyMatrix4(worldFromGripper);
-  const height = sampleTarget.z;
-  const faceOffset = Math.hypot(
-    sampleTarget.x - DEFAULT_CUBE_POSE.x,
-    sampleTarget.y - DEFAULT_CUBE_POSE.y
-  );
+  return computeSimpleWorkspaceForCubeZ(k, DEFAULT_CUBE_POSE.z);
+}
 
-  // Locate the feasible radial interval: coarse scan, then bisect both edges.
+// Compute the simple-pregrasp workspace for a cube whose center sits at
+// `cubeCenterZ`. Everything else is identical to `computeSimpleWorkspace`.
+export function computeSimpleWorkspaceForCubeZ(
+  k: So101Kinematics,
+  cubeCenterZ: number
+): SimpleWorkspaceSector {
+  const { height, faceOffset } = deriveSampleGeometry(cubeCenterZ);
+
   const step = 0.002;
   let firstHit = NaN;
   let lastHit = NaN;
-  for (let r = 0.01; r <= 0.32 + 1e-9; r += step) {
+  for (let r = 0.01; r <= 0.40 + 1e-9; r += step) {
     if (radialReachable(k, r, height)) {
       if (Number.isNaN(firstHit)) { firstHit = r; }
       lastHit = r;
@@ -133,11 +151,8 @@ export function computeSimpleWorkspace(k: So101Kinematics): SimpleWorkspaceSecto
   const radialMin = bisectRadial(k, firstHit, firstHit - step, height);
   const radialMax = bisectRadial(k, lastHit, lastHit + step, height);
 
-  // Azimuth band = shoulder_pan range, negated (shoulder_pan = -azimuth).
   const pan = k.jointLimits.shoulder_pan;
   const azimuth = { min: -pan.max, max: -pan.min };
-
-  // wrist_roll forbidden-arc width vs. the 90 deg face spacing.
   const roll = k.jointLimits.wrist_roll;
   const forbiddenArc = 2 * Math.PI - (roll.max - roll.min);
   const anyYawReachable = forbiddenArc < Math.PI / 2;
@@ -147,6 +162,135 @@ export function computeSimpleWorkspace(k: So101Kinematics): SimpleWorkspaceSecto
     radial: { min: radialMin, max: radialMax },
     azimuth,
     targetHeight: height,
+    faceOffset,
+    anyYawReachable
+  };
+}
+
+// Maximum horizontal (XY) reach of the gripper contact point at a fixed
+// `targetHeight`, for any joint configuration (not restricted to the pregrasp
+// pose). For each (shoulder_lift, elbow_flex) pair, wrist_flex is solved
+// analytically (two branches from the sin inverse) so there is no wrist_flex
+// scan — the result is exact within the (lift × flex) grid resolution.
+export function computeArmWorkspaceAtHeight(
+  k: So101Kinematics,
+  targetHeight: number
+): SimpleWorkspaceSector {
+  const pan = k.jointLimits.shoulder_pan;
+  const azimuth = { min: -pan.max, max: -pan.min };
+  const roll = k.jointLimits.wrist_roll;
+  const forbiddenArc = 2 * Math.PI - (roll.max - roll.min);
+  const anyYawReachable = forbiddenArc < Math.PI / 2;
+
+  const upperRest = Math.atan2(k.upperArm.height, k.upperArm.radial);
+  const lowerRest = Math.atan2(k.lowerArm.height, k.lowerArm.radial);
+  const { min: liftMin, max: liftMax } = k.jointLimits.shoulder_lift;
+  const { min: flexMin, max: flexMax } = k.jointLimits.elbow_flex;
+  const { min: wflexMin, max: wflexMax } = k.jointLimits.wrist_flex;
+
+  const STEPS = 300;
+  let radialMin = Infinity;
+  let radialMax = -Infinity;
+
+  for (let i = 0; i <= STEPS; i++) {
+    const lift = liftMin + (i / STEPS) * (liftMax - liftMin);
+    const theta1 = upperRest - lift;
+    const wr1 = k.shoulderLift.radial + k.upperArm.length * Math.cos(theta1);
+    const wh1 = k.shoulderLift.height + k.upperArm.length * Math.sin(theta1);
+    for (let j = 0; j <= STEPS; j++) {
+      const flex = flexMin + (j / STEPS) * (flexMax - flexMin);
+      const theta2 = lowerRest - lift - flex;
+      const wr = wr1 + k.lowerArm.length * Math.cos(theta2);
+      const wh = wh1 + k.lowerArm.length * Math.sin(theta2);
+
+      // Analytically solve for the tool pitch that places the tip at targetHeight.
+      const sinArg = (targetHeight - wh) / k.toolLength;
+      if (Math.abs(sinArg) > 1) { continue; }
+      const asinVal = Math.asin(sinArg);
+      for (const toolPitch of [asinVal, Math.PI - asinVal]) {
+        const wflex = -(lift + flex + toolPitch);
+        if (wflex < wflexMin || wflex > wflexMax) { continue; }
+        const targetR = wr + k.toolLength * Math.cos(toolPitch);
+        if (targetR > radialMax) { radialMax = targetR; }
+        if (targetR < radialMin) { radialMin = targetR; }
+      }
+    }
+  }
+
+  if (!isFinite(radialMax)) {
+    throw new Error(`No configuration reaches height ${targetHeight} m`);
+  }
+
+  return {
+    panAxis: k.panAxis.clone(),
+    radial: { min: Math.max(0, radialMin), max: radialMax },
+    azimuth,
+    targetHeight,
+    faceOffset: 0,
+    anyYawReachable
+  };
+}
+
+// Maximum horizontal (XY) reach of the arm at any joint configuration,
+// projected vertically onto the floor. Uses planar-arm FK (shoulder_lift ×
+// elbow_flex × wrist_flex) — not restricted to the simple pregrasp pose.
+// wrist_roll is omitted since it only spins the gripper without moving it.
+// `targetHeight` is NaN; the sector spans from the minimum to the maximum
+// radial reach subject to the arm staying above the floor.
+export function computeGlobalXyWorkspace(k: So101Kinematics): SimpleWorkspaceSector {
+  const { faceOffset } = deriveSampleGeometry(DEFAULT_CUBE_POSE.z);
+  const pan = k.jointLimits.shoulder_pan;
+  const azimuth = { min: -pan.max, max: -pan.min };
+  const roll = k.jointLimits.wrist_roll;
+  const forbiddenArc = 2 * Math.PI - (roll.max - roll.min);
+  const anyYawReachable = forbiddenArc < Math.PI / 2;
+
+  // Rest angles of the two links (measured from the radial axis in the
+  // radial-height plane, as used by the 2R solver).
+  const upperRest = Math.atan2(k.upperArm.height, k.upperArm.radial);
+  const lowerRest = Math.atan2(k.lowerArm.height, k.lowerArm.radial);
+
+  const { min: liftMin, max: liftMax } = k.jointLimits.shoulder_lift;
+  const { min: flexMin, max: flexMax } = k.jointLimits.elbow_flex;
+  const { min: wflexMin, max: wflexMax } = k.jointLimits.wrist_flex;
+
+  const STEPS = 80;
+  let radialMin = Infinity;
+  let radialMax = -Infinity;
+
+  for (let i = 0; i <= STEPS; i++) {
+    const lift = liftMin + (i / STEPS) * (liftMax - liftMin);
+    const theta1 = upperRest - lift; // upper-arm geometric angle from radial
+    const wristR1 = k.shoulderLift.radial + k.upperArm.length * Math.cos(theta1);
+    const wristH1 = k.shoulderLift.height + k.upperArm.length * Math.sin(theta1);
+    for (let j = 0; j <= STEPS; j++) {
+      const flex = flexMin + (j / STEPS) * (flexMax - flexMin);
+      const theta2 = lowerRest - lift - flex; // lower-arm absolute angle
+      const wristR = wristR1 + k.lowerArm.length * Math.cos(theta2);
+      const wristH = wristH1 + k.lowerArm.length * Math.sin(theta2);
+      for (let l = 0; l <= STEPS; l++) {
+        const wflex = wflexMin + (l / STEPS) * (wflexMax - wflexMin);
+        // toolPitch: pitch of the tool (from wrist to target) in the
+        // radial-height plane; derived from wristFlex = -lift-flex-toolPitch.
+        const toolPitch = -(lift + flex + wflex);
+        const targetH = wristH + k.toolLength * Math.sin(toolPitch);
+        if (targetH < 0) { continue; } // gripper underground
+        const targetR = wristR + k.toolLength * Math.cos(toolPitch);
+        if (targetR > radialMax) { radialMax = targetR; }
+        if (targetR < radialMin) { radialMin = targetR; }
+      }
+    }
+  }
+
+  if (!isFinite(radialMax)) {
+    throw new Error('No reachable position found for the global workspace scan');
+  }
+
+  return {
+    panAxis: k.panAxis.clone(),
+    radial: { min: Math.max(0, radialMin), max: radialMax },
+    azimuth,
+    targetHeight: NaN,
     faceOffset,
     anyYawReachable
   };

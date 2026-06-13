@@ -3,7 +3,9 @@
 
 import * as THREE from 'three';
 
+import { deriveSo101Kinematics } from '../../ik/kinematics';
 import { loadWebModel } from '../../web-model';
+import { buildWorkspaceOverlaySpecs } from '../workspace-overlay';
 import { createRobotScene } from './scene';
 import { buildUi, formatDegrees } from './ui';
 
@@ -45,8 +47,12 @@ export async function initializeRobotVisualization(
       hexColor: `#${new THREE.Color(r, g, b).getHexString()}`
     }));
 
+  const kinematics = deriveSo101Kinematics(model);
   const ui = buildUi(parent, joints, materialColors);
-  const vizScene = createRobotScene(ui.viewport, model, options.modelBasePath);
+  const vizScene = createRobotScene(
+    ui.viewport, model, options.modelBasePath,
+    buildWorkspaceOverlaySpecs(kinematics)
+  );
   const { renderer, camera, scene, orbitControls } = vizScene;
   const listeners: (() => void)[] = [];
 

@@ -19,7 +19,11 @@ import { deriveSo101Kinematics } from './kinematics';
 import { solveSimplePregraspIk } from './simple-ik';
 import {
   anyYawCubeCenterBand,
+  computeArmWorkspaceAtHeight,
+  computeGlobalXyWorkspace,
   computeSimpleWorkspace,
+  computeSimpleWorkspaceForCubeZ,
+  CUBE_Z_1CM_OVER_GROUND_TOP,
   sectorBoundingBox
 } from './workspace';
 
@@ -114,5 +118,82 @@ describe('computeSimpleWorkspace', () => {
     const roll = k.jointLimits.wrist_roll;
     const forbiddenArc = 2 * Math.PI - (roll.max - roll.min);
     expect(forbiddenArc).toBeLessThan(Math.PI / 2);
+  });
+});
+
+describe('computeSimpleWorkspaceForCubeZ (cube 1 cm above ground-cube top)', () => {
+  const k = deriveSo101Kinematics(model);
+  const clearance = computeSimpleWorkspaceForCubeZ(k, CUBE_Z_1CM_OVER_GROUND_TOP);
+
+  it('reports the clearance sector', () => {
+    console.log(
+      '[clearance workspace] radial %s..%s m, targetHeight %s m',
+      clearance.radial.min.toFixed(4),
+      clearance.radial.max.toFixed(4),
+      clearance.targetHeight.toFixed(4)
+    );
+    expect(clearance.targetHeight).toBeCloseTo(CUBE_Z_1CM_OVER_GROUND_TOP, 3);
+  });
+
+  it('is smaller than the ground sector (arm reach shrinks at higher z)', () => {
+    const ground = computeSimpleWorkspace(k);
+    expect(clearance.radial.max).toBeLessThan(ground.radial.max);
+  });
+
+  it('shares the same azimuth band as the ground sector', () => {
+    const ground = computeSimpleWorkspace(k);
+    expect(clearance.azimuth.min).toBeCloseTo(ground.azimuth.min, 6);
+    expect(clearance.azimuth.max).toBeCloseTo(ground.azimuth.max, 6);
+  });
+});
+
+describe('computeArmWorkspaceAtHeight (jaw contact reach at z = 1.5 cm)', () => {
+  const k = deriveSo101Kinematics(model);
+  const groundHeight = computeSimpleWorkspace(k).targetHeight;
+  const armWs = computeArmWorkspaceAtHeight(k, groundHeight);
+
+  it('reports the sector', () => {
+    console.log(
+      '[arm@ground-height workspace] radial %s..%s m',
+      armWs.radial.min.toFixed(4),
+      armWs.radial.max.toFixed(4)
+    );
+    expect(armWs.targetHeight).toBeCloseTo(groundHeight, 4);
+    expect(armWs.radial.max).toBeGreaterThan(0);
+  });
+
+  it('outer radius strictly exceeds the pregrasp ground sector', () => {
+    const ground = computeSimpleWorkspace(k);
+    expect(armWs.radial.max).toBeGreaterThan(ground.radial.max);
+  });
+
+  it('outer radius is within the global max reach', () => {
+    const global = computeGlobalXyWorkspace(k);
+    expect(armWs.radial.max).toBeLessThanOrEqual(global.radial.max + 1e-6);
+  });
+});
+
+describe('computeGlobalXyWorkspace (arm max reach, any joint config)', () => {
+  const k = deriveSo101Kinematics(model);
+  const global = computeGlobalXyWorkspace(k);
+
+  it('reports the global sector', () => {
+    console.log(
+      '[global workspace] radial %s..%s m',
+      global.radial.min.toFixed(4),
+      global.radial.max.toFixed(4)
+    );
+    expect(global.radial.min).toBeGreaterThanOrEqual(0);
+    expect(global.radial.max).toBeGreaterThan(0);
+    expect(Number.isNaN(global.targetHeight)).toBe(true);
+    // Must be substantially larger than the pregrasp-only sector.
+    expect(global.radial.max).toBeGreaterThan(0.35);
+  });
+
+  it('outer radius exceeds both pregrasp sectors', () => {
+    const ground = computeSimpleWorkspace(k);
+    const clearance = computeSimpleWorkspaceForCubeZ(k, CUBE_Z_1CM_OVER_GROUND_TOP);
+    expect(global.radial.max).toBeGreaterThan(ground.radial.max);
+    expect(global.radial.max).toBeGreaterThan(clearance.radial.max);
   });
 });

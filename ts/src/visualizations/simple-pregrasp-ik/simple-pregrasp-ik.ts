@@ -21,6 +21,7 @@ import {
 // The pose math is the shared, DRY core: this viz and the SimplePregraspPose
 // viz both derive the gripper pose from the same function.
 import { createSimplePregraspMatrix } from '../simple-pregrasp-pose/pose';
+import { buildWorkspaceOverlaySpecs } from '../workspace-overlay';
 import { createSimplePregraspIkScene } from './scene';
 import {
   buildUi,
@@ -46,8 +47,7 @@ export async function initializeSimplePregraspIkVisualization(
   const model = await loadWebModel(options.modelUrl);
   const kinematics = deriveSo101Kinematics(model);
 
-  // Closed-form any-yaw workspace: marks the graspable region and bounds the
-  // X/Y sliders to it. See src/ik/workspace.ts.
+  // Ground-cube pregrasp workspace: drives the slider ranges.
   const workspace = computeSimpleWorkspace(kinematics);
   const band = anyYawCubeCenterBand(workspace);
   const bbox = sectorBoundingBox(workspace);
@@ -92,13 +92,8 @@ export async function initializeSimplePregraspIkVisualization(
     azimuthDefault: Math.round(defaultRadial.azimuthDeg)
   });
   const vizScene = createSimplePregraspIkScene(
-    ui.viewport, model, options.modelBasePath, {
-      center: workspace.panAxis,
-      innerRadius: band.min,
-      outerRadius: band.max,
-      thetaStart: workspace.azimuth.min,
-      thetaLength: workspace.azimuth.max - workspace.azimuth.min
-    }
+    ui.viewport, model, options.modelBasePath,
+    buildWorkspaceOverlaySpecs(kinematics)
   );
 
   let currentFace: CubeFace = '-x';

@@ -9,6 +9,10 @@ import {
   setJointAngle,
   type WebModel
 } from '../../web-model';
+import {
+  addWorkspaceOverlaysToScene,
+  type WorkspaceOverlaySpec
+} from '../workspace-overlay';
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from './ui';
 
 export interface RobotScene {
@@ -25,7 +29,8 @@ export interface RobotScene {
 export function createRobotScene(
   viewport: HTMLElement,
   model: WebModel,
-  modelBasePath = '/so101_assets'
+  modelBasePath = '/so101_assets',
+  workspaces: WorkspaceOverlaySpec[] = []
 ): RobotScene {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
@@ -54,6 +59,8 @@ export function createRobotScene(
   const grid = new THREE.GridHelper(1, 20, 0x9aa9bc, 0xd5dde8);
   grid.rotation.x = Math.PI / 2;
   scene.add(grid);
+
+  const disposeOverlays = addWorkspaceOverlaysToScene(scene, workspaces);
 
   const builtModel = buildWebModel(model, modelBasePath);
   scene.add(builtModel.root);
@@ -84,6 +91,7 @@ export function createRobotScene(
     destroy(): void {
       orbitControls.dispose();
       renderer.dispose();
+      disposeOverlays();
       for (const mats of builtModel.materialsByName.values()) {
         for (const mat of mats) { mat.dispose(); }
       }
