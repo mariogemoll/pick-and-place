@@ -63,6 +63,17 @@ export const CUBE_CONTACT_POSITION = new THREE.Vector3(
   0
 );
 
+// IK position target: the jaw contact point projected onto the wrist-roll axis
+// (the gripper frame's z-axis). The displacement from the contact point to this
+// point runs along gripper x (the jaw-closing direction and face normal), so
+// wrist roll does not change the target's world position. That invariance makes
+// the closed-form IK decomposition exact.
+export const GRIPPER_TARGET_POSITION = new THREE.Vector3(
+  0,
+  0,
+  TIP_BOX.position[2]
+);
+
 export function createWorldFromCubeMatrix(pose: CubePose = DEFAULT_CUBE_POSE): THREE.Matrix4 {
   return new THREE.Matrix4()
     .makeTranslation(pose.x, pose.y, pose.z)

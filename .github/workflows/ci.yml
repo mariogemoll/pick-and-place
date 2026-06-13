@@ -43,6 +43,11 @@ jobs:
       - name: "Run simulation package tests"
         working-directory: py
         run: python -m pytest
+      - name: "Generate web model"
+        working-directory: py
+        run: |
+          python -m pick_and_place.export -o ../ts/public/so101.xml
+          rm ../ts/public/so101.xml
       - name: "Run ruff on mesh optimization package"
         working-directory: mesh_optimization
         run: python -m ruff check .

@@ -28,6 +28,10 @@ import {
   type RobotVisualization
 } from './visualizations/robot';
 import {
+  initSimplePregraspIkVisualization,
+  type SimplePregraspIkVisualization
+} from './visualizations/simple-pregrasp-ik';
+import {
   initSimplePregraspPoseVisualization,
   type SimplePregraspPoseVisualization
 } from './visualizations/simple-pregrasp-pose';
@@ -39,6 +43,7 @@ let gripperVisualization: GripperVisualization | null = null;
 let robotVisualization: RobotVisualization | null = null;
 let bodyTreeVisualization: BodyTreeVisualization | null = null;
 let simplePregraspPoseVisualization: SimplePregraspPoseVisualization | null = null;
+let simplePregraspIkVisualization: SimplePregraspIkVisualization | null = null;
 
 function initialize(): void {
   const dummyPanel = document.getElementById('dummy-visualization');
@@ -69,6 +74,17 @@ function initialize(): void {
 
     void initSimplePregraspPoseVisualization(simplePregraspPosePanel).then(viz => {
       simplePregraspPoseVisualization = viz;
+    });
+  }
+
+  const simplePregraspIkPanel =
+    document.getElementById('simple-pregrasp-ik-visualization');
+  if (simplePregraspIkPanel) {
+    simplePregraspIkVisualization?.destroy();
+    simplePregraspIkVisualization = null;
+
+    void initSimplePregraspIkVisualization(simplePregraspIkPanel).then(viz => {
+      simplePregraspIkVisualization = viz;
     });
   }
 

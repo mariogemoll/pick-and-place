@@ -40,7 +40,6 @@ export async function initializeSimplePregraspPoseVisualization(
     vizScene.bodies.updateCubePose(currentPose);
     const matrix = createSimplePregraspMatrix(currentFace, currentPose);
     if (!gripper) { return; }
-    gripper.visible = matrix !== undefined;
     ui.status.textContent = matrix === undefined
       ? 'No solution: the selected face is not vertical.'
       : 'Valid vertical pregrasp pose';
