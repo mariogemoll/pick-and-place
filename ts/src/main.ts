@@ -16,6 +16,10 @@ import {
   initGripperVisualization
 } from './visualizations/gripper';
 import {
+  PickAndPlace,
+  type PickAndPlaceVisualization
+} from './visualizations/pick-and-place';
+import {
   initPregraspPoseVisualization,
   type PregraspPoseVisualization
 } from './visualizations/pregrasp-pose';
@@ -44,6 +48,7 @@ let robotVisualization: RobotVisualization | null = null;
 let bodyTreeVisualization: BodyTreeVisualization | null = null;
 let simplePregraspPoseVisualization: SimplePregraspPoseVisualization | null = null;
 let simplePregraspIkVisualization: SimplePregraspIkVisualization | null = null;
+let pickAndPlaceVisualization: PickAndPlaceVisualization | null = null;
 
 function initialize(): void {
   const dummyPanel = document.getElementById('dummy-visualization');
@@ -85,6 +90,16 @@ function initialize(): void {
 
     void initSimplePregraspIkVisualization(simplePregraspIkPanel).then(viz => {
       simplePregraspIkVisualization = viz;
+    });
+  }
+
+  const pickAndPlacePanel = document.getElementById('pick-and-place-visualization');
+  if (pickAndPlacePanel) {
+    pickAndPlaceVisualization?.destroy();
+    pickAndPlaceVisualization = null;
+
+    void PickAndPlace(pickAndPlacePanel).then(viz => {
+      pickAndPlaceVisualization = viz;
     });
   }
 

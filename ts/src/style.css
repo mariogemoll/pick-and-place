@@ -584,3 +584,32 @@ canvas {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.pick-and-place-viz-cube-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.35rem;
+  color: #334155;
+  font-size: 0.8rem;
+}
+
+.pick-and-place-viz-viewport {
+  height: 560px;
+}
+
+.pick-and-place-viz-swatch {
+  width: 0.7rem;
+  height: 0.7rem;
+  box-sizing: border-box;
+  border-radius: 2px;
+}
+
+.pick-and-place-viz-swatch.source {
+  background: #38bdf8;
+}
+
+.pick-and-place-viz-swatch.target {
+  background: rgb(34 197 94 / 28%);
+  border: 1px solid #22c55e;
+}
