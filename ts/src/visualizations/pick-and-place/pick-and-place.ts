@@ -15,6 +15,7 @@ import {
   type CubePose
 } from '../pregrasp-pose-shared/body-factories';
 import { createXyMultiDragControls } from '../xy-drag-controls';
+import { createCarryProfilePlot } from './carry-profile-plot';
 import { createPickAndPlaceScene } from './scene';
 import { computeTrajectory, NEUTRAL_FRAME, type Trajectory } from './trajectory';
 import {
@@ -132,6 +133,14 @@ export async function PickAndPlace(
       thetaLength: workspace.azimuth.max - workspace.azimuth.min
     }
   );
+  const profilePlots = [
+    createCarryProfilePlot('time'),
+    createCarryProfilePlot('distance')
+  ];
+  for (const profilePlot of profilePlots) {
+    ui.viewport.appendChild(profilePlot.element);
+  }
+
   let sourcePose = { ...initialSource };
   let targetPose = { ...initialTarget };
 
@@ -232,6 +241,9 @@ export async function PickAndPlace(
     }
     vizScene.setJoint('gripper', frame.gripper);
     vizScene.updateSourceCube(frame.sourceCube);
+    for (const profilePlot of profilePlots) {
+      profilePlot.setMarker(trajectory.carryFraction(t));
+    }
   };
   const resetFrame = (): void => {
     for (const name of ARM_JOINT_NAMES) {
@@ -275,11 +287,20 @@ export async function PickAndPlace(
       playbackSeconds = 0;
       setPlaying(false);
       resetFrame();
+      for (const profilePlot of profilePlots) {
+        profilePlot.element.hidden = true;
+      }
     } else {
-      trajectory = computeTrajectory(kinematics, sourcePose);
+      trajectory = computeTrajectory(kinematics, sourcePose, targetPose);
       if (trajectory === null) { setStage('setup'); return; }
       ui.seekInput.max = String(trajectory.duration);
       playbackSeconds = 0;
+      const profile = trajectory.carryProfile();
+      for (const profilePlot of profilePlots) {
+        profilePlot.setProfile(profile);
+        profilePlot.setMarker(trajectory.carryFraction(0));
+        profilePlot.element.hidden = false;
+      }
       setPlaying(true);
     }
   };
@@ -312,7 +333,10 @@ export async function PickAndPlace(
   };
   ui.resetButton.addEventListener('click', resetListener);
 
-  const resizeObserver = new ResizeObserver(() => { vizScene.resize(); });
+  const resizeObserver = new ResizeObserver(() => {
+    vizScene.resize();
+    for (const profilePlot of profilePlots) { profilePlot.resize(); }
+  });
   resizeObserver.observe(ui.viewport);
   renderCubePoses();
 
@@ -357,6 +381,7 @@ export async function PickAndPlace(
       ui.cancelButton.removeEventListener('click', cancelListener);
       ui.playPauseButton.removeEventListener('click', playPauseListener);
       ui.seekInput.removeEventListener('input', seekListener);
+      for (const profilePlot of profilePlots) { profilePlot.destroy(); }
       vizScene.destroy();
       ui.root.remove();
     }

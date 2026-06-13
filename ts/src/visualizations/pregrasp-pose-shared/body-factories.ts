@@ -175,7 +175,15 @@ export async function createGripperBody(
   };
 }
 
-export function createCubeBody(materials: BodyMaterials): BodyPart {
+// `faceMaterials`, when given, paints the six cube faces individually (in
+// THREE.BoxGeometry group order: +x, -x, +y, -y, +z, -z) so the cube's
+// orientation is legible as it is carried and reoriented. The caller owns and
+// disposes those materials; when omitted the cube uses the shared `cube`
+// material as before.
+export function createCubeBody(
+  materials: BodyMaterials,
+  faceMaterials?: readonly THREE.Material[]
+): BodyPart {
   const body = new THREE.Group();
   body.name = 'cube_body';
   createWorldFromCubeMatrix().decompose(
@@ -189,7 +197,10 @@ export function createCubeBody(materials: BodyMaterials): BodyPart {
     CUBE_HALF_SIZE * 2,
     CUBE_HALF_SIZE * 2
   );
-  const cubeVisual = new THREE.Mesh(cubeGeometry, materials.cube);
+  const cubeVisual = new THREE.Mesh(
+    cubeGeometry,
+    faceMaterials ? [...faceMaterials] : materials.cube
+  );
   cubeVisual.name = 'cube_visual';
   body.add(cubeVisual);
 

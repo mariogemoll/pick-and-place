@@ -787,6 +787,41 @@ canvas {
   pointer-events: auto;
 }
 
+.pick-and-place-viz-profile {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 1;
+  width: 230px;
+  padding: 0.5rem 0.6rem 0.4rem;
+  background: rgb(255 255 255 / 90%);
+  border: 1px solid rgb(203 213 225 / 80%);
+  border-radius: 7px;
+  box-shadow: 0 2px 8px rgb(15 23 42 / 15%);
+  backdrop-filter: blur(8px);
+}
+
+.pick-and-place-viz-profile-distance {
+  top: 12.25rem;
+}
+
+.pick-and-place-viz-profile[hidden] {
+  display: none;
+}
+
+.pick-and-place-viz-profile-title {
+  margin-bottom: 0.25rem;
+  color: #475569;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.pick-and-place-viz-profile-canvas {
+  display: block;
+  width: 100%;
+  height: 130px;
+}
+
 @media (width <= 600px) {
   .pick-and-place-viz-controls {
     top: 0.5rem;

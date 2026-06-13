@@ -82,20 +82,31 @@ export function createPickAndPlaceScene(
   const builtModel = buildWebModel(model, modelBasePath);
   scene.add(builtModel.root);
 
+  // One colour per cube face, in THREE.BoxGeometry group order
+  // (+x, -x, +y, -y, +z, -z), so the cube's orientation – and which face the
+  // jaws grasped – stays readable while it is carried and reoriented.
+  const FACE_COLORS = [0xef4444, 0xf97316, 0x22c55e, 0x06b6d4, 0x3b82f6, 0xeab308];
+  const createFaceMaterials = (translucent: boolean): THREE.MeshStandardMaterial[] =>
+    FACE_COLORS.map(color => new THREE.MeshStandardMaterial({
+      color,
+      roughness: 0.6,
+      ...(translucent
+        ? { opacity: 0.3, transparent: true, depthWrite: false }
+        : {})
+    }));
+
   const sourceMaterials = createBodyMaterials();
-  const sourcePart = createCubeBody(sourceMaterials);
+  const sourceFaceMaterials = createFaceMaterials(false);
+  const sourcePart = createCubeBody(sourceMaterials, sourceFaceMaterials);
   sourcePart.body.name = 'source_cube';
   scene.add(sourcePart.body);
 
   const targetMaterials = createBodyMaterials();
-  targetMaterials.cube.color.set(0x22c55e);
-  targetMaterials.cube.opacity = 0.28;
-  targetMaterials.cube.transparent = true;
-  targetMaterials.cube.depthWrite = false;
   targetMaterials.marker.opacity = 0.35;
   targetMaterials.marker.transparent = true;
   targetMaterials.marker.depthWrite = false;
-  const targetPart = createCubeBody(targetMaterials);
+  const targetFaceMaterials = createFaceMaterials(true);
+  const targetPart = createCubeBody(targetMaterials, targetFaceMaterials);
   targetPart.body.name = 'target_cube';
   scene.add(targetPart.body);
 
@@ -135,8 +146,10 @@ export function createPickAndPlaceScene(
       }
       sourcePart.destroy();
       sourceMaterials.destroy();
+      for (const material of sourceFaceMaterials) { material.dispose(); }
       targetPart.destroy();
       targetMaterials.destroy();
+      for (const material of targetFaceMaterials) { material.dispose(); }
       disposeOverlays();
     }
   };
