@@ -9,7 +9,9 @@ import {
   type So101Kinematics
 } from '../../ik/kinematics';
 import { solveSimplePregraspIk } from '../../ik/simple-ik';
+import { SAFETY_MARGIN } from '../pregrasp-pose-shared/bodies';
 import {
+  createWorldFromCubeContactMatrix,
   type CubeFace,
   type CubePose
 } from '../pregrasp-pose-shared/body-factories';
@@ -20,15 +22,29 @@ const HOVER_Z_OFFSET = 0.01;
 
 // Gripper joint angle at hover pregrasp: 40° open.
 export const GRIPPER_OPEN = 40 * (Math.PI / 180);
+// Gripper joint angle once the jaws have pinched the cube. Geometrically
+// estimated: at this angle the moving jaw's fingertips reach the cube's far
+// face after the cube has slid flush against the fixed jaw. (Faked, not solved
+// from a physics engine – fine-tune visually if the pinch looks off.)
+export const GRIPPER_CLOSED = 10.5 * (Math.PI / 180);
+// Gripper angle at which the cube starts being shoved toward the fixed jaw.
+// The true geometric contact is a bit later (~14°), but starting the slide
+// sooner reads better: the cube eases over rather than snapping flush at the
+// very end of the close.
+const GRIPPER_CONTACT = 20 * (Math.PI / 180);
 
 export type JointAngles = Record<ArmJointName, number>;
 
-export interface TrajectoryFrame {
+export interface RobotPose {
   joints: JointAngles;
   gripper: number;
 }
 
-export const NEUTRAL_FRAME: TrajectoryFrame = {
+export interface TrajectoryFrame extends RobotPose {
+  sourceCube: CubePose;
+}
+
+export const NEUTRAL_FRAME: RobotPose = {
   joints: {
     shoulder_pan: 0,
     shoulder_lift: 0,
@@ -43,6 +59,9 @@ export const NEUTRAL_FRAME: TrajectoryFrame = {
 const STAGE1_DURATION = 2.0;
 // Duration of stage 2 – hover pregrasp → pregrasp at source cube center.
 const STAGE2_DURATION = 1.0;
+// Duration of stage 3 – close the gripper, pushing the cube against the fixed
+// jaw.
+const STAGE3_DURATION = 1.0;
 
 // The four vertical faces tried in order of how naturally the robot approaches
 // a cube that is roughly in the +x direction from the pan axis.
@@ -123,10 +142,33 @@ export function computeTrajectory(
 
   const stage1EndJoints = hoverJoints;
   const stage2EndJoints = pregraspJoints;
-  const duration = STAGE1_DURATION + STAGE2_DURATION;
+  const stage2End = STAGE1_DURATION + STAGE2_DURATION;
+  const duration = stage2End + STAGE3_DURATION;
+
+  // Direction pointing from the grasped face into the cube. The cube is pushed
+  // the opposite way (toward the fixed jaw) as the gripper closes.
+  const inwardNormal = new THREE.Vector3(0, 0, 1).transformDirection(
+    createWorldFromCubeContactMatrix(selectedFace, sourcePose)
+  );
+
   return {
     duration,
     evaluate(t: number): TrajectoryFrame {
+      if (t >= stage2End) {
+        // Stage 3: hold the arm at pregrasp and close the gripper. Once the
+        // moving jaw reaches the cube it shoves it flush against the fixed jaw.
+        const alpha = smoothstep((t - stage2End) / STAGE3_DURATION);
+        const gripper = GRIPPER_OPEN + (GRIPPER_CLOSED - GRIPPER_OPEN) * alpha;
+        const push = gripper < GRIPPER_CONTACT
+          ? SAFETY_MARGIN *
+            (GRIPPER_CONTACT - gripper) / (GRIPPER_CONTACT - GRIPPER_CLOSED)
+          : 0;
+        return {
+          joints: stage2EndJoints,
+          gripper,
+          sourceCube: pushedCube(sourcePose, inwardNormal, push)
+        };
+      }
       if (t >= STAGE1_DURATION) {
         const alpha = smoothstep((t - STAGE1_DURATION) / STAGE2_DURATION);
         const matrix = pregraspMatrix(
@@ -141,14 +183,32 @@ export function computeTrajectory(
         return {
           joints: branch?.joints ??
             lerpJoints(stage1EndJoints, stage2EndJoints, alpha),
-          gripper: GRIPPER_OPEN
+          gripper: GRIPPER_OPEN,
+          sourceCube: sourcePose
         };
       }
       const alpha = smoothstep(t / STAGE1_DURATION);
       return {
         joints: lerpJoints(NEUTRAL_FRAME.joints, stage1EndJoints, alpha),
-        gripper: NEUTRAL_FRAME.gripper + (GRIPPER_OPEN - NEUTRAL_FRAME.gripper) * alpha
+        gripper: NEUTRAL_FRAME.gripper + (GRIPPER_OPEN - NEUTRAL_FRAME.gripper) * alpha,
+        sourceCube: sourcePose
       };
     }
+  };
+}
+
+// Source cube translated `push` metres toward the fixed jaw (opposite the
+// face's inward normal). Faces are vertical, so this only moves x/y.
+function pushedCube(
+  pose: CubePose,
+  inwardNormal: THREE.Vector3,
+  push: number
+): CubePose {
+  if (push === 0) { return pose; }
+  return {
+    ...pose,
+    x: pose.x - inwardNormal.x * push,
+    y: pose.y - inwardNormal.y * push,
+    z: pose.z - inwardNormal.z * push
   };
 }

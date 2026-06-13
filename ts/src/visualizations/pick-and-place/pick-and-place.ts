@@ -231,12 +231,14 @@ export async function PickAndPlace(
       vizScene.setJoint(name, frame.joints[name]);
     }
     vizScene.setJoint('gripper', frame.gripper);
+    vizScene.updateSourceCube(frame.sourceCube);
   };
   const resetFrame = (): void => {
     for (const name of ARM_JOINT_NAMES) {
       vizScene.setJoint(name, NEUTRAL_FRAME.joints[name]);
     }
     vizScene.setJoint('gripper', NEUTRAL_FRAME.gripper);
+    vizScene.updateSourceCube(sourcePose);
   };
 
   const renderPlayback = (): void => {
