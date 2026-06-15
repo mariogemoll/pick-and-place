@@ -46,6 +46,7 @@ def build_robot(
     spec.meshdir = str(STOCK_ASSETS_DIR)
     _strip_mesh_collisions(spec)
     _add_collision_boxes(spec)
+    _exclude_base_shoulder_contact(spec)
     if wrist_camera:
         add_wrist_camera(spec)
     apply_materials(spec, materials or MaterialConfig())
@@ -82,3 +83,13 @@ def _add_collision_boxes(spec: mujoco.MjSpec) -> None:
                 rgba=_COLLISION_RGBA,
                 **grip_kwargs,
             )
+
+
+def _exclude_base_shoulder_contact(spec: mujoco.MjSpec) -> None:
+    # MuJoCo intentionally allows contacts when the parent is welded to the
+    # world, so mechanically adjacent static-base links need an explicit filter.
+    spec.add_exclude(
+        name="base_shoulder",
+        bodyname1="base",
+        bodyname2="shoulder",
+    )

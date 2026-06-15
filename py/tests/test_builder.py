@@ -30,6 +30,18 @@ def test_robot_has_box_collisions_only():
     assert colliding_meshes == []
 
 
+def test_robot_shoulder_pan_range_has_no_self_contacts():
+    model = build_robot().compile()
+    data = mujoco.MjData(model)
+    shoulder_pan_qpos = model.joint("shoulder_pan").qposadr[0]
+
+    for angle in np.linspace(*model.jnt_range[model.joint("shoulder_pan").id], 17):
+        data.qpos[shoulder_pan_qpos] = angle
+        mujoco.mj_forward(model, data)
+
+        assert data.ncon == 0
+
+
 def test_wrist_camera_is_on_by_default_and_can_be_disabled():
     model = build_robot().compile()
 
