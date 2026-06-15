@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Compose the SO-101 robot with a floor, light, and small cube."""
+"""Compose the SO-101 robot with a floor, workspace overlays, light, and cube."""
 
 from __future__ import annotations
 
@@ -11,13 +11,15 @@ import mujoco
 
 from pick_and_place.builder import STOCK_ASSETS_DIR, build_robot
 from pick_and_place.materials import MaterialConfig
+from pick_and_place.workspace_overlays import add_workspace_overlays
+
 
 def build_scene(
     *,
     wrist_camera: bool = True,
     materials: MaterialConfig | None = None,
 ) -> mujoco.MjSpec:
-    """Return the composed robot with a floor, light, and 3 cm cube."""
+    """Return the composed robot with a floor, workspace overlays, light, and cube."""
     spec = build_robot(wrist_camera=wrist_camera, materials=materials)
     spec.modelname = "so101_with_cube"
     spec.add_texture(
@@ -49,6 +51,7 @@ def build_scene(
         pos=(0.0, 0.0, 1.0),
         dir=(0.0, 0.0, -1.0),
     )
+    add_workspace_overlays(spec, spec.body("base"))
     _add_pick_cube(spec)
     return spec
 

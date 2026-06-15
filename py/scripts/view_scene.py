@@ -5,7 +5,8 @@
 """Open or export the SO-101 robot with a floor, light, and 3 cm cube.
 
 The model is composed on the fly from the stock robot, hand-tuned collision
-boxes, one floor plane, one light, and one cube.
+boxes, workspace overlays, one floor plane, one light, and one cube. Toggle
+geom group 4 in the viewer (key '4') to show or hide the workspace overlays.
 """
 
 from __future__ import annotations
