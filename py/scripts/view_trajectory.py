@@ -9,7 +9,7 @@ the trajectory's joint set points are written to ``data.ctrl`` and the simulatio
 is stepped, so gravity and contact are live. The cube gets a free joint and rests
 on the floor as a genuine rigid body.
 
-Phase 1 only so far: neutral -> hover above the source cube.
+Phases 1-2 so far: neutral -> hover -> pregrasp at the source cube center.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ import mujoco.viewer
 from pick_and_place import build_scene
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.kinematics import derive_kinematics
-from pick_and_place.trajectory import NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER, hover_approach
+from pick_and_place.trajectory import NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER, pick_approach
 
 
 def _set_joint(model: mujoco.MjModel, data: mujoco.MjData, name: str, value: float) -> None:
@@ -53,7 +53,7 @@ def main() -> None:
     data = mujoco.MjData(model)
 
     kinematics = derive_kinematics(model)
-    trajectory = hover_approach(kinematics, source)
+    trajectory = pick_approach(kinematics, source)
 
     # Start at the neutral pose, gripper closed, holding via the servos.
     for name, value in NEUTRAL_ARM_JOINTS.items():
