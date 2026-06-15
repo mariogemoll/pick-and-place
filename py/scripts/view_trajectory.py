@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import dataclasses
 import math
 import time
 
@@ -26,7 +25,11 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
-from pick_and_place import build_scene
+from pick_and_place.episodes import (
+    is_unexpected,
+    prepare_episode,
+    scan_contacts,
+)
 from pick_and_place.follower import (
     ARM_JOINT_NAMES,
     GRIPPER_INDEX,
@@ -39,138 +42,7 @@ from pick_and_place.follower import (
     sim_frame_to_real,
 )
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
-from pick_and_place.kinematics import So101Kinematics, derive_kinematics
-from pick_and_place.trajectory import (
-    GRIPPER_OPEN,
-    NEUTRAL_ARM_JOINTS,
-    NEUTRAL_GRIPPER,
-    PickAndCarry,
-    pick_and_carry_candidates,
-)
-from pick_and_place.workspace_overlays import (
-    AZIMUTH_MAX,
-    AZIMUTH_MIN,
-    PAN_AXIS,
-    WORKSPACE_OVERLAYS,
-)
-
-_CLEARANCE_OVERLAY = next(o for o in WORKSPACE_OVERLAYS if o.name == "workspace_clearance_pregrasp")
-
-
-def _build_geom_sets(model: mujoco.MjModel) -> tuple[set[int], set[int]]:
-    """Return (robot_geom_ids, env_geom_ids).
-
-    Robot geoms: all geoms on bodies other than the worldbody and the pick_cube.
-    Environment geoms: floor and pick_cube — the things we check robot against.
-    """
-    world_body_id = 0
-    cube_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pick_cube")
-    robot_geom_ids = {
-        gid
-        for gid in range(model.ngeom)
-        if model.geom_bodyid[gid] not in (world_body_id, cube_body_id)
-    }
-    cube_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "pick_cube")
-    floor_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "floor")
-    return robot_geom_ids, {cube_geom_id, floor_geom_id}
-
-
-def _scan_contacts(
-    model: mujoco.MjModel,
-    data: mujoco.MjData,
-    robot_geom_ids: set[int],
-    env_geom_ids: set[int],
-) -> list[tuple[str, str]]:
-    """Return (name1, name2) for robot↔environment and robot↔robot contacts."""
-    hits = []
-    for i in range(data.ncon):
-        c = data.contact[i]
-        g1, g2 = int(c.geom[0]), int(c.geom[1])
-        g1_robot = g1 in robot_geom_ids
-        g2_robot = g2 in robot_geom_ids
-        if (g1_robot and g2 in env_geom_ids) or (g2_robot and g1 in env_geom_ids) or (g1_robot and g2_robot):
-            n1 = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, g1) or str(g1)
-            n2 = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, g2) or str(g2)
-            hits.append((n1, n2))
-    return hits
-
-
-def _preflight(
-    model: mujoco.MjModel,
-    trajectory: PickAndCarry,
-    actuator_id: dict[str, int],
-    robot_geom_ids: set[int],
-    env_geom_ids: set[int],
-) -> list[tuple[float, str, str]]:
-    """Simulate the full trajectory in a shadow MjData and return collision events."""
-    shadow = mujoco.MjData(model)
-    for name, value in NEUTRAL_ARM_JOINTS.items():
-        _set_joint(model, shadow, name, value)
-        shadow.ctrl[actuator_id[name]] = value
-    shadow.ctrl[actuator_id["gripper"]] = NEUTRAL_GRIPPER
-
-    # Compensate for the physical 2.8° (0.0486795 rad) arm twist.
-    wrist_roll = math.radians(2.8 - 90)
-    _set_joint(model, shadow, "wrist_roll", wrist_roll)
-    shadow.ctrl[actuator_id["wrist_roll"]] = wrist_roll
-
-    mujoco.mj_forward(model, shadow)
-
-    events: list[tuple[float, str, str]] = []
-    while shadow.time < trajectory.duration:
-        frame = trajectory.evaluate(shadow.time)
-        for name, value in frame.joints.items():
-            shadow.ctrl[actuator_id[name]] = value
-        shadow.ctrl[actuator_id["gripper"]] = frame.gripper
-        mujoco.mj_step(model, shadow)
-        for n1, n2 in _scan_contacts(model, shadow, robot_geom_ids, env_geom_ids):
-            events.append((shadow.time, n1, n2))
-    return events
-
-
-_JAW_PREFIXES = ("fixed_jaw_col", "moving_jaw_col")
-
-
-def _is_jaw(n: str) -> bool:
-    return n.startswith(_JAW_PREFIXES)
-
-
-def _is_unexpected(n1: str, n2: str) -> bool:
-    """False only for jaw↔cube contacts, which are the intentional grasp."""
-    return not ((_is_jaw(n1) and n2 == "pick_cube") or (_is_jaw(n2) and n1 == "pick_cube"))
-
-
-def _random_cube() -> CubePose:
-    """Sample a cube pose uniformly inside the clearance-pregrasp annular sector."""
-    r_inner, r_outer = _CLEARANCE_OVERLAY.inner_radius, _CLEARANCE_OVERLAY.outer_radius
-    # Uniform area sampling: draw r² uniformly so density is flat in 2-D.
-    r = math.sqrt(np.random.uniform(r_inner**2, r_outer**2))
-    theta = np.random.uniform(AZIMUTH_MIN, AZIMUTH_MAX)
-    yaw = np.random.uniform(0.0, 2 * math.pi)
-    return CubePose(
-        x=PAN_AXIS[0] + r * math.cos(theta),
-        y=PAN_AXIS[1] + r * math.sin(theta),
-        z=CUBE_HALF_SIZE,
-        yaw=yaw,
-    )
-
-
-_NEAR_NEUTRAL_JOINT_SCALE = 0.4  # ±radians of random joint perturbation from neutral
-
-
-def _random_near_neutral() -> tuple[dict[str, float], float]:
-    """Return arm joints and gripper perturbed slightly from the neutral pose."""
-    joints = {
-        name: value + np.random.uniform(-_NEAR_NEUTRAL_JOINT_SCALE, _NEAR_NEUTRAL_JOINT_SCALE)
-        for name, value in NEUTRAL_ARM_JOINTS.items()
-    }
-    gripper = float(np.random.uniform(0.0, GRIPPER_OPEN))
-    return joints, gripper
-
-
-def _set_joint(model: mujoco.MjModel, data: mujoco.MjData, name: str, value: float) -> None:
-    jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
-    data.qpos[model.jnt_qposadr[jid]] = value
+from pick_and_place.kinematics import So101Kinematics
 
 
 # Rate at which set points are streamed to the physical follower and the motors
@@ -338,83 +210,27 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    fixed_source = args.source is not None
-    fixed_target = args.target is not None
-
-    attempt = 0
-    while True:
-        attempt += 1
-
-        source = (
-            CubePose(x=args.source[0], y=args.source[1], z=CUBE_HALF_SIZE)
-            if fixed_source
-            else _random_cube()
-        )
-        target = (
-            CubePose(x=args.target[0], y=args.target[1], z=CUBE_HALF_SIZE)
-            if fixed_target
-            else _random_cube()
-        )
-        start_joints, start_gripper = _random_near_neutral()
-        end_joints, end_gripper = _random_near_neutral()
-
-        spec = build_scene()
-        cube = spec.body("pick_cube")
-        cube.pos = (source.x, source.y, source.z)
-        half_yaw = source.yaw / 2.0
-        cube.quat = (math.cos(half_yaw), 0.0, 0.0, math.sin(half_yaw))
-        cube.add_freejoint()  # make the cube a real dynamic body
-        model = spec.compile()
-        data = mujoco.MjData(model)
-
-        kinematics = derive_kinematics(model)
-
-        actuator_id = {
-            mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i): i
-            for i in range(model.nu)
-        }
-        for name, value in start_joints.items():
-            _set_joint(model, data, name, value)
-            data.ctrl[actuator_id[name]] = value
-        data.ctrl[actuator_id["gripper"]] = start_gripper
-
-        mujoco.mj_forward(model, data)
-
-        robot_geom_ids, env_geom_ids = _build_geom_sets(model)
-
-        trajectory = None
-        for traj in pick_and_carry_candidates(kinematics, source, target):
-            grasp = traj.grasp
-            events = _preflight(model, traj, actuator_id, robot_geom_ids, env_geom_ids)
-            unexpected = [(t, n1, n2) for t, n1, n2 in events if _is_unexpected(n1, n2)]
-            if not unexpected:
-                trajectory = traj
-                print(
-                    f"source: x={source.x:.4f}  y={source.y:.4f}  yaw={math.degrees(source.yaw):.1f}°"
-                    f"  target: x={target.x:.4f}  y={target.y:.4f}  yaw={math.degrees(target.yaw):.1f}°"
-                )
-                print(f"grasp: face={grasp.face}  elbow={grasp.elbow}  carry={traj.carry.mode}  (attempt {attempt})")
-                break
-            seen_pairs: set[tuple[str, str]] = set()
-            for t, n1, n2 in unexpected:
-                key = (min(n1, n2), max(n1, n2))
-                if key not in seen_pairs:
-                    seen_pairs.add(key)
-                    print(f"skip {grasp.face}/{grasp.elbow}: collision t={t:.3f}s  {n1} ↔ {n2}")
-
-        if trajectory is not None:
-            break
-        if fixed_source and fixed_target:
-            raise ValueError("no collision-free pick-and-carry found for this source/target")
-        print(f"attempt {attempt}: no trajectory found, resampling...")
-
-    trajectory = dataclasses.replace(
-        trajectory,
-        start_joints=start_joints,
-        start_gripper=start_gripper,
-        end_joints=end_joints,
-        end_gripper=end_gripper,
+    source = (
+        CubePose(x=args.source[0], y=args.source[1], z=CUBE_HALF_SIZE)
+        if args.source is not None
+        else None
     )
+    target = (
+        CubePose(x=args.target[0], y=args.target[1], z=CUBE_HALF_SIZE)
+        if args.target is not None
+        else None
+    )
+
+    episode = prepare_episode(np.random.default_rng(), source, target, verbose=True)
+    model = episode.model
+    data = episode.data
+    kinematics = episode.kinematics
+    actuator_id = episode.actuator_id
+    robot_geom_ids = episode.robot_geom_ids
+    env_geom_ids = episode.env_geom_ids
+    trajectory = episode.trajectory
+    start_joints = episode.start_joints
+    start_gripper = episode.start_gripper
 
     # The physical arm is opt-in: only when a follower port is given. With zero
     # offsets the real frame is just the sim frame in degrees, so this run also
@@ -471,8 +287,8 @@ def main() -> None:
                 mujoco.mj_step(model, data)
                 curr_contacts = {
                     (min(n1, n2), max(n1, n2))
-                    for n1, n2 in _scan_contacts(model, data, robot_geom_ids, env_geom_ids)
-                    if _is_unexpected(n1, n2)
+                    for n1, n2 in scan_contacts(model, data, robot_geom_ids, env_geom_ids)
+                    if is_unexpected(n1, n2)
                 }
                 for pair in curr_contacts - prev_contacts:
                     print(f"collision t={traj_t:.3f}s  {pair[0]} ↔ {pair[1]}")
