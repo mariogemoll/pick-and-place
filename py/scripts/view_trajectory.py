@@ -9,7 +9,8 @@ the trajectory's joint set points are written to ``data.ctrl`` and the simulatio
 is stepped, so gravity and contact are live. The cube gets a free joint and rests
 on the floor as a genuine rigid body.
 
-Phases 1-2 so far: neutral -> hover -> pregrasp at the source cube center.
+Phases: (1) neutral -> hover, (2) hover -> pregrasp at cube center, (3) grasp,
+(4) lift and carry the grasped cube over to the hover above the target.
 """
 
 from __future__ import annotations
@@ -28,8 +29,8 @@ from pick_and_place.kinematics import derive_kinematics
 from pick_and_place.trajectory import (
     NEUTRAL_ARM_JOINTS,
     NEUTRAL_GRIPPER,
-    PickApproach,
-    grasp_candidates,
+    PickAndCarry,
+    pick_and_carry_candidates,
 )
 from pick_and_place.workspace_overlays import (
     AZIMUTH_MAX,
@@ -81,7 +82,7 @@ def _scan_contacts(
 
 def _preflight(
     model: mujoco.MjModel,
-    trajectory: PickApproach,
+    trajectory: PickAndCarry,
     actuator_id: dict[str, int],
     robot_geom_ids: set[int],
     env_geom_ids: set[int],
@@ -118,7 +119,7 @@ def _is_unexpected(n1: str, n2: str) -> bool:
     return not ((_is_jaw(n1) and n2 == "pick_cube") or (_is_jaw(n2) and n1 == "pick_cube"))
 
 
-def _random_source() -> CubePose:
+def _random_cube() -> CubePose:
     """Sample a cube pose uniformly inside the clearance-pregrasp annular sector."""
     r_inner, r_outer = _CLEARANCE_OVERLAY.inner_radius, _CLEARANCE_OVERLAY.outer_radius
     # Uniform area sampling: draw r² uniformly so density is flat in 2-D.
@@ -148,13 +149,27 @@ def main() -> None:
         default=None,
         help="source cube (x, y) on the floor; omit for a random pose in the clearance annulus",
     )
+    parser.add_argument(
+        "--target",
+        type=float,
+        nargs=2,
+        metavar=("X", "Y"),
+        default=None,
+        help="target (x, y) on the floor; omit for a random pose in the clearance annulus",
+    )
     args = parser.parse_args()
 
     if args.source is not None:
         source = CubePose(x=args.source[0], y=args.source[1], z=CUBE_HALF_SIZE)
     else:
-        source = _random_source()
-        print(f"cube: x={source.x:.4f}  y={source.y:.4f}  yaw={math.degrees(source.yaw):.1f}°")
+        source = _random_cube()
+        print(f"source: x={source.x:.4f}  y={source.y:.4f}  yaw={math.degrees(source.yaw):.1f}°")
+
+    if args.target is not None:
+        target = CubePose(x=args.target[0], y=args.target[1], z=CUBE_HALF_SIZE)
+    else:
+        target = _random_cube()
+        print(f"target: x={target.x:.4f}  y={target.y:.4f}  yaw={math.degrees(target.yaw):.1f}°")
 
     spec = build_scene()
     cube = spec.body("pick_cube")
@@ -181,13 +196,13 @@ def main() -> None:
     robot_geom_ids, env_geom_ids = _build_geom_sets(model)
 
     trajectory = None
-    for grasp in grasp_candidates(kinematics, source):
-        traj = PickApproach(k=kinematics, source=source, grasp=grasp)
+    for traj in pick_and_carry_candidates(kinematics, source, target):
+        grasp = traj.grasp
         events = _preflight(model, traj, actuator_id, robot_geom_ids, env_geom_ids)
         unexpected = [(t, n1, n2) for t, n1, n2 in events if _is_unexpected(n1, n2)]
         if not unexpected:
             trajectory = traj
-            print(f"grasp: face={grasp.face}  elbow={grasp.elbow}  (pre-flight clean)")
+            print(f"grasp: face={grasp.face}  elbow={grasp.elbow}  carry={traj.carry.mode}  (pre-flight clean)")
             break
         seen_pairs: set[tuple[str, str]] = set()
         for t, n1, n2 in unexpected:
@@ -196,7 +211,7 @@ def main() -> None:
                 seen_pairs.add(key)
                 print(f"skip {grasp.face}/{grasp.elbow}: collision t={t:.3f}s  {n1} ↔ {n2}")
     if trajectory is None:
-        raise ValueError("no collision-free grasp found for the source cube")
+        raise ValueError("no collision-free pick-and-carry found for this source/target")
 
     prev_contacts: set[tuple[str, str]] = set()
     with mujoco.viewer.launch_passive(model, data) as viewer:
