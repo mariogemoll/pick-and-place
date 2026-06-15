@@ -12,8 +12,10 @@ geom group 4 in the viewer (key '4') to show or hide the workspace overlays.
 from __future__ import annotations
 
 import argparse
+import math
 from pathlib import Path
 
+import mujoco
 import mujoco.viewer
 
 from pick_and_place import build_scene, export_scene
@@ -48,7 +50,14 @@ def main() -> None:
         print(f"Wrote {output}")
     if not args.export_only:
         model = build_scene(wrist_camera=wrist_camera).compile()
-        mujoco.viewer.launch(model)
+        data = mujoco.MjData(model)
+
+        # Compensate for the physical 2.8° (0.0486795 rad) arm twist.
+        wrist_roll = math.radians(2.8 - 90)
+        data.joint("wrist_roll").qpos = wrist_roll
+        data.actuator("wrist_roll").ctrl = wrist_roll
+
+        mujoco.viewer.launch(model, data)
 
 
 if __name__ == "__main__":

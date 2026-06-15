@@ -11,7 +11,9 @@ group 2 (key '2') to hide the visual meshes.
 from __future__ import annotations
 
 import argparse
+import math
 
+import mujoco
 import mujoco.viewer
 
 from pick_and_place import build_robot
@@ -27,7 +29,14 @@ def main() -> None:
     args = parser.parse_args()
 
     model = build_robot(wrist_camera=not args.no_wrist_camera).compile()
-    mujoco.viewer.launch(model)
+    data = mujoco.MjData(model)
+
+    # Compensate for the physical 2.8° (0.0486795 rad) arm twist.
+    wrist_roll = math.radians(2.8 - 90)
+    data.joint("wrist_roll").qpos = wrist_roll
+    data.actuator("wrist_roll").ctrl = wrist_roll
+
+    mujoco.viewer.launch(model, data)
 
 
 if __name__ == "__main__":

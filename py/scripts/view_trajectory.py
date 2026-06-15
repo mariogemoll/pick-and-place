@@ -94,6 +94,12 @@ def _preflight(
         _set_joint(model, shadow, name, value)
         shadow.ctrl[actuator_id[name]] = value
     shadow.ctrl[actuator_id["gripper"]] = NEUTRAL_GRIPPER
+
+    # Compensate for the physical 2.8° (0.0486795 rad) arm twist.
+    wrist_roll = math.radians(2.8 - 90)
+    _set_joint(model, shadow, "wrist_roll", wrist_roll)
+    shadow.ctrl[actuator_id["wrist_roll"]] = wrist_roll
+
     mujoco.mj_forward(model, shadow)
 
     events: list[tuple[float, str, str]] = []
@@ -192,6 +198,12 @@ def main() -> None:
         _set_joint(model, data, name, value)
         data.ctrl[actuator_id[name]] = value
     data.ctrl[actuator_id["gripper"]] = NEUTRAL_GRIPPER
+
+    # Compensate for the physical 2.8° (0.0486795 rad) arm twist.
+    wrist_roll = math.radians(2.8 - 90)
+    _set_joint(model, data, "wrist_roll", wrist_roll)
+    data.ctrl[actuator_id["wrist_roll"]] = wrist_roll
+
     mujoco.mj_forward(model, data)
 
     robot_geom_ids, env_geom_ids = _build_geom_sets(model)
