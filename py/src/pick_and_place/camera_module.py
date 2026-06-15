@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Reusable MuJoCo geometry for the UVC camera module used in the lab."""
+"""Reusable MuJoCo geometry for the UVC camera module."""
 
 from __future__ import annotations
 

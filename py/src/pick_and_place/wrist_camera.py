@@ -35,7 +35,7 @@ _MOUNT_SOURCE_ROTATION = np.array(
         (0.0, -1.0, 0.0),
     )
 )
-# Fitted in pickplace-lab so the locating nib seats flush in the wrist.
+# Fitted so the locating nib seats flush in the wrist.
 _MOUNT_VISUAL_POS = (-0.015086, 0.024001, -0.031666)
 _MOUNT_RGBA = (1.0, 0.82, 0.12, 1.0)
 
