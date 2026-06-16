@@ -22,6 +22,11 @@ from typing import Any
 import mujoco
 
 from pick_and_place.builder import STOCK_ASSETS_DIR, build_robot
+from pick_and_place.camera_intrinsics import (
+    CAMERA_INTRINSICS_BY_NAME,
+    load_camera_intrinsics,
+    load_local_camera_intrinsics,
+)
 from pick_and_place.materials import MaterialConfig
 from pick_and_place.scene import build_environment, build_scene
 
@@ -50,6 +55,7 @@ def web_manifest(
     spec: mujoco.MjSpec,
     model: mujoco.MjModel,
     materials: MaterialConfig | None = None,
+    camera_intrinsics_by_name: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return a web representation of a composed and compiled MuJoCo model.
 
@@ -108,16 +114,21 @@ def web_manifest(
         }
         bodies.append(body)
 
-    cameras = [
-        {
+    camera_intrinsics_by_name = camera_intrinsics_by_name or CAMERA_INTRINSICS_BY_NAME
+    cameras = []
+    for camera_id in range(model.ncam):
+        name = model.camera(camera_id).name
+        camera = {
             "name": model.camera(camera_id).name,
             "body": model.body(int(model.cam_bodyid[camera_id])).name,
             "position": _values(model.cam_pos[camera_id]),
             "quaternion": _values(model.cam_quat[camera_id]),
             "fovy": float(model.cam_fovy[camera_id]),
         }
-        for camera_id in range(model.ncam)
-    ]
+        intrinsics = camera_intrinsics_by_name.get(name)
+        if intrinsics is not None:
+            camera["intrinsics"] = intrinsics
+        cameras.append(camera)
     materials_dict: dict[str, list[float]] = {
         model.mat(mat_id).name: _values(model.mat_rgba[mat_id])
         for mat_id in range(model.nmat)
@@ -136,19 +147,57 @@ def _write_outputs(
     spec: mujoco.MjSpec,
     output: Path,
     materials: MaterialConfig | None,
+    camera_intrinsics_by_name: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[Path, Path]:
     """Write matching XML and JSON web-manifest outputs for a composed spec."""
     # The spec was loaded relative to the stock model; rewrite meshdir so the
     # exported file resolves meshes from wherever it is saved.
+    camera_intrinsics_by_name = camera_intrinsics_by_name or CAMERA_INTRINSICS_BY_NAME
+    _apply_camera_intrinsics(spec, camera_intrinsics_by_name)
     spec.meshdir = str(STOCK_ASSETS_DIR)
     model = spec.compile()
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(spec.to_xml())
     manifest_output = output.with_suffix(".json")
     manifest_output.write_text(
-        json.dumps(web_manifest(spec, model, materials), indent=2) + "\n"
+        json.dumps(
+            web_manifest(
+                spec,
+                model,
+                materials,
+                camera_intrinsics_by_name=camera_intrinsics_by_name,
+            ),
+            indent=2,
+        )
+        + "\n"
     )
     return output, manifest_output
+
+
+def _apply_camera_intrinsics(
+    spec: mujoco.MjSpec,
+    camera_intrinsics_by_name: dict[str, dict[str, Any]],
+) -> None:
+    for camera in spec.cameras:
+        intrinsics = camera_intrinsics_by_name.get(camera.name)
+        if intrinsics is not None and "fovy_deg" in intrinsics:
+            camera.fovy = float(intrinsics["fovy_deg"])
+
+
+def _camera_intrinsics_with_overrides(
+    overrides: dict[str, dict[str, Any]] | None,
+    *,
+    include_local: bool = True,
+) -> dict[str, dict[str, Any]]:
+    camera_intrinsics_by_name = {
+        name: dict(intrinsics)
+        for name, intrinsics in CAMERA_INTRINSICS_BY_NAME.items()
+    }
+    if include_local:
+        camera_intrinsics_by_name.update(load_local_camera_intrinsics())
+    if overrides:
+        camera_intrinsics_by_name.update(overrides)
+    return camera_intrinsics_by_name
 
 
 def export_robot(
@@ -157,6 +206,8 @@ def export_robot(
     wrist_camera: bool = True,
     include_environment: bool = False,
     materials: MaterialConfig | None = None,
+    camera_intrinsics: dict[str, dict[str, Any]] | None = None,
+    include_local_camera_intrinsics: bool = True,
 ) -> tuple[Path, Path]:
     """Write matching XML and JSON outputs from one composed robot."""
     if include_environment:
@@ -167,13 +218,23 @@ def export_robot(
         )
     else:
         spec = build_robot(wrist_camera=wrist_camera, materials=materials)
-    return _write_outputs(spec, output, materials)
+    return _write_outputs(
+        spec,
+        output,
+        materials,
+        _camera_intrinsics_with_overrides(
+            camera_intrinsics,
+            include_local=include_local_camera_intrinsics,
+        ),
+    )
 
 
 def export_environment(
     output: Path,
     *,
     materials: MaterialConfig | None = None,
+    camera_intrinsics: dict[str, dict[str, Any]] | None = None,
+    include_local_camera_intrinsics: bool = True,
 ) -> tuple[Path, Path]:
     """Write matching XML and JSON outputs for the robot-free environment.
 
@@ -181,7 +242,27 @@ def export_environment(
     robot lives in exactly one place instead of being duplicated here.
     """
     spec = build_environment(materials=materials)
-    return _write_outputs(spec, output, materials)
+    return _write_outputs(
+        spec,
+        output,
+        materials,
+        _camera_intrinsics_with_overrides(
+            camera_intrinsics,
+            include_local=include_local_camera_intrinsics,
+        ),
+    )
+
+
+def _parse_camera_intrinsics_args(values: list[str]) -> dict[str, dict[str, Any]]:
+    overrides: dict[str, dict[str, Any]] = {}
+    for value in values:
+        if "=" not in value:
+            raise ValueError(f"expected CAMERA=PATH for --camera-intrinsics, got {value!r}")
+        camera_name, path = value.split("=", 1)
+        if not camera_name:
+            raise ValueError(f"missing camera name in --camera-intrinsics {value!r}")
+        overrides[camera_name] = load_camera_intrinsics(Path(path))
+    return overrides
 
 
 def main() -> None:
@@ -202,6 +283,16 @@ def main() -> None:
         action="store_true",
         help="export only the robot-free environment (floor, cube, frame, overhead mount)",
     )
+    parser.add_argument(
+        "--camera-intrinsics",
+        action="append",
+        default=[],
+        metavar="CAMERA=PATH",
+        help=(
+            "replace nominal intrinsics for a camera with values from a JSON file; "
+            "local config/camera_intrinsics/<camera>.json files are loaded automatically"
+        ),
+    )
     args = parser.parse_args()
 
     output = args.output
@@ -209,13 +300,19 @@ def main() -> None:
         name = "environment.xml" if args.environment_only else "so101.xml"
         output = Path(__file__).resolve().parents[2] / "out" / name
 
+    try:
+        camera_intrinsics = _parse_camera_intrinsics_args(args.camera_intrinsics)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     if args.environment_only:
-        paths = export_environment(output)
+        paths = export_environment(output, camera_intrinsics=camera_intrinsics)
     else:
         paths = export_robot(
             output,
             wrist_camera=not args.no_wrist_camera,
             include_environment=args.include_environment,
+            camera_intrinsics=camera_intrinsics,
         )
     for path in paths:
         print(f"Wrote {path}")

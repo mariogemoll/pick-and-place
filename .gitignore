@@ -10,3 +10,4 @@ pnpm-lock.yaml
 *.log
 /dist_assets
 /intermediary-glb
+/config/camera_intrinsics/*.json

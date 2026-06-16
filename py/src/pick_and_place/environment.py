@@ -10,6 +10,7 @@ from pathlib import Path
 import mujoco
 
 from pick_and_place.camera_module import add_camera_module
+from pick_and_place.camera_intrinsics import OVERHEAD_CAMERA_INTRINSICS
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WORKSPACE_FRAME_STL_DIR = REPO_ROOT / "stl" / "workspace_frame"
@@ -319,5 +320,10 @@ def add_overhead_camera_mount(
     for geom in camera_module.geoms:
         if int(geom.group) == 2:
             geom.material = "camera"
+
+    camera_module.add_camera(
+        name="overhead_camera",
+        fovy=OVERHEAD_CAMERA_INTRINSICS["fovy_deg"],
+    )
 
     return mount

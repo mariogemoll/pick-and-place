@@ -11,6 +11,7 @@ import mujoco
 import numpy as np
 
 from pick_and_place.camera_module import add_camera_module
+from pick_and_place.camera_intrinsics import WRIST_CAMERA_INTRINSICS
 from pick_and_place.wrist_camera_mount_collision_boxes import (
     WRIST_CAMERA_MOUNT_COLLISION_BOXES,
 )
@@ -115,4 +116,7 @@ def add_wrist_camera(spec: mujoco.MjSpec) -> None:
         if int(geom.group) == 2:
             geom.material = "camera"
 
-    camera_module.add_camera(name="wrist_camera")
+    camera_module.add_camera(
+        name="wrist_camera",
+        fovy=WRIST_CAMERA_INTRINSICS["fovy_deg"],
+    )
