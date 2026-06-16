@@ -27,6 +27,10 @@ from pick_and_place.camera_intrinsics import (
     load_camera_intrinsics,
     load_local_camera_intrinsics,
 )
+from pick_and_place.camera_extrinsics import (
+    apply_camera_extrinsics_to_spec,
+    load_local_camera_extrinsics,
+)
 from pick_and_place.materials import MaterialConfig
 from pick_and_place.scene import build_environment, build_scene
 
@@ -148,12 +152,16 @@ def _write_outputs(
     output: Path,
     materials: MaterialConfig | None,
     camera_intrinsics_by_name: dict[str, dict[str, Any]] | None = None,
+    *,
+    include_local_camera_extrinsics: bool = True,
 ) -> tuple[Path, Path]:
     """Write matching XML and JSON web-manifest outputs for a composed spec."""
     # The spec was loaded relative to the stock model; rewrite meshdir so the
     # exported file resolves meshes from wherever it is saved.
     camera_intrinsics_by_name = camera_intrinsics_by_name or CAMERA_INTRINSICS_BY_NAME
     _apply_camera_intrinsics(spec, camera_intrinsics_by_name)
+    if include_local_camera_extrinsics:
+        apply_camera_extrinsics_to_spec(spec, load_local_camera_extrinsics())
     spec.meshdir = str(STOCK_ASSETS_DIR)
     model = spec.compile()
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -208,6 +216,7 @@ def export_robot(
     materials: MaterialConfig | None = None,
     camera_intrinsics: dict[str, dict[str, Any]] | None = None,
     include_local_camera_intrinsics: bool = True,
+    include_local_camera_extrinsics: bool = True,
 ) -> tuple[Path, Path]:
     """Write matching XML and JSON outputs from one composed robot."""
     if include_environment:
@@ -226,6 +235,7 @@ def export_robot(
             camera_intrinsics,
             include_local=include_local_camera_intrinsics,
         ),
+        include_local_camera_extrinsics=include_local_camera_extrinsics,
     )
 
 
@@ -235,6 +245,7 @@ def export_environment(
     materials: MaterialConfig | None = None,
     camera_intrinsics: dict[str, dict[str, Any]] | None = None,
     include_local_camera_intrinsics: bool = True,
+    include_local_camera_extrinsics: bool = True,
 ) -> tuple[Path, Path]:
     """Write matching XML and JSON outputs for the robot-free environment.
 
@@ -250,6 +261,7 @@ def export_environment(
             camera_intrinsics,
             include_local=include_local_camera_intrinsics,
         ),
+        include_local_camera_extrinsics=include_local_camera_extrinsics,
     )
 
 

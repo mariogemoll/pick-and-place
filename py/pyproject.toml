@@ -6,9 +6,13 @@ build-backend = "setuptools.build_meta"
 name = "pick-and-place"
 version = "0.0.0"
 dependencies = [
+    "fpdf",
+    "imageio[ffmpeg]",
     "lerobot[feetech]",
     "mujoco",
     "numpy",
+    "opencv-python",
+    "pupil-apriltags",
 ]
 
 [tool.ruff]

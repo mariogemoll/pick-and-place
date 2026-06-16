@@ -10,7 +10,11 @@ from pathlib import Path
 import mujoco
 
 from pick_and_place.builder import STOCK_ASSETS_DIR, build_robot
-from pick_and_place.environment import add_overhead_camera_mount, add_workspace_frame
+from pick_and_place.environment import (
+    add_overhead_camera_mount,
+    add_workspace_frame,
+    add_workspace_frame_apriltags,
+)
 from pick_and_place.materials import MaterialConfig, apply_materials
 from pick_and_place.workspace_overlays import add_workspace_overlays
 
@@ -38,6 +42,8 @@ def build_scene(
         add_overhead_camera_mount(spec, collision_default=collision_default)
 
     apply_materials(spec, materials or MaterialConfig())
+    if include_environment:
+        add_workspace_frame_apriltags(spec)
     _add_groundplane(spec)
 
     return spec
@@ -60,6 +66,7 @@ def build_environment(
     add_workspace_frame(spec)
     add_overhead_camera_mount(spec)
     apply_materials(spec, materials or MaterialConfig())
+    add_workspace_frame_apriltags(spec)
     _add_groundplane(spec)
     return spec
 

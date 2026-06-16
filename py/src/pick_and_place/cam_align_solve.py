@@ -1,0 +1,547 @@
+# SPDX-FileCopyrightText: 2026 Mario Gemoll
+# SPDX-License-Identifier: 0BSD
+
+"""Solve the overhead camera extrinsics from workspace-frame AprilTags.
+
+The workspace frame carries four fixed tagStandard41h12 tags:
+
+- id 12: ``workspace_frame_tag_ne``
+- id 13: ``workspace_frame_tag_nw``
+- id 14: ``workspace_frame_tag_sw``
+- id 15: ``workspace_frame_tag_se``
+
+This command detects those tags in a real overhead-camera frame, uses their known
+3-D positions in the generated MuJoCo scene, runs OpenCV PnP, converts the result
+to MuJoCo's camera frame convention, and saves a local sidecar:
+
+    config/camera_extrinsics/overhead_camera.json
+
+Example:
+
+    cd py
+    python -m pick_and_place.cam_align_solve \
+        --camera 0 \
+        --intrinsics ../config/camera_intrinsics/overhead_camera.json
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import mujoco
+import numpy as np
+
+from pick_and_place.camera_extrinsics import LOCAL_CAMERA_EXTRINSICS_DIR, save_camera_extrinsics
+from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
+from pick_and_place.scene import build_environment
+
+TAG_GEOMS: dict[int, tuple[str, tuple[int, int] | None]] = {
+    12: ("workspace_frame_tag_ne", (2, +1)),
+    13: ("workspace_frame_tag_nw", (2, +1)),
+    14: ("workspace_frame_tag_sw", (2, +1)),
+    15: ("workspace_frame_tag_se", (2, +1)),
+}
+
+
+@dataclass(frozen=True)
+class NominalDelta:
+    translation_m: float
+    rotation_deg: float
+
+
+@dataclass(frozen=True)
+class SolveResult:
+    used_tags: tuple[int, ...]
+    reprojection_error_px: float
+    pos: tuple[float, float, float]
+    quat: tuple[float, float, float, float]
+    nominal_delta: NominalDelta
+
+
+def parse_index_or_path(value: str) -> int | str:
+    """Parse an OpenCV camera selector as an int index or device path."""
+    try:
+        return int(value)
+    except ValueError:
+        return value
+
+
+def mat_to_quat_wxyz(matrix: np.ndarray) -> np.ndarray:
+    """Convert a 3x3 rotation matrix to a canonical MuJoCo wxyz quaternion."""
+    m = np.asarray(matrix, dtype=float)
+    trace = float(np.trace(m))
+    if trace > 0.0:
+        s = np.sqrt(trace + 1.0) * 2.0
+        quat = np.array(
+            [
+                0.25 * s,
+                (m[2, 1] - m[1, 2]) / s,
+                (m[0, 2] - m[2, 0]) / s,
+                (m[1, 0] - m[0, 1]) / s,
+            ],
+            dtype=float,
+        )
+    else:
+        axis = int(np.argmax(np.diag(m)))
+        if axis == 0:
+            s = np.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2]) * 2.0
+            quat = np.array(
+                [
+                    (m[2, 1] - m[1, 2]) / s,
+                    0.25 * s,
+                    (m[0, 1] + m[1, 0]) / s,
+                    (m[0, 2] + m[2, 0]) / s,
+                ],
+                dtype=float,
+            )
+        elif axis == 1:
+            s = np.sqrt(1.0 + m[1, 1] - m[0, 0] - m[2, 2]) * 2.0
+            quat = np.array(
+                [
+                    (m[0, 2] - m[2, 0]) / s,
+                    (m[0, 1] + m[1, 0]) / s,
+                    0.25 * s,
+                    (m[1, 2] + m[2, 1]) / s,
+                ],
+                dtype=float,
+            )
+        else:
+            s = np.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1]) * 2.0
+            quat = np.array(
+                [
+                    (m[1, 0] - m[0, 1]) / s,
+                    (m[0, 2] + m[2, 0]) / s,
+                    (m[1, 2] + m[2, 1]) / s,
+                    0.25 * s,
+                ],
+                dtype=float,
+            )
+    quat /= np.linalg.norm(quat)
+    return quat if quat[0] >= 0.0 else -quat
+
+
+def quat_angle_deg(q0: np.ndarray, q1: np.ndarray) -> float:
+    """Return the shortest angular distance between two wxyz quaternions."""
+    a = np.asarray(q0, dtype=float)
+    b = np.asarray(q1, dtype=float)
+    a /= np.linalg.norm(a)
+    b /= np.linalg.norm(b)
+    dot = abs(float(np.dot(a, b)))
+    return float(np.degrees(2.0 * np.arccos(np.clip(dot, -1.0, 1.0))))
+
+
+def average_quaternions_wxyz(quaternions: list[np.ndarray]) -> np.ndarray:
+    """Average same-hemisphere wxyz quaternions and normalize the result."""
+    if not quaternions:
+        raise ValueError("cannot average zero quaternions")
+    reference = quaternions[0]
+    aligned = [q if float(np.dot(reference, q)) >= 0.0 else -q for q in quaternions]
+    quat = np.mean(np.array(aligned), axis=0)
+    quat /= np.linalg.norm(quat)
+    return quat if quat[0] >= 0.0 else -quat
+
+
+def average_results(
+    results: list[SolveResult],
+    *,
+    nominal_pos: np.ndarray,
+    nominal_quat: np.ndarray,
+) -> SolveResult:
+    """Average solved poses and reprojection statistics over multiple frames."""
+    if not results:
+        raise ValueError("cannot average zero solve results")
+    pos = np.mean(np.array([result.pos for result in results], dtype=float), axis=0)
+    quat = average_quaternions_wxyz(
+        [np.array(result.quat, dtype=float) for result in results]
+    )
+    used_tags = tuple(sorted(set.intersection(*(set(result.used_tags) for result in results))))
+    delta = NominalDelta(
+        translation_m=float(np.linalg.norm(pos - nominal_pos)),
+        rotation_deg=quat_angle_deg(quat, nominal_quat),
+    )
+    return SolveResult(
+        used_tags=used_tags,
+        reprojection_error_px=float(
+            np.mean([result.reprojection_error_px for result in results])
+        ),
+        pos=tuple(float(v) for v in pos),
+        quat=tuple(float(v) for v in quat),
+        nominal_delta=delta,
+    )
+
+
+def tag_world_points(model: mujoco.MjModel, data: mujoco.MjData) -> dict[int, np.ndarray]:
+    """Return visible-face centers for the fixed workspace-frame tag geoms."""
+    points: dict[int, np.ndarray] = {}
+    mujoco.mj_forward(model, data)
+    for tag_id, (geom_name, axis) in TAG_GEOMS.items():
+        geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
+        if geom_id < 0:
+            continue
+        point = data.geom_xpos[geom_id].copy()
+        if axis is not None:
+            axis_index, sign = axis
+            rotation = data.geom_xmat[geom_id].reshape(3, 3)
+            point = point + sign * rotation[:, axis_index] * model.geom_size[geom_id][axis_index]
+        points[tag_id] = point
+    if len(points) < 4:
+        raise ValueError(f"need all 4 workspace-frame tags, found {sorted(points)}")
+    return points
+
+
+def camera_matrix_from_intrinsics(path: Path, width: int, height: int) -> tuple[np.ndarray, np.ndarray]:
+    """Load and scale calibrated camera intrinsics for the solve resolution."""
+    data = json.loads(path.read_text())
+    matrix = np.array(data["camera_matrix"], dtype=float)
+    dist = np.array(data["dist_coeffs"], dtype=float)
+    sx = width / float(data["width"])
+    sy = height / float(data["height"])
+    matrix[0, :] *= sx
+    matrix[1, :] *= sy
+    return matrix, dist
+
+
+def default_camera_matrix(width: int, height: int, fovy_deg: float) -> tuple[np.ndarray, np.ndarray]:
+    """Fallback pinhole intrinsics from the MuJoCo camera fovy."""
+    focal = (height / 2.0) / np.tan(np.radians(fovy_deg) / 2.0)
+    matrix = np.array(
+        [[focal, 0.0, width / 2.0], [0.0, focal, height / 2.0], [0.0, 0.0, 1.0]],
+        dtype=float,
+    )
+    return matrix, np.zeros(5)
+
+
+def opencv_camera_pose_to_mujoco_parent_pose(
+    rotation_camera_world: np.ndarray,
+    translation_camera_world: np.ndarray,
+    parent_rotation_world: np.ndarray,
+    parent_position_world: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Convert an OpenCV solvePnP pose to parent-relative MuJoCo camera pose."""
+    rotation_world_camera = rotation_camera_world.T
+    camera_center_world = (-rotation_world_camera @ translation_camera_world).ravel()
+
+    # OpenCV camera: x right, y down, z forward.
+    # MuJoCo camera: x right, y up, z back.
+    rotation_world_mujoco_camera = np.column_stack(
+        [
+            rotation_world_camera[:, 0],
+            -rotation_world_camera[:, 1],
+            -rotation_world_camera[:, 2],
+        ]
+    )
+
+    parent_rotation = np.asarray(parent_rotation_world, dtype=float)
+    parent_position = np.asarray(parent_position_world, dtype=float)
+    pos = parent_rotation.T @ (camera_center_world - parent_position)
+    quat = mat_to_quat_wxyz(parent_rotation.T @ rotation_world_mujoco_camera)
+    return pos, quat
+
+
+def solve_camera_pose(
+    *,
+    frame_rgb: np.ndarray,
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    camera_name: str,
+    matrix: np.ndarray,
+    dist: np.ndarray,
+    detector: Any,
+    cv2_module: Any,
+    nominal_pos: np.ndarray,
+    nominal_quat: np.ndarray,
+) -> SolveResult | None:
+    """Detect reference tags in ``frame_rgb`` and solve/apply the camera pose."""
+    camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
+    if camera_id < 0:
+        raise ValueError(f"unknown camera {camera_name!r}")
+
+    gray = cv2_module.cvtColor(frame_rgb, cv2_module.COLOR_RGB2GRAY)
+    detections = detector.detect(gray)
+    points = tag_world_points(model, data)
+    matched = [(det.tag_id, points[det.tag_id], det.center) for det in detections if det.tag_id in points]
+    if len(matched) < 4:
+        return None
+
+    object_points = np.array([item[1] for item in matched], dtype=float)
+    image_points = np.array([item[2] for item in matched], dtype=float)
+    flags = cv2_module.SOLVEPNP_IPPE if np.ptp(object_points[:, 2]) < 1e-3 else cv2_module.SOLVEPNP_ITERATIVE
+    ok, rvec, tvec = cv2_module.solvePnP(object_points, image_points, matrix, dist, flags=flags)
+    if not ok:
+        return None
+
+    projected, _ = cv2_module.projectPoints(object_points, rvec, tvec, matrix, dist)
+    reprojection_error = float(
+        np.linalg.norm(projected.reshape(-1, 2) - image_points, axis=1).mean()
+    )
+
+    rotation_camera_world, _ = cv2_module.Rodrigues(rvec)
+    parent_id = int(model.cam_bodyid[camera_id])
+    parent_rotation = data.xmat[parent_id].reshape(3, 3)
+    parent_position = data.xpos[parent_id]
+    pos, quat = opencv_camera_pose_to_mujoco_parent_pose(
+        rotation_camera_world,
+        tvec,
+        parent_rotation,
+        parent_position,
+    )
+
+    model.cam_pos[camera_id] = pos
+    model.cam_quat[camera_id] = quat
+    mujoco.mj_forward(model, data)
+
+    delta = NominalDelta(
+        translation_m=float(np.linalg.norm(pos - nominal_pos)),
+        rotation_deg=quat_angle_deg(quat, nominal_quat),
+    )
+    return SolveResult(
+        used_tags=tuple(sorted(item[0] for item in matched)),
+        reprojection_error_px=reprojection_error,
+        pos=tuple(float(v) for v in pos),
+        quat=tuple(float(v) for v in quat),
+        nominal_delta=delta,
+    )
+
+
+def read_real_image(path: Path, cv2_module: Any) -> np.ndarray:
+    """Read an image file as RGB."""
+    frame_bgr = cv2_module.imread(str(path))
+    if frame_bgr is None:
+        raise SystemExit(f"could not read image {path}")
+    return cv2_module.cvtColor(frame_bgr, cv2_module.COLOR_BGR2RGB)
+
+
+def open_camera(camera: int | str, width: int, height: int, fps: int, cv2_module: Any) -> Any:
+    """Open an OpenCV VideoCapture with the requested stream settings."""
+    cap = cv2_module.VideoCapture(camera)
+    if not cap.isOpened():
+        raise SystemExit(f"could not open camera {camera!r}")
+    cap.set(cv2_module.CAP_PROP_FRAME_WIDTH, width)
+    cap.set(cv2_module.CAP_PROP_FRAME_HEIGHT, height)
+    cap.set(cv2_module.CAP_PROP_FPS, fps)
+    return cap
+
+
+def read_camera_frame(cap: Any, cv2_module: Any) -> np.ndarray | None:
+    """Read one OpenCV VideoCapture frame as RGB."""
+    ok, frame_bgr = cap.read()
+    if not ok:
+        return None
+    return cv2_module.cvtColor(frame_bgr, cv2_module.COLOR_BGR2RGB)
+
+
+def print_result(result: SolveResult) -> None:
+    """Print a concise solve summary."""
+    print(f"Tags        : {list(result.used_tags)}")
+    print(f"Reprojection: {result.reprojection_error_px:.3f} px")
+    print(
+        "Nominal delta: "
+        f"{result.nominal_delta.translation_m * 1000.0:.1f} mm, "
+        f"{result.nominal_delta.rotation_deg:.2f} deg"
+    )
+    print(f"Position    : {[round(v, 8) for v in result.pos]}")
+    print(f"Quaternion  : {[round(v, 8) for v in result.quat]}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--real-image", type=Path, help="captured real overhead frame")
+    source.add_argument("--camera", help="OpenCV camera index or device path")
+    source.add_argument("--self-test", action="store_true", help="render sim camera and solve it")
+    parser.add_argument("--camera-name", default="overhead_camera")
+    parser.add_argument("--intrinsics", type=Path, default=None)
+    parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--width", type=int, default=1920)
+    parser.add_argument("--height", type=int, default=1080)
+    parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument("--show", action="store_true", help="show a live camera window while solving")
+    parser.add_argument("--no-save", action="store_true", help="report the solve without writing JSON")
+    parser.add_argument("--max-seconds", type=float, default=0.0, help="0 means wait forever for live camera")
+    parser.add_argument(
+        "--samples",
+        type=int,
+        default=1,
+        help="number of solved live-camera frames to average before reporting/saving",
+    )
+    parser.add_argument(
+        "--self-test-fovy",
+        type=float,
+        default=60.0,
+        help="synthetic render fovy used only with --self-test, chosen to show all four tags",
+    )
+    args = parser.parse_args()
+    if args.samples < 1:
+        parser.error("--samples must be at least 1")
+
+    try:
+        import cv2
+        from pupil_apriltags import Detector
+    except ImportError as exc:
+        raise SystemExit(
+            "camera extrinsic solving requires opencv-python and pupil-apriltags"
+        ) from exc
+
+    spec = build_environment()
+    model = spec.compile()
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+
+    camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, args.camera_name)
+    if camera_id < 0:
+        raise SystemExit(f"unknown camera {args.camera_name!r}")
+    nominal_pos = model.cam_pos[camera_id].copy()
+    nominal_quat = model.cam_quat[camera_id].copy()
+
+    intrinsics = args.intrinsics
+    if intrinsics is None:
+        local_intrinsics = LOCAL_CAMERA_INTRINSICS_DIR / f"{args.camera_name}.json"
+        intrinsics = local_intrinsics if local_intrinsics.exists() else None
+    if intrinsics is not None:
+        matrix, dist = camera_matrix_from_intrinsics(intrinsics, args.width, args.height)
+        print(f"Intrinsics  : {intrinsics}")
+    else:
+        matrix, dist = default_camera_matrix(
+            args.width,
+            args.height,
+            float(model.cam_fovy[camera_id]),
+        )
+        print("Intrinsics  : nominal MuJoCo fovy (calibrated JSON recommended)")
+
+    detector = Detector(families="tagStandard41h12", nthreads=4, refine_edges=True)
+
+    renderer = None
+    cap = None
+    result: SolveResult | None = None
+    try:
+        if args.self_test:
+            args.width = min(args.width, int(model.vis.global_.offwidth))
+            args.height = min(args.height, int(model.vis.global_.offheight))
+            model.cam_fovy[camera_id] = args.self_test_fovy
+            matrix, dist = default_camera_matrix(
+                args.width,
+                args.height,
+                float(model.cam_fovy[camera_id]),
+            )
+            renderer = mujoco.Renderer(model, height=args.height, width=args.width)
+            renderer.update_scene(data, camera=args.camera_name)
+            frame_rgb = renderer.render()
+            result = solve_camera_pose(
+                frame_rgb=frame_rgb,
+                model=model,
+                data=data,
+                camera_name=args.camera_name,
+                matrix=matrix,
+                dist=dist,
+                detector=detector,
+                cv2_module=cv2,
+                nominal_pos=nominal_pos,
+                nominal_quat=nominal_quat,
+            )
+        elif args.real_image is not None:
+            frame_rgb = read_real_image(args.real_image, cv2)
+            if frame_rgb.shape[1] != args.width or frame_rgb.shape[0] != args.height:
+                frame_rgb = cv2.resize(frame_rgb, (args.width, args.height), interpolation=cv2.INTER_AREA)
+            result = solve_camera_pose(
+                frame_rgb=frame_rgb,
+                model=model,
+                data=data,
+                camera_name=args.camera_name,
+                matrix=matrix,
+                dist=dist,
+                detector=detector,
+                cv2_module=cv2,
+                nominal_pos=nominal_pos,
+                nominal_quat=nominal_quat,
+            )
+        else:
+            cap = open_camera(parse_index_or_path(args.camera), args.width, args.height, args.fps, cv2)
+            start = time.monotonic()
+            results: list[SolveResult] = []
+            while True:
+                frame_rgb = read_camera_frame(cap, cv2)
+                if frame_rgb is None:
+                    continue
+                if frame_rgb.shape[1] != args.width or frame_rgb.shape[0] != args.height:
+                    frame_rgb = cv2.resize(frame_rgb, (args.width, args.height), interpolation=cv2.INTER_AREA)
+                result = solve_camera_pose(
+                    frame_rgb=frame_rgb,
+                    model=model,
+                    data=data,
+                    camera_name=args.camera_name,
+                    matrix=matrix,
+                    dist=dist,
+                    detector=detector,
+                    cv2_module=cv2,
+                    nominal_pos=nominal_pos,
+                    nominal_quat=nominal_quat,
+                )
+                if result is not None:
+                    results.append(result)
+                    if args.samples > 1:
+                        print(
+                            f"Sample {len(results)}/{args.samples}: "
+                            f"{result.reprojection_error_px:.3f} px, "
+                            f"{result.nominal_delta.translation_m * 1000.0:.1f} mm, "
+                            f"{result.nominal_delta.rotation_deg:.2f} deg",
+                            flush=True,
+                        )
+                if args.show:
+                    preview = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                    cv2.imshow("cam_align_solve", preview)
+                    key = cv2.waitKey(1) & 0xFF
+                    if key in (27, ord("q")):
+                        break
+                if len(results) >= args.samples:
+                    result = average_results(
+                        results,
+                        nominal_pos=nominal_pos,
+                        nominal_quat=nominal_quat,
+                    )
+                    break
+                if args.max_seconds > 0.0 and time.monotonic() - start > args.max_seconds:
+                    if results:
+                        result = average_results(
+                            results,
+                            nominal_pos=nominal_pos,
+                            nominal_quat=nominal_quat,
+                        )
+                    break
+    finally:
+        if renderer is not None:
+            renderer.close()
+        if cap is not None:
+            cap.release()
+        if args.show:
+            cv2.destroyAllWindows()
+
+    if result is None:
+        raise SystemExit("no pose solved; need all four workspace-frame tags visible")
+
+    model.cam_pos[camera_id] = np.array(result.pos, dtype=float)
+    model.cam_quat[camera_id] = np.array(result.quat, dtype=float)
+
+    print_result(result)
+    if args.no_save:
+        return
+
+    output = args.output or (LOCAL_CAMERA_EXTRINSICS_DIR / f"{args.camera_name}.json")
+    meta = {
+        "method": "workspace-frame AprilTag PnP (pick_and_place.cam_align_solve)",
+        "intrinsics": str(intrinsics) if intrinsics is not None else None,
+        "reference_tags": list(result.used_tags),
+        "rms_reproj_px": round(result.reprojection_error_px, 3),
+        "nominal_delta_mm": round(result.nominal_delta.translation_m * 1000.0, 3),
+        "nominal_delta_deg": round(result.nominal_delta.rotation_deg, 3),
+    }
+    path = save_camera_extrinsics(model, args.camera_name, path=output, meta=meta)
+    print(f"Saved       : {path}")
+
+
+if __name__ == "__main__":
+    main()

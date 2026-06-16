@@ -11,6 +11,7 @@ def test_export_robot_writes_matching_xml_and_web_manifest(tmp_path):
     xml_path, json_path = export_robot(
         tmp_path / "so101.xml",
         include_local_camera_intrinsics=False,
+        include_local_camera_extrinsics=False,
     )
 
     assert xml_path.exists()
@@ -72,6 +73,7 @@ def test_export_robot_can_omit_wrist_camera(tmp_path):
         tmp_path / "so101.xml",
         wrist_camera=False,
         include_local_camera_intrinsics=False,
+        include_local_camera_extrinsics=False,
     )
     manifest = json.loads(json_path.read_text())
 
@@ -84,6 +86,7 @@ def test_export_environment_includes_overhead_camera_intrinsics(tmp_path):
     _, json_path = export_environment(
         tmp_path / "environment.xml",
         include_local_camera_intrinsics=False,
+        include_local_camera_extrinsics=False,
     )
     manifest = json.loads(json_path.read_text())
 
@@ -128,6 +131,7 @@ def test_export_robot_can_override_camera_intrinsics_from_json(tmp_path):
         tmp_path / "so101.xml",
         camera_intrinsics={"wrist_camera": json.loads(intrinsics_path.read_text())},
         include_local_camera_intrinsics=False,
+        include_local_camera_extrinsics=False,
     )
     manifest = json.loads(json_path.read_text())
 

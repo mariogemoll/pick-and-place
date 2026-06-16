@@ -8,6 +8,8 @@ dist
 build
 pnpm-lock.yaml
 *.log
+/assets/apriltags
 /dist_assets
 /intermediary-glb
 /config/camera_intrinsics/*.json
+/config/camera_extrinsics/*.json

@@ -13,6 +13,7 @@ from pick_and_place.camera_module import add_camera_module
 from pick_and_place.camera_intrinsics import OVERHEAD_CAMERA_INTRINSICS
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+APRILTAG_TEXTURE_DIR = REPO_ROOT / "assets" / "apriltags" / "textures"
 WORKSPACE_FRAME_STL_DIR = REPO_ROOT / "stl" / "workspace_frame"
 OVERHEAD_MOUNT_STL_DIR = (
     REPO_ROOT
@@ -34,6 +35,13 @@ WORKSPACE_FRAME_YELLOW = (0.93, 0.67, 0.18, 1.0)
 WORKSPACE_FRAME_BLUE = (0.18, 0.55, 0.91, 1.0)
 # A brighter grey for the overhead mount (dark parts hierarchy: camera < motor < mount).
 MOUNT_BRIGHT_GRAY = (0.3, 0.3, 0.3, 1.0)
+
+WORKSPACE_FRAME_APRILTAG_PLATES: tuple[tuple[int, str, tuple[float, float, float]], ...] = (
+    (12, "ne", (0.230, 0.230, 0.0025)),
+    (13, "nw", (-0.230, 0.230, 0.0025)),
+    (14, "sw", (-0.230, -0.230, 0.0025)),
+    (15, "se", (0.230, -0.230, 0.0025)),
+)
 
 
 def add_workspace_frame(
@@ -175,6 +183,35 @@ def add_workspace_frame(
     )
 
     return frame
+
+
+def add_workspace_frame_apriltags(spec: mujoco.MjSpec) -> None:
+    """Add the textured calibration AprilTag plates to the workspace frame."""
+    frame = spec.body("workspace_frame_frame")
+    for tag_id, corner_name, pos in WORKSPACE_FRAME_APRILTAG_PLATES:
+        texture_name = f"workspace_frame_apriltag_{tag_id:02d}"
+        material_name = f"{texture_name}_material"
+        spec.add_texture(
+            name=texture_name,
+            type=mujoco.mjtTexture.mjTEXTURE_CUBE,
+            file=str(
+                APRILTAG_TEXTURE_DIR
+                / f"tagStandard41h12_{tag_id:05d}_60x60mm_tag40mm.png"
+            ),
+        )
+        material = spec.add_material(name=material_name)
+        material.textures[1] = texture_name
+        frame.add_geom(
+            name=f"workspace_frame_tag_{corner_name}",
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+            size=(0.03, 0.03, 0.0025),
+            pos=pos,
+            material=material_name,
+            contype=0,
+            conaffinity=0,
+            group=2,
+        )
+
 
 def _add_workspace_frame_part(
     spec: mujoco.MjSpec,

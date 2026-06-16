@@ -21,7 +21,7 @@ jobs:
           node-version: 24
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.14'
+          python-version: '3.13'
       - uses: astral-sh/setup-uv@v5
       - name: "Install JS dependencies"
         working-directory: ts
@@ -37,6 +37,9 @@ jobs:
       - name: "Install mesh optimization package dependencies"
         working-directory: mesh_optimization
         run: uv pip install --system -e . --group dev
+      - name: "Generate AprilTag textures"
+        working-directory: py
+        run: python scripts/render_apriltag_textures.py --all-defaults
       - name: "Run ruff on simulation package"
         working-directory: py
         run: python -m ruff check .

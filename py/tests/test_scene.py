@@ -4,7 +4,8 @@
 import mujoco
 import numpy as np
 
-from pick_and_place import build_scene, export_scene
+from pick_and_place import build_environment, build_scene, export_scene
+from pick_and_place.environment import WORKSPACE_FRAME_APRILTAG_PLATES
 from pick_and_place.workspace_overlays import WORKSPACE_OVERLAY_GROUP, WORKSPACE_OVERLAYS
 
 
@@ -78,6 +79,27 @@ def test_workspace_overlays_follow_robot_base():
             np.array((1.0, 2.0, 0.1)) + rotation @ original_data.geom_xpos[original_geom],
             atol=1e-7,
         )
+
+
+def test_environment_contains_textured_workspace_frame_apriltags():
+    model = build_environment().compile()
+    frame_id = model.body("workspace_frame_frame").id
+
+    for tag_id, corner_name, pos in WORKSPACE_FRAME_APRILTAG_PLATES:
+        geom = model.geom(f"workspace_frame_tag_{corner_name}").id
+        material = model.geom_matid[geom]
+        texture = model.texture(f"workspace_frame_apriltag_{tag_id:02d}").id
+
+        assert model.tex_type[texture] == mujoco.mjtTexture.mjTEXTURE_CUBE
+        assert model.geom_type[geom] == mujoco.mjtGeom.mjGEOM_BOX
+        assert model.geom_group[geom] == 2
+        assert model.geom_bodyid[geom] == frame_id
+        assert model.geom_contype[geom] == 0
+        assert model.geom_conaffinity[geom] == 0
+        np.testing.assert_allclose(model.geom_size[geom], (0.03, 0.03, 0.0025))
+        np.testing.assert_allclose(model.geom_pos[geom], pos)
+        assert model.mat(material).name == f"workspace_frame_apriltag_{tag_id:02d}_material"
+        assert model.mat_texid[material][1] == texture
 
 
 def test_export_scene_writes_compilable_xml(tmp_path):
