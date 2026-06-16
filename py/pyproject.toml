@@ -6,7 +6,6 @@ build-backend = "setuptools.build_meta"
 name = "pick-and-place"
 version = "0.0.0"
 dependencies = [
-    "lerobot[feetech]",
     "mujoco",
     "numpy",
 ]
@@ -24,4 +23,27 @@ pick_and_place = ["*.xml"]
 dev = [
     "pytest",
     "ruff>=0.9.0",
+]
+hardware = [
+    "lerobot[feetech]",
+]
+rl = [
+    "gymnasium>=0.29",
+    "stable-baselines3>=2.3",
+    "tensorboard>=2.14",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+    "rich>=13.0",
+]
+# GPU-accelerated RL track: MJX physics + MuJoCo Playground envs + Brax trainer.
+# `jax` here is the CPU build (enough to develop/correctness-test the port);
+# on a CUDA box install the GPU build instead: uv pip install -U "jax[cuda13]"
+# (or "jax[cuda12]" to match an existing CUDA 12.x stack).
+# (`playground` is the PyPI name; it imports as `mujoco_playground`.)
+mjx = [
+    "jax>=0.4.35",
+    "mujoco-mjx>=3.9",
+    "brax>=0.12",
+    "playground>=0.0.4",
+    "ml-collections>=0.1",
 ]

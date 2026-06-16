@@ -27,40 +27,26 @@ import mujoco
 import numpy as np
 
 from pick_and_place.episodes import (
+    SUCCESS_XY_TOLERANCE,
+    SUCCESS_YAW_TOLERANCE,
+    SUCCESS_Z_TOLERANCE,
     EpisodeSamplingError,
     Episode,
     is_unexpected,
+    placement_errors,
     prepare_episode,
+    quat_yaw,
     scan_contacts,
 )
 from pick_and_place.follower import JOINT_NAMES
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.geometry import CubePose
 
 # Default rate at which the trajectory is sampled into the dataset (Hz). The sim
 # steps far faster; frames are emitted on this slower clock — the same cadence a
 # real follower would be commanded at.
 DEFAULT_CONTROL_HZ = 50.0
-# A grasp is counted successful if the released cube settles within this far (m)
-# of the target in the floor plane, stays on the floor, and lands within the yaw
-# tolerance of the commanded target orientation. The cube sits on the floor, so
-# yaw is its only free orientation; error is the shortest angle (wrapped ±180°)
-# to the target yaw the carry was planned for.
-SUCCESS_XY_TOLERANCE = 0.04
-SUCCESS_Z_TOLERANCE = 0.01
-SUCCESS_YAW_TOLERANCE = math.radians(15.0)
-
-
-def _yaw_error(measured: float, target: float) -> float:
-    """Absolute shortest-arc difference between two yaw angles, in [0, π]."""
-    return abs((measured - target + math.pi) % (2.0 * math.pi) - math.pi)
 # Per-episode budget of pose resamples before that episode is abandoned.
 DEFAULT_MAX_ATTEMPTS = 50
-
-
-def _quat_yaw(quat: np.ndarray) -> float:
-    """Yaw (rotation about world z) of a (w, x, y, z) quaternion."""
-    w, x, y, z = (float(v) for v in quat)
-    return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
 
 
 def _cube_qpos_adr(model: mujoco.MjModel) -> int:
@@ -128,7 +114,7 @@ def run_episode(episode: Episode, control_hz: float) -> dict[str, np.ndarray]:
 
     cube_pos = data.qpos[cube_adr : cube_adr + 3]
     cube_quat = data.qpos[cube_adr + 3 : cube_adr + 7]
-    cube_end = np.array([cube_pos[0], cube_pos[1], cube_pos[2], _quat_yaw(cube_quat)])
+    cube_end = np.array([cube_pos[0], cube_pos[1], cube_pos[2], quat_yaw(cube_quat)])
 
     def _pose4(p: CubePose) -> np.ndarray:
         return np.array([p.x, p.y, p.z, p.yaw])
@@ -137,9 +123,7 @@ def run_episode(episode: Episode, control_hz: float) -> dict[str, np.ndarray]:
         return np.array([joints[n] for n in JOINT_NAMES[:-1]] + [gripper])
 
     target = episode.target
-    xy_err = math.hypot(cube_end[0] - target.x, cube_end[1] - target.y)
-    z_err = abs(cube_end[2] - CUBE_HALF_SIZE)
-    yaw_err = _yaw_error(cube_end[3], target.yaw)
+    xy_err, z_err, yaw_err = placement_errors(cube_end, target)
     # The preflight vets the whole trajectory collision-free, so an accepted
     # episode should run without unexpected contacts; if any slip through, the run
     # clipped the floor or itself and is not a clean demonstration regardless of

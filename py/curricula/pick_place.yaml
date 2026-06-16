@@ -1,0 +1,124 @@
+# SPDX-FileCopyrightText: 2026 Mario Gemoll
+# SPDX-License-Identifier: 0BSD
+
+# Pick-and-place RL curriculum (see docs/rl-curriculum-roadmap.md).
+#
+# A sequence of chapters on the single PickPlaceEnv: every stage is the same env
+# with a different reward weighting. `defaults` is deep-merged into each stage,
+# so a stage only states its *deltas* — a chapter is a weight change, not a fork.
+#
+# Each stage is its own training run. To finetune a chapter on top of the
+# previous one, point --init-from at the previous stage's run dir:
+#   python scripts/train_curriculum.py --curriculum curricula/pick_place.yaml \
+#       --stages ch1_reach
+#   python scripts/train_curriculum.py --curriculum curricula/pick_place.yaml \
+#       --stages ch2_grasp --init-from out/rl_curriculum/pick_place/ch1_reach
+
+name: pick_place
+
+defaults:
+  seed: 0
+  n_envs: 8
+  total_steps: 2000000
+  eval_episodes: 20
+  eval_freq: 20000
+  checkpoint_freq: 50000
+
+  # Stable-Baselines3 PPO constructor kwargs (mirrors the validated hover loop).
+  ppo:
+    policy: MlpPolicy
+    learning_rate: 3.0e-4
+    n_steps: 2048
+    batch_size: 256
+    n_epochs: 10
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_range: 0.2
+    ent_coef: 0.01
+    vf_coef: 0.5
+    max_grad_norm: 0.5
+    policy_kwargs:
+      net_arch: [256, 256]
+
+  # PickPlaceEnv constructor kwargs. action_smooth/jerk/collision are constant
+  # shaping/safety terms, on from the first stage; reach/grasp/lift/carry/
+  # place/yaw start at zero and each stage below turns on exactly one.
+  # action_smooth penalises set-point speed; jerk penalises set-point
+  # acceleration (chatter / abrupt direction changes) — the main smoothness lever.
+  env_kwargs:
+    reward_weights:
+      reach: 0.0
+      grasp: 0.0
+      lift: 0.0
+      carry: 0.0
+      place: 0.0
+      yaw: 0.0
+      action_smooth: -0.5
+      jerk: -2.0
+      collision: -50.0
+
+stages:
+  # Book 1 (position-only pick-and-place), one reward term turned on per stage.
+  # ch1 trains from scratch; finetune each later stage on the previous one via
+  # --init-from. NB: the roadmap's "add wrist rotation" and "descend to grasp"
+  # sub-steps don't have dedicated reward terms in PickPlaceEnv yet — they fold
+  # into `reach` until that lands, so this is 5 stages, not 7.
+  #
+  # Each stage restates the full *cumulative* reward_weights it wants active
+  # (the deltas merge against `defaults`, not against an earlier stage).
+  - name: ch1_reach
+    env_kwargs:
+      reward_weights:
+        reach: 1.0
+
+  - name: ch2_grasp
+    total_steps: 1000000
+    env_kwargs:
+      reward_weights:
+        reach: 1.0
+        grasp: 1.0
+
+  - name: ch3_lift
+    total_steps: 1000000
+    env_kwargs:
+      reward_weights:
+        reach: 1.0
+        grasp: 1.0
+        lift: 1.0
+
+  - name: ch4_carry
+    total_steps: 1000000
+    env_kwargs:
+      reward_weights:
+        reach: 1.0
+        grasp: 1.0
+        lift: 1.0
+        carry: 1.0
+
+  - name: ch5_place
+    total_steps: 1000000
+    env_kwargs:
+      reward_weights:
+        reach: 1.0
+        grasp: 1.0
+        lift: 1.0
+        carry: 1.0
+        place: 5.0
+
+  # Book 2 — orientation. Finetune on ch5_place; turn the yaw-alignment reward
+  # on (no new observation dimension, no env fork).
+  - name: ch6_orientation
+    total_steps: 1000000
+    env_kwargs:
+      reward_weights:
+        reach: 1.0
+        grasp: 1.0
+        lift: 1.0
+        carry: 1.0
+        place: 5.0
+        yaw: 2.0
+
+  # Chapters 7 (regrasp) and 8 (robustness / domain randomization) extend the
+  # sequence. They need env support not yet built (the regrasp phase; cube-pose
+  # corruption + confidence dropout), so they are intentionally omitted here
+  # rather than referencing env_kwargs PickPlaceEnv would reject.

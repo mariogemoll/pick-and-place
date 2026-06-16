@@ -57,6 +57,46 @@ _JOINT_SCALE_OVERRIDES: dict[str, float] = {
 MIN_START_CLEARANCE = 0.10
 
 
+# A grasp is counted successful if the released cube settles within these tolerances
+# of the target: ``XY`` in the floor plane, ``Z`` keeps it on the floor, and ``YAW``
+# bounds the orientation error. The cube sits on the floor, so yaw is its only free
+# orientation; error is the shortest angle (wrapped ±180°) to the planned target yaw.
+# Shared by ``record_episodes`` (vetting demos) and the IL eval harness so both judge
+# a placement by exactly the same rule.
+SUCCESS_XY_TOLERANCE = 0.04
+SUCCESS_Z_TOLERANCE = 0.01
+SUCCESS_YAW_TOLERANCE = math.radians(15.0)
+
+
+def quat_yaw(quat: np.ndarray) -> float:
+    """Yaw (rotation about world z) of a (w, x, y, z) quaternion."""
+    w, x, y, z = (float(v) for v in quat)
+    return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+
+def yaw_error(measured: float, target: float) -> float:
+    """Absolute shortest-arc difference between two yaw angles, in [0, π]."""
+    return abs((measured - target + math.pi) % (2.0 * math.pi) - math.pi)
+
+
+def placement_errors(cube_pose: np.ndarray, target: CubePose) -> tuple[float, float, float]:
+    """``(xy, z, yaw)`` error of a settled cube ``(x, y, z, yaw)`` against ``target``."""
+    xy = math.hypot(float(cube_pose[0]) - target.x, float(cube_pose[1]) - target.y)
+    z = abs(float(cube_pose[2]) - CUBE_HALF_SIZE)
+    yaw = yaw_error(float(cube_pose[3]), target.yaw)
+    return xy, z, yaw
+
+
+def is_placed(cube_pose: np.ndarray, target: CubePose) -> bool:
+    """True if the cube landed within all placement tolerances of ``target``."""
+    xy, z, yaw = placement_errors(cube_pose, target)
+    return (
+        xy <= SUCCESS_XY_TOLERANCE
+        and z <= SUCCESS_Z_TOLERANCE
+        and yaw <= SUCCESS_YAW_TOLERANCE
+    )
+
+
 class EpisodeSamplingError(RuntimeError):
     """Raised when no collision-free trajectory is found within the attempt budget."""
 

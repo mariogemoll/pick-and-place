@@ -45,9 +45,10 @@ from pick_and_place.transforms import Mat4, Vec3
 _N_DESCENT_CHECKS = 8
 
 # Tip-contact height of the source hover above the floor (clears the 3 cm cube
-# top by 1 cm). At the grasp the tip sits at the cube-center height, so the
-# world-z offset applied to the pregrasp is ``tip_z - pose.z``.
-SOURCE_HOVER_TIP_Z = 0.04
+# top by 2 cm, so the RL success sphere of radius 1.5 cm never dips into the
+# cube). At the grasp the tip sits at the cube-center height, so the world-z
+# offset applied to the pregrasp is ``tip_z - pose.z``.
+SOURCE_HOVER_TIP_Z = 0.05
 # Tip-contact height of the hover the carry ends at, above the target (lower
 # than the source hover, ready for a gentle release).
 PREDROP_HOVER_TIP_Z = 0.02
