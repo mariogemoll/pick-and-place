@@ -39,8 +39,12 @@ import {
   initSimplePregraspPoseVisualization,
   type SimplePregraspPoseVisualization
 } from './visualizations/simple-pregrasp-pose';
+import {
+  initStandardSceneVisualization,
+  type StandardSceneVisualization } from './visualizations/standard-scene';
 
 let dummyVisualization: DummyVisualization | null = null;
+let standardSceneVisualization: StandardSceneVisualization | null = null;
 let pregraspPoseVisualization: PregraspPoseVisualization | null = null;
 let pregraspPoseBreakdownVisualization: PregraspPoseBreakdownVisualization | null = null;
 let gripperVisualization: GripperVisualization | null = null;
@@ -58,6 +62,16 @@ function initialize(): void {
 
     void initDummyVisualization(dummyPanel).then(viz => {
       dummyVisualization = viz;
+    });
+  }
+
+  const standardScenePanel = document.getElementById('standard-scene-visualization');
+  if (standardScenePanel) {
+    standardSceneVisualization?.destroy();
+    standardSceneVisualization = null;
+
+    void initStandardSceneVisualization(standardScenePanel).then(viz => {
+      standardSceneVisualization = viz;
     });
   }
 

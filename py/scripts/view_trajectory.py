@@ -208,6 +208,11 @@ def main() -> None:
         help="playback speed multiplier of the nominal trajectory pace "
         f"(1.0 = nominal; default {REAL_ARM_DEFAULT_SPEED} when --follower-port is set, else 1.0)",
     )
+    parser.add_argument(
+        "--environment",
+        action="store_true",
+        help="include the calibration workspace_frame and overhead camera mount in the scene",
+    )
     args = parser.parse_args()
 
     source = (
@@ -221,7 +226,13 @@ def main() -> None:
         else None
     )
 
-    episode = prepare_episode(np.random.default_rng(), source, target, verbose=True)
+    episode = prepare_episode(
+        np.random.default_rng(),
+        source,
+        target,
+        verbose=True,
+        include_environment=args.environment,
+    )
     model = episode.model
     data = episode.data
     kinematics = episode.kinematics

@@ -44,6 +44,30 @@ WRIST_CAMERA_MOUNT_STL = (
     / "stl"
     / "SO-ARM101_camera_wrist_mount.stl"
 )
+OVERHEAD_MOUNT_STL_DIR = (
+    ROOT
+    / "SO-ARM100"
+    / "Optional"
+    / "Overhead_Cam_Mount_32x32_UVC_Module"
+    / "stl"
+)
+OVERHEAD_MOUNT_STLS = [
+    OVERHEAD_MOUNT_STL_DIR / "arm_base.stl",
+    OVERHEAD_MOUNT_STL_DIR / "cam_mount_bottom.stl",
+    OVERHEAD_MOUNT_STL_DIR / "cam_mount_middle.stl",
+    OVERHEAD_MOUNT_STL_DIR / "cam_mount_top.stl",
+]
+OVERHEAD_MOUNT_NAMES = {
+    "arm_base.stl": "overhead_cam_arm_base",
+    "cam_mount_bottom.stl": "overhead_mount_bottom",
+    "cam_mount_middle.stl": "overhead_mount_middle",
+    "cam_mount_top.stl": "overhead_mount_top",
+}
+WORKSPACE_FRAME_STL_DIR = ROOT / "stl" / "workspace_frame"
+WORKSPACE_FRAME_STLS = sorted(WORKSPACE_FRAME_STL_DIR.glob("*.stl"))
+WORKSPACE_FRAME_NAMES = {
+    path.name: "workspace_frame_" + path.stem for path in WORKSPACE_FRAME_STLS
+}
 GLB_DIR = ROOT / "intermediary-glb"
 
 # Keep these dimensions aligned with pick_and_place.camera_module. The generated
@@ -79,8 +103,12 @@ def generate_camera_module_mesh(output: Path) -> None:
 def load_source_mesh(path: Path):
     """Load a source mesh in the canonical web coordinate system: meters."""
     mesh = trimesh.load_mesh(path, force="mesh", process=True)
-    if path == WRIST_CAMERA_MOUNT_STL:
+    # The SO-ARM mount STLs are authored in millimeters; the workspace-frame
+    # STLs are already in meters (MuJoCo loads them unscaled), so they must not
+    # be rescaled here.
+    if path == WRIST_CAMERA_MOUNT_STL or path in OVERHEAD_MOUNT_STLS:
         mesh.apply_scale(MM_TO_M)
+    if path == WRIST_CAMERA_MOUNT_STL:
         mesh.apply_transform(WRIST_CAMERA_MOUNT_SOURCE_TRANSFORM)
     return mesh
 
@@ -119,6 +147,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="omit the optional SO-101 wrist-camera mount and camera-module visual",
     )
+    parser.add_argument(
+        "--no-overhead-camera-mount",
+        action="store_true",
+        help="omit the optional SO-101 overhead-camera mount",
+    )
     return parser.parse_args()
 
 
@@ -140,6 +173,18 @@ def main() -> int:
         paths.append(WRIST_CAMERA_MOUNT_STL)
         generate_camera_module_mesh(camera_module_glb)
 
+    if args.no_overhead_camera_mount:
+        for name in OVERHEAD_MOUNT_NAMES.values():
+            (GLB_DIR / (name + ".glb")).unlink(missing_ok=True)
+    else:
+        for path in OVERHEAD_MOUNT_STLS:
+            if not path.is_file():
+                raise SystemExit(f"overhead-camera mount STL not found: {path}")
+            paths.append(path)
+
+    for path in WORKSPACE_FRAME_STLS:
+        paths.append(path)
+
     print(f"{'mesh':42} {'orig':>7} {'ratio':>6} {'faces':>6} {'p98':>7}")
     for path in tqdm(paths, unit="mesh"):
         mesh = load_source_mesh(path)
@@ -156,7 +201,10 @@ def main() -> int:
                     ratio, reduced, error, high = mid, candidate, candidate_error, mid
                 else:
                     low = mid
-        reduced.export(GLB_DIR / path.with_suffix(".glb").name)
+        
+        name_map = {**OVERHEAD_MOUNT_NAMES, **WORKSPACE_FRAME_NAMES}
+        output_name = name_map.get(path.name, path.stem) + ".glb"
+        reduced.export(GLB_DIR / output_name)
         tqdm.write(f"{path.name:42} {len(mesh.faces):7d} {ratio:6.3f} {len(reduced.faces):6d} "
                    f"{error:5.2f}mm")
     return 0

@@ -23,8 +23,10 @@ import mujoco
 
 from pick_and_place.builder import STOCK_ASSETS_DIR, build_robot
 from pick_and_place.materials import MaterialConfig
+from pick_and_place.scene import build_environment, build_scene
 
 _GEOM_TYPES = {
+    mujoco.mjtGeom.mjGEOM_PLANE: "plane",
     mujoco.mjtGeom.mjGEOM_SPHERE: "sphere",
     mujoco.mjtGeom.mjGEOM_CAPSULE: "capsule",
     mujoco.mjtGeom.mjGEOM_ELLIPSOID: "ellipsoid",
@@ -76,14 +78,17 @@ def web_manifest(
         geom_type = mujoco.mjtGeom(int(model.geom_type[geom_id]))
         spec_geom = spec.geoms[geom_id]
         mat_id = int(model.geom_matid[geom_id])
+        geom_group = int(model.geom_group[geom_id])
         geom: dict[str, Any] = {
             "name": model.geom(geom_id).name or f"geom_{geom_id}",
-            "role": "visual" if int(model.geom_group[geom_id]) == 2 else "collision",
+            "role": "visual" if geom_group in (2, 4) else "collision",
             "type": _GEOM_TYPES[geom_type],
             "position": _values(spec_geom.pos),
             "quaternion": _values(spec_geom.quat),
-            "material": model.mat(mat_id).name,
+            "rgba": _values(model.geom_rgba[geom_id]),
         }
+        if mat_id != -1:
+            geom["material"] = model.mat(mat_id).name
         if geom_type == mujoco.mjtGeom.mjGEOM_MESH:
             mesh_id = int(model.geom_dataid[geom_id])
             geom["mesh"] = f"{model.mesh(mesh_id).name}.glb"
@@ -91,11 +96,11 @@ def web_manifest(
             geom["size"] = _values(model.geom_size[geom_id])
         geoms_by_body.setdefault(int(model.geom_bodyid[geom_id]), []).append(geom)
 
-    for body_id in range(1, model.nbody):
+    for body_id in range(model.nbody):
         spec_body = spec.bodies[body_id]
         body: dict[str, Any] = {
             "name": model.body(body_id).name,
-            "parent": model.body(int(model.body_parentid[body_id])).name,
+            "parent": model.body(int(model.body_parentid[body_id])).name if body_id > 0 else "world",
             "position": _values(spec_body.pos),
             "quaternion": _values(spec_body.quat),
             "joints": joints_by_body.get(body_id, []),
@@ -127,14 +132,12 @@ def web_manifest(
     }
 
 
-def export_robot(
+def _write_outputs(
+    spec: mujoco.MjSpec,
     output: Path,
-    *,
-    wrist_camera: bool = True,
-    materials: MaterialConfig | None = None,
+    materials: MaterialConfig | None,
 ) -> tuple[Path, Path]:
-    """Write matching XML and JSON outputs from one composed robot."""
-    spec = build_robot(wrist_camera=wrist_camera, materials=materials)
+    """Write matching XML and JSON web-manifest outputs for a composed spec."""
     # The spec was loaded relative to the stock model; rewrite meshdir so the
     # exported file resolves meshes from wherever it is saved.
     spec.meshdir = str(STOCK_ASSETS_DIR)
@@ -148,6 +151,39 @@ def export_robot(
     return output, manifest_output
 
 
+def export_robot(
+    output: Path,
+    *,
+    wrist_camera: bool = True,
+    include_environment: bool = False,
+    materials: MaterialConfig | None = None,
+) -> tuple[Path, Path]:
+    """Write matching XML and JSON outputs from one composed robot."""
+    if include_environment:
+        spec = build_scene(
+            wrist_camera=wrist_camera,
+            materials=materials,
+            include_environment=True,
+        )
+    else:
+        spec = build_robot(wrist_camera=wrist_camera, materials=materials)
+    return _write_outputs(spec, output, materials)
+
+
+def export_environment(
+    output: Path,
+    *,
+    materials: MaterialConfig | None = None,
+) -> tuple[Path, Path]:
+    """Write matching XML and JSON outputs for the robot-free environment.
+
+    The web viewer overlays this on the standalone ``so101`` model, so the
+    robot lives in exactly one place instead of being duplicated here.
+    """
+    spec = build_environment(materials=materials)
+    return _write_outputs(spec, output, materials)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("-o", "--output", type=Path, default=None, help="output XML path")
@@ -156,13 +192,31 @@ def main() -> None:
         action="store_true",
         help="omit the wrist-camera mount and module",
     )
+    parser.add_argument(
+        "--include-environment",
+        action="store_true",
+        help="include the workspace frame and overhead mount in the robot model",
+    )
+    parser.add_argument(
+        "--environment-only",
+        action="store_true",
+        help="export only the robot-free environment (floor, cube, frame, overhead mount)",
+    )
     args = parser.parse_args()
 
     output = args.output
     if output is None:
-        output = Path(__file__).resolve().parents[2] / "out" / "so101.xml"
+        name = "environment.xml" if args.environment_only else "so101.xml"
+        output = Path(__file__).resolve().parents[2] / "out" / name
 
-    paths = export_robot(output, wrist_camera=not args.no_wrist_camera)
+    if args.environment_only:
+        paths = export_environment(output)
+    else:
+        paths = export_robot(
+            output,
+            wrist_camera=not args.no_wrist_camera,
+            include_environment=args.include_environment,
+        )
     for path in paths:
         print(f"Wrote {path}")
 

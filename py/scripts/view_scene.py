@@ -39,6 +39,11 @@ def main() -> None:
         action="store_true",
         help="write the XML without opening the viewer (requires --export)",
     )
+    parser.add_argument(
+        "--environment",
+        action="store_true",
+        help="include the calibration workspace_frame and overhead camera mount in the scene",
+    )
     args = parser.parse_args()
 
     if args.export_only and args.export is None:
@@ -46,10 +51,17 @@ def main() -> None:
 
     wrist_camera = not args.no_wrist_camera
     if args.export is not None:
-        output = export_scene(args.export, wrist_camera=wrist_camera)
+        output = export_scene(
+            args.export,
+            wrist_camera=wrist_camera,
+            include_environment=args.environment,
+        )
         print(f"Wrote {output}")
     if not args.export_only:
-        model = build_scene(wrist_camera=wrist_camera).compile()
+        model = build_scene(
+            wrist_camera=wrist_camera,
+            include_environment=args.environment,
+        ).compile()
         data = mujoco.MjData(model)
 
         # Compensate for the physical 2.8° (0.0486795 rad) arm twist.

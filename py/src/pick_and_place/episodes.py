@@ -235,8 +235,11 @@ class Episode:
         return self.trajectory.grasp
 
 
-def _build_model(source: CubePose) -> tuple[mujoco.MjModel, mujoco.MjData]:
-    spec = build_scene()
+def _build_model(
+    source: CubePose,
+    include_environment: bool = False,
+) -> tuple[mujoco.MjModel, mujoco.MjData]:
+    spec = build_scene(include_environment=include_environment)
     cube = spec.body("pick_cube")
     cube.pos = (source.x, source.y, source.z)
     half_yaw = source.yaw / 2.0
@@ -253,6 +256,7 @@ def prepare_episode(
     *,
     max_attempts: int | None = None,
     verbose: bool = False,
+    include_environment: bool = False,
 ) -> Episode:
     """Sample poses and return the first collision-free pick-and-carry.
 
@@ -274,7 +278,7 @@ def prepare_episode(
         start_joints, start_gripper = sample_near_neutral(rng)
         end_joints, end_gripper = sample_near_neutral(rng)
 
-        model, data = _build_model(ep_source)
+        model, data = _build_model(ep_source, include_environment=include_environment)
         kinematics = derive_kinematics(model)
         actuator_id = {
             mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i): i for i in range(model.nu)

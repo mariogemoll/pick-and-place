@@ -144,15 +144,16 @@ export async function initializeBodyTreeVisualization(
     origin.position.set(...link.position);
     setQuaternion(origin, link.quaternion);
     origin.add(group);
-    const parentBody = bodies.get(link.parent);
+    const parentBody = link.name !== link.parent ? bodies.get(link.parent) : undefined;
     if (parentBody !== undefined) { parentBody.add(origin); } else { scene.add(origin); }
 
     const bodyRow = document.createElement('details');
     bodyRow.className = 'body-tree-body';
     bodyRow.open = true;
     const summary = document.createElement('summary');
+    const initialLabel = link.visuals.length === 0 ? 'no visuals' : 'loading…';
     summary.innerHTML = `<span class="body-tree-icon">B</span>
-      <span>${link.name}</span><small>loading…</small>
+      <span>${link.name}</span><small>${initialLabel}</small>
       <button class="body-tree-toggle" type="button" title="Hide body geoms"
         aria-label="Toggle ${link.name} geoms" aria-pressed="false">●</button>`;
     bodyRow.appendChild(summary);

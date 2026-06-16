@@ -57,17 +57,25 @@ if [[ "$OMIT_WRIST_CAMERA_MOUNT" == true ]]; then
 fi
 pnpm run optimize-meshes
 
-# 3. Generate the web model from the same composed robot used by MuJoCo
+# 3. Generate the web model manifests from the same composed robot used by MuJoCo
 cd "$PICK_AND_PLACE_DIR/py"
+# 3a. Simple Scene (Robot only)
 EXPORT_ARGS=()
 if [[ "$OMIT_WRIST_CAMERA_MOUNT" == true ]]; then
     EXPORT_ARGS+=(--no-wrist-camera)
 fi
 python -m pick_and_place.export \
     -o "$PICK_AND_PLACE_DIR/ts/public/so101.xml" "${EXPORT_ARGS[@]}"
-rm -f "$PICK_AND_PLACE_DIR/ts/public/so101.xml"
 
-# 4. Copy optimized GLBs and web model to destination
+# 3b. Environment only (Overhead Mount + Workspace Frame + Cube + Floor).
+# The robot lives in so101.json; the web viewer overlays this on top so the
+# robot is defined once instead of being baked into the scene a second time.
+python -m pick_and_place.export --environment-only \
+    -o "$PICK_AND_PLACE_DIR/ts/public/environment.xml"
+
+rm -f "$PICK_AND_PLACE_DIR/ts/public/so101.xml" "$PICK_AND_PLACE_DIR/ts/public/environment.xml"
+
+# 4. Copy optimized GLBs and web models to destination
 cd "$PICK_AND_PLACE_DIR/ts"
 if [[ "$OMIT_WRIST_CAMERA_MOUNT" == true ]]; then
     rm -f \
@@ -75,7 +83,7 @@ if [[ "$OMIT_WRIST_CAMERA_MOUNT" == true ]]; then
         "$DST_DIR/uvc_camera_module_32x32.glb"
 fi
 cp -r public/so101_assets/* "$DST_DIR/"
-cp public/so101.json "$DST_DIR/"
+cp public/so101.json public/environment.json "$DST_DIR/"
 
 # 5. Copy CSS
 cp src/style.css "$DST_DIR/pick-and-place.css"

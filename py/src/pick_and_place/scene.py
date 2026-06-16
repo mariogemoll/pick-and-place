@@ -10,7 +10,8 @@ from pathlib import Path
 import mujoco
 
 from pick_and_place.builder import STOCK_ASSETS_DIR, build_robot
-from pick_and_place.materials import MaterialConfig
+from pick_and_place.environment import add_overhead_camera_mount, add_workspace_frame
+from pick_and_place.materials import MaterialConfig, apply_materials
 from pick_and_place.workspace_overlays import add_workspace_overlays
 
 
@@ -18,10 +19,52 @@ def build_scene(
     *,
     wrist_camera: bool = True,
     materials: MaterialConfig | None = None,
+    include_environment: bool = False,
 ) -> mujoco.MjSpec:
     """Return the composed robot with a floor, workspace overlays, light, and cube."""
     spec = build_robot(wrist_camera=wrist_camera, materials=materials)
     spec.modelname = "so101_with_cube"
+    spec.worldbody.add_light(
+        name="scene_light",
+        pos=(0.0, 0.0, 1.0),
+        dir=(0.0, 0.0, -1.0),
+    )
+    add_workspace_overlays(spec, spec.body("base"))
+    _add_pick_cube(spec)
+
+    if include_environment:
+        collision_default = spec.find_default("collision")
+        add_workspace_frame(spec, collision_default=collision_default)
+        add_overhead_camera_mount(spec, collision_default=collision_default)
+
+    apply_materials(spec, materials or MaterialConfig())
+    _add_groundplane(spec)
+
+    return spec
+
+
+def build_environment(
+    *,
+    materials: MaterialConfig | None = None,
+) -> mujoco.MjSpec:
+    """Return only the environment, with no robot.
+
+    Contains the floor, pick cube, calibration workspace frame, and overhead
+    camera mount, all attached to the worldbody. The web viewer loads this on
+    top of the standalone ``so101`` model so the robot is defined exactly once
+    instead of being baked into the scene a second time.
+    """
+    spec = mujoco.MjSpec()
+    spec.modelname = "pick_and_place_environment"
+    _add_pick_cube(spec)
+    add_workspace_frame(spec)
+    add_overhead_camera_mount(spec)
+    apply_materials(spec, materials or MaterialConfig())
+    _add_groundplane(spec)
+    return spec
+
+
+def _add_groundplane(spec: mujoco.MjSpec) -> None:
     spec.add_texture(
         name="groundplane",
         type=mujoco.mjtTexture.mjTEXTURE_2D,
@@ -46,14 +89,6 @@ def build_scene(
         size=(0.0, 0.0, 0.05),
         material="groundplane",
     )
-    spec.worldbody.add_light(
-        name="scene_light",
-        pos=(0.0, 0.0, 1.0),
-        dir=(0.0, 0.0, -1.0),
-    )
-    add_workspace_overlays(spec, spec.body("base"))
-    _add_pick_cube(spec)
-    return spec
 
 
 def export_scene(
@@ -61,9 +96,14 @@ def export_scene(
     *,
     wrist_camera: bool = True,
     materials: MaterialConfig | None = None,
+    include_environment: bool = False,
 ) -> Path:
     """Write a standalone, machine-local XML file for the composed scene."""
-    spec = build_scene(wrist_camera=wrist_camera, materials=materials)
+    spec = build_scene(
+        wrist_camera=wrist_camera,
+        materials=materials,
+        include_environment=include_environment,
+    )
     spec.meshdir = str(STOCK_ASSETS_DIR)
     spec.compile()
     output.parent.mkdir(parents=True, exist_ok=True)

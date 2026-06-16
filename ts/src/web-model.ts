@@ -17,10 +17,11 @@ export interface WebJoint {
 export interface WebGeometry {
   name: string;
   role: 'visual' | 'collision';
-  type: 'sphere' | 'capsule' | 'ellipsoid' | 'cylinder' | 'box' | 'mesh';
+  type: 'plane' | 'sphere' | 'capsule' | 'ellipsoid' | 'cylinder' | 'box' | 'mesh';
   position: [number, number, number];
   quaternion: [number, number, number, number];
-  material: string;
+  material?: string;
+  rgba?: [number, number, number, number];
   mesh?: string;
   size?: [number, number, number];
 }
@@ -73,7 +74,16 @@ export function materialFor(
   geometry: WebGeometry,
   modelMaterials: Record<string, [number, number, number, number]>
 ): THREE.MeshStandardMaterial {
-  const [r, g, b, a] = modelMaterials[geometry.material] ?? [0.5, 0.5, 0.5, 1];
+  const materialKey = geometry.material;
+  const isOverlay = geometry.name.startsWith('workspace_');
+  const sourceRgba =
+    (materialKey !== undefined ? modelMaterials[materialKey] : undefined) ??
+    geometry.rgba ??
+    [0.5, 0.5, 0.5, 1];
+  const [r, g, b, initialAlpha] = sourceRgba;
+  const a = isOverlay ? 1.0 : initialAlpha;
+
+  // User request: workspace borders should not be transparent.
   return new THREE.MeshStandardMaterial({
     color: new THREE.Color(r, g, b),
     opacity: a,
@@ -85,6 +95,11 @@ export function materialFor(
 export function primitiveGeometry(geometry: WebGeometry): THREE.BufferGeometry | undefined {
   const size = geometry.size;
   if (size === undefined) { return undefined; }
+  if (geometry.type === 'plane') {
+    const width = size[0] > 0 ? size[0] * 2 : 100;
+    const height = size[1] > 0 ? size[1] * 2 : 100;
+    return new THREE.PlaneGeometry(width, height);
+  }
   if (geometry.type === 'box') {
     return new THREE.BoxGeometry(size[0] * 2, size[1] * 2, size[2] * 2);
   }
@@ -174,7 +189,7 @@ export function buildWebModel(
     }
 
     const parent = bodies.get(body.parent);
-    if (parent !== undefined && included.has(body.parent)) {
+    if (parent !== undefined && included.has(body.parent) && body.name !== body.parent) {
       parent.add(origin);
     } else {
       root.add(subtreeRoot === body.name ? bodyGroup : origin);
@@ -183,15 +198,19 @@ export function buildWebModel(
     for (const geometry of body.geometries) {
       if (geometry.role !== 'visual') { continue; }
       const material = materialFor(geometry, model.materials);
-      const slot = materialsByName.get(geometry.material) ?? [];
-      slot.push(material);
-      materialsByName.set(geometry.material, slot);
+      if (geometry.material !== undefined) {
+        const slot = materialsByName.get(geometry.material) ?? [];
+        slot.push(material);
+        materialsByName.set(geometry.material, slot);
+      }
       if (geometry.type === 'mesh' && geometry.mesh !== undefined) {
         const meshLoad = loadMesh(`${basePath}/${geometry.mesh}`).then(
           ({ geometry: bufferGeometry }) => {
             addVisual(bodyGroup, geometry, bufferGeometry, material);
           }
-        );
+        ).catch((err: unknown) => {
+          console.warn(`Failed to load mesh ${geometry.mesh}:`, err);
+        });
         meshLoads.push(meshLoad);
       } else {
         const bufferGeometry = primitiveGeometry(geometry);

@@ -25,6 +25,20 @@ def test_scene_contains_robot_floor_light_and_cube():
     assert tuple(model.geom_size[model.geom("pick_cube").id]) == (0.015, 0.015, 0.015)
 
 
+def test_robot_visual_geoms_are_visible():
+    model = build_scene().compile()
+    base_id = model.body("base").id
+    visual_geoms = [
+        geom_id
+        for geom_id in range(model.ngeom)
+        if int(model.geom_bodyid[geom_id]) == base_id and int(model.geom_group[geom_id]) == 2
+    ]
+
+    assert visual_geoms
+    for geom_id in visual_geoms:
+        assert model.geom_rgba[geom_id, 3] > 0
+
+
 def test_scene_contains_non_colliding_workspace_overlays():
     model = build_scene().compile()
 

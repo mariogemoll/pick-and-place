@@ -25,5 +25,6 @@ dist-ssr
 
 package-lock.json
 
+/public/environment.json
 /public/so101_assets
 /public/so101.json
