@@ -15,14 +15,20 @@ to NEUTRAL, then REST, and releases torque.
 The runner owns the follower, the viewer and the cameras and keeps them alive
 across the whole loop; ``execute_episode`` runs a single pass against them. For
 sim-only playback (no arm) use ``view_trajectory``.
+
+Every run records to ``records/<timestamp>/`` unconditionally: per episode, the
+full wrist/overhead mp4s, the full-rate motor npz, and the decimated
+frame-index npz (see ``execute_episode``'s docstring).
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime
 import math
 import sys
 import time
+from pathlib import Path
 
 import mujoco
 import mujoco.viewer
@@ -277,13 +283,16 @@ def main() -> None:
     )
     follower.connect()
 
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    record_dir_path = Path(__file__).resolve().parents[1] / "records" / timestamp
+    record_dir_path.mkdir(parents=True, exist_ok=True)
+    print(f"Recording. Saving to: {record_dir_path}")
+
     backend = cv2.CAP_AVFOUNDATION if hasattr(cv2, "CAP_AVFOUNDATION") else cv2.CAP_ANY
-    overhead_cap = None
-    if args.source is None:
-        print("Opening overhead camera...")
-        overhead_cap = cv2.VideoCapture(parse_index_or_path(args.camera), backend)
-        overhead_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-        overhead_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+    print("Opening overhead camera...")
+    overhead_cap = cv2.VideoCapture(parse_index_or_path(args.camera), backend)
+    overhead_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+    overhead_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
 
     fixed_target = (
         CubePose(x=args.target[0], y=args.target[1], z=CUBE_HALF_SIZE)
@@ -360,6 +369,7 @@ def main() -> None:
             move_to(arm, grip, viewer)
 
             episodes_done = 0
+            episode_attempt = 0
             while (args.episodes == 0 or episodes_done < args.episodes) and viewer.is_running():
                 source = hunt_for_cube(viewer)
                 if not viewer.is_running():
@@ -387,13 +397,19 @@ def main() -> None:
                     abort_to_near_neutral(viewer)
                     continue
 
+                episode_attempt += 1
                 print(f"\n--- Episode {episodes_done + 1}"
                       f"{f'/{args.episodes}' if args.episodes else ''} ---")
+                episode_base_name = f"episode_{episode_attempt:03d}"
                 status = execute_episode(
                     episode,
                     follower=follower,
                     viewer=viewer,
                     offsets_path=args.offsets_path,
+                    record_path=str(record_dir_path / f"{episode_base_name}.npz"),
+                    video_dir=record_dir_path,
+                    video_base_name=episode_base_name,
+                    overhead_camera_cap=overhead_cap,
                     speed=args.speed,
                     wrist_camera=args.wrist_camera,
                     wrist_intrinsics=args.wrist_intrinsics,

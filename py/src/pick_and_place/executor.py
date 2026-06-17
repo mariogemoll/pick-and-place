@@ -13,9 +13,10 @@ execute → re-seed) will grow here — see ``docs/realworld-execution-roadmap.m
 
 from __future__ import annotations
 
-import csv
 import math
+import threading
 import time
+from pathlib import Path
 
 import mujoco
 import numpy as np
@@ -180,18 +181,34 @@ def _report_tracking(log_rows: list[tuple[float, np.ndarray, np.ndarray]]) -> No
 
 
 def _write_record(path: str, log_rows: list[tuple[float, np.ndarray, np.ndarray]]) -> None:
-    """Write the full per-tick commanded/actual log to CSV (degrees; gripper position)."""
-    header = ["t"] + [f"cmd_{n}" for n in JOINT_NAMES] + [f"act_{n}" for n in JOINT_NAMES]
-    with open(path, "w", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(header)
-        for t, commanded, actual in log_rows:
-            writer.writerow(
-                [f"{t:.6f}"]
-                + [f"{v:.6f}" for v in commanded]
-                + [f"{v:.6f}" for v in actual]
-            )
+    """Write the full per-tick commanded/actual log to npz (degrees; gripper position).
+
+    Arrays: ``t`` (N,), ``commanded`` (N, J), ``actual`` (N, J), ``joint_names`` (J,)
+    giving the column order of the last axis of ``commanded``/``actual``.
+    """
+    t = np.array([row[0] for row in log_rows])
+    commanded = np.array([row[1] for row in log_rows])
+    actual = np.array([row[2] for row in log_rows])
+    np.savez_compressed(path, t=t, commanded=commanded, actual=actual, joint_names=np.array(JOINT_NAMES))
     print(f"Wrote {len(log_rows)} samples to {path}")
+
+
+def _write_frame_index(path: str, rows: list[tuple[int, int | None, int | None]]) -> None:
+    """Write the decimated frame-index log to npz: no joint data, just a join key.
+
+    One row per ``record_fps`` tick: ``motor_row`` is the row number in the
+    full-rate motor npz (``_write_record``) this tick belongs to, plus the exact
+    frame index each camera's continuous mp4 had just written at that instant
+    (``-1`` if that camera isn't recording). The motor npz already has every
+    tick's commanded/actual joints, so this file doesn't repeat them — a later
+    exporter joins the two on ``motor_row`` to get (state, action, image)
+    triples, pulling each frame straight out of the existing video by index.
+    """
+    motor_row = np.array([r[0] for r in rows], dtype=np.int64)
+    wrist_frame = np.array([-1 if r[1] is None else r[1] for r in rows], dtype=np.int64)
+    overhead_frame = np.array([-1 if r[2] is None else r[2] for r in rows], dtype=np.int64)
+    np.savez_compressed(path, motor_row=motor_row, wrist_frame=wrist_frame, overhead_frame=overhead_frame)
+    print(f"Wrote {len(rows)} synced frame-index samples to {path}")
 
 
 def execute_episode(
@@ -201,6 +218,10 @@ def execute_episode(
     viewer,
     offsets_path: str | None = None,
     record_path: str | None = None,
+    video_dir: Path | str | None = None,
+    video_base_name: str | None = None,
+    overhead_camera_cap=None,
+    record_fps: float = 30.0,
     speed: float | None = None,
     wrist_camera: str | None = None,
     wrist_intrinsics: str | None = None,
@@ -213,6 +234,20 @@ def execute_episode(
     passive viewer, or a mock exposing ``is_running``/``sync``). This ramps the
     real arm onto the trajectory start pose, then steps the sim (the plant) while
     streaming set points to the arm at ``CONTROL_HZ`` and logging motor readback.
+
+    If ``video_dir`` is given, the wrist camera (already opened for cube tracking,
+    when ``wrist_camera`` is set) and ``overhead_camera_cap`` (owned by the
+    caller, opened across the whole loop) are each recorded to an mp4 named
+    ``{video_base_name}_wrist.mp4`` / ``{video_base_name}_overhead.mp4`` in that
+    directory, continuously, at the camera's own frame rate — independent of
+    ``CONTROL_HZ``. Alongside those full videos and the full-rate ``record_path``
+    motor npz, a ``{video_base_name}_frames.npz`` is written: one row every
+    ``record_fps`` (default 30) giving ``motor_row`` (the matching row in the
+    motor npz) plus, for each camera, the index of the frame each video had most
+    recently written at that instant — never a stale repeat. It carries no joint
+    data of its own, only the join key, so nothing is stored twice; a later
+    LeRobotDataset exporter joins the two npz files on ``motor_row`` and pulls
+    each frame straight out of the existing (full-resolution, undecimated) mp4.
 
     Returns ``"success"`` when the trajectory ran to completion, or ``"restart"``
     when a checkpoint replan failed and the caller should abort and re-home. A
@@ -262,6 +297,47 @@ def execute_episode(
     cam_thread = None
     wrist_renderer = None
 
+    wrist_video_writer = None
+    overhead_video_writer = None
+    overhead_cam_running = False
+    overhead_cam_thread = None
+    overhead_frame_count = 0
+
+    # One (motor_row, wrist_frame_index, overhead_frame_index) row per record_fps
+    # tick, populated only when video_dir is set (see docstring).
+    synced_log: list[tuple[int, int | None, int | None]] = []
+    last_synced_t = -math.inf
+    record_period = 1.0 / record_fps
+
+    def _open_video_writer(cap, suffix: str):
+        """Build a same-size, same-fps mp4 writer for ``cap`` under ``video_dir``."""
+        import cv2
+
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if not fps or fps <= 0 or math.isnan(fps):
+            fps = 30.0
+        path = Path(video_dir) / f"{video_base_name or 'episode'}_{suffix}.mp4"
+        return cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
+
+    if video_dir is not None:
+        Path(video_dir).mkdir(parents=True, exist_ok=True)
+        if overhead_camera_cap is not None and overhead_camera_cap.isOpened():
+            overhead_video_writer = _open_video_writer(overhead_camera_cap, "overhead")
+            overhead_cam_running = True
+
+            def overhead_reader():
+                nonlocal overhead_frame_count
+                while overhead_cam_running:
+                    ok, frame = overhead_camera_cap.read()
+                    if ok:
+                        overhead_video_writer.write(frame)
+                        overhead_frame_count += 1
+
+            overhead_cam_thread = threading.Thread(target=overhead_reader, daemon=True)
+            overhead_cam_thread.start()
+
     if wrist_camera is not None and wrist_cam_id >= 0:
         import cv2
         from pick_and_place.cam_align_solve import parse_index_or_path
@@ -275,13 +351,15 @@ def execute_episode(
             wrist_cam.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
             wrist_cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
             wrist_tracker = CubeTracker(smooth=0.95)
+
+            if video_dir is not None:
+                wrist_video_writer = _open_video_writer(wrist_cam, "wrist")
             
             intrinsics_path = wrist_intrinsics
             if intrinsics_path is None:
                 from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
                 intrinsics_path = LOCAL_CAMERA_INTRINSICS_DIR / "wrist_camera.json"
             else:
-                from pathlib import Path
                 intrinsics_path = Path(intrinsics_path)
                 
             if intrinsics_path.exists():
@@ -304,7 +382,6 @@ def execute_episode(
                 rh = max(1, int(round(render_h * scale)))
                 wrist_renderer = mujoco.Renderer(model, width=rw, height=rh)
 
-            import threading
             cam_lock = threading.Lock()
             cam_running = True
             def cam_reader():
@@ -312,6 +389,8 @@ def execute_episode(
                 while cam_running:
                     ok, frame = wrist_cam.read()
                     if ok:
+                        if wrist_video_writer is not None:
+                            wrist_video_writer.write(frame)
                         with cam_lock:
                             cam_frame = frame
                             cam_frame_id += 1
@@ -501,6 +580,15 @@ def execute_episode(
                     # We log data.time so the overall timeline is continuous.
                     log_rows.append((data.time, commanded, actual))
 
+                    if video_dir is not None and data.time - last_synced_t >= record_period:
+                        last_synced_t = data.time
+                        wrist_idx = None
+                        if cam_lock is not None:
+                            with cam_lock:
+                                wrist_idx = cam_frame_id - 1 if cam_frame_id > 0 else None
+                        overhead_idx = overhead_frame_count - 1 if overhead_frame_count > 0 else None
+                        synced_log.append((len(log_rows) - 1, wrist_idx, overhead_idx))
+
                 viewer.sync()
                 
                 if phase_t >= phase.duration:
@@ -587,11 +675,21 @@ def execute_episode(
         _report_tracking(log_rows)
         if record_path is not None:
             _write_record(record_path, log_rows)
+        if video_dir is not None:
+            frames_path = Path(video_dir) / f"{video_base_name or 'episode'}_frames.npz"
+            _write_frame_index(str(frames_path), synced_log)
         if wrist_cam is not None:
             cam_running = False
             if cam_thread is not None:
                 cam_thread.join(timeout=1.0)
             wrist_cam.release()
+        if overhead_cam_thread is not None:
+            overhead_cam_running = False
+            overhead_cam_thread.join(timeout=1.0)
+        if wrist_video_writer is not None:
+            wrist_video_writer.release()
+        if overhead_video_writer is not None:
+            overhead_video_writer.release()
         if show_wrist_cam or show_wrist_mixed:
             import cv2
             cv2.destroyAllWindows()
