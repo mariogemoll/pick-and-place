@@ -59,6 +59,11 @@ def main() -> None:
     # 1. Build the scene with robot and environment
     wrist_camera = (args.camera_name == "wrist_camera" or True) # Always include for the model
     spec = build_scene(wrist_camera=wrist_camera, include_environment=True)
+    
+    # Ensure the offscreen framebuffer is large enough for the requested render size
+    spec.visual.global_.offwidth = max(spec.visual.global_.offwidth, args.width)
+    spec.visual.global_.offheight = max(spec.visual.global_.offheight, args.height)
+    
     model = spec.compile()
     data = mujoco.MjData(model)
 
@@ -71,7 +76,23 @@ def main() -> None:
     if camera_id < 0:
         raise SystemExit(f"unknown camera {args.camera_name!r}")
 
-    # 3. Handle intrinsics and undistortion
+    # 3. Handle framebuffer limits
+    requested_size = (args.width, args.height)
+    framebuffer_size = (int(model.vis.global_.offwidth), int(model.vis.global_.offheight))
+    scale = min(
+        1.0,
+        framebuffer_size[0] / args.width,
+        framebuffer_size[1] / args.height,
+    )
+    args.width = max(1, int(round(args.width * scale)))
+    args.height = max(1, int(round(args.height * scale)))
+    if requested_size != (args.width, args.height):
+        print(
+            f"Clamping render to {args.width}x{args.height} "
+            f"(offscreen framebuffer limit {framebuffer_size[0]}x{framebuffer_size[1]})."
+        )
+
+    # 4. Handle intrinsics and undistortion
     intrinsics = args.intrinsics
     if intrinsics is None:
         candidate = LOCAL_CAMERA_INTRINSICS_DIR / f"{args.camera_name}.json"
