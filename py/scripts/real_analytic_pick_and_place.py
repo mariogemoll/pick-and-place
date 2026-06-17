@@ -172,7 +172,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--environment",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="include the calibration workspace_frame and overhead camera mount in the scene",
     )
     parser.add_argument("--camera", default="0", help="OpenCV camera index or device path (default: 0)")

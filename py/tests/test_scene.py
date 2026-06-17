@@ -49,15 +49,11 @@ def test_scene_contains_non_colliding_workspace_overlays():
         assert model.geom_group[geom] == WORKSPACE_OVERLAY_GROUP
         assert model.geom_contype[geom] == 0
         assert model.geom_conaffinity[geom] == 0
-        assert model.geom_bodyid[geom] == model.body("base").id
+        assert model.geom_bodyid[geom] == 0
         np.testing.assert_allclose(model.geom_rgba[geom], (1.0, 0.4667, 0.0, 0.22), atol=1e-6)
 
 
-def test_workspace_overlays_follow_robot_base():
-    original_model = build_scene().compile()
-    original_data = mujoco.MjData(original_model)
-    mujoco.mj_forward(original_model, original_data)
-
+def test_workspace_overlays_stay_on_worldbody_floor():
     spec = build_scene()
     base = spec.body("base")
     base.pos = (1.0, 2.0, 0.1)
@@ -67,18 +63,10 @@ def test_workspace_overlays_follow_robot_base():
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
 
-    base_id = model.body("base").id
-    np.testing.assert_allclose(data.xpos[base_id], (1.0, 2.0, 0.1))
-    rotation = np.array(((0.0, -1.0, 0.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0)))
     for overlay in WORKSPACE_OVERLAYS:
         geom = model.geom(overlay.name).id
-        original_geom = original_model.geom(overlay.name).id
-        assert model.geom_bodyid[geom] == base_id
-        np.testing.assert_allclose(
-            data.geom_xpos[geom],
-            np.array((1.0, 2.0, 0.1)) + rotation @ original_data.geom_xpos[original_geom],
-            atol=1e-7,
-        )
+        assert model.geom_bodyid[geom] == 0
+        np.testing.assert_allclose(data.geom_xpos[geom][2], overlay.z, atol=1e-7)
 
 
 def test_environment_contains_textured_workspace_frame_apriltags():

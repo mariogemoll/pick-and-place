@@ -35,7 +35,7 @@ def build_scene(
     *,
     wrist_camera: bool = True,
     materials: MaterialConfig | None = None,
-    include_environment: bool = False,
+    include_environment: bool = True,
     apriltag_cube: bool | None = None,
 ) -> mujoco.MjSpec:
     """Return the composed robot with a floor, workspace overlays, light, and cube.
@@ -55,7 +55,15 @@ def build_scene(
         pos=(0.0, 0.0, 1.0),
         dir=(0.0, 0.0, -1.0),
     )
-    add_workspace_overlays(spec, spec.body("base"))
+    
+    # The real robot is mounted on the workspace frame, elevating its base
+    # by the frame's thickness (7.2 mm). This is critical for IK solving
+    # because the floor (where the cube rests) is at Z=0.
+    base = spec.body("base")
+    base.pos = (0.0, 0.0, 0.0072)
+
+    # Attach overlays to worldbody so they stay on the floor.
+    add_workspace_overlays(spec, spec.worldbody)
     _add_pick_cube(spec, apriltag=apriltag_cube)
 
     if include_environment:
@@ -131,7 +139,7 @@ def export_scene(
     *,
     wrist_camera: bool = True,
     materials: MaterialConfig | None = None,
-    include_environment: bool = False,
+    include_environment: bool = True,
     apriltag_cube: bool | None = None,
 ) -> Path:
     """Write a standalone, machine-local XML file for the composed scene."""
