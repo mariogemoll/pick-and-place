@@ -18,6 +18,7 @@ from __future__ import annotations
 import dataclasses
 import math
 from collections.abc import Iterator
+from typing import Protocol, runtime_checkable
 from dataclasses import dataclass
 from functools import cached_property
 
@@ -68,6 +69,16 @@ NEUTRAL_ARM_JOINTS: dict[str, float] = {
     "wrist_roll": -math.pi / 2,
 }
 NEUTRAL_GRIPPER = 0.0
+
+REST_ARM_JOINTS: dict[str, float] = {
+    "shoulder_pan": math.radians(5.492788249022637),
+    "shoulder_lift": math.radians(-95.10455666443607),
+    "elbow_flex": math.radians(89.41623426698676),
+    "wrist_flex": math.radians(75.45878504436078),
+    "wrist_roll": math.radians(-86.5807853208365)
+}
+REST_GRIPPER = math.radians((10 - 2.3) / 96.2 * 130 - 10)
+
 
 # --- Phase timing -----------------------------------------------------------
 # Travel phases (approach, carry, retreat) derive their duration from the
@@ -526,149 +537,144 @@ def plan_carry(
     return None
 
 
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class TrajectoryPhase(Protocol):
+    @property
+    def duration(self) -> float: ...
+    def evaluate(self, t: float) -> Frame: ...
+    @property
+    def name(self) -> str: ...
+
 @dataclass(frozen=True)
-class PickAndCarry:
-    """Phases 1-5: start -> hover -> pregrasp -> grasp -> carry -> retreat to end."""
-
+class ApproachPhase:
     k: So101Kinematics
-    source: CubePose
-    target: CubePose
-    grasp: GraspChoice
-    carry: CarryPlan
-    predrop_joints: dict[str, float]
-    postdrop_joints: dict[str, float]
-    start_joints: dict[str, float] = dataclasses.field(
-        default_factory=lambda: dict(NEUTRAL_ARM_JOINTS)
-    )
-    start_gripper: float = NEUTRAL_GRIPPER
-    end_joints: dict[str, float] = dataclasses.field(
-        default_factory=lambda: dict(NEUTRAL_ARM_JOINTS)
-    )
-    end_gripper: float = NEUTRAL_GRIPPER
+    start_joints: dict[str, float]
+    start_gripper: float
+    hover_joints: dict[str, float]
 
-    # Durations are derived from the (immutable) geometry and joint poses, so they
-    # are computed once and cached — ``evaluate``/``duration`` are called every sim
-    # step and must not re-run the forward-kinematics sampling each time.
-    @cached_property
-    def stage1_duration(self) -> float:
-        # Approach: joint swing from the start pose to the hover above the cube.
-        return _joint_move_duration(self.k, self.start_joints, self.grasp.hover_joints)
-
-    @cached_property
-    def stage2_duration(self) -> float:
-        return DESCENT_DURATION
-
-    @cached_property
-    def stage3_duration(self) -> float:
-        return GRASP_DURATION
-
-    @cached_property
-    def stage4_duration(self) -> float:
-        # Carry: traverse the generalized arc (translation + weighted yaw) at
-        # CARTESIAN_SPEED, so both the cube travel and the wrist rotation stay
-        # within their speed limits and a longer carry takes proportionally longer.
-        return _cartesian_move_duration(self.carry.arc_table[-1][1])
-
-    @cached_property
-    def stage5_hover_duration(self) -> float:
-        return RELEASE_DURATION
-
-    @cached_property
-    def stage5_return_duration(self) -> float:
-        # Retreat: joint spline up through the postdrop hover and on to the end
-        # pose. (The arm actually starts moving in the tail of the hover phase, so
-        # its real speed is a touch under the target — safely on the slow side.)
-        return _joint_move_duration(self.k, self.predrop_joints, self.postdrop_joints, self.end_joints)
+    @property
+    def name(self) -> str: return "approach"
 
     @cached_property
     def duration(self) -> float:
-        return (
-            self.stage1_duration
-            + self.stage2_duration
-            + self.stage3_duration
-            + self.stage4_duration
-            + self.stage5_hover_duration
-            + self.stage5_return_duration
-        )
+        return _joint_move_duration(self.k, self.start_joints, self.hover_joints)
 
     def evaluate(self, t: float) -> Frame:
-        stage1_end = self.stage1_duration
-        stage2_end = stage1_end + self.stage2_duration
-        stage3_end = stage2_end + self.stage3_duration
-        stage4_end = stage3_end + self.stage4_duration
+        alpha = _timed_arc_fraction(t / self.duration) if self.duration > 0 else 1.0
+        joints = _lerp_joints(self.start_joints, self.hover_joints, alpha)
+        gripper = self.start_gripper + (GRIPPER_OPEN - self.start_gripper) * alpha
+        return Frame(joints=joints, gripper=gripper)
 
-        if t < stage1_end:
-            # Phase 1: swing from start to the hover, opening the gripper. Uses the
-            # same trapezoidal profile as the carry (smooth ramp up, constant cruise,
-            # smooth ramp down) so a longer approach holds top speed rather than being
-            # one continuous ease, while still leaving/arriving with zero velocity and
-            # acceleration.
-            alpha = _timed_arc_fraction(t / self.stage1_duration) if self.stage1_duration > 0 else 1.0
-            joints = _lerp_joints(self.start_joints, self.grasp.hover_joints, alpha)
-            gripper = self.start_gripper + (GRIPPER_OPEN - self.start_gripper) * alpha
-            return Frame(joints=joints, gripper=gripper)
+@dataclass(frozen=True)
+class DescentPhase:
+    k: So101Kinematics
+    face: CubeFace
+    source: CubePose
+    elbow: str
+    hover_joints: dict[str, float]
+    pregrasp_joints: dict[str, float]
 
-        if t < stage2_end:
-            # Phase 2: descend straight down from the hover to the pregrasp at the
-            # cube center, re-solving IK each frame so the tip tracks a vertical
-            # line. The joint lerp is a defensive fallback for the rare frame whose
-            # interpolated pose has no in-limit branch on the chosen elbow.
-            alpha = (
-                _smoothstep((t - stage1_end) / self.stage2_duration)
-                if self.stage2_duration > 0
-                else 1.0
-            )
-            hover_offset = SOURCE_HOVER_TIP_Z - self.source.z
-            matrix = pregrasp_matrix(self.grasp.face, self.source, hover_offset * (1.0 - alpha))
-            branch = None
-            if matrix is not None:
-                branches = solve_simple_pregrasp_ik(self.k, matrix)
-                branch = next((b for b in branches if b.elbow == self.grasp.elbow), None)
-            joints = (
-                branch.joints
-                if branch is not None
-                else _lerp_joints(self.grasp.hover_joints, self.grasp.pregrasp_joints, alpha)
-            )
-            return Frame(joints=joints, gripper=GRIPPER_OPEN)
+    @property
+    def name(self) -> str: return "descent"
 
-        if t < stage3_end:
-            # Phase 3: arm holds at the pregrasp; gripper closes onto the cube.
-            alpha = _smoothstep((t - stage2_end) / self.stage3_duration) if self.stage3_duration > 0 else 1.0
-            gripper = GRIPPER_OPEN + (GRIPPER_GRASP - GRIPPER_OPEN) * alpha
-            return Frame(joints=self.grasp.pregrasp_joints, gripper=gripper)
+    @cached_property
+    def duration(self) -> float: return DESCENT_DURATION
 
-        if t < stage4_end:
-            # Phase 4: lift and carry the grasped cube up and over to the hover above
-            # the target, the gripper following the cube along the planned curve. The
-            # plan was validated across the whole sweep, so the per-frame IK resolves
-            # cleanly; the joint lerp is only a defensive fallback for edge cases.
-            phase = (
-                min(1.0, (t - stage3_end) / self.stage4_duration) if self.stage4_duration > 0 else 1.0
-            )
-            gripper_matrix = _carry_cube_matrix(self.carry, phase) @ self.carry.cube_from_gripper
-            branch = next(
-                (b for b in solve_simple_pregrasp_ik(self.k, gripper_matrix) if b.elbow == self.grasp.elbow),
-                None,
-            )
-            joints = (
-                branch.joints
-                if branch is not None
-                else _lerp_joints(self.grasp.pregrasp_joints, self.predrop_joints, _smoothstep(phase))
-            )
-            return Frame(joints=joints, gripper=GRIPPER_GRASP)
+    def evaluate(self, t: float) -> Frame:
+        alpha = _smoothstep(t / self.duration) if self.duration > 0 else 1.0
+        hover_offset = SOURCE_HOVER_TIP_Z - self.source.z
+        matrix = pregrasp_matrix(self.face, self.source, hover_offset * (1.0 - alpha))
+        branch = None
+        if matrix is not None:
+            branches = solve_simple_pregrasp_ik(self.k, matrix)
+            branch = next((b for b in branches if b.elbow == self.elbow), None)
+        joints = (
+            branch.joints
+            if branch is not None
+            else _lerp_joints(self.hover_joints, self.pregrasp_joints, alpha)
+        )
+        return Frame(joints=joints, gripper=GRIPPER_OPEN)
 
-        # Phase 5: release the cube and retreat. The gripper opens (gravity drops
-        # the cube), then the arm flows up through the postdrop hover and on to
-        # neutral along one C2 joint spline — the hover is a non-stopping clearance
-        # waypoint. The arm holds still until the gripper has opened far enough for
-        # the cube to fall clear, so the retreat doesn't fling it.
-        stage5_duration = self.stage5_hover_duration + self.stage5_return_duration
-        elapsed = min(stage5_duration, t - stage4_end)
-        opening_fraction = RETREAT_OPENING_ANGLE / (GRIPPER_OPEN - GRIPPER_GRASP)
-        movement_start = opening_fraction * self.stage5_hover_duration
-        retreat_duration = stage5_duration - movement_start
-        hover_phase = (self.stage5_hover_duration - movement_start) / retreat_duration
-        movement_phase = min(1.0, max(0.0, (elapsed - movement_start) / retreat_duration))
+@dataclass(frozen=True)
+class GraspPhase:
+    pregrasp_joints: dict[str, float]
+    start_gripper: float = GRIPPER_OPEN
+
+    @property
+    def name(self) -> str: return "grasp"
+
+    @cached_property
+    def duration(self) -> float: return GRASP_DURATION
+
+    def evaluate(self, t: float) -> Frame:
+        alpha = _smoothstep(t / self.duration) if self.duration > 0 else 1.0
+        gripper = self.start_gripper + (GRIPPER_GRASP - self.start_gripper) * alpha
+        return Frame(joints=self.pregrasp_joints, gripper=gripper)
+
+@dataclass(frozen=True)
+class CarryPhase:
+    k: So101Kinematics
+    carry: CarryPlan
+    elbow: str
+    pregrasp_joints: dict[str, float]
+    predrop_joints: dict[str, float]
+
+    @property
+    def name(self) -> str: return "carry"
+
+    @cached_property
+    def duration(self) -> float:
+        return _cartesian_move_duration(self.carry.arc_table[-1][1])
+
+    def evaluate(self, t: float) -> Frame:
+        phase = min(1.0, t / self.duration) if self.duration > 0 else 1.0
+        gripper_matrix = _carry_cube_matrix(self.carry, phase) @ self.carry.cube_from_gripper
+        branch = next(
+            (b for b in solve_simple_pregrasp_ik(self.k, gripper_matrix) if b.elbow == self.elbow),
+            None,
+        )
+        joints = (
+            branch.joints
+            if branch is not None
+            else _lerp_joints(self.pregrasp_joints, self.predrop_joints, _smoothstep(phase))
+        )
+        return Frame(joints=joints, gripper=GRIPPER_GRASP)
+
+@dataclass(frozen=True)
+class RetreatPhase:
+    k: So101Kinematics
+    predrop_joints: dict[str, float]
+    postdrop_joints: dict[str, float]
+    end_joints: dict[str, float]
+    end_gripper: float
+    start_gripper: float = GRIPPER_GRASP
+
+    @property
+    def name(self) -> str: return "retreat"
+
+    @cached_property
+    def hover_duration(self) -> float: return RELEASE_DURATION
+
+    @cached_property
+    def return_duration(self) -> float:
+        return _joint_move_duration(self.k, self.predrop_joints, self.postdrop_joints, self.end_joints)
+
+    @cached_property
+    def duration(self) -> float: return self.hover_duration + self.return_duration
+
+    def evaluate(self, t: float) -> Frame:
+        elapsed = min(self.duration, t)
+        opening_fraction = RETREAT_OPENING_ANGLE / (GRIPPER_OPEN - self.start_gripper)
+        movement_start = opening_fraction * self.hover_duration
+        retreat_duration = self.duration - movement_start
+        if retreat_duration <= 0.0:
+            hover_phase = 1.0
+            movement_phase = 1.0
+        else:
+            hover_phase = (self.hover_duration - movement_start) / retreat_duration
+            movement_phase = min(1.0, max(0.0, (elapsed - movement_start) / retreat_duration))
         joints = _spline_joints_through_waypoint(
             self.predrop_joints,
             self.postdrop_joints,
@@ -676,24 +682,49 @@ class PickAndCarry:
             hover_phase,
             movement_phase,
         )
-        if elapsed <= self.stage5_hover_duration:
-            open_alpha = elapsed / self.stage5_hover_duration if self.stage5_hover_duration > 0 else 1.0
-            gripper = GRIPPER_GRASP + (GRIPPER_OPEN - GRIPPER_GRASP) * open_alpha
+        if elapsed <= self.hover_duration:
+            open_alpha = elapsed / self.hover_duration if self.hover_duration > 0 else 1.0
+            gripper = self.start_gripper + (GRIPPER_OPEN - self.start_gripper) * open_alpha
         else:
-            close_alpha = _smoothstep((elapsed - self.stage5_hover_duration) / self.stage5_return_duration)
+            close_alpha = _smoothstep((elapsed - self.hover_duration) / self.return_duration) if self.return_duration > 0 else 1.0
             gripper = GRIPPER_OPEN + (self.end_gripper - GRIPPER_OPEN) * close_alpha
         return Frame(joints=joints, gripper=gripper)
 
+@dataclass(frozen=True)
+class Trajectory:
+    phases: tuple[TrajectoryPhase, ...]
+    source: CubePose | None = None
+    target: CubePose | None = None
+    grasp: GraspChoice | None = None
+    carry: CarryPlan | None = None
+    start_joints: dict[str, float] = dataclasses.field(default_factory=lambda: dict(NEUTRAL_ARM_JOINTS))
+    start_gripper: float = NEUTRAL_GRIPPER
+    end_joints: dict[str, float] = dataclasses.field(default_factory=lambda: dict(NEUTRAL_ARM_JOINTS))
+    end_gripper: float = NEUTRAL_GRIPPER
 
-def pick_and_carry_candidates(
-    k: So101Kinematics, source: CubePose, target: CubePose
-) -> Iterator[PickAndCarry]:
-    """Yield full pick-and-carry trajectories in grasp preference order.
+    @cached_property
+    def duration(self) -> float:
+        return sum(p.duration for p in self.phases)
 
-    A grasp is usable only if the same face and elbow that grasp the source can
-    also follow the carry to the target hover and reach the postdrop hover it
-    retreats through; candidates that fail either check on that branch are skipped.
-    """
+    def evaluate(self, t: float) -> Frame:
+        if not self.phases:
+            return Frame(NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER)
+        for phase in self.phases[:-1]:
+            if t < phase.duration:
+                return phase.evaluate(t)
+            t -= phase.duration
+        return self.phases[-1].evaluate(max(0.0, min(t, self.phases[-1].duration)))
+
+def trajectory_candidates(
+    k: So101Kinematics, 
+    source: CubePose, 
+    target: CubePose,
+    start_joints: dict[str, float],
+    start_gripper: float,
+    end_joints: dict[str, float],
+    end_gripper: float,
+) -> Iterator[Trajectory]:
+    """Yield full trajectories from start to end in grasp preference order."""
     for grasp in grasp_candidates(k, source):
         carry = plan_carry(k, grasp, source, target)
         if carry is None:
@@ -712,12 +743,106 @@ def pick_and_carry_candidates(
         )
         if postdrop_branch is None:
             continue
-        yield PickAndCarry(
-            k=k,
+            
+        phases = (
+            ApproachPhase(k, start_joints, start_gripper, grasp.hover_joints),
+            DescentPhase(k, grasp.face, source, grasp.elbow, grasp.hover_joints, grasp.pregrasp_joints),
+            GraspPhase(grasp.pregrasp_joints),
+            CarryPhase(k, carry, grasp.elbow, grasp.pregrasp_joints, predrop_branch.joints),
+            RetreatPhase(k, predrop_branch.joints, postdrop_branch.joints, end_joints, end_gripper),
+        )
+        
+        yield Trajectory(
+            phases=phases,
             source=source,
             target=target,
             grasp=grasp,
             carry=carry,
-            predrop_joints=predrop_branch.joints,
-            postdrop_joints=postdrop_branch.joints,
+            start_joints=start_joints,
+            start_gripper=start_gripper,
+            end_joints=end_joints,
+            end_gripper=end_gripper,
         )
+
+def replan_remaining_phases(
+    k: So101Kinematics,
+    measured_joints: dict[str, float],
+    measured_gripper: float,
+    completed_phase_name: str | None,
+    source: CubePose,
+    target: CubePose,
+    grasp: GraspChoice | None,
+    end_joints: dict[str, float],
+    end_gripper: float,
+) -> Trajectory | None:
+    """Plan the remaining trajectory phases starting exactly from the measured state."""
+    
+    if completed_phase_name == "retreat":
+        return Trajectory((), source, target, grasp, None, measured_joints, measured_gripper, end_joints, end_gripper)
+
+    # If we haven't locked in a grasp yet (before Carry phase starts), we need to search or use the provided one
+    # Actually, if grasp is None, we should pick the best candidate. If provided, we verify it.
+    grasps = [grasp] if grasp is not None else list(grasp_candidates(k, source))
+    
+    for g in grasps:
+        carry = plan_carry(k, g, source, target)
+        if carry is None:
+            continue
+            
+        endpoint = _carry_geometry_matrix(carry, 1.0) @ carry.cube_from_gripper
+        predrop_branch = next(
+            (b for b in solve_simple_pregrasp_ik(k, endpoint) if b.elbow == g.elbow), None
+        )
+        if predrop_branch is None:
+            continue
+            
+        postdrop_hover = pregrasp_matrix(g.face, target, POSTDROP_HOVER_TIP_Z - target.z)
+        if postdrop_hover is None:
+            continue
+            
+        postdrop_branch = next(
+            (b for b in solve_simple_pregrasp_ik(k, postdrop_hover) if b.elbow == g.elbow), None
+        )
+        if postdrop_branch is None:
+            continue
+
+        phases = []
+        if completed_phase_name is None:
+            # We are at the very beginning. Next is Approach.
+            phases.append(ApproachPhase(k, measured_joints, measured_gripper, g.hover_joints))
+            phases.append(DescentPhase(k, g.face, source, g.elbow, g.hover_joints, g.pregrasp_joints))
+            phases.append(GraspPhase(g.pregrasp_joints, start_gripper=GRIPPER_OPEN))
+            phases.append(CarryPhase(k, carry, g.elbow, g.pregrasp_joints, predrop_branch.joints))
+            phases.append(RetreatPhase(k, predrop_branch.joints, postdrop_branch.joints, end_joints, end_gripper, start_gripper=GRIPPER_GRASP))
+        elif completed_phase_name == "approach":
+            # Next is Descent. We start from measured hover.
+            phases.append(DescentPhase(k, g.face, source, g.elbow, measured_joints, g.pregrasp_joints))
+            phases.append(GraspPhase(g.pregrasp_joints, start_gripper=measured_gripper))
+            phases.append(CarryPhase(k, carry, g.elbow, g.pregrasp_joints, predrop_branch.joints))
+            phases.append(RetreatPhase(k, predrop_branch.joints, postdrop_branch.joints, end_joints, end_gripper, start_gripper=GRIPPER_GRASP))
+        elif completed_phase_name == "descent":
+            # Next is Grasp. We start from measured pregrasp.
+            phases.append(GraspPhase(measured_joints, start_gripper=measured_gripper))
+            phases.append(CarryPhase(k, carry, g.elbow, measured_joints, predrop_branch.joints))
+            phases.append(RetreatPhase(k, predrop_branch.joints, postdrop_branch.joints, end_joints, end_gripper, start_gripper=GRIPPER_GRASP))
+        elif completed_phase_name == "grasp":
+            # Next is Carry. We start from measured post-grasp.
+            phases.append(CarryPhase(k, carry, g.elbow, measured_joints, predrop_branch.joints))
+            phases.append(RetreatPhase(k, predrop_branch.joints, postdrop_branch.joints, end_joints, end_gripper, start_gripper=measured_gripper))
+        elif completed_phase_name == "carry":
+            # Next is Retreat. We start from measured predrop.
+            phases.append(RetreatPhase(k, measured_joints, postdrop_branch.joints, end_joints, end_gripper, start_gripper=measured_gripper))
+
+        return Trajectory(
+            phases=tuple(phases),
+            source=source,
+            target=target,
+            grasp=g,
+            carry=carry,
+            start_joints=measured_joints,
+            start_gripper=measured_gripper,
+            end_joints=end_joints,
+            end_gripper=end_gripper,
+        )
+        
+    return None
