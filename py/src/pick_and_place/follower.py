@@ -107,6 +107,14 @@ def gripper_angle_to_position(angle_rad: float) -> float:
     return GRIPPER_READBACK_CLOSED + t * span_enc
 
 
+def gripper_position_to_angle(position: float) -> float:
+    """Map a follower 0-100 position to a sim gripper joint angle (radians)."""
+    span_enc = GRIPPER_READBACK_OPEN - GRIPPER_READBACK_CLOSED
+    t = float(np.clip((position - GRIPPER_READBACK_CLOSED) / span_enc, 0.0, 1.0))
+    span_deg = GRIPPER_RENDER_OPEN_DEG - GRIPPER_RENDER_CLOSED_DEG
+    angle_deg = GRIPPER_RENDER_CLOSED_DEG + t * span_deg
+    return math.radians(angle_deg)
+
 def sim_frame_to_real(
     arm_joints_rad: dict[str, float], gripper_rad: float, offsets: np.ndarray
 ) -> np.ndarray:
@@ -121,6 +129,15 @@ def sim_frame_to_real(
     out[GRIPPER_INDEX] = gripper_angle_to_position(gripper_rad)
     return out
 
+def real_frame_to_sim(
+    real_joints: np.ndarray, offsets: np.ndarray
+) -> tuple[dict[str, float], float]:
+    """Convert a real-frame 6-vector back into sim-frame joints (radians)."""
+    arm_joints_rad = {}
+    for i, name in enumerate(ARM_JOINT_NAMES):
+        arm_joints_rad[name] = math.radians(real_joints[i] - offsets[i])
+    gripper_rad = gripper_position_to_angle(real_joints[GRIPPER_INDEX])
+    return arm_joints_rad, gripper_rad
 
 def make_so101_follower(
     port: str,
@@ -150,3 +167,21 @@ def make_so101_follower(
             use_degrees=True,
         )
     )
+
+def make_so101_leader(
+    port: str,
+    robot_id: str,
+    *,
+    calibration_dir: str | None = None,
+) -> Any:
+    """Construct a lerobot ``SO101Leader`` (imported lazily)."""
+    try:
+        from lerobot.teleoperators.so_leader import SO101Leader, SO101LeaderConfig
+        return SO101Leader(SO101LeaderConfig(port=port, id=robot_id, calibration_dir=calibration_dir))
+    except ModuleNotFoundError:
+        from lerobot.teleoperators import make_teleoperator_from_config
+        from lerobot.teleoperators.so101_leader import SO101LeaderConfig
+        
+        leader_cfg = SO101LeaderConfig(port=port, id=robot_id, calibration_dir=calibration_dir)
+        return make_teleoperator_from_config(leader_cfg)
+

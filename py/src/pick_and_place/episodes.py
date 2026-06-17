@@ -13,7 +13,6 @@ for a trajectory that runs clean — resampling the poses until one is found.
 
 from __future__ import annotations
 
-import dataclasses
 import math
 from dataclasses import dataclass, field
 
@@ -27,8 +26,8 @@ from pick_and_place.trajectory import (
     GRIPPER_OPEN,
     NEUTRAL_ARM_JOINTS,
     GraspChoice,
-    PickAndCarry,
-    pick_and_carry_candidates,
+    Trajectory,
+    trajectory_candidates,
 )
 from pick_and_place.workspace_overlays import (
     AZIMUTH_MAX,
@@ -136,7 +135,7 @@ def scan_contacts(
 
 def _preflight(
     model: mujoco.MjModel,
-    trajectory: PickAndCarry,
+    trajectory: Trajectory,
     actuator_id: dict[str, int],
     robot_geom_ids: set[int],
     env_geom_ids: set[int],
@@ -228,7 +227,7 @@ class Episode:
     actuator_id: dict[str, int]
     robot_geom_ids: set[int] = field(repr=False)
     env_geom_ids: set[int] = field(repr=False)
-    trajectory: PickAndCarry = field(repr=False)
+    trajectory: Trajectory = field(repr=False)
     attempts: int = 1
 
     @property
@@ -306,18 +305,8 @@ def prepare_episode(
         robot_geom_ids, env_geom_ids = build_geom_sets(model)
 
         trajectory = None
-        for traj in pick_and_carry_candidates(kinematics, ep_source, ep_target):
+        for traj in trajectory_candidates(kinematics, ep_source, ep_target, start_joints, start_gripper, end_joints, end_gripper):
             grasp = traj.grasp
-            # Inject the sampled start/end arm poses *before* the preflight so the
-            # approach from the start pose and the retreat to the end pose are part
-            # of the swept trajectory the collision check actually vets.
-            traj = dataclasses.replace(
-                traj,
-                start_joints=start_joints,
-                start_gripper=start_gripper,
-                end_joints=end_joints,
-                end_gripper=end_gripper,
-            )
             events = _preflight(model, traj, actuator_id, robot_geom_ids, env_geom_ids)
             unexpected = [(t, n1, n2) for t, n1, n2 in events if is_unexpected(n1, n2)]
             if not unexpected:
@@ -343,13 +332,6 @@ def prepare_episode(
                         print(f"skip {grasp.face}/{grasp.elbow}: collision t={t:.3f}s  {n1} ↔ {n2}")
 
         if trajectory is not None:
-            trajectory = dataclasses.replace(
-                trajectory,
-                start_joints=start_joints,
-                start_gripper=start_gripper,
-                end_joints=end_joints,
-                end_gripper=end_gripper,
-            )
             return Episode(
                 source=ep_source,
                 target=ep_target,

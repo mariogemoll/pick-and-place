@@ -21,7 +21,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
-from pick_and_place.episodes import Episode, is_unexpected, scan_contacts
+from pick_and_place.episodes import Episode, _preflight, is_unexpected, scan_contacts
 from pick_and_place.follower import (
     ARM_JOINT_NAMES,
     GRIPPER_INDEX,
@@ -31,8 +31,10 @@ from pick_and_place.follower import (
     joints_to_action,
     load_follower_joint_offsets,
     make_so101_follower,
+    real_frame_to_sim,
     sim_frame_to_real,
 )
+from pick_and_place.trajectory import replan_remaining_phases, REST_ARM_JOINTS, REST_GRIPPER
 from pick_and_place.kinematics import So101Kinematics
 
 
@@ -110,6 +112,47 @@ def _ramp_to_start(
         step_start = time.time()
         interp = current + _smoothstep(i / steps) * delta
         follower.send_action(joints_to_action(interp))
+        mujoco.mj_step(model, data)
+        viewer.sync()
+        remaining = period - (time.time() - step_start)
+        if remaining > 0:
+            time.sleep(remaining)
+
+
+def _ramp_to_resting(
+    follower,
+    target_real: np.ndarray,
+    target_sim_joints: dict[str, float],
+    target_sim_gripper: float,
+    actuator_id: dict[str, int],
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    viewer,
+) -> None:
+    """Smoothstep the real arm and the sim onto the resting pose."""
+    current_real = action_to_joints(follower.get_observation(), target_real)
+    delta_real = target_real - current_real
+
+    current_sim_joints = {name: data.ctrl[actuator_id[name]] for name in target_sim_joints}
+    current_sim_gripper = data.ctrl[actuator_id["gripper"]]
+
+    steps = max(1, round(RAMP_DURATION * CONTROL_HZ))
+    period = 1.0 / CONTROL_HZ
+    for i in range(1, steps + 1):
+        if not viewer.is_running():
+            return
+        step_start = time.time()
+        alpha = _smoothstep(i / steps)
+        
+        # Interpolate real arm
+        interp_real = current_real + alpha * delta_real
+        follower.send_action(joints_to_action(interp_real))
+        
+        # Interpolate sim
+        for name in target_sim_joints:
+            data.ctrl[actuator_id[name]] = current_sim_joints[name] + alpha * (target_sim_joints[name] - current_sim_joints[name])
+        data.ctrl[actuator_id["gripper"]] = current_sim_gripper + alpha * (target_sim_gripper - current_sim_gripper)
+        
         mujoco.mj_step(model, data)
         viewer.sync()
         remaining = period - (time.time() - step_start)
@@ -218,46 +261,113 @@ def execute_episode(
             )
             print("Ramping real arm to the trajectory start pose...")
             _ramp_to_start(follower, start_real, model, data, viewer)
-            # The ramp advances data.time, so anchor the trajectory clock here.
-            playback_start = data.time
-            while viewer.is_running():
-                step_start = time.time()
-                traj_t = (data.time - playback_start) * speed
-                frame = trajectory.evaluate(traj_t)
-                for name, value in frame.joints.items():
-                    data.ctrl[actuator_id[name]] = value
-                data.ctrl[actuator_id["gripper"]] = frame.gripper
-                mujoco.mj_step(model, data)
-                curr_contacts = {
-                    (min(n1, n2), max(n1, n2))
-                    for n1, n2 in scan_contacts(model, data, robot_geom_ids, env_geom_ids)
-                    if is_unexpected(n1, n2)
-                }
-                for pair in curr_contacts - prev_contacts:
-                    print(f"collision t={traj_t:.3f}s  {pair[0]} ↔ {pair[1]}")
-                prev_contacts = curr_contacts
+            # State for tracking progress
+            current_traj = trajectory
+            completed_phase_name = None
 
-                # Stream the same set points to the real arm and read the motors
-                # back, throttled to CONTROL_HZ (the sim above steps far faster).
-                if data.time - last_control_t >= control_period:
-                    last_control_t = data.time
-                    commanded = _clamp_and_warn(
-                        sim_frame_to_real(frame.joints, frame.gripper, offsets),
-                        clamp_low,
-                        clamp_high,
-                        clip_warned,
-                    )
-                    follower.send_action(joints_to_action(commanded))
-                    actual = action_to_joints(follower.get_observation(), commanded)
-                    log_rows.append((traj_t, commanded, actual))
+            while current_traj is not None and current_traj.phases and viewer.is_running():
+                phase = current_traj.phases[0]
+                print(f"Executing phase: {phase.name}")
 
-                viewer.sync()
-                # One pass through the planned trajectory, then stop so we can report.
-                if traj_t >= trajectory.duration:
+                playback_start = data.time
+                while viewer.is_running():
+                    step_start = time.time()
+                    phase_t = (data.time - playback_start) * speed
+                    frame = phase.evaluate(phase_t)
+                    for name, value in frame.joints.items():
+                        data.ctrl[actuator_id[name]] = value
+                    data.ctrl[actuator_id["gripper"]] = frame.gripper
+                    mujoco.mj_step(model, data)
+                    
+                    curr_contacts = {
+                        (min(n1, n2), max(n1, n2))
+                        for n1, n2 in scan_contacts(model, data, robot_geom_ids, env_geom_ids)
+                        if is_unexpected(n1, n2)
+                    }
+                    for pair in curr_contacts - prev_contacts:
+                        print(f"collision phase_t={phase_t:.3f}s  {pair[0]} ↔ {pair[1]}")
+                    prev_contacts = curr_contacts
+
+                    if data.time - last_control_t >= control_period:
+                        last_control_t = data.time
+                        commanded = _clamp_and_warn(
+                            sim_frame_to_real(frame.joints, frame.gripper, offsets),
+                            clamp_low,
+                            clamp_high,
+                            clip_warned,
+                        )
+                        follower.send_action(joints_to_action(commanded))
+                        actual = action_to_joints(follower.get_observation(), commanded)
+                        # We log data.time so the overall timeline is continuous.
+                        log_rows.append((data.time, commanded, actual))
+
+                    viewer.sync()
+                    
+                    if phase_t >= phase.duration:
+                        break
+                    
+                    remaining = model.opt.timestep - (time.time() - step_start)
+                    if remaining > 0:
+                        time.sleep(remaining)
+                
+                if not viewer.is_running():
                     break
-                remaining = model.opt.timestep - (time.time() - step_start)
-                if remaining > 0:
-                    time.sleep(remaining)
+                    
+                completed_phase_name = phase.name
+                
+                # Checkpoint Replanning
+                if len(current_traj.phases) <= 1:
+                    break # All phases completed
+                    
+                # Sense: get actual joints
+                actual = action_to_joints(follower.get_observation(), commanded)
+                measured_joints, measured_gripper = real_frame_to_sim(actual, offsets)
+                
+                print(f"Replanning remaining trajectory after {completed_phase_name}...")
+                current_traj = replan_remaining_phases(
+                    kinematics,
+                    measured_joints,
+                    measured_gripper,
+                    completed_phase_name,
+                    episode.source,
+                    episode.target,
+                    current_traj.grasp,
+                    episode.end_joints,
+                    episode.end_gripper,
+                )
+                
+                if current_traj is None:
+                    print("Error: No feasible plan from current state. Aborting.")
+                    break
+                    
+                # Preflight the newly planned remaining trajectory
+                events = _preflight(model, current_traj, actuator_id, robot_geom_ids, env_geom_ids)
+                unexpected = [(t, n1, n2) for t, n1, n2 in events if is_unexpected(n1, n2)]
+                if unexpected:
+                    print("Error: Replanned segment failed preflight. Aborting.")
+                    for t, n1, n2 in unexpected:
+                        print(f"  collision t={t:.3f}s {n1} ↔ {n2}")
+                    break
+                    
+            if viewer.is_running():
+                print("Ramping real arm back to the resting pose...")
+                resting_real = _clamp_and_warn(
+                    sim_frame_to_real(REST_ARM_JOINTS, REST_GRIPPER, offsets),
+                    clamp_low,
+                    clamp_high,
+                    clip_warned,
+                )
+                _ramp_to_resting(
+                    follower,
+                    resting_real,
+                    REST_ARM_JOINTS,
+                    REST_GRIPPER,
+                    actuator_id,
+                    model,
+                    data,
+                    viewer,
+                )
+                
     except KeyboardInterrupt:
         print("\nInterrupted.")
     finally:

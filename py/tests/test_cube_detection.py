@@ -331,6 +331,6 @@ def test_cube_tracker_recovers_world_pose():
 
 
 def test_no_cube_tags_returns_none():
-    frame = np.zeros((64, 64, 3), dtype=np.uint8)
-    camera_matrix = np.array([[100, 0, 32], [0, 100, 32], [0, 0, 1]], dtype=float)
+    frame = np.full((240, 320, 3), 128, dtype=np.uint8)
+    camera_matrix = np.array([[100, 0, 160], [0, 100, 120], [0, 0, 1]], dtype=float)
     assert estimate_cube_pose(frame, make_cube_detector(), camera_matrix) is None
