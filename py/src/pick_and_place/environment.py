@@ -346,21 +346,17 @@ def add_overhead_camera_mount(
         group=3,
     )
 
-    # Camera module (hardware is 'camera' material).
     camera_module = add_camera_module(
         mount,
         prefix="overhead_",
         pos=(0.0730125, -0.21667, 0.5536),
         quat=(0.976299, 0.216427, 0, 0),
+        camera_name="overhead_camera",
+        fovy=OVERHEAD_CAMERA_INTRINSICS["fovy_deg"],
         collision_default=collision_default,
     )
     for geom in camera_module.geoms:
         if int(geom.group) == 2:
             geom.material = "camera"
-
-    camera_module.add_camera(
-        name="overhead_camera",
-        fovy=OVERHEAD_CAMERA_INTRINSICS["fovy_deg"],
-    )
 
     return mount

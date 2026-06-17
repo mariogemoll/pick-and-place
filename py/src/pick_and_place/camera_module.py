@@ -12,6 +12,7 @@ BOARD_HALF_SIZE = (0.016, 0.016, 0.001)
 LENS_RADIUS = 0.007
 LENS_HALF_LENGTH = 0.010
 LENS_POS = (0.0, 0.0, -(BOARD_HALF_SIZE[2] + LENS_HALF_LENGTH))
+_LENS_FRONT_POS = (0.0, 0.0, LENS_POS[2] - LENS_HALF_LENGTH)
 
 MODULE_RGBA = (0.05, 0.05, 0.05, 1.0)
 LENS_RGBA = (0.16, 0.16, 0.16, 1.0)
@@ -24,6 +25,8 @@ def add_camera_module(
     prefix: str,
     pos: tuple[float, float, float] = (0.0, 0.0, 0.0),
     quat: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
+    camera_name: str | None = None,
+    fovy: float | None = None,
     collision: bool = True,
     collision_default: mujoco.MjsDefault | None = None,
 ) -> mujoco.MjsBody:
@@ -31,7 +34,8 @@ def add_camera_module(
 
     ``pos`` and ``quat`` place the module's board-center frame in the parent
     body. Names are prefixed so multiple instances can coexist in one model.
-    The calibrated MuJoCo camera should be added separately by the caller.
+    If ``camera_name`` is provided, a MuJoCo camera is added at the lens's
+    optical center (front face).
     """
     body = parent.add_body(name=f"{prefix}camera_module", pos=pos, quat=quat)
 
@@ -56,9 +60,17 @@ def add_camera_module(
     )
     body.add_site(
         name=f"{prefix}camera_frame",
+        pos=_LENS_FRONT_POS,
         size=(0.0015, 0.0015, 0.0015),
         group=3,
     )
+
+    if camera_name is not None:
+        body.add_camera(
+            name=camera_name,
+            pos=_LENS_FRONT_POS,
+            fovy=fovy if fovy is not None else 90.0,
+        )
 
     if collision:
         body.add_geom(

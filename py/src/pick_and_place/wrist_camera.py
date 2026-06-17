@@ -109,14 +109,11 @@ def add_wrist_camera(spec: mujoco.MjSpec) -> None:
         prefix="wrist_",
         pos=_CAMERA_POS,
         quat=_CAMERA_QUAT,
+        camera_name="wrist_camera",
+        fovy=WRIST_CAMERA_INTRINSICS["fovy_deg"],
         collision_default=collision_default,
     )
     # The camera module itself (board and lens) should match the robot's camera finish.
     for geom in camera_module.geoms:
         if int(geom.group) == 2:
             geom.material = "camera"
-
-    camera_module.add_camera(
-        name="wrist_camera",
-        fovy=WRIST_CAMERA_INTRINSICS["fovy_deg"],
-    )

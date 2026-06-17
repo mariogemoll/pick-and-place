@@ -21,6 +21,11 @@ import mujoco
 import numpy as np
 
 from pick_and_place import build_scene
+from pick_and_place.camera_extrinsics import (
+    apply_camera_extrinsics_to_spec,
+    load_local_camera_extrinsics,
+)
+from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
 
 
 def _rebuild_model(cube_start: np.ndarray) -> tuple[mujoco.MjModel, mujoco.MjData]:
@@ -29,7 +34,15 @@ def _rebuild_model(cube_start: np.ndarray) -> tuple[mujoco.MjModel, mujoco.MjDat
     Matches ``pick_and_place.episodes`` exactly so the ``qpos`` layout lines up;
     the cube's free joint is what makes the logged ``qpos`` 13-wide.
     """
-    spec = build_scene()
+    spec = build_scene(include_environment=True)
+    
+    # Apply local calibration if present
+    apply_camera_extrinsics_to_spec(spec, load_local_camera_extrinsics())
+    intrinsics = load_local_camera_intrinsics()
+    for camera in spec.cameras:
+        if camera.name in intrinsics and "fovy_deg" in intrinsics[camera.name]:
+            camera.fovy = float(intrinsics[camera.name]["fovy_deg"])
+
     cube = spec.body("pick_cube")
     cube.pos = (float(cube_start[0]), float(cube_start[1]), float(cube_start[2]))
     half_yaw = float(cube_start[3]) / 2.0
