@@ -73,76 +73,31 @@ def parse_index_or_path(value: str) -> int | str:
 
 def mat_to_quat_wxyz(matrix: np.ndarray) -> np.ndarray:
     """Convert a 3x3 rotation matrix to a canonical MuJoCo wxyz quaternion."""
-    m = np.asarray(matrix, dtype=float)
-    trace = float(np.trace(m))
-    if trace > 0.0:
-        s = np.sqrt(trace + 1.0) * 2.0
-        quat = np.array(
-            [
-                0.25 * s,
-                (m[2, 1] - m[1, 2]) / s,
-                (m[0, 2] - m[2, 0]) / s,
-                (m[1, 0] - m[0, 1]) / s,
-            ],
-            dtype=float,
-        )
-    else:
-        axis = int(np.argmax(np.diag(m)))
-        if axis == 0:
-            s = np.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2]) * 2.0
-            quat = np.array(
-                [
-                    (m[2, 1] - m[1, 2]) / s,
-                    0.25 * s,
-                    (m[0, 1] + m[1, 0]) / s,
-                    (m[0, 2] + m[2, 0]) / s,
-                ],
-                dtype=float,
-            )
-        elif axis == 1:
-            s = np.sqrt(1.0 + m[1, 1] - m[0, 0] - m[2, 2]) * 2.0
-            quat = np.array(
-                [
-                    (m[0, 2] - m[2, 0]) / s,
-                    (m[0, 1] + m[1, 0]) / s,
-                    0.25 * s,
-                    (m[1, 2] + m[2, 1]) / s,
-                ],
-                dtype=float,
-            )
-        else:
-            s = np.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1]) * 2.0
-            quat = np.array(
-                [
-                    (m[1, 0] - m[0, 1]) / s,
-                    (m[0, 2] + m[2, 0]) / s,
-                    (m[1, 2] + m[2, 1]) / s,
-                    0.25 * s,
-                ],
-                dtype=float,
-            )
-    quat /= np.linalg.norm(quat)
+    from scipy.spatial.transform import Rotation
+
+    xyzw = Rotation.from_matrix(matrix).as_quat()
+    quat = np.array([xyzw[3], xyzw[0], xyzw[1], xyzw[2]], dtype=float)
     return quat if quat[0] >= 0.0 else -quat
 
 
 def quat_angle_deg(q0: np.ndarray, q1: np.ndarray) -> float:
     """Return the shortest angular distance between two wxyz quaternions."""
-    a = np.asarray(q0, dtype=float)
-    b = np.asarray(q1, dtype=float)
-    a /= np.linalg.norm(a)
-    b /= np.linalg.norm(b)
-    dot = abs(float(np.dot(a, b)))
-    return float(np.degrees(2.0 * np.arccos(np.clip(dot, -1.0, 1.0))))
+    from scipy.spatial.transform import Rotation
+
+    r0 = Rotation.from_quat([q0[1], q0[2], q0[3], q0[0]])
+    r1 = Rotation.from_quat([q1[1], q1[2], q1[3], q1[0]])
+    return float(np.degrees((r0.inv() * r1).magnitude()))
 
 
 def average_quaternions_wxyz(quaternions: list[np.ndarray]) -> np.ndarray:
     """Average same-hemisphere wxyz quaternions and normalize the result."""
+    from scipy.spatial.transform import Rotation
+
     if not quaternions:
         raise ValueError("cannot average zero quaternions")
-    reference = quaternions[0]
-    aligned = [q if float(np.dot(reference, q)) >= 0.0 else -q for q in quaternions]
-    quat = np.mean(np.array(aligned), axis=0)
-    quat /= np.linalg.norm(quat)
+    quats_xyzw = [[q[1], q[2], q[3], q[0]] for q in quaternions]
+    xyzw = Rotation.from_quat(quats_xyzw).mean().as_quat()
+    quat = np.array([xyzw[3], xyzw[0], xyzw[1], xyzw[2]], dtype=float)
     return quat if quat[0] >= 0.0 else -quat
 
 

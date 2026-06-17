@@ -168,8 +168,11 @@ def _tag_correspondences(detections) -> tuple[NDArray, NDArray, list[int]] | Non
 
 def _rotation_angle_deg(a: NDArray, b: NDArray) -> float:
     """Shortest rotation angle (degrees) between two rotation matrices."""
-    cos_angle = (float(np.trace(a.T @ b)) - 1.0) / 2.0
-    return float(np.degrees(np.arccos(np.clip(cos_angle, -1.0, 1.0))))
+    from scipy.spatial.transform import Rotation
+
+    r_a = Rotation.from_matrix(a)
+    r_b = Rotation.from_matrix(b)
+    return float(np.degrees((r_a.inv() * r_b).magnitude()))
 
 
 def _outside_face_score(rotation: NDArray, translation: NDArray, ids: list[int]) -> float:
@@ -288,10 +291,9 @@ def estimate_cube_pose(
 
 def _average_rotation(rotations: list[NDArray], weights: NDArray) -> NDArray:
     """Weighted chordal mean of rotations, projected back onto SO(3)."""
-    accumulated = sum(weight * rotation for weight, rotation in zip(weights, rotations))
-    u, _, vt = np.linalg.svd(accumulated)
-    correction = np.diag([1.0, 1.0, float(np.sign(np.linalg.det(u @ vt)))])
-    return u @ correction @ vt
+    from scipy.spatial.transform import Rotation
+
+    return Rotation.from_matrix(rotations).mean(weights=weights).as_matrix()
 
 
 class PoseEMA:

@@ -13,6 +13,7 @@ dependencies = [
     "numpy",
     "opencv-python",
     "pupil-apriltags",
+    "scipy",
 ]
 
 [tool.ruff]
