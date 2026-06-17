@@ -204,6 +204,9 @@ def execute_episode(
     offsets_path: str | None = None,
     record_path: str | None = None,
     speed: float | None = None,
+    wrist_camera: str | None = None,
+    wrist_intrinsics: str | None = None,
+    show_wrist_cam: bool = False,
 ) -> None:
     """Stream a prepared episode's trajectory to the physical follower for one pass.
 
@@ -248,9 +251,88 @@ def execute_episode(
     control_period = 1.0 / CONTROL_HZ
     last_control_t = -math.inf
 
+    wrist_cam = None
+    wrist_tracker = None
+    wrist_cam_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "wrist_camera")
+    wrist_camera_matrix = None
+    wrist_undistort_map = None
+
+    cam_lock = None
+    cam_frame = None
+    cam_frame_id = 0
+    last_processed_id = -1
+    cam_running = False
+    cam_thread = None
+
+    if wrist_camera is not None and wrist_cam_id >= 0:
+        import cv2
+        from pick_and_place.cam_align_solve import parse_index_or_path
+        from pick_and_place.cube_detection import CubeTracker
+        
+        cam_idx = parse_index_or_path(wrist_camera)
+        backend = cv2.CAP_AVFOUNDATION if hasattr(cv2, "CAP_AVFOUNDATION") else cv2.CAP_ANY
+        wrist_cam = cv2.VideoCapture(cam_idx, backend)
+        
+        if wrist_cam.isOpened():
+            wrist_cam.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            wrist_cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            wrist_tracker = CubeTracker(smooth=0.95)
+            
+            intrinsics_path = wrist_intrinsics
+            if intrinsics_path is None:
+                from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
+                intrinsics_path = LOCAL_CAMERA_INTRINSICS_DIR / "wrist_camera.json"
+            else:
+                from pathlib import Path
+                intrinsics_path = Path(intrinsics_path)
+                
+            if intrinsics_path.exists():
+                from pick_and_place.camera_compare import load_intrinsics
+                wrist_camera_matrix, wrist_undistort_map = load_intrinsics(intrinsics_path, 1280, 720, cv2)
+            else:
+                focal = (720 / 2.0) / np.tan(np.radians(model.cam_fovy[wrist_cam_id]) / 2.0)
+                wrist_camera_matrix = np.array(
+                    [[focal, 0, 1280 / 2.0], [0, focal, 720 / 2.0], [0, 0, 1]], dtype=float
+                )
+
+            import threading
+            cam_lock = threading.Lock()
+            cam_running = True
+            def cam_reader():
+                nonlocal cam_frame, cam_frame_id
+                while cam_running:
+                    ok, frame = wrist_cam.read()
+                    if ok:
+                        with cam_lock:
+                            cam_frame = frame
+                            cam_frame_id += 1
+            cam_thread = threading.Thread(target=cam_reader, daemon=True)
+            cam_thread.start()
+        else:
+            print(f"Warning: could not open wrist camera {wrist_camera!r}")
+            wrist_cam = None
+
     prev_contacts: set[tuple[str, str]] = set()
     try:
-        with mujoco.viewer.launch_passive(model, data) as viewer:
+        import sys
+        disable_viewer = show_wrist_cam and sys.platform == "darwin"
+        
+        class MockViewer:
+            def __init__(self):
+                self._running = True
+            def is_running(self):
+                return self._running
+            def sync(self):
+                pass
+            def close(self):
+                self._running = False
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+
+        viewer_ctx = MockViewer() if disable_viewer else mujoco.viewer.launch_passive(model, data)
+        with viewer_ctx as viewer:
             # Open the viewer at the start pose first, then ramp the real arm onto
             # it so both are visibly aligned before any playback motion begins.
             start_real = _clamp_and_warn(
@@ -264,15 +346,96 @@ def execute_episode(
             # State for tracking progress
             current_traj = trajectory
             completed_phase_name = None
+            dynamic_source = episode.source
+            dynamic_grasp = current_traj.grasp
 
             while current_traj is not None and current_traj.phases and viewer.is_running():
                 phase = current_traj.phases[0]
                 print(f"Executing phase: {phase.name}")
 
                 playback_start = data.time
+                
+                # Setup PBVS dynamically updating current source
+                from pick_and_place.trajectory import DescentPhase
+                from pick_and_place.geometry import CubePose, CUBE_HALF_SIZE
+                from scipy.spatial.transform import Rotation
+                import dataclasses
+                import cv2
+                
+                is_descent = isinstance(phase, DescentPhase)
+                
                 while viewer.is_running():
                     step_start = time.time()
                     phase_t = (data.time - playback_start) * speed
+                    
+                    bgr = None
+                    if wrist_cam is not None and (show_wrist_cam or is_descent):
+                        with cam_lock:
+                            if cam_frame is not None and cam_frame_id != last_processed_id:
+                                last_processed_id = cam_frame_id
+                                bgr = cam_frame.copy()
+                        
+                        if bgr is not None and is_descent and wrist_tracker is not None:
+                            if wrist_undistort_map is not None:
+                                bgr = cv2.remap(bgr, *wrist_undistort_map, cv2.INTER_LINEAR)
+                            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                                
+                            cam_pos = data.cam_xpos[wrist_cam_id]
+                            cam_rot = data.cam_xmat[wrist_cam_id].reshape(3, 3)
+                            
+                            from pick_and_place.cube_detection import detect_cube_faces
+                            detections = detect_cube_faces(rgb, wrist_tracker.detector)
+                            
+                            for det in detections:
+                                corners = np.array(det.corners, dtype=np.int32)
+                                cv2.polylines(bgr, [corners], True, (0, 255, 0), 2, cv2.LINE_AA)
+                                cv2.putText(bgr, str(det.tag_id), tuple(corners[0]), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1, cv2.LINE_AA)
+                                
+                            estimate = wrist_tracker.update(
+                                detections, wrist_camera_matrix, cam_pos, cam_rot, dist=None
+                            )
+                            
+                            if estimate is not None:
+                                CV_TO_MJ = np.diag([1.0, -1.0, -1.0])
+                                pos_mj_cam = cam_rot.T @ (estimate.position - cam_pos)
+                                rot_mj_cam = cam_rot.T @ estimate.rotation
+                                tvec = CV_TO_MJ @ pos_mj_cam
+                                rmat = CV_TO_MJ @ rot_mj_cam
+                                rvec, _ = cv2.Rodrigues(rmat)
+                                
+                                cv2.drawFrameAxes(bgr, wrist_camera_matrix, np.zeros(5), rvec, tvec, 0.03, 2)
+                                
+                                s = CUBE_HALF_SIZE
+                                pts_3d = np.float32([
+                                    [-s, -s, -s], [s, -s, -s], [s, s, -s], [-s, s, -s],
+                                    [-s, -s, s], [s, -s, s], [s, s, s], [-s, s, s]
+                                ])
+                                pts_img, _ = cv2.projectPoints(pts_3d, rvec, tvec, wrist_camera_matrix, np.zeros(5))
+                                pts_img = pts_img.reshape(-1, 2).astype(int)
+                                edges = [(0,1), (1,2), (2,3), (3,0),
+                                         (4,5), (5,6), (6,7), (7,4),
+                                         (0,4), (1,5), (2,6), (3,7)]
+                                for i, j in edges:
+                                    cv2.line(bgr, tuple(pts_img[i]), tuple(pts_img[j]), (0, 165, 255), 2, cv2.LINE_AA)
+                                    
+                                roll, pitch, yaw = Rotation.from_matrix(estimate.rotation).as_euler("xyz")
+                                new_source = CubePose(
+                                    x=float(estimate.position[0]),
+                                    y=float(estimate.position[1]),
+                                    z=CUBE_HALF_SIZE,
+                                    roll=0.0,
+                                    pitch=0.0,
+                                    yaw=float(yaw)
+                                )
+                                phase = dataclasses.replace(phase, source=new_source)
+                                dynamic_source = new_source
+
+                        if bgr is not None and show_wrist_cam:
+                            if wrist_undistort_map is not None and not is_descent:
+                                bgr = cv2.remap(bgr, *wrist_undistort_map, cv2.INTER_LINEAR)
+                            cv2.imshow("Wrist Cam", bgr)
+                            cv2.waitKey(1)
+
                     frame = phase.evaluate(phase_t)
                     for name, value in frame.joints.items():
                         data.ctrl[actuator_id[name]] = value
@@ -315,6 +478,13 @@ def execute_episode(
                     
                 completed_phase_name = phase.name
                 
+                if completed_phase_name == "descent" and isinstance(phase, DescentPhase):
+                    from pick_and_place.trajectory import grasp_candidates
+                    for g in grasp_candidates(kinematics, dynamic_source):
+                        if g.face == phase.face and g.elbow == phase.elbow:
+                            dynamic_grasp = g
+                            break
+                
                 # Checkpoint Replanning
                 if len(current_traj.phases) <= 1:
                     break # All phases completed
@@ -329,9 +499,9 @@ def execute_episode(
                     measured_joints,
                     measured_gripper,
                     completed_phase_name,
-                    episode.source,
+                    dynamic_source,
                     episode.target,
-                    current_traj.grasp,
+                    dynamic_grasp,
                     episode.end_joints,
                     episode.end_gripper,
                 )
@@ -375,3 +545,11 @@ def execute_episode(
         if record_path is not None:
             _write_record(record_path, log_rows)
         follower.disconnect()
+        if wrist_cam is not None:
+            cam_running = False
+            if cam_thread is not None:
+                cam_thread.join(timeout=1.0)
+            wrist_cam.release()
+        if show_wrist_cam:
+            import cv2
+            cv2.destroyAllWindows()

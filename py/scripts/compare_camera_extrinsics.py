@@ -28,72 +28,71 @@ def main() -> None:
     extrinsics = load_local_camera_extrinsics()
     
     if not extrinsics:
-        print("No extrinsics found in 'config/camera_extrinsics'. Skipping comparison.")
-    else:
-        print("Comparing extrinsics...")
-        for camera_name, ext in extrinsics.items():
-            # Find camera in spec
-            found = False
-            # Collect all cameras from the model
-            all_cameras = list(spec.worldbody.cameras)
-            for body in spec.bodies:
-                all_cameras.extend(body.cameras)
+        print("No extrinsics found in 'config/camera_extrinsics'. Will only show model cameras.")
+        
+    print("Visualizing cameras...")
+    for cam in spec.cameras:
+        camera_name = cam.name
+        print(f"Camera: {camera_name}")
+        print(f"  Model pos: {cam.pos}")
 
-            for cam in all_cameras:
-                if cam.name == camera_name:
-                    found = True
-                    print(f"Camera: {camera_name}")
-                    print(f"  Model pos: {cam.pos}")
-                    print(f"  Extr pos:  {ext['pos']}")
-                    print(f"  Diff pos:  {np.array(cam.pos) - np.array(ext['pos'])}")
-                    
-                    # Look for the lens cylinder geom in the same body
-                    parent_body = None
-                    for b in list(spec.bodies) + [spec.worldbody]:
-                        if cam in list(b.cameras):
-                            parent_body = b
-                            break
-                    
-                    if parent_body:
-                        lens_name = f"{camera_name}_lens_visual"
-                        for geom in parent_body.geoms:
-                            if geom.name == lens_name:
-                                print(f"  Lens pos:  {geom.pos}")
-                                print(f"  Diff lens: {np.array(geom.pos) - np.array(ext['pos'])}")
-                                break
-
-                        # Add calibrated camera to the mount (parent body)
-                        calibrated_name = f"{camera_name}_calibrated"
-                        parent_body.add_camera(
-                            name=calibrated_name,
-                            pos=ext['pos'],
-                            quat=ext['quat'],
-                        )
-                        print(f"  Added: {calibrated_name}")
-                        
-                        # Add dots to visualize positions
-                        parent_body.add_geom(
-                            name=f"{camera_name}_dot_model",
-                            type=mujoco.mjtGeom.mjGEOM_SPHERE,
-                            size=[0.005, 0.0, 0.0],
-                            pos=cam.pos,
-                            rgba=[0, 0, 1, 1], # Blue for Model
-                            contype=0,
-                            conaffinity=0,
-                        )
-                        parent_body.add_geom(
-                            name=f"{camera_name}_dot_real",
-                            type=mujoco.mjtGeom.mjGEOM_SPHERE,
-                            size=[0.005, 0.0, 0.0],
-                            pos=ext['pos'],
-                            rgba=[0, 1, 0, 1], # Green for Real
-                            contype=0,
-                            conaffinity=0,
-                        )
-                    break
+        parent_body = None
+        for b in list(spec.bodies) + [spec.worldbody]:
+            if cam in list(b.cameras):
+                parent_body = b
+                break
+        
+        if parent_body:
+            # Add dots to visualize positions
+            parent_body.add_geom(
+                name=f"{camera_name}_dot_model",
+                type=mujoco.mjtGeom.mjGEOM_SPHERE,
+                size=[0.005, 0.0, 0.0],
+                pos=cam.pos,
+                rgba=[0, 0, 1, 1], # Blue for Model
+                contype=0,
+                conaffinity=0,
+            )
             
-            if not found:
-                print(f"Camera {camera_name} not found in model worldbody cameras.")
+            ext = extrinsics.get(camera_name)
+            if ext:
+                print(f"  Extr pos:  {ext['pos']}")
+                print(f"  Diff pos:  {np.array(cam.pos) - np.array(ext['pos'])}")
+                
+                # Look for the lens cylinder geom in the same body
+                lens_name = f"{camera_name}_lens_visual"
+                for geom in parent_body.geoms:
+                    if geom.name == lens_name:
+                        print(f"  Lens pos:  {geom.pos}")
+                        print(f"  Diff lens: {np.array(geom.pos) - np.array(ext['pos'])}")
+                        break
+
+                # Add calibrated camera to the mount (parent body)
+                calibrated_name = f"{camera_name}_calibrated"
+                parent_body.add_camera(
+                    name=calibrated_name,
+                    pos=ext['pos'],
+                    quat=ext['quat'],
+                )
+                print(f"  Added: {calibrated_name}")
+                
+                parent_body.add_geom(
+                    name=f"{camera_name}_dot_real",
+                    type=mujoco.mjtGeom.mjGEOM_SPHERE,
+                    size=[0.005, 0.0, 0.0],
+                    pos=ext['pos'],
+                    rgba=[0, 1, 0, 1], # Green for Real
+                    contype=0,
+                    conaffinity=0,
+                )
+            else:
+                print("  No extrinsics found for comparison.")
+        else:
+            print(f"  Warning: parent body not found for {camera_name}")
+
+    for camera_name in extrinsics:
+        if not any(cam.name == camera_name for cam in spec.cameras):
+            print(f"Camera {camera_name} from extrinsics not found in model cameras.")
 
     # Visualize
     if not args.no_viewer:

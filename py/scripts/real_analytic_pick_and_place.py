@@ -178,6 +178,21 @@ def main() -> None:
     )
     parser.add_argument("--camera", default="0", help="OpenCV camera index or device path (default: 0)")
     parser.add_argument("--camera-name", default="overhead_camera", help="name of the camera in the model (default: overhead_camera)")
+    parser.add_argument(
+        "--wrist-camera", 
+        default="1", 
+        help="OpenCV camera index or device path for the wrist camera (default: 1)"
+    )
+    parser.add_argument(
+        "--wrist-intrinsics", 
+        default=None, 
+        help="Path to wrist camera intrinsics JSON"
+    )
+    parser.add_argument(
+        "--show-wrist-cam",
+        action="store_true",
+        help="Show live feed from the wrist camera in an OpenCV window"
+    )
     args = parser.parse_args()
 
     if args.source is not None:
@@ -207,6 +222,9 @@ def main() -> None:
         offsets_path=args.offsets_path,
         record_path=args.record_path,
         speed=args.speed,
+        wrist_camera=args.wrist_camera,
+        wrist_intrinsics=args.wrist_intrinsics,
+        show_wrist_cam=args.show_wrist_cam,
     )
 
 

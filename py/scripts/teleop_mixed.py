@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Overlay the 3D robot model on a live, undistorted camera feed.
+"""Teleoperate the SO-101 arm while overlaying the 3D robot model on a live camera feed.
 
 This script combines the real camera image with the MuJoCo simulation,
 applying undistortion based on calibrated intrinsics and aligning the
@@ -10,12 +10,16 @@ applying undistortion based on calibrated intrinsics and aligning the
 a physical SO-101 follower to show the model at the real robot's pose.
 
 Example:
-    python py/scripts/view_mixed.py --overhead-camera 0 --wrist-camera 1
+    python py/scripts/teleop_mixed.py --leader-port /dev/ttyUSB0 --overhead-camera 0 --wrist-camera 1
 """
 
 from __future__ import annotations
 
 import argparse
+import time
+import threading
+from dataclasses import dataclass
+from typing import Optional
 from pathlib import Path
 
 import cv2
@@ -36,12 +40,20 @@ from pick_and_place.cube_detection import (
 )
 from pick_and_place.scene import build_scene
 from pick_and_place.follower import (
-    JOINT_NAMES,
+    ARM_JOINT_NAMES,
     action_to_joints,
+    joints_to_action,
+    load_follower_joint_offsets,
+    make_so101_leader,
     make_so101_follower,
+    real_frame_to_sim,
 )
 
-WINDOW_TITLE = "view_mixed  (m mode  , . alpha  q quit)"
+def _smoothstep(t: float) -> float:
+    c = min(1.0, max(0.0, t))
+    return c * c * (3.0 - 2.0 * c)
+
+WINDOW_TITLE = "teleop_mixed  (m mode  , . alpha  q quit)"
 
 
 def _rotation_angle_deg(a: np.ndarray, b: np.ndarray) -> float:
@@ -120,6 +132,47 @@ def _draw_cube_wireframe(bgr: np.ndarray, data: mujoco.MjData, camera_id: int, c
             cv2.line(bgr, p1, p2, (0, 255, 0), 2, cv2.LINE_AA)
 
 
+
+@dataclass
+class TeleopState:
+    leader_joints: Optional[np.ndarray] = None
+    follower_read_joints: Optional[np.ndarray] = None
+    lock: threading.Lock = threading.Lock()
+    stop_event: threading.Event = threading.Event()
+
+def _teleop_thread_func(state: TeleopState, leader, follower, follower_start_joints, real_joints_init, fps, ramp_duration, loop_start_time):
+    dt = 1.0 / fps
+    real_joints = real_joints_init
+    
+    while not state.stop_event.is_set():
+        step_start = time.perf_counter()
+        elapsed_total = step_start - loop_start_time
+
+        obs = leader.get_action()
+        leader_joints = action_to_joints(obs, real_joints)
+        
+        follower_read_joints = None
+        if follower is not None:
+            if elapsed_total < ramp_duration:
+                alpha = _smoothstep(elapsed_total / ramp_duration)
+                follower_target = follower_start_joints + alpha * (leader_joints - follower_start_joints)
+            else:
+                follower_target = leader_joints
+            follower.send_action(joints_to_action(follower_target))
+
+            follower_obs = follower.get_observation()
+            follower_read_joints = action_to_joints(follower_obs, follower_target)
+
+        with state.lock:
+            state.leader_joints = leader_joints
+            state.follower_read_joints = follower_read_joints
+
+        real_joints = leader_joints
+
+        elapsed = time.perf_counter() - step_start
+        if elapsed < dt:
+            time.sleep(dt - elapsed)
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=False)
@@ -134,8 +187,14 @@ def main() -> None:
     parser.add_argument("--camera-height", type=int, default=1080)
     parser.add_argument("--camera-fps", type=int, default=30)
     parser.add_argument("--alpha", type=float, default=0.5)
-    parser.add_argument("--follower-port", help="serial port of the SO-101 follower to sync joints")
+    parser.add_argument("--leader-port", required=True, help="Serial port of the SO-101 leader")
+    parser.add_argument("--leader-id", default="liddy", help="Leader ID (default: liddy)")
+    parser.add_argument("--follower-port", help="Optional serial port of the SO-101 follower to sync joints")
     parser.add_argument("--follower-id", default="folly", help="follower calibration id")
+    parser.add_argument("--offsets-path", default=None, help="JSON of per-joint sim→real degree offsets")
+    parser.add_argument("--sim-tracks", choices=["leader", "follower"], default="leader", help="Whether the sim displays the leader's target pose or the follower's actual readback pose.")
+    parser.add_argument("--kinematic", action="store_true", help="Teleport the simulation joints instantly rather than driving them with actuators.")
+    parser.add_argument("--fps", type=float, default=50.0, help="Teleop loop rate (Hz)")
     parser.add_argument(
         "--track-cube",
         action="store_true",
@@ -316,16 +375,51 @@ def main() -> None:
             )
             print("Warning: tracking the cube on a raw frame; calibrated intrinsics recommended")
 
-    # 6. Connect to follower if requested
+    # 6. Connect to leader and follower
+    offsets = load_follower_joint_offsets(args.offsets_path)
+    
+    print(f"Connecting to leader on {args.leader_port}...")
+    leader = make_so101_leader(args.leader_port, args.leader_id)
+    leader.connect(calibrate=True)
+    print("Leader connected.")
+
     follower = None
-    joint_qpos_adr = [
-        int(model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)])
-        for name in JOINT_NAMES
-    ]
-    if args.follower_port:
-        follower = make_so101_follower(args.follower_port, args.follower_id)
-        follower.connect()
-        print(f"Connected to follower on {args.follower_port}")
+    follower_start_joints = None
+    if args.follower_port is not None:
+        print(f"Connecting to follower on {args.follower_port}...")
+        follower = make_so101_follower(
+            args.follower_port,
+            args.follower_id,
+            disable_torque_on_disconnect=False,
+        )
+        follower.connect(calibrate=True)
+        follower_obs = follower.get_observation()
+        follower_start_joints = action_to_joints(follower_obs, np.zeros(6, dtype=float))
+        print("Follower connected.")
+
+    actuator_id = {
+        mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i): i 
+        for i in range(model.nu)
+    }
+
+    # Initialize to the leader's actual pose so the sim doesn't snap abruptly
+    leader_action = leader.get_action()
+    real_joints = action_to_joints(leader_action, np.zeros(6, dtype=float))
+    arm_rad, gripper_rad = real_frame_to_sim(real_joints, offsets)
+
+    for name in ARM_JOINT_NAMES:
+        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+        data.qpos[model.jnt_qposadr[jid]] = arm_rad[name]
+        data.ctrl[actuator_id[name]] = arm_rad[name]
+        
+    g_jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "gripper")
+    data.qpos[model.jnt_qposadr[g_jid]] = gripper_rad
+    data.ctrl[actuator_id["gripper"]] = gripper_rad
+    
+    mujoco.mj_forward(model, data)
+    
+    ramp_duration = 4.0
+    loop_start_time = time.perf_counter()
 
     mode = "blend"
     alpha = float(np.clip(args.alpha, 0.0, 1.0))
@@ -337,40 +431,53 @@ def main() -> None:
     else:
         cv2.namedWindow("wrist_camera (sim)", cv2.WINDOW_NORMAL)
 
+    teleop_state = TeleopState()
+    teleop_state.leader_joints = real_joints
+    
+    teleop_thread = threading.Thread(
+        target=_teleop_thread_func,
+        args=(teleop_state, leader, follower, follower_start_joints, real_joints, args.fps, ramp_duration, loop_start_time),
+        daemon=True
+    )
+    teleop_thread.start()
+
     try:
         while True:
-            # Sync joints with real robot
-            if follower is not None:
-                obs = follower.get_observation()
-                # follower returns joints in degrees (and gripper 0-100)
-                # action_to_joints converts it to a vector.
-                # But MuJoCo expects radians for joints.
-                # Actually, SO101Follower with use_degrees=True returns degrees.
-                # Let's check follower.py for sim_frame_to_real inversion if needed.
-                # For now, let's assume we want to just read the joints.
-                
-                # In follower.py:
-                # ARM_JOINT_NAMES are in radians in sim.
-                # real_deg = sim_deg + offset
-                # So sim_rad = (real_deg - offset) * (pi/180)
-                
-                # For simplicity, if offsets are 0: sim_rad = real_deg * (pi/180)
-                joints_real = action_to_joints(obs, np.zeros(6))
-                for i, name in enumerate(JOINT_NAMES[:-1]): # Arm joints
-                    data.qpos[joint_qpos_adr[i]] = np.radians(joints_real[i])
-                
-                # Gripper is more complex, but let's just use a linear approximation for now
-                # or skip it if it's too much.
-                # In follower.py, gripper_angle_to_position maps angle_rad -> [2.3, 98.5]
-                # We need the inverse: position -> angle_rad
-                pos = joints_real[5]
-                # GRIPPER_READBACK_CLOSED = 2.3, GRIPPER_READBACK_OPEN = 98.5
-                # GRIPPER_RENDER_CLOSED_DEG = -10.0, GRIPPER_RENDER_OPEN_DEG = 120.0
-                t = (pos - 2.3) / (98.5 - 2.3)
-                angle_deg = -10.0 + t * (120.0 - -10.0)
-                data.qpos[joint_qpos_adr[5]] = np.radians(angle_deg)
+            with teleop_state.lock:
+                leader_joints = teleop_state.leader_joints
+                follower_read_joints = teleop_state.follower_read_joints
+            
+            if leader_joints is None:
+                continue
 
-            mujoco.mj_forward(model, data)
+            if args.sim_tracks == "follower" and follower_read_joints is not None:
+                sim_target_joints = follower_read_joints
+            else:
+                sim_target_joints = leader_joints
+
+            arm_rad, gripper_rad = real_frame_to_sim(sim_target_joints, offsets)
+
+            is_kinematic = args.kinematic or (args.sim_tracks == "follower" and follower_read_joints is not None)
+
+            if is_kinematic:
+                for name in ARM_JOINT_NAMES:
+                    jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
+                    data.qpos[model.jnt_qposadr[jid]] = arm_rad[name]
+                    data.ctrl[actuator_id[name]] = arm_rad[name]
+                    data.qvel[model.jnt_dofadr[jid]] = 0.0
+
+                g_jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "gripper")
+                data.qpos[model.jnt_qposadr[g_jid]] = gripper_rad
+                data.ctrl[actuator_id["gripper"]] = gripper_rad
+                data.qvel[model.jnt_dofadr[g_jid]] = 0.0
+            else:
+                for name in ARM_JOINT_NAMES:
+                    data.ctrl[actuator_id[name]] = arm_rad[name]
+                data.ctrl[actuator_id["gripper"]] = gripper_rad
+
+            substeps = max(1, int((1.0 / args.fps) / model.opt.timestep))
+            for _ in range(substeps):
+                mujoco.mj_step(model, data)
 
             out = None
             if has_overhead:
@@ -492,7 +599,11 @@ def main() -> None:
                 alpha = float(np.clip(alpha + 0.05, 0.0, 1.0))
             if args.real_image is not None and key == -1:
                 cv2.waitKey(0)
+
+
     finally:
+        teleop_state.stop_event.set()
+        teleop_thread.join(timeout=1.0)
         renderer.close()
         if real is not None:
             real.close()
@@ -500,6 +611,7 @@ def main() -> None:
             real_wrist.close()
         if follower is not None:
             follower.disconnect()
+        leader.disconnect()
         cv2.destroyAllWindows()
 
 
