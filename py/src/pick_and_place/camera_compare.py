@@ -143,6 +143,29 @@ def draw_hud(bgr: np.ndarray, *, mode: str, alpha: float, intrinsics: Path | Non
     return out
 
 
+def draw_tag_detections(bgr: np.ndarray, detections, scale_x: float, scale_y: float) -> None:
+    """Outline detected tags on the (smaller) overlay, scaling corners.
+
+    Cube tags (the ones driving the pose) are green; other tags -- the
+    workspace frame and drop box -- are orange.
+    """
+    from pick_and_place.cube_detection import CUBE_TAG_IDS
+    import cv2
+    import numpy as np
+    
+    scale = np.array([scale_x, scale_y])
+    for det in detections:
+        cube = det.tag_id in CUBE_TAG_IDS
+        colour = (0, 255, 0) if cube else (0, 165, 255)
+        corners = (np.asarray(det.corners, dtype=float) * scale).astype(int)
+        cv2.polylines(bgr, [corners.reshape(-1, 1, 2)], True, colour, 1, cv2.LINE_AA)
+        centre = (np.asarray(det.center, dtype=float) * scale).astype(int)
+        cv2.circle(bgr, tuple(centre), 2, (0, 0, 255), -1)
+        cv2.putText(bgr, str(det.tag_id), (corners[0][0], corners[0][1] - 6),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 1, cv2.LINE_AA)
+
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     source = parser.add_mutually_exclusive_group(required=True)

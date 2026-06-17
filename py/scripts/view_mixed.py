@@ -41,6 +41,8 @@ from pick_and_place.follower import (
     make_so101_follower,
 )
 
+from pick_and_place.camera_compare import draw_tag_detections
+
 WINDOW_TITLE = "view_mixed  (m mode  , . alpha  q quit)"
 
 
@@ -50,22 +52,7 @@ def _rotation_angle_deg(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.degrees(np.arccos(np.clip(cos_angle, -1.0, 1.0))))
 
 
-def _draw_tag_detections(bgr: np.ndarray, detections, scale_x: float, scale_y: float) -> None:
-    """Outline detected tags on the (smaller) overlay, scaling corners.
 
-    Cube tags (the ones driving the pose) are green; other tags -- the
-    workspace frame and drop box -- are orange.
-    """
-    scale = np.array([scale_x, scale_y])
-    for det in detections:
-        cube = det.tag_id in CUBE_TAG_IDS
-        colour = (0, 255, 0) if cube else (0, 165, 255)
-        corners = (np.asarray(det.corners, dtype=float) * scale).astype(int)
-        cv2.polylines(bgr, [corners.reshape(-1, 1, 2)], True, colour, 1, cv2.LINE_AA)
-        centre = (np.asarray(det.center, dtype=float) * scale).astype(int)
-        cv2.circle(bgr, tuple(centre), 2, (0, 0, 255), -1)
-        cv2.putText(bgr, str(det.tag_id), (corners[0][0], corners[0][1] - 6),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 1, cv2.LINE_AA)
 
 
 def _draw_cube_wireframe(bgr: np.ndarray, data: mujoco.MjData, camera_id: int, camera_matrix: np.ndarray) -> None:
@@ -460,11 +447,11 @@ def main() -> None:
                     out = cv2.cvtColor(blended, cv2.COLOR_RGB2BGR)
 
                 if tag_detections:
-                    _draw_tag_detections(
+                    draw_tag_detections(
                         out,
                         tag_detections,
-                        out.shape[1] / detection_size[0],
-                        out.shape[0] / detection_size[1],
+                        args.width / frame.shape[1],
+                        args.height / frame.shape[0],
                     )
 
                 out = draw_hud(out, mode=mode, alpha=alpha, intrinsics=intrinsics)

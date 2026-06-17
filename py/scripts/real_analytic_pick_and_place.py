@@ -215,6 +215,11 @@ def main() -> None:
         include_environment=args.environment,
     )
 
+    from pick_and_place.camera_extrinsics import apply_camera_extrinsics_to_model, load_local_camera_extrinsics
+    import mujoco
+    apply_camera_extrinsics_to_model(episode.model, load_local_camera_extrinsics())
+    mujoco.mj_forward(episode.model, episode.data)
+
     execute_episode(
         episode,
         follower_port=args.follower_port,
