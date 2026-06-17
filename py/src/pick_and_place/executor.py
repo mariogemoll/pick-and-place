@@ -40,7 +40,7 @@ from pick_and_place.kinematics import So101Kinematics
 
 # Rate at which set points are streamed to the physical follower and the motors
 # are read back. The sim steps far faster; follower I/O is throttled to this.
-CONTROL_HZ = 50.0
+CONTROL_HZ = 60.0
 # Seconds spent smoothly ramping the real arm onto the trajectory's start pose
 # before playback begins, so there is no jump from wherever it was parked.
 RAMP_DURATION = 2.0
