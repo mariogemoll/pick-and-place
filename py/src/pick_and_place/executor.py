@@ -34,7 +34,7 @@ from pick_and_place.follower import (
     real_frame_to_sim,
     sim_frame_to_real,
 )
-from pick_and_place.trajectory import replan_remaining_phases, REST_ARM_JOINTS, REST_GRIPPER, NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER
+from pick_and_place.trajectory import replan_remaining_phases, REST_ARM_JOINTS, REST_GRIPPER, NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER, GRIPPER_OPEN
 from pick_and_place.kinematics import So101Kinematics
 
 
@@ -608,7 +608,7 @@ def execute_episode(
                     actual_sim_joints, _ = real_frame_to_sim(actual, offsets)
                     
                     open_gripper_real = _clamp_and_warn(
-                        sim_frame_to_real(actual_sim_joints, NEUTRAL_GRIPPER, offsets),
+                        sim_frame_to_real(actual_sim_joints, GRIPPER_OPEN, offsets),
                         clamp_low,
                         clamp_high,
                         clip_warned,
@@ -617,7 +617,7 @@ def execute_episode(
                         follower,
                         open_gripper_real,
                         actual_sim_joints,
-                        NEUTRAL_GRIPPER,
+                        GRIPPER_OPEN,
                         actuator_id,
                         model,
                         data,
