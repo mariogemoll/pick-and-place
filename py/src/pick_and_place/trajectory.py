@@ -89,9 +89,9 @@ REST_GRIPPER = math.radians((10 - 2.3) / 96.2 * 130 - 10)
 
 # Angular speed of the fastest-moving joint through a joint-space move, rad/s.
 # Governs phase 1 (approach) and the phase 5 retreat.
-JOINT_SPEED = 1.0
+JOINT_SPEED = 1.5
 # Cartesian speed of the gripper/cube tip along the carry, m/s. Governs phase 4.
-CARTESIAN_SPEED = 0.3
+CARTESIAN_SPEED = 0.45
 # Metres of carry arc that one radian of cube yaw is counted as when retiming the
 # carry. Set so a pure in-place rotation is paced at JOINT_SPEED rather than
 # whipping the wrist through the low-translation stretch of the path.

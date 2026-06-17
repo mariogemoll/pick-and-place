@@ -43,7 +43,7 @@ from pick_and_place.kinematics import So101Kinematics
 CONTROL_HZ = 50.0
 # Seconds spent smoothly ramping the real arm onto the trajectory's start pose
 # before playback begins, so there is no jump from wherever it was parked.
-RAMP_DURATION = 4.0
+RAMP_DURATION = 2.0
 # Default playback pace for the physical arm: a fraction of the nominal speed so
 # the first hardware passes are gentle. Scaling the trajectory clock slows every
 # phase uniformly without touching the planner. Override with ``speed``.
