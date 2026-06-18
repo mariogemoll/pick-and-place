@@ -16,9 +16,11 @@ The runner owns the follower, the viewer and the cameras and keeps them alive
 across the whole loop; ``execute_episode`` runs a single pass against them. For
 sim-only playback (no arm) use ``sim.py``.
 
-Every run records to ``records/<timestamp>/`` unconditionally: per episode, the
-full wrist/overhead mp4s, the full-rate motor npz, and the decimated
-frame-index npz (see ``execute_episode``'s docstring).
+Every run records straight into a LeRobotDataset (``datasets/<timestamp>/`` by
+default): each successful episode is committed with one frame per control tick
+(measured joints as state, commanded joints as action, plus the wrist and
+overhead camera frames); aborted/restarted episodes are discarded. See
+``execute_episode``'s docstring.
 """
 
 from __future__ import annotations
@@ -42,8 +44,10 @@ from pick_and_place.episodes import (
     sample_near_neutral,
 )
 from pick_and_place.executor import (
+    CONTROL_HZ,
     HARDWARE_SIMULATION_HZ,
     REAL_ARM_DEFAULT_SPEED,
+    RecordingSession,
     clamp_and_warn,
     execute_episode,
     follower_clamp_limits,
@@ -391,6 +395,41 @@ def main() -> None:
         default=8,
         help="maximum rejected candidates to save",
     )
+    parser.add_argument(
+        "--dataset-root",
+        type=Path,
+        default=None,
+        help="output dir for the LeRobotDataset (default: datasets/<timestamp>)",
+    )
+    parser.add_argument(
+        "--repo-id",
+        default="local/pick-and-place-so101",
+        help="dataset repo id stored in metadata",
+    )
+    parser.add_argument(
+        "--task",
+        default="Pick up the cube and place it at the target.",
+        help="natural-language task instruction saved with every frame",
+    )
+    parser.add_argument(
+        "--vcodec",
+        default="auto",
+        help="LeRobot video codec (default: auto = best available HW encoder, "
+        "e.g. h264_videotoolbox on macOS)",
+    )
+    parser.add_argument(
+        "--streaming-encoding",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="encode video in real time during capture (near-instant save_episode, "
+        "no PNG scratch files); --no-streaming-encoding falls back to PNG-then-encode",
+    )
+    parser.add_argument(
+        "--image-writer-threads",
+        type=int,
+        default=4,
+        help="background image-writer threads LeRobot uses for PNG-then-encode mode",
+    )
     args = parser.parse_args()
 
     if args.target is not None and args.target_drop_zone:
@@ -436,9 +475,21 @@ def main() -> None:
     follower.connect()
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    record_dir_path = Path(__file__).resolve().parents[2] / "records" / timestamp
-    record_dir_path.mkdir(parents=True, exist_ok=True)
-    print(f"Recording. Saving to: {record_dir_path}")
+    dataset_root = (
+        args.dataset_root
+        if args.dataset_root is not None
+        else Path(__file__).resolve().parents[2] / "datasets" / timestamp
+    )
+    recording = RecordingSession(
+        repo_id=args.repo_id,
+        root=dataset_root,
+        task=args.task,
+        fps=CONTROL_HZ,
+        vcodec=args.vcodec,
+        streaming_encoding=args.streaming_encoding,
+        image_writer_threads=args.image_writer_threads,
+    )
+    print(f"Recording into LeRobotDataset at: {dataset_root}")
 
     backend = cv2.CAP_AVFOUNDATION if hasattr(cv2, "CAP_AVFOUNDATION") else cv2.CAP_ANY
     print("Opening overhead camera...")
@@ -622,7 +673,6 @@ def main() -> None:
                 arm, grip = sample_near_neutral(rng)
                 move_to(arm, grip, viewer)
 
-                episode_attempt = 0
                 for ep in episode_loop(
                     target=args.episodes,
                     rest_every=args.rest_every,
@@ -696,18 +746,14 @@ def main() -> None:
                             print("No feasible plan from the current pose.")
                             raise
 
-                        episode_attempt += 1
                         print(f"\n--- Episode {ep.index}"
                               f"{f'/{args.episodes}' if args.episodes else ''} ---")
-                        episode_base_name = f"episode_{episode_attempt:03d}"
                         status = execute_episode(
                             episode,
                             follower=follower,
                             viewer=viewer,
                             offsets_path=args.offsets_path,
-                            record_path=str(record_dir_path / f"{episode_base_name}.npz"),
-                            video_dir=record_dir_path,
-                            video_base_name=episode_base_name,
+                            recording=recording,
                             overhead_camera_cap=overhead_cap,
                             speed=args.speed,
                             wrist_camera=args.wrist_camera,
@@ -734,6 +780,10 @@ def main() -> None:
                     move_to(REST_ARM_JOINTS, REST_GRIPPER, viewer)
                     ended_at_rest = True
     finally:
+        if recording.dataset is not None:
+            print("Finalizing dataset...")
+            recording.finalize()
+            print(f"Dataset written to {dataset_root}")
         if ended_at_rest:
             print("At REST — releasing torque.")
             try:

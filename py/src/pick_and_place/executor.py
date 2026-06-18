@@ -14,9 +14,12 @@ execute → re-seed) will grow here — see ``docs/realworld-execution-roadmap.m
 from __future__ import annotations
 
 import math
+import queue
 import threading
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import mujoco
 import numpy as np
@@ -209,37 +212,89 @@ def _report_tracking(recorder: EpisodeRecorder) -> None:
     print("  (with zero offsets, a joint's mean err is its sim→real calibration bias)")
 
 
-def _write_record(path: str, recorder: EpisodeRecorder, status: str) -> None:
-    """Write the full per-tick commanded/measured log to npz (degrees; gripper position).
+@dataclass
+class RecordingSession:
+    """Holds the ``LeRobotDataset`` written across one collection run.
 
-    Arrays: ``t`` (N,), ``wall_t`` (N,), ``commanded`` (N, J), ``measured``
-    (N, J), ``joint_names`` (J,), and scalar ``status``. ``t`` is exact MuJoCo
-    time and ``wall_t`` is elapsed monotonic time, allowing collection-rate
-    overruns to be measured.
+    The dataset is created lazily on the first recorded episode, once the camera
+    frame shapes are known, and reused for every later episode. The runner owns
+    it and calls :meth:`finalize` when the run ends. Episodes are added straight
+    into the dataset during execution (one frame per control tick), so there are
+    no intermediate video/motor files and no separate export step.
     """
-    recorder.save(path, joint_names=np.array(JOINT_NAMES), status=np.array(status))
-    print(f"Wrote {len(recorder)} samples to {path}")
+
+    repo_id: str
+    root: Path
+    task: str
+    fps: float
+    vcodec: str = "auto"
+    streaming_encoding: bool = True
+    image_writer_threads: int = 4
+    dataset: Any = field(default=None, init=False)
+
+    def create_dataset(self, wrist_shape: tuple, overhead_shape: tuple) -> None:
+        from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+        joint_names = list(JOINT_NAMES)
+        features = {
+            "observation.state": {
+                "dtype": "float32",
+                "shape": (len(joint_names),),
+                "names": joint_names,
+            },
+            "action": {
+                "dtype": "float32",
+                "shape": (len(joint_names),),
+                "names": joint_names,
+            },
+            "observation.images.wrist": {
+                "dtype": "video",
+                "shape": (wrist_shape[0], wrist_shape[1], 3),
+                "names": ["height", "width", "channels"],
+            },
+            "observation.images.overhead": {
+                "dtype": "video",
+                "shape": (overhead_shape[0], overhead_shape[1], 3),
+                "names": ["height", "width", "channels"],
+            },
+        }
+        self.dataset = LeRobotDataset.create(
+            repo_id=self.repo_id,
+            fps=int(round(self.fps)),
+            features=features,
+            root=self.root,
+            robot_type="so101",
+            use_videos=True,
+            image_writer_threads=self.image_writer_threads,
+            vcodec=self.vcodec,
+            streaming_encoding=self.streaming_encoding,
+            video_backend="pyav",
+        )
+
+    def finalize(self) -> None:
+        if self.dataset is not None:
+            self.dataset.finalize()
 
 
-def _write_frame_index(path: str, rows: list[tuple[int, int | None, int | None]]) -> None:
-    """Write the frame-index log to npz: no joint data, just a join key.
+def _request_camera_fps(cap, label: str) -> None:
+    """Ask the camera to capture at ``CONTROL_HZ`` and report what it grants.
 
-    One row per ``record_fps`` tick: ``motor_row`` is the row number in the
-    full-rate motor npz (``_write_record``) this tick belongs to, plus the exact
-    frame index each camera's continuous mp4 had most recently written at that
-    instant (``-1`` if that camera isn't recording). Camera frames may repeat
-    because capture is asynchronous. The motor npz already has every
-    tick's commanded/actual joints, so this file doesn't repeat them — a later
-    exporter joins the two on ``motor_row`` to get (state, action, image)
-    triples, pulling each frame straight out of the existing video by index.
+    Pinning the capture rate near the tick rate keeps the latest-frame buffer
+    fresh and avoids wasting captures. Sync no longer depends on the camera
+    honoring it — the control loop logs exactly one buffered frame per tick
+    either way — so a mismatch is a warning, not a failure.
     """
-    motor_row = np.array([r[0] for r in rows], dtype=np.int64)
-    wrist_frame = np.array([-1 if r[1] is None else r[1] for r in rows], dtype=np.int64)
-    overhead_frame = np.array([-1 if r[2] is None else r[2] for r in rows], dtype=np.int64)
-    np.savez_compressed(
-        path, motor_row=motor_row, wrist_frame=wrist_frame, overhead_frame=overhead_frame
-    )
-    print(f"Wrote {len(rows)} synced frame-index samples to {path}")
+    import cv2
+
+    cap.set(cv2.CAP_PROP_FPS, float(CONTROL_HZ))
+    actual = cap.get(cv2.CAP_PROP_FPS)
+    if not actual or actual <= 0 or math.isnan(actual):
+        print(f"warning: {label} camera did not report an FPS after requesting {CONTROL_HZ:g}")
+    elif not math.isclose(actual, CONTROL_HZ, rel_tol=1e-2):
+        print(
+            f"warning: {label} camera reports {actual:g} fps, not the requested "
+            f"{CONTROL_HZ:g}; frames are still logged one per control tick"
+        )
 
 
 def execute_episode(
@@ -248,11 +303,8 @@ def execute_episode(
     follower,
     viewer,
     offsets_path: str | None = None,
-    record_path: str | None = None,
-    video_dir: Path | str | None = None,
-    video_base_name: str | None = None,
+    recording: RecordingSession | None = None,
     overhead_camera_cap=None,
-    record_fps: float = 30.0,
     speed: float | None = None,
     wrist_camera: str | None = None,
     wrist_intrinsics: str | None = None,
@@ -269,19 +321,17 @@ def execute_episode(
     streaming set points to the arm at ``CONTROL_HZ`` and logging motor readback.
     MuJoCo advances in a batch of high-rate physics substeps per control tick.
 
-    If ``video_dir`` is given, the wrist camera (already opened for cube tracking,
-    when ``wrist_camera`` is set) and ``overhead_camera_cap`` (owned by the
-    caller, opened across the whole loop) are each recorded to an mp4 named
-    ``{video_base_name}_wrist.mp4`` / ``{video_base_name}_overhead.mp4`` in that
-    directory, continuously, at the camera's own frame rate — independent of
-    ``CONTROL_HZ``. Alongside those full videos and the full-rate ``record_path``
-    motor npz, a ``{video_base_name}_frames.npz`` is written: one row every
-    ``record_fps`` (default 30) giving ``motor_row`` (the matching row in the
-    motor npz) plus, for each camera, the index of the frame each video had most
-    recently written at that instant. It carries no joint data of its own, only
-    the join key, so nothing is stored twice; a later
-    LeRobotDataset exporter joins the two npz files on ``motor_row`` and pulls
-    each frame straight out of the existing (full-resolution, undecimated) mp4.
+    If ``recording`` is given, the episode is written straight into its
+    ``LeRobotDataset`` and both the wrist camera (opened here when
+    ``wrist_camera`` is set) and ``overhead_camera_cap`` (owned by the caller)
+    are required. Each camera runs a reader thread keeping a single-slot
+    "latest frame" buffer fresh; once per control tick the loop snapshots both
+    buffers and queues one frame for a dataset writer thread, which converts to
+    RGB and calls ``add_frame``. Capture is therefore in lockstep with the
+    ``CONTROL_HZ`` loop — exactly one dataset frame per camera per tick. With
+    the session's streaming encoder, LeRobot encodes frames as they arrive. A
+    completed episode is committed with ``save_episode``; a ``restart``/
+    interrupted one is discarded with ``clear_episode_buffer``.
 
     Returns ``"success"`` when the trajectory ran to completion, or ``"restart"``
     when a checkpoint replan failed and the caller should abort and re-home. A
@@ -325,15 +375,13 @@ def execute_episode(
         raise ValueError(
             f"MuJoCo timestep {model.opt.timestep:g}s cannot produce {CONTROL_HZ:g} Hz exactly"
         )
-    if not math.isclose(record_fps, CONTROL_HZ):
-        raise ValueError(f"record_fps must equal the {CONTROL_HZ:g} Hz control rate")
     wrist_cam = None
     wrist_tracker = None
     wrist_cam_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "wrist_camera")
     wrist_camera_matrix = None
     wrist_undistort_map = None
 
-    cam_lock = None
+    cam_lock = threading.Lock()
     cam_frame = None
     cam_frame_id = 0
     last_processed_id = -1
@@ -341,40 +389,48 @@ def execute_episode(
     cam_thread = None
     wrist_renderer = None
 
-    wrist_video_writer = None
-    wrist_video_frame_count = 0
-    overhead_video_writer = None
+    # Per-camera reader threads keep these single-slot "latest frame" buffers
+    # fresh; the control loop snapshots both once per tick and queues one
+    # (state, action, wrist_bgr, overhead_bgr) tuple onto record_queue, so the
+    # dataset gets exactly one frame per camera per control tick.
+    overhead_lock = threading.Lock()
+    overhead_frame = None
     overhead_cam_running = False
     overhead_cam_thread = None
-    overhead_frame_count = 0
-    video_recording_enabled = threading.Event()
 
-    # One (motor_row, wrist_frame_index, overhead_frame_index) row per record_fps
-    # tick, populated only when video_dir is set (see docstring).
-    synced_log: list[tuple[int, int | None, int | None]] = []
-
-    def _open_video_writer(cap, suffix: str):
-        """Build a same-size, same-fps mp4 writer for ``cap`` under ``video_dir``."""
-        import cv2
-
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        if not fps or fps <= 0 or math.isnan(fps):
-            fps = 30.0
-        path = Path(video_dir) / f"{video_base_name or 'episode'}_{suffix}.mp4"
-        return cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
-
-    if video_dir is not None:
-        Path(video_dir).mkdir(parents=True, exist_ok=True)
+    record_queue: queue.Queue = queue.Queue()
+    record_writer_thread = None
 
     def overhead_reader():
-        nonlocal overhead_frame_count
+        nonlocal overhead_frame
         while overhead_cam_running:
             ok, frame = overhead_camera_cap.read()
-            if ok and overhead_video_writer is not None and video_recording_enabled.is_set():
-                overhead_video_writer.write(frame)
-                overhead_frame_count += 1
+            if ok:
+                with overhead_lock:
+                    overhead_frame = frame
+
+    def record_writer():
+        """Drain queued frames into the dataset until the ``None`` sentinel.
+
+        Color conversion and ``add_frame`` run here, off the control loop, so a
+        slow frame never delays a tick. Frames are enqueued one per tick in
+        order, so the dataset episode keeps that order."""
+        import cv2
+
+        while True:
+            item = record_queue.get()
+            if item is None:
+                return
+            state, action, wrist_bgr, overhead_bgr = item
+            recording.dataset.add_frame(
+                {
+                    "observation.state": state,
+                    "action": action,
+                    "observation.images.wrist": cv2.cvtColor(wrist_bgr, cv2.COLOR_BGR2RGB),
+                    "observation.images.overhead": cv2.cvtColor(overhead_bgr, cv2.COLOR_BGR2RGB),
+                    "task": recording.task,
+                }
+            )
 
     if wrist_camera is not None and wrist_cam_id >= 0:
         import cv2
@@ -388,10 +444,8 @@ def execute_episode(
         if wrist_cam.isOpened():
             wrist_cam.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
             wrist_cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            _request_camera_fps(wrist_cam, "wrist")
             wrist_tracker = CubeTracker(smooth=0.95)
-
-            if video_dir is not None:
-                wrist_video_writer = _open_video_writer(wrist_cam, "wrist")
 
             intrinsics_path = wrist_intrinsics
             if intrinsics_path is None:
@@ -426,17 +480,13 @@ def execute_episode(
                 rh = max(1, int(round(render_h * scale)))
                 wrist_renderer = mujoco.Renderer(model, width=rw, height=rh)
 
-            cam_lock = threading.Lock()
             cam_running = True
 
             def cam_reader():
-                nonlocal cam_frame, cam_frame_id, wrist_video_frame_count
+                nonlocal cam_frame, cam_frame_id
                 while cam_running:
                     ok, frame = wrist_cam.read()
                     if ok:
-                        if wrist_video_writer is not None and video_recording_enabled.is_set():
-                            wrist_video_writer.write(frame)
-                            wrist_video_frame_count += 1
                         with cam_lock:
                             cam_frame = frame
                             cam_frame_id += 1
@@ -461,27 +511,37 @@ def execute_episode(
         print("Ramping real arm to the trajectory start pose...")
         ramp_to_start(follower, start_real, model, data, viewer)
 
-        # Cameras may be open for tracking before the episode, but their video
-        # writers start only after the unrecorded ramp reaches the start pose.
-        if video_dir is not None:
-            if wrist_cam is not None:
-                wrist_video_writer = _open_video_writer(wrist_cam, "wrist")
-            if overhead_camera_cap is not None and overhead_camera_cap.isOpened():
-                overhead_video_writer = _open_video_writer(overhead_camera_cap, "overhead")
-                overhead_cam_running = True
-                overhead_cam_thread = threading.Thread(target=overhead_reader, daemon=True)
-                overhead_cam_thread.start()
-            video_recording_enabled.set()
+        # Recording starts only after the unrecorded ramp reaches the start pose.
+        # The wrist reader is already running from the open block above; the
+        # overhead reader is started here. Recording needs both cameras.
+        if recording is not None:
+            if wrist_cam is None or overhead_camera_cap is None or not overhead_camera_cap.isOpened():
+                raise RuntimeError(
+                    "Recording requires both the wrist and overhead cameras to be open"
+                )
+            _request_camera_fps(overhead_camera_cap, "overhead")
+            overhead_cam_running = True
+            overhead_cam_thread = threading.Thread(target=overhead_reader, daemon=True)
+            overhead_cam_thread.start()
 
-            deadline = time.monotonic() + 1.0
+            # Wait for both latest-frame buffers to fill so the first tick has a
+            # real frame to log and the dataset features get true frame shapes.
+            deadline = time.monotonic() + 2.0
             while time.monotonic() < deadline:
-                wrist_ready = wrist_video_writer is None or wrist_video_frame_count > 0
-                overhead_ready = overhead_video_writer is None or overhead_frame_count > 0
-                if wrist_ready and overhead_ready:
+                with cam_lock:
+                    first_wrist = cam_frame
+                with overhead_lock:
+                    first_overhead = overhead_frame
+                if first_wrist is not None and first_overhead is not None:
                     break
                 time.sleep(0.001)
             else:
-                raise RuntimeError("Timed out waiting for the episode video streams to start")
+                raise RuntimeError("Timed out waiting for the episode camera streams to start")
+
+            if recording.dataset is None:
+                recording.create_dataset(first_wrist.shape, first_overhead.shape)
+            record_writer_thread = threading.Thread(target=record_writer, daemon=True)
+            record_writer_thread.start()
         execution_wall_start = time.monotonic()
 
         # State for tracking progress
@@ -733,12 +793,23 @@ def execute_episode(
                     wall_t=time.monotonic() - execution_wall_start,
                 )
 
-                if video_dir is not None:
-                    wrist_idx = (
-                        wrist_video_frame_count - 1 if wrist_video_frame_count > 0 else None
-                    )
-                    overhead_idx = overhead_frame_count - 1 if overhead_frame_count > 0 else None
-                    synced_log.append((len(recorder) - 1, wrist_idx, overhead_idx))
+                # Queue exactly one dataset frame for this tick: the measured
+                # joints as state, the commanded joints as action, and a snapshot
+                # of each camera's latest frame.
+                if record_writer_thread is not None:
+                    with cam_lock:
+                        wrist_snapshot = cam_frame
+                    with overhead_lock:
+                        overhead_snapshot = overhead_frame
+                    if wrist_snapshot is not None and overhead_snapshot is not None:
+                        record_queue.put(
+                            (
+                                actual.astype(np.float32),
+                                commanded.astype(np.float32),
+                                wrist_snapshot,
+                                overhead_snapshot,
+                            )
+                        )
 
                 viewer.sync()
 
@@ -928,9 +999,9 @@ def execute_episode(
         print("\nInterrupted during episode.")
         raise
     finally:
-        # Stop video first so the MP4 boundaries match the recorded episode,
-        # rather than including diagnostics and NPZ serialization afterward.
-        video_recording_enabled.clear()
+        # Stop the readers first so no new frames are produced, then drain the
+        # record queue with a sentinel so every queued tick is added before the
+        # episode is committed or discarded.
         if wrist_cam is not None:
             cam_running = False
             if cam_thread is not None:
@@ -939,16 +1010,17 @@ def execute_episode(
         if overhead_cam_thread is not None:
             overhead_cam_running = False
             overhead_cam_thread.join(timeout=1.0)
-        if wrist_video_writer is not None:
-            wrist_video_writer.release()
-        if overhead_video_writer is not None:
-            overhead_video_writer.release()
+        if record_writer_thread is not None:
+            record_queue.put(None)
+            record_writer_thread.join(timeout=30.0)
         _report_tracking(recorder)
-        if record_path is not None:
-            _write_record(record_path, recorder, episode_status)
-        if video_dir is not None:
-            frames_path = Path(video_dir) / f"{video_base_name or 'episode'}_frames.npz"
-            _write_frame_index(str(frames_path), synced_log)
+        if recording is not None and recording.dataset is not None and record_writer_thread is not None:
+            if episode_status == "success":
+                recording.dataset.save_episode()
+                print(f"Saved episode to dataset ({len(recorder)} frames).")
+            elif recording.dataset.has_pending_frames():
+                recording.dataset.clear_episode_buffer()
+                print(f"Discarded {episode_status} episode (not added to dataset).")
         if show_wrist_cam or show_wrist_mixed:
             import cv2
 

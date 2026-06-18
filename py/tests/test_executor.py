@@ -4,8 +4,7 @@
 import mujoco
 import numpy as np
 
-from pick_and_place.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ, _write_record
-from pick_and_place.recorder import EpisodeRecorder
+from pick_and_place.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 
 
 def test_hardware_physics_substeps_advance_exactly_one_control_tick():
@@ -23,19 +22,3 @@ def test_hardware_physics_substeps_advance_exactly_one_control_tick():
         times.append(data.time)
 
     np.testing.assert_allclose(np.diff(times), 1.0 / CONTROL_HZ, atol=1e-12)
-
-
-def test_motor_record_includes_episode_status(tmp_path):
-    recorder = EpisodeRecorder()
-    recorder.log(
-        commanded=np.zeros(6),
-        measured=np.zeros(6),
-        t=0.0,
-        wall_t=0.0,
-    )
-    path = tmp_path / "episode_001.npz"
-
-    _write_record(str(path), recorder, "success")
-
-    with np.load(path, allow_pickle=False) as record:
-        assert record["status"].item() == "success"
