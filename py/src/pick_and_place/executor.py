@@ -647,6 +647,7 @@ def execute_episode(
                 dynamic_grasp,
                 episode.end_joints,
                 episode.end_gripper,
+                drop_orientation=episode.trajectory.drop_orientation,
             )
             
             if candidate_traj is None:
@@ -695,4 +696,3 @@ def execute_episode(
             wrist_renderer.close()
 
     return "success"
-

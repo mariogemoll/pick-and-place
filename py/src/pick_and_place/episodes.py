@@ -23,6 +23,7 @@ from pick_and_place import build_scene
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.kinematics import So101Kinematics, derive_kinematics
 from pick_and_place.trajectory import (
+    DropOrientation,
     GRIPPER_OPEN,
     NEUTRAL_ARM_JOINTS,
     GraspChoice,
@@ -303,6 +304,7 @@ def prepare_episode(
     include_environment: bool = False,
     offwidth: int = 1280,
     offheight: int = 720,
+    drop_orientation: DropOrientation = "free",
 ) -> Episode:
     """Sample poses and return the first collision-free pick-and-carry.
 
@@ -377,7 +379,16 @@ def prepare_episode(
         robot_geom_ids, env_geom_ids = build_geom_sets(ep_model)
 
         trajectory = None
-        for traj in trajectory_candidates(kinematics, ep_source, ep_target, ep_start_joints, ep_start_gripper, end_joints, end_gripper):
+        for traj in trajectory_candidates(
+            kinematics,
+            ep_source,
+            ep_target,
+            ep_start_joints,
+            ep_start_gripper,
+            end_joints,
+            end_gripper,
+            drop_orientation=drop_orientation,
+        ):
             grasp = traj.grasp
             events = _preflight(ep_model, traj, actuator_id, robot_geom_ids, env_geom_ids)
             unexpected = [(t, n1, n2) for t, n1, n2 in events if is_unexpected(n1, n2)]

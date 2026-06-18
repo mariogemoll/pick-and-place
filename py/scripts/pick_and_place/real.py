@@ -218,6 +218,12 @@ def main() -> None:
         default=None,
         help="pin the target (x, y); omit for a random pose in the clearance annulus",
     )
+    parser.add_argument(
+        "--drop-orientation",
+        choices=("free", "target"),
+        default="free",
+        help="free searches any reachable drop orientation; target preserves target yaw",
+    )
     parser.add_argument("--follower-port", required=True, help="serial port of the SO-101 follower")
     parser.add_argument("--follower-id", default="folly", help="follower calibration id (default: folly)")
     parser.add_argument(
@@ -420,6 +426,7 @@ def main() -> None:
                                 max_attempts=EPISODE_MAX_ATTEMPTS,
                                 verbose=True,
                                 include_environment=args.environment,
+                                drop_orientation=args.drop_orientation,
                             )
                         except EpisodeSamplingError:
                             print("No feasible plan from the current pose.")

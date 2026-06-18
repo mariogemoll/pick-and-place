@@ -42,10 +42,8 @@ from pick_and_place.recorder import EpisodeRecorder
 # real follower would be commanded at.
 DEFAULT_CONTROL_HZ = 50.0
 # A grasp is counted successful if the released cube settles within this far (m)
-# of the target in the floor plane, stays on the floor, and lands within the yaw
-# tolerance of the commanded target orientation. The cube sits on the floor, so
-# yaw is its only free orientation; error is the shortest angle (wrapped ±180°)
-# to the target yaw the carry was planned for.
+# of the target in the floor plane and stays on the floor. Yaw is only required
+# when the episode was planned with target-oriented drops.
 SUCCESS_XY_TOLERANCE = 0.04
 SUCCESS_Z_TOLERANCE = 0.01
 SUCCESS_YAW_TOLERANCE = math.radians(15.0)
@@ -142,6 +140,10 @@ def run_episode(
     xy_err = math.hypot(cube_end[0] - target.x, cube_end[1] - target.y)
     z_err = abs(cube_end[2] - CUBE_HALF_SIZE)
     yaw_err = _yaw_error(cube_end[3], target.yaw)
+    yaw_ok = (
+        episode.trajectory.drop_orientation == "free"
+        or yaw_err <= SUCCESS_YAW_TOLERANCE
+    )
     # The preflight vets the whole trajectory collision-free, so an accepted
     # episode should run without unexpected contacts; if any slip through, the run
     # clipped the floor or itself and is not a clean demonstration regardless of
@@ -149,7 +151,7 @@ def run_episode(
     success = (
         xy_err <= SUCCESS_XY_TOLERANCE
         and z_err <= SUCCESS_Z_TOLERANCE
-        and yaw_err <= SUCCESS_YAW_TOLERANCE
+        and yaw_ok
         and len(collisions) == 0
     )
 
@@ -165,6 +167,7 @@ def run_episode(
         grasp_face=np.array(episode.grasp.face),
         grasp_elbow=np.array(episode.grasp.elbow),
         carry_mode=np.array(episode.trajectory.carry.mode),
+        drop_orientation=np.array(episode.trajectory.drop_orientation),
         success=np.array(success),
         final_xy_error=np.array(xy_err),
         final_yaw_error=np.array(yaw_err),
@@ -197,6 +200,12 @@ def main() -> None:
         default=DEFAULT_MAX_ATTEMPTS,
         help=f"pose resamples per episode before giving up (default {DEFAULT_MAX_ATTEMPTS})",
     )
+    parser.add_argument(
+        "--drop-orientation",
+        choices=("free", "target"),
+        default="free",
+        help="free searches any reachable drop orientation; target preserves target yaw",
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="print the grasp search log")
     args = parser.parse_args()
 
@@ -207,7 +216,12 @@ def main() -> None:
     written = 0
     for index in range(args.num_episodes):
         try:
-            episode = prepare_episode(rng, max_attempts=args.max_attempts, verbose=args.verbose)
+            episode = prepare_episode(
+                rng,
+                max_attempts=args.max_attempts,
+                verbose=args.verbose,
+                drop_orientation=args.drop_orientation,
+            )
         except EpisodeSamplingError as exc:
             print(f"episode {index}: skipped ({exc})")
             continue
@@ -218,7 +232,8 @@ def main() -> None:
         successes += ok
         print(
             f"episode {index}: {len(record['time'])} frames, "
-            f"{record['grasp_face']}/{record['grasp_elbow']} {record['carry_mode']}, "
+            f"{record['grasp_face']}/{record['grasp_elbow']} "
+            f"{record['carry_mode']}/{record['drop_orientation']}, "
             f"xy_err={float(record['final_xy_error']):.3f}m, "
             f"yaw_err={math.degrees(float(record['final_yaw_error'])):.1f}°, "
             f"{'success' if ok else 'MISS'} -> {path.name}"
@@ -234,6 +249,7 @@ def main() -> None:
         "success_xy_tolerance": SUCCESS_XY_TOLERANCE,
         "success_z_tolerance": SUCCESS_Z_TOLERANCE,
         "success_yaw_tolerance_deg": math.degrees(SUCCESS_YAW_TOLERANCE),
+        "drop_orientation": args.drop_orientation,
         "qpos_layout": "JOINT_NAMES (6) then pick_cube free joint (pos[3] + quat[4])",
         "fields": {
             "time": "(T,) trajectory time in seconds",
@@ -243,6 +259,7 @@ def main() -> None:
             "qvel": "(T,nv) full sim qvel",
             "cube_start/cube_target/cube_end": "(x, y, z, yaw)",
             "robot_start/robot_end": "(6,) JOINT_NAMES order set points",
+            "drop_orientation": "free position-only drop or target yaw-matched drop",
         },
     }
     (args.out_dir / "meta.json").write_text(json.dumps(meta, indent=2))

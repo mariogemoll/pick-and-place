@@ -94,6 +94,12 @@ def main() -> None:
         help="target (x, y) on the floor; omit for a random pose in the clearance annulus",
     )
     parser.add_argument(
+        "--drop-orientation",
+        choices=("free", "target"),
+        default="free",
+        help="free searches any reachable drop orientation; target preserves target yaw",
+    )
+    parser.add_argument(
         "--speed",
         type=float,
         default=1.0,
@@ -126,6 +132,7 @@ def main() -> None:
         target,
         verbose=True,
         include_environment=args.environment,
+        drop_orientation=args.drop_orientation,
     )
 
     _play(episode, args.speed)
