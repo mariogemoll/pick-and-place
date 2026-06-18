@@ -15,7 +15,7 @@ Phases: (1) neutral -> hover, (2) hover -> pregrasp at cube center, (3) grasp,
 (5) release, lift clear, and flow back to neutral.
 
 This is sim-only. To run on the physical SO-101 follower, use
-``real_analytic_pick_and_place`` (``pick_and_place.executor``).
+``real.py`` (``pick_and_place.executor``).
 """
 
 from __future__ import annotations

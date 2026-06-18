@@ -14,7 +14,7 @@ to NEUTRAL, then REST, and releases torque.
 
 The runner owns the follower, the viewer and the cameras and keeps them alive
 across the whole loop; ``execute_episode`` runs a single pass against them. For
-sim-only playback (no arm) use ``view_trajectory``.
+sim-only playback (no arm) use ``sim.py``.
 
 Every run records to ``records/<timestamp>/`` unconditionally: per episode, the
 full wrist/overhead mp4s, the full-rate motor npz, and the decimated
@@ -286,7 +286,7 @@ def main() -> None:
     follower.connect()
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    record_dir_path = Path(__file__).resolve().parents[1] / "records" / timestamp
+    record_dir_path = Path(__file__).resolve().parents[2] / "records" / timestamp
     record_dir_path.mkdir(parents=True, exist_ok=True)
     print(f"Recording. Saving to: {record_dir_path}")
 

@@ -6,7 +6,7 @@
 
 For each episode a random source/target cube and near-neutral start/end arm pose
 are sampled and a collision-free pick-and-carry is found (same logic as
-``view_trajectory``), then the trajectory is run headless — no viewer, no
+``pick_and_place/sim.py``), then the trajectory is run headless — no viewer, no
 rendering — and sampled at a fixed control rate into a ``.npz`` per episode.
 
 No camera frames are stored: the full per-frame ``qpos``/``qvel`` is logged, so

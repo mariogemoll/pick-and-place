@@ -3,7 +3,7 @@
 
 """Sample and prepare random pick-and-carry episodes under live physics.
 
-Shared by ``view_trajectory`` (sim-only viewer), ``real_analytic_pick_and_place``
+Shared by ``pick_and_place/sim.py`` (sim-only viewer), ``pick_and_place/real.py``
 (the hardware path) and ``record_episodes`` (batch dataset generation). All need
 to draw random source/target cube poses
 and near-neutral start/end arm poses, build the scene with a dynamic cube, and

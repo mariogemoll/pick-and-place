@@ -13,7 +13,7 @@ the toolbox's actual seams, not an artifact of the one task it was extracted
 from. See ``docs/episode-toolkit-plan.md``.
 
 The arm is driven through the model's position actuators under real physics,
-same execution pattern as ``view_trajectory``. Sim-only; see ``real.py`` for
+same execution pattern as ``pick_and_place/sim.py``. Sim-only; see ``real.py`` for
 the hardware counterpart.
 """
 

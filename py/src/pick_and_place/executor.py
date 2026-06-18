@@ -4,7 +4,7 @@
 """Drive the physical SO-101 follower through a prepared pick-and-carry episode.
 
 This is the home of the hardware execution path, split out of the sim-only
-``view_trajectory`` viewer. Today it is **pure feedforward with the sim as the
+``pick_and_place/sim.py`` viewer. Today it is **pure feedforward with the sim as the
 source of truth**: the sim integrates physics, the trajectory's joint set points
 stream out to the real arm at ``CONTROL_HZ``, and motor readback is logged but
 never fed back. The phase state machine for checkpoint replanning (sense → plan →
