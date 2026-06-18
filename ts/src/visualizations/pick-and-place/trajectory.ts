@@ -62,13 +62,13 @@ export const NEUTRAL_FRAME: RobotPose = {
 // encoder degrees into the MuJoCo joint frame.
 export const REST_FRAME: RobotPose = {
   joints: {
-    shoulder_pan: 5.492788249022637 * (Math.PI / 180),
-    shoulder_lift: -95.10455666443607 * (Math.PI / 180),
-    elbow_flex: 89.41623426698676 * (Math.PI / 180),
-    wrist_flex: 75.45878504436078 * (Math.PI / 180),
-    wrist_roll: -86.5807853208365 * (Math.PI / 180)
+    shoulder_pan: 4.967032967032967 * (Math.PI / 180),
+    shoulder_lift: -95.16483516483517 * (Math.PI / 180),
+    elbow_flex: 96.13186813186813 * (Math.PI / 180),
+    wrist_flex: 73.71428571428571 * (Math.PI / 180),
+    wrist_roll: -86.46153846153847 * (Math.PI / 180)
   },
-  gripper: ((10 - 2.3) / 96.2 * 130 - 10) * (Math.PI / 180)
+  gripper: ((10.5 - 2.3) / 96.2 * 130 - 10) * (Math.PI / 180)
 };
 
 const REST_PHASE_DURATION = 2.0;

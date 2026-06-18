@@ -71,13 +71,13 @@ NEUTRAL_ARM_JOINTS: dict[str, float] = {
 NEUTRAL_GRIPPER = 0.0
 
 REST_ARM_JOINTS: dict[str, float] = {
-    "shoulder_pan": math.radians(5.492788249022637),
-    "shoulder_lift": math.radians(-95.10455666443607),
-    "elbow_flex": math.radians(89.41623426698676),
-    "wrist_flex": math.radians(75.45878504436078),
-    "wrist_roll": math.radians(-86.5807853208365)
+    "shoulder_pan": math.radians(4.967032967032967),
+    "shoulder_lift": math.radians(-95.16483516483517),
+    "elbow_flex": math.radians(96.13186813186813),
+    "wrist_flex": math.radians(73.71428571428571),
+    "wrist_roll": math.radians(-86.46153846153847),
 }
-REST_GRIPPER = math.radians((10 - 2.3) / 96.2 * 130 - 10)
+REST_GRIPPER = math.radians((10.5 - 2.3) / 96.2 * 130 - 10)
 
 
 # --- Phase timing -----------------------------------------------------------
