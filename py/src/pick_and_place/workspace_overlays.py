@@ -129,6 +129,20 @@ def is_cube_drop_allowed(x: float, y: float) -> bool:
 is_cube_placement_allowed = is_cube_pickup_allowed
 
 
+def workspace_interior_corners_world() -> np.ndarray:
+    """World-space corners of the workspace-frame interior.
+
+    Used to mask overhead detections to the table surface, excluding off-table
+    clutter (keyboard, cables, the shadowed table border).
+    """
+    h = WORKSPACE_FRAME_INNER_HALF_EXTENT
+    z = WORKSPACE_FRAME_POS[2]
+    return np.array(
+        [(*_frame_to_world_xy(fx, fy), z) for fx, fy in ((-h, -h), (h, -h), (h, h), (-h, h))],
+        dtype=float,
+    )
+
+
 def _world_to_frame_xy(x: float, y: float) -> tuple[float, float]:
     """Transform a world XY point into the workspace-frame coordinate system."""
     w, qx, qy, qz = WORKSPACE_FRAME_QUAT

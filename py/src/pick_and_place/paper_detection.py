@@ -131,6 +131,22 @@ def pixel_to_world_plane(
     return origin + distance * ray_world
 
 
+def project_to_pixel(
+    points_world: NDArray,
+    camera_matrix: NDArray,
+    camera_position: NDArray,
+    camera_rotation: NDArray,
+) -> NDArray:
+    """Project world points onto the image plane (inverse of ``pixel_to_world_plane``)."""
+    points = np.asarray(points_world, dtype=float).reshape(-1, 3)
+    rays_mj = (points - np.asarray(camera_position, dtype=float)) @ np.asarray(
+        camera_rotation, dtype=float
+    )
+    rays_cv = rays_mj * np.array((1.0, -1.0, -1.0))
+    projected = rays_cv @ np.asarray(camera_matrix, dtype=float).T
+    return projected[:, :2] / projected[:, 2:3]
+
+
 def add_paper_target_marker(spec) -> None:
     """Add a hidden, non-colliding drop-zone marker to an ``MjSpec`` before compile."""
     import mujoco
@@ -184,24 +200,57 @@ def detect_paper_target(
     min_area_fraction: float = 0.008,
     max_area_fraction: float = 0.15,
     target_color: str = "black",
+    workspace_corners_world: NDArray | None = None,
 ) -> PaperTarget | None:
-    """Find the strongest black or white drop-zone square contour."""
+    """Find the strongest black or white drop-zone square contour.
+
+    When ``workspace_corners_world`` is given, the search is restricted to that
+    world-space quad projected into the image, so off-table clutter cannot be
+    mistaken for or merged into the target.
+    """
     import cv2
 
     image = np.asarray(frame_rgb)
     if image.ndim != 3 or image.shape[2] != 3:
         raise ValueError("frame_rgb must have shape (height, width, 3)")
+    height, width = image.shape[:2]
 
-    hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+    roi: NDArray | None = None
+    if workspace_corners_world is not None:
+        quad_px = project_to_pixel(
+            workspace_corners_world, camera_matrix, camera_position, camera_rotation
+        )
+        roi = np.zeros((height, width), dtype=np.uint8)
+        cv2.fillConvexPoly(roi, np.round(quad_px).astype(np.int32), 255)
+
+    # Local (adaptive) thresholding keys on "darker/brighter than the immediate
+    # surroundings" rather than an absolute cutoff. An uneven illumination
+    # gradient across the table therefore does not lump the target in with a
+    # dimly lit corner, and a uniformly dark region is not flagged at all. The
+    # block spans a sizeable fraction of the frame so the local mean is set by
+    # the table around the target rather than by the target itself.
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    block = max(31, round(0.1 * width)) | 1
     if target_color == "black":
-        mask = cv2.inRange(hsv, (0, 0, 0), (180, 80, 90))
+        mask = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, block, 15
+        )
     elif target_color == "white":
-        mask = cv2.inRange(hsv, (0, 0, 160), (180, 40, 255))
+        mask = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, block, 15
+        )
+        hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+        mask = cv2.bitwise_and(mask, cv2.inRange(hsv, (0, 0, 0), (180, 60, 255)))
     else:
         raise ValueError(f"Unknown target_color: {target_color!r}")
 
-    kernel = np.ones((5, 5), dtype=np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    if roi is not None:
+        mask = cv2.bitwise_and(mask, roi)
+
+    # Open to sever thin bridges to neighbouring blobs, then close to fill
+    # speckle and glare holes inside the target.
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), dtype=np.uint8))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((9, 9), dtype=np.uint8))
 
     image_area = float(image.shape[0] * image.shape[1])
     min_area = min_area_fraction * image_area

@@ -16,6 +16,7 @@ Example:
 from __future__ import annotations
 
 import argparse
+import time
 from pathlib import Path
 
 import cv2
@@ -42,7 +43,10 @@ from pick_and_place.paper_detection import (
     set_paper_target_marker,
 )
 from pick_and_place.scene import build_scene
-from pick_and_place.workspace_overlays import is_cube_drop_allowed
+from pick_and_place.workspace_overlays import (
+    is_cube_drop_allowed,
+    workspace_interior_corners_world,
+)
 from pick_and_place.follower import (
     JOINT_NAMES,
     action_to_joints,
@@ -331,6 +335,7 @@ def main() -> None:
             )
         if args.track_drop_zone:
             drop_zone_tracker = PaperTracker(alpha=args.drop_zone_smooth)
+            workspace_corners = workspace_interior_corners_world()
         if intrinsics is not None:
             detection_matrix, detection_map = load_intrinsics(intrinsics, *detection_size, cv2)
         else:
@@ -407,6 +412,7 @@ def main() -> None:
             cube_status = None
             drop_zone_status = None
             tag_detections = []
+            det_rgb = None
             if (cube_tracker is not None or drop_zone_tracker is not None) and has_overhead:
                 det_frame = real.read(*detection_size)
                 if detection_map is not None:
@@ -420,6 +426,7 @@ def main() -> None:
                         data.cam_xpos[camera_id],
                         data.cam_xmat[camera_id].reshape(3, 3),
                         target_color=args.drop_zone_color,
+                        workspace_corners_world=workspace_corners,
                     )
                     drop_zone_target = drop_zone_tracker.update(raw_drop_zone_target)
                     if drop_zone_target is None:
@@ -556,6 +563,14 @@ def main() -> None:
                 alpha = float(np.clip(alpha - 0.05, 0.0, 1.0))
             elif key == ord("."):
                 alpha = float(np.clip(alpha + 0.05, 0.0, 1.0))
+            elif key == ord("s") and has_overhead:
+                stamp = time.strftime("%Y%m%d_%H%M%S")
+                if frame is not None:
+                    cv2.imwrite(f"/tmp/overhead_{stamp}.png", cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+                    print(f"saved /tmp/overhead_{stamp}.png")
+                if det_rgb is not None:
+                    cv2.imwrite(f"/tmp/overhead_det_{stamp}.png", cv2.cvtColor(det_rgb, cv2.COLOR_RGB2BGR))
+                    print(f"saved /tmp/overhead_det_{stamp}.png")
             if args.real_image is not None and key == -1:
                 cv2.waitKey(0)
     finally:

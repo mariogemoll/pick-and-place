@@ -60,6 +60,10 @@ _JOINT_SCALE_OVERRIDES: dict[str, float] = {
     "elbow_flex": 0.2,
     "wrist_flex": 0.2,
 }
+# Shoulder-pan half-range for look-around search poses. Near the ±1.92 rad pan
+# limit (with a small margin) so the search sweeps the arm across nearly its full
+# lateral travel to clear the overhead view, rather than the tight start jitter.
+_HUNT_PAN_SCALE = 1.7
 # Minimum height (m) the lowest gripper-jaw corner must clear the floor by for a
 # sampled start pose to be accepted, so the arm begins well up in the air rather
 # than skimming (or buried in) the ground.
@@ -129,6 +133,20 @@ def sample_near_neutral(rng: np.random.Generator) -> tuple[dict[str, float], flo
         scale = _JOINT_SCALE_OVERRIDES.get(name, _NEAR_NEUTRAL_JOINT_SCALE)
         joints[name] = value + rng.uniform(-scale, scale)
     gripper = float(rng.uniform(0.0, GRIPPER_OPEN))
+    return joints, gripper
+
+
+def sample_hunt_pose(rng: np.random.Generator) -> tuple[dict[str, float], float]:
+    """Return a search pose: a wide shoulder-pan swing, the rest near neutral.
+
+    The arm itself can sit between the fixed overhead camera and the cube or
+    drop-zone square, so the look-around search swings the pan far wider than the
+    near-neutral start jitter to clear the view from a range of angles. The tilt
+    joints stay near neutral, keeping the gripper well above the floor."""
+    joints, gripper = sample_near_neutral(rng)
+    joints["shoulder_pan"] = NEUTRAL_ARM_JOINTS["shoulder_pan"] + rng.uniform(
+        -_HUNT_PAN_SCALE, _HUNT_PAN_SCALE
+    )
     return joints, gripper
 
 

@@ -48,7 +48,10 @@ from pick_and_place.paper_detection import (
     set_paper_target_marker,
 )
 from pick_and_place.scene import build_scene
-from pick_and_place.workspace_overlays import is_cube_drop_allowed
+from pick_and_place.workspace_overlays import (
+    is_cube_drop_allowed,
+    workspace_interior_corners_world,
+)
 from pick_and_place.follower import (
     ARM_JOINT_NAMES,
     action_to_joints,
@@ -414,6 +417,7 @@ def main() -> None:
             )
         if args.track_drop_zone:
             drop_zone_tracker = PaperTracker(alpha=args.drop_zone_smooth)
+            workspace_corners = workspace_interior_corners_world()
         if intrinsics is not None:
             detection_matrix, detection_map = load_intrinsics(intrinsics, *detection_size, cv2)
         else:
@@ -551,6 +555,7 @@ def main() -> None:
                         data.cam_xpos[camera_id],
                         data.cam_xmat[camera_id].reshape(3, 3),
                         target_color=args.drop_zone_color,
+                        workspace_corners_world=workspace_corners,
                     )
                     drop_zone_target = drop_zone_tracker.update(raw_drop_zone_target)
                     if drop_zone_target is None:

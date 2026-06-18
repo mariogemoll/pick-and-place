@@ -41,6 +41,7 @@ from pick_and_place.episodes import (
     _build_model,
     prepare_episode,
     sample_cube,
+    sample_hunt_pose,
     sample_near_neutral,
 )
 from pick_and_place.executor import (
@@ -211,7 +212,12 @@ def track_drop_zone_square(
 
     from pick_and_place.camera_compare import load_intrinsics
     from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
-    from pick_and_place.workspace_overlays import is_cube_drop_allowed
+    from pick_and_place.workspace_overlays import (
+        is_cube_drop_allowed,
+        workspace_interior_corners_world,
+    )
+
+    workspace_corners = workspace_interior_corners_world()
 
     # This function is called once per episode. Do not let the tracker's cached
     # estimate satisfy a new episode when the square is no longer visible.
@@ -250,6 +256,7 @@ def track_drop_zone_square(
             cam_pos,
             cam_rot,
             target_color=target_color,
+            workspace_corners_world=workspace_corners,
         )
         target = tracker.update(raw_target)
         if target is None:
@@ -572,8 +579,8 @@ def main() -> None:
             if not viewer.is_running():
                 return None
             if attempt > 0:
-                arm, grip = sample_near_neutral(rng)
-                print(f"Look {attempt + 1}/{args.max_hunt_tries}: moving to a new near-neutral pose...")
+                arm, grip = sample_hunt_pose(rng)
+                print(f"Look {attempt + 1}/{args.max_hunt_tries}: panning to a new search pose...")
                 move_to(arm, grip, viewer)
                 time.sleep(0.5)  # let the camera settle
             else:
@@ -589,6 +596,40 @@ def main() -> None:
             )
             if source is not None:
                 return source
+        return None
+
+    def hunt_for_drop_zone(viewer, *, hunt: bool) -> CubePose | None:
+        """Look for the drop-zone square on the overhead camera.
+
+        The arm can sit between the overhead camera and the square, so when
+        ``hunt`` is set we re-home to fresh near-neutral poses up to
+        ``--max-hunt-tries`` times to clear the view, exactly like
+        ``hunt_for_cube``. With ``hunt`` off (marker display only) we take a
+        single look from the current pose. Returns the target or ``None``."""
+        assert drop_zone_tracker is not None
+        tries = args.max_hunt_tries if hunt else 1
+        for attempt in range(tries):
+            if not viewer.is_running():
+                return None
+            if attempt > 0:
+                arm, grip = sample_hunt_pose(rng)
+                print(
+                    f"Drop-zone look {attempt + 1}/{tries}: panning to a new search pose..."
+                )
+                move_to(arm, grip, viewer)
+                time.sleep(0.5)  # let the camera settle
+            elif hunt:
+                print(f"Drop-zone look {attempt + 1}/{tries}: searching from current pose...")
+            target = track_drop_zone_square(
+                overhead_cap,
+                args.camera_name,
+                model,
+                data,
+                drop_zone_tracker,
+                args.drop_zone_color,
+            )
+            if target is not None:
+                return target
         return None
 
     def recover_cube(viewer) -> bool:
@@ -681,17 +722,17 @@ def main() -> None:
                 ):
                     episode_target = fixed_target
                     if drop_zone_tracker is not None:
-                        tracked_target = track_drop_zone_square(
-                            overhead_cap,
-                            args.camera_name,
-                            model,
-                            data,
-                            drop_zone_tracker,
-                            args.drop_zone_color,
+                        tracked_target = hunt_for_drop_zone(
+                            viewer, hunt=args.target_drop_zone
                         )
+                        if not viewer.is_running():
+                            break
                         if args.target_drop_zone:
                             if tracked_target is None:
-                                print("Drop-zone square not found. Ending loop.")
+                                print(
+                                    f"Drop-zone square not found after "
+                                    f"{args.max_hunt_tries} looks. Ending loop."
+                                )
                                 break
                             episode_target = tracked_target
 
