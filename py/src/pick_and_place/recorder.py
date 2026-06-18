@@ -19,23 +19,29 @@ class EpisodeRecorder:
     """Accumulates named per-tick fields over an episode, then stacks and saves
     them as one ``.npz``.
 
-    Call ``log(**fields)`` once per tick with the same field names every time;
-    each value is appended to that field's list. ``save(path, **metadata)``
-    stacks every field into an array (preserving the order ticks were logged
-    in) via ``np.asarray``, merges in any episode-level metadata (already an
-    array, or anything ``np.savez`` accepts), and writes the result with
-    ``np.savez_compressed``.
+    Call ``log(commanded=..., measured=..., **fields)`` once per tick with the
+    same field names every time; each value is appended to that field's list.
+    ``save(path, **metadata)`` stacks every field into an array (preserving the
+    order ticks were logged in) via ``np.asarray``, merges in any episode-level
+    metadata (already an array, or anything ``np.savez`` accepts), and writes
+    the result with ``np.savez_compressed``.
 
-    Field names and shapes are entirely caller-defined, so the same class
-    serves both backends' per-tick logs without needing to know which one it
-    is: sim logs ``time``/``action``/``state``/``qpos``/``qvel``; the real-arm
-    executor logs ``t``/``commanded``/``actual``.
+    ``commanded`` and ``measured`` are required on every call: the joint
+    targets sent this tick, and what was actually observed for those same
+    joints. This is the one contract both backends must satisfy regardless of
+    what else they log — sim's ``commanded`` is the ``ctrl`` set point and
+    ``measured`` is ``qpos`` restricted to the robot joints; the real-arm
+    executor's ``commanded`` is the servo target and ``measured`` is the
+    encoder read-back. Anything beyond that (sim's full ``qpos``/``qvel``,
+    the real executor's ``t``) is caller-defined extra fields.
     """
 
     def __init__(self) -> None:
         self._fields: dict[str, list] = {}
 
-    def log(self, **fields: object) -> None:
+    def log(self, *, commanded: object, measured: object, **fields: object) -> None:
+        self._fields.setdefault("commanded", []).append(commanded)
+        self._fields.setdefault("measured", []).append(measured)
         for key, value in fields.items():
             self._fields.setdefault(key, []).append(value)
 

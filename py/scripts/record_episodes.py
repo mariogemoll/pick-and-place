@@ -87,9 +87,9 @@ def run_episode(
     episode: Episode, control_hz: float, out_path: Path, *, episode_index: int, seed: int
 ) -> dict[str, np.ndarray]:
     """Step the prepared episode under physics, sampling the trajectory at
-    ``control_hz`` into per-frame ``action``/``state``/``qpos``/``qvel`` arrays,
-    then save it (plus the start/end poses of the cube and robot and the
-    realized final cube pose) to ``out_path``.
+    ``control_hz`` into per-frame ``commanded``/``measured``/``qpos``/``qvel``
+    arrays, then save it (plus the start/end poses of the cube and robot and
+    the realized final cube pose) to ``out_path``.
 
     Returns the dict that was saved.
     """
@@ -114,9 +114,9 @@ def run_episode(
         if traj_t - last_sample_t >= control_period:
             last_sample_t = traj_t
             recorder.log(
+                commanded=_action_vector(frame),
+                measured=data.qpos[joint_adr].copy(),
                 time=traj_t,
-                action=_action_vector(frame),
-                state=data.qpos[joint_adr].copy(),
                 qpos=data.qpos.copy(),
                 qvel=data.qvel.copy(),
             )
@@ -237,8 +237,8 @@ def main() -> None:
         "qpos_layout": "JOINT_NAMES (6) then pick_cube free joint (pos[3] + quat[4])",
         "fields": {
             "time": "(T,) trajectory time in seconds",
-            "action": "(T,6) joint set points, JOINT_NAMES order, radians",
-            "state": "(T,6) measured joint positions, JOINT_NAMES order, radians",
+            "commanded": "(T,6) joint set points, JOINT_NAMES order, radians",
+            "measured": "(T,6) measured joint positions, JOINT_NAMES order, radians",
             "qpos": "(T,nq) full sim qpos for exact reconstruction",
             "qvel": "(T,nv) full sim qvel",
             "cube_start/cube_target/cube_end": "(x, y, z, yaw)",

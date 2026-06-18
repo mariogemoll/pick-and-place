@@ -166,8 +166,8 @@ def _report_tracking(recorder: EpisodeRecorder) -> None:
         print("No follower samples recorded.")
         return
     stacked = recorder.stacked()
-    t, commanded, actual = stacked["t"], stacked["commanded"], stacked["actual"]
-    error = actual - commanded
+    t, commanded, measured = stacked["t"], stacked["commanded"], stacked["measured"]
+    error = measured - commanded
     print("\nPer-joint tracking (actual − commanded):")
     print(f"  {'joint':<14}{'unit':<5}{'max|err|':>10}{'mean|err|':>11}{'mean err':>10}")
     for i, name in enumerate(JOINT_NAMES):
@@ -182,10 +182,10 @@ def _report_tracking(recorder: EpisodeRecorder) -> None:
 
 
 def _write_record(path: str, recorder: EpisodeRecorder) -> None:
-    """Write the full per-tick commanded/actual log to npz (degrees; gripper position).
+    """Write the full per-tick commanded/measured log to npz (degrees; gripper position).
 
-    Arrays: ``t`` (N,), ``commanded`` (N, J), ``actual`` (N, J), ``joint_names`` (J,)
-    giving the column order of the last axis of ``commanded``/``actual``.
+    Arrays: ``t`` (N,), ``commanded`` (N, J), ``measured`` (N, J), ``joint_names`` (J,)
+    giving the column order of the last axis of ``commanded``/``measured``.
     """
     recorder.save(path, joint_names=np.array(JOINT_NAMES))
     print(f"Wrote {len(recorder)} samples to {path}")
@@ -576,7 +576,7 @@ def execute_episode(
                     follower.send_action(joints_to_action(commanded))
                     actual = action_to_joints(follower.get_observation(), commanded)
                     # We log data.time so the overall timeline is continuous.
-                    recorder.log(t=data.time, commanded=commanded, actual=actual)
+                    recorder.log(commanded=commanded, measured=actual, t=data.time)
 
                     if video_dir is not None and data.time - last_synced_t >= record_period:
                         last_synced_t = data.time
