@@ -34,6 +34,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
+from pick_and_place.episode_loop import episode_loop
 from pick_and_place.episodes import (
     EpisodeSamplingError,
     _build_model,
@@ -378,6 +379,9 @@ def main() -> None:
     )
     viewer_ctx = MockViewer() if disable_viewer else mujoco.viewer.launch_passive(model, data)
 
+    # Run-level session: home near-neutral on entry; whatever ends the run
+    # (episode budget met, cube lost, viewer closed, or Ctrl-C) flows to REST
+    # before the hardware is released in the `finally` below.
     ended_at_rest = False
     try:
         with recover_on(KeyboardInterrupt, recover=park_from_interrupt):
@@ -386,9 +390,13 @@ def main() -> None:
                 arm, grip = sample_near_neutral(rng)
                 move_to(arm, grip, viewer)
 
-                episodes_done = 0
                 episode_attempt = 0
-                while (args.episodes == 0 or episodes_done < args.episodes) and viewer.is_running():
+                for ep in episode_loop(
+                    target=args.episodes,
+                    rest_every=args.rest_every,
+                    cooldown=lambda: cooldown(viewer),
+                    should_continue=viewer.is_running,
+                ):
                     source = hunt_for_cube(viewer)
                     if not viewer.is_running():
                         break
@@ -397,6 +405,9 @@ def main() -> None:
                         break
 
                     current_joints, current_gripper = read_current_sim_pose()
+                    # Per-episode guard: an infeasible plan or a failed checkpoint
+                    # replan opens the gripper and re-homes, then this attempt is
+                    # abandoned without calling `ep.complete()`.
                     with recover_on(
                         EpisodeSamplingError, EpisodeAborted,
                         recover=lambda: abort_to_near_neutral(viewer),
@@ -419,7 +430,7 @@ def main() -> None:
                             raise
 
                         episode_attempt += 1
-                        print(f"\n--- Episode {episodes_done + 1}"
+                        print(f"\n--- Episode {ep.index}"
                               f"{f'/{args.episodes}' if args.episodes else ''} ---")
                         episode_base_name = f"episode_{episode_attempt:03d}"
                         status = execute_episode(
@@ -441,10 +452,7 @@ def main() -> None:
                         if status == "restart":
                             raise EpisodeAborted
 
-                        episodes_done += 1
-                        is_last = args.episodes != 0 and episodes_done >= args.episodes
-                        if not is_last and args.rest_every > 0 and episodes_done % args.rest_every == 0:
-                            cooldown(viewer)
+                        ep.complete()
 
                 # Normal end (episode budget met, cube lost, or viewer closed): the
                 # arm is at the last near-neutral pose — flow it straight to REST.
