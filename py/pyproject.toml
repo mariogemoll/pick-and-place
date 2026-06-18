@@ -8,7 +8,7 @@ version = "0.0.0"
 dependencies = [
     "fpdf",
     "imageio[ffmpeg]",
-    "lerobot[feetech]",
+    "lerobot[feetech,smolvla]",
     "mujoco",
     "numpy",
     "opencv-python",
