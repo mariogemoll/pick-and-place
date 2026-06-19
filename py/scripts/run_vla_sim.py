@@ -57,8 +57,15 @@ from pick_and_place.follower import (
     real_frame_to_sim,
     sim_frame_to_real,
 )
+from pick_and_place.episodes import sample_target
 from pick_and_place.geometry import CUBE_HALF_SIZE
+from pick_and_place.paper_detection import (
+    DROP_ZONE_HALF_SIZE,
+    add_paper_target_marker,
+    place_paper_target_marker,
+)
 from pick_and_place.trajectory import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
+from pick_and_place.workspace_overlays import is_cube_drop_allowed
 from pick_and_place.vla import (
     DEFAULT_CHECKPOINT,
     DEFAULT_INSTRUCTION,
@@ -73,10 +80,20 @@ from pick_and_place.vla import (
 CONTROL_HZ = 10.0
 
 
-def _build_model(source_xy: tuple[float, float], source_yaw: float, render_size: int):
+def _build_model(
+    source_xy: tuple[float, float],
+    source_yaw: float,
+    target_xy: tuple[float, float],
+    target_yaw: float,
+    render_size: int,
+):
     """Compile the standard (AprilTag, calibrated-camera) scene with the pick cube
     placed as a free rigid body at the requested pose. Mirrors the layout used by
     the episode tooling so the cameras and cube match what a policy would see.
+
+    The black drop-zone square is rendered at ``target_xy``/``target_yaw`` so the
+    frames match a real recording, where a physical paper square on the table marks
+    where the cube must be placed; without it the policy sees no target.
 
     ``render_size`` enlarges the offscreen framebuffer so the camera renders fed to
     the policy fit (MuJoCo defaults to 640x480, too small for a 512 square)."""
@@ -95,7 +112,17 @@ def _build_model(source_xy: tuple[float, float], source_yaw: float, render_size:
     cube.quat = (math.cos(half_yaw), 0.0, 0.0, math.sin(half_yaw))
     cube.add_freejoint()
 
+    add_paper_target_marker(spec)
+
     model = spec.compile()
+    place_paper_target_marker(
+        model,
+        target_xy,
+        target_yaw,
+        (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
+        usable=is_cube_drop_allowed(target_xy[0], target_xy[1]),
+        alpha=1.0,
+    )
     return model, mujoco.MjData(model)
 
 
@@ -144,6 +171,16 @@ def main() -> None:
     parser.add_argument("--source", type=float, nargs=2, metavar=("X", "Y"), default=(0.22, 0.0))
     parser.add_argument("--source-yaw", type=float, default=0.0, help="cube yaw (radians)")
     parser.add_argument(
+        "--target",
+        type=float,
+        nargs=2,
+        metavar=("X", "Y"),
+        default=None,
+        help="pin the drop-zone center (x, y); omit to sample one randomly like the recording",
+    )
+    parser.add_argument("--target-yaw", type=float, default=0.0, help="drop-zone yaw (radians)")
+    parser.add_argument("--seed", type=int, default=None, help="RNG seed for random target sampling")
+    parser.add_argument(
         "--steps",
         type=int,
         default=0,
@@ -176,7 +213,21 @@ def main() -> None:
     device = select_device(args.device)
     print(f"Loading {args.checkpoint} on {device} (first run downloads the weights)...")
 
-    model, data = _build_model(tuple(args.source), args.source_yaw, args.image_size)
+    # Sample a random drop zone the same way the recording does, unless pinned.
+    if args.target is not None:
+        target_xy, target_yaw = tuple(args.target), args.target_yaw
+    else:
+        sampled = sample_target(np.random.default_rng(args.seed))
+        target_xy, target_yaw = (sampled.x, sampled.y), sampled.yaw
+    print(f"Drop zone at ({target_xy[0]:.4f}, {target_xy[1]:.4f}), yaw {target_yaw:.3f} rad")
+
+    model, data = _build_model(
+        tuple(args.source),
+        args.source_yaw,
+        target_xy,
+        target_yaw,
+        args.image_size,
+    )
     _set_neutral(model, data)
     joint_adr = _joint_qpos_adr(model)
     ctrl_low = model.actuator_ctrlrange[:, 0].copy()
