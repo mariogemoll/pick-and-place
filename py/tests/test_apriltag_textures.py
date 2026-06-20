@@ -40,3 +40,15 @@ def test_workspace_frame_textures_are_reproducible():
         assert actual is not None
         assert actual.shape == expected.shape
         np.testing.assert_array_equal(actual, expected)
+
+
+def test_default_cli_renders_all_presets(tmp_path, monkeypatch):
+    module = load_texture_script()
+    monkeypatch.setattr(sys, "argv", ["render_apriltag_textures.py", "--out-dir", str(tmp_path)])
+
+    module.main()
+
+    assert len(list(tmp_path.glob("*.png"))) == 14
+    assert (tmp_path / "tagStandard41h12_00000_30x30mm_tag20mm.png").is_file()
+    assert (tmp_path / "tagStandard41h12_00008_100x100mm_tag60mm.png").is_file()
+    assert (tmp_path / "tagStandard41h12_00012_60x60mm_tag40mm.png").is_file()

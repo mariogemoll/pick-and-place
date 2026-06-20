@@ -355,6 +355,29 @@ def main() -> None:
     parser.add_argument("--follower-port", required=True, help="serial port of the SO-101 follower")
     parser.add_argument("--follower-id", default="folly", help="follower calibration id (default: folly)")
     parser.add_argument(
+        "--robot",
+        choices=("left", "right"),
+        default="left",
+        help="which north plate carries the controlled robot (default: left); "
+        "the other plate holds the passive robot",
+    )
+    parser.add_argument(
+        "--second-port",
+        default=None,
+        help="serial port of the passive SO-101; its joint angles are read and "
+        "mirrored into the sim's other_* arm (omit to leave the passive arm static)",
+    )
+    parser.add_argument(
+        "--second-id",
+        default="folly2",
+        help="passive follower calibration id (default: folly2)",
+    )
+    parser.add_argument(
+        "--second-offsets-path",
+        default=None,
+        help="sim→real degree offsets for the passive arm (default: same as --offsets-path)",
+    )
+    parser.add_argument(
         "--offsets-path",
         default=None,
         help="JSON of per-joint sim→real degree offsets (default: zero offsets)",
@@ -459,6 +482,7 @@ def main() -> None:
         dummy_source,
         include_environment=args.environment,
         paper_target_marker=args.target_drop_zone or args.show_drop_zone,
+        robot_side=args.robot,
     )
     model.opt.timestep = 1.0 / HARDWARE_SIMULATION_HZ
     apply_camera_extrinsics_to_model(model, load_local_camera_extrinsics())
@@ -480,6 +504,36 @@ def main() -> None:
         args.follower_port, args.follower_id, disable_torque_on_disconnect=False
     )
     follower.connect()
+
+    # Optional passive arm: read-only, its angles mirrored into the sim's other_*
+    # joints so the second robot in the scene tracks the real hardware.
+    second_follower = None
+    second_offsets = None
+    if args.second_port is not None:
+        print("Connecting to passive (second) follower...")
+        second_follower = make_so101_follower(
+            args.second_port, args.second_id, disable_torque_on_disconnect=False
+        )
+        second_follower.connect()
+        second_offsets = load_follower_joint_offsets(
+            args.second_offsets_path if args.second_offsets_path is not None else args.offsets_path
+        )
+
+    def mirror_passive_arm() -> None:
+        """Read the passive arm and hold the sim's other_* joints at its pose.
+
+        The other_* actuators are position servos, so writing their set points once
+        per call holds the mirrored pose across the intervening physics steps."""
+        if second_follower is None:
+            return
+        actual = action_to_joints(second_follower.get_observation(), clamp_low)
+        arm_joints, gripper = real_frame_to_sim(actual, second_offsets)
+        for name, value in arm_joints.items():
+            data.ctrl[actuator_id[f"other_{name}"]] = value
+        data.ctrl[actuator_id["other_gripper"]] = gripper
+
+    mirror_passive_arm()
+    mujoco.mj_forward(model, data)
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     dataset_root = (
@@ -518,6 +572,7 @@ def main() -> None:
 
     def move_to(arm_joints: dict[str, float], gripper: float, viewer) -> None:
         """Smoothly ramp the real arm and the sim onto ``arm_joints``/``gripper``."""
+        mirror_passive_arm()
         target_real = clamp_and_warn(
             sim_frame_to_real(arm_joints, gripper, offsets), clamp_low, clamp_high, clip_warned
         )
@@ -833,6 +888,8 @@ def main() -> None:
                 print(f"Warning: could not release torque: {exc}")
         print("Disconnecting hardware...")
         follower.disconnect()
+        if second_follower is not None:
+            second_follower.disconnect()
         if overhead_cap is not None:
             overhead_cap.release()
 

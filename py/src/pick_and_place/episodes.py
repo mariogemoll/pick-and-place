@@ -23,7 +23,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from pick_and_place import build_scene
+from pick_and_place import RobotSide, build_scene
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.kinematics import So101Kinematics, derive_kinematics
 from pick_and_place.paper_detection import add_paper_target_marker
@@ -523,8 +523,9 @@ def _build_model(
     offwidth: int = 1280,
     offheight: int = 720,
     paper_target_marker: bool = False,
+    robot_side: RobotSide | None = None,
 ) -> tuple[mujoco.MjModel, mujoco.MjData]:
-    spec = build_scene(include_environment=include_environment)
+    spec = build_scene(include_environment=include_environment, robot_side=robot_side)
     if paper_target_marker:
         add_paper_target_marker(spec)
     spec.visual.global_.offwidth = max(spec.visual.global_.offwidth, offwidth)
@@ -559,6 +560,7 @@ def prepare_episode(
     failed_trajectory_limit: int = 8,
     free_grasp: bool = False,
     target_sampler: Callable[[np.random.Generator], CubePose] | None = None,
+    robot_side: RobotSide | None = None,
 ) -> Episode:
     """Sample poses and return the first collision-free pick-and-carry.
 
@@ -621,6 +623,7 @@ def prepare_episode(
                 include_environment=include_environment,
                 offwidth=offwidth,
                 offheight=offheight,
+                robot_side=robot_side,
             )
         kinematics = derive_kinematics(ep_model)
         actuator_id = {

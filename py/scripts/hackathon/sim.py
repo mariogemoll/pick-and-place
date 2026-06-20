@@ -113,6 +113,13 @@ def main() -> None:
         help="include the calibration workspace_frame and overhead camera mount in the scene",
     )
     parser.add_argument(
+        "--robot",
+        choices=("left", "right"),
+        default=None,
+        help="enable the two-robot hackathon rig and control the given north plate; "
+        "omit for the single-robot scene",
+    )
+    parser.add_argument(
         "--preflight-debug",
         action="store_true",
         help="print detailed collision diagnostics for rejected trajectory candidates",
@@ -163,6 +170,7 @@ def main() -> None:
             target,
             verbose=True,
             include_environment=args.environment,
+            robot_side=args.robot,
             drop_orientation=args.drop_orientation,
             preflight_debug=args.preflight_debug,
             preflight_debug_limit=args.preflight_debug_limit,

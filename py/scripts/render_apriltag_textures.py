@@ -112,20 +112,25 @@ def main() -> None:
     parser.add_argument("--out-dir", type=Path, default=OUT_DIR)
     parser.add_argument("--px-per-cell", type=int, default=32)
     parser.add_argument("--ids", type=parse_ids, default=None, help="IDs like 12-15 or 0-5,8-11.")
-    parser.add_argument("--sticker-mm", type=float, default=60.0)
-    parser.add_argument("--tag-mm", type=float, default=40.0)
+    parser.add_argument("--sticker-mm", type=float)
+    parser.add_argument("--tag-mm", type=float)
     parser.add_argument(
         "--all-defaults",
         action="store_true",
-        help="render cube, drop-box, and workspace-frame texture presets",
+        help="render cube, drop-box, and workspace-frame texture presets (the default)",
     )
     args = parser.parse_args()
 
-    if args.all_defaults:
+    custom_requested = any(
+        value is not None for value in (args.ids, args.sticker_mm, args.tag_mm)
+    )
+    if args.all_defaults or not custom_requested:
         specs = DEFAULT_SPECS
     else:
         ids = args.ids if args.ids is not None else tuple(range(12, 16))
-        specs = (TextureSpec("custom", ids, args.sticker_mm, args.tag_mm),)
+        sticker_mm = args.sticker_mm if args.sticker_mm is not None else 60.0
+        tag_mm = args.tag_mm if args.tag_mm is not None else 40.0
+        specs = (TextureSpec("custom", ids, sticker_mm, tag_mm),)
 
     render_specs(specs, args.out_dir.resolve(), args.px_per_cell)
 

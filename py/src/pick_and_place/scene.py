@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import mujoco
 
@@ -30,6 +31,39 @@ PICK_CUBE_HALF_SIZE = 0.015
 # Plain pick cube colour, used when the AprilTag faces are not requested.
 PICK_CUBE_RGBA = (0.82, 0.12, 0.08, 1.0)
 
+# Robot mounts sit 7.2 mm above the floor, on top of the workspace-frame plates.
+ROBOT_BASE_HEIGHT = 0.0072
+
+# Each north arm-base plate is 0.116 m (local x) either side of the frame centre.
+# Local +x maps to world +y under WORKSPACE_FRAME_QUAT, so the "left" plate is on
+# world +y. The controlled robot always sits at the world origin; the workspace
+# frame and camera shift so the chosen plate lands under it, and the second robot
+# occupies the opposite plate one full plate-spacing away.
+ROBOT_PLATE_HALF_SPACING = 0.116
+INTER_ROBOT_DISTANCE = 2.0 * ROBOT_PLATE_HALF_SPACING
+
+RobotSide = Literal["left", "right"]
+
+
+def second_robot_offset_y(robot_side: RobotSide) -> float:
+    """World-y position of the passive robot when ``robot_side`` is controlled."""
+    sign = 1.0 if robot_side == "left" else -1.0
+    return -sign * INTER_ROBOT_DISTANCE
+
+
+def workspace_shift_y(robot_side: RobotSide) -> float:
+    """World-y shift applied to the workspace frame and overhead camera.
+
+    The controlled robot stays at the origin, so the frame (and the camera bolted
+    to it) slides by this amount to bring the chosen plate under the robot. The
+    same shift must be applied to any camera extrinsics calibrated against a
+    single, centred robot.
+    """
+    from pick_and_place.environment import WORKSPACE_FRAME_POS
+
+    sign = 1.0 if robot_side == "left" else -1.0
+    return -sign * ROBOT_PLATE_HALF_SPACING - WORKSPACE_FRAME_POS[1]
+
 
 def build_scene(
     *,
@@ -37,6 +71,7 @@ def build_scene(
     materials: MaterialConfig | None = None,
     include_environment: bool = True,
     apriltag_cube: bool | None = None,
+    robot_side: RobotSide | None = None,
 ) -> mujoco.MjSpec:
     """Return the composed robot with a floor, workspace overlays, light, and cube.
 
@@ -44,23 +79,28 @@ def build_scene(
     the simple scene, or the AprilTag-stickered cube (a perception target) for
     the standard scene. When left ``None`` it follows ``include_environment``, so
     the simple scene gets the red cube and the standard scene the tagged one.
+
+    ``robot_side`` enables the two-robot hackathon rig: the controlled robot stays
+    at the world origin and represents the chosen north plate, a second ``other_``
+    prefixed robot is attached on the opposite plate, and the workspace frame and
+    overhead camera shift so the controlled plate lands under the origin.
     """
     if apriltag_cube is None:
         apriltag_cube = include_environment
 
     spec = build_robot(wrist_camera=wrist_camera, materials=materials)
-    spec.modelname = "so101_with_cube"
+    spec.modelname = "so101_two_robots" if robot_side else "so101_with_cube"
     spec.worldbody.add_light(
         name="scene_light",
         pos=(0.0, 0.0, 1.0),
         dir=(0.0, 0.0, -1.0),
     )
-    
+
     # The real robot is mounted on the workspace frame, elevating its base
     # by the frame's thickness (7.2 mm). This is critical for IK solving
     # because the floor (where the cube rests) is at Z=0.
     base = spec.body("base")
-    base.pos = (0.0, 0.0, 0.0072)
+    base.pos = (0.0, 0.0, ROBOT_BASE_HEIGHT)
 
     # Attach overlays to worldbody so they stay on the floor.
     add_workspace_overlays(spec, spec.worldbody)
@@ -68,8 +108,16 @@ def build_scene(
 
     if include_environment:
         collision_default = spec.find_default("collision")
-        add_workspace_frame(spec, collision_default=collision_default)
-        add_overhead_camera_mount(spec, collision_default=collision_default)
+        frame = add_workspace_frame(
+            spec, collision_default=collision_default, dual_robot=robot_side is not None
+        )
+        mount = add_overhead_camera_mount(spec, collision_default=collision_default)
+        if robot_side is not None:
+            # Slide the frame so the controlled plate is under the origin, and move
+            # the camera with it so the rig is unchanged relative to the workspace.
+            frame_dy = workspace_shift_y(robot_side)
+            frame.pos = (frame.pos[0], frame.pos[1] + frame_dy, frame.pos[2])
+            mount.pos = (mount.pos[0], mount.pos[1] + frame_dy, mount.pos[2])
 
     apply_materials(spec, materials or MaterialConfig())
     if apriltag_cube:
@@ -78,7 +126,25 @@ def build_scene(
         add_workspace_frame_apriltags(spec)
     _add_groundplane(spec)
 
+    if robot_side is not None:
+        _attach_second_robot(spec, robot_side, wrist_camera=wrist_camera, materials=materials)
+
     return spec
+
+
+def _attach_second_robot(
+    spec: mujoco.MjSpec,
+    robot_side: RobotSide,
+    *,
+    wrist_camera: bool,
+    materials: MaterialConfig | None,
+) -> None:
+    """Attach the passive robot (``other_`` prefix) on the plate opposite ``robot_side``."""
+    other = build_robot(wrist_camera=wrist_camera, materials=materials)
+    frame = spec.worldbody.add_frame(
+        pos=(0.0, second_robot_offset_y(robot_side), ROBOT_BASE_HEIGHT)
+    )
+    spec.attach(other, prefix="other_", frame=frame)
 
 
 def build_environment(

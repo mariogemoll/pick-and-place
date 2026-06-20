@@ -44,38 +44,30 @@ WORKSPACE_FRAME_APRILTAG_PLATES: tuple[tuple[int, str, tuple[float, float, float
 )
 
 
-def add_workspace_frame(
+def _add_robot_arm_base(
     spec: mujoco.MjSpec,
-    *,
-    collision_default: mujoco.MjsDefault | None = None,
-) -> mujoco.MjsBody:
-    """Add the 60cm calibration workspace_frame to the worldbody."""
-    frame = spec.worldbody.add_body(name="workspace_frame_frame", pos=WORKSPACE_FRAME_POS, quat=WORKSPACE_FRAME_QUAT)
+    frame: mujoco.MjsBody,
+    name: str,
+    cx: float,
+    collision_default: mujoco.MjsDefault | None,
+) -> None:
+    """Add one SO-101 arm-base plate to the workspace north edge at local x = ``cx``.
 
-    # North side components.
-    # Parts 02 and 04 are plastic, supporting the robot base.
-    # Part 03 is the overhead camera arm base, also plastic.
-    _add_workspace_frame_part(
-        spec, frame, "north_01", WORKSPACE_FRAME_STL_DIR / "part_01_box_10p45_flat.stl",
-        pos=(-0.24775, 0.2813, 0), rgba=WORKSPACE_FRAME_RED, material="mdf",
-        col_size=(0.05225, 0.0187, 0.0036), collision_default=collision_default
-    )
-    _add_workspace_frame_part(
-        spec, frame, "north_02", WORKSPACE_FRAME_STL_DIR / "part_02_box_11p6.stl",
-        pos=(-0.1375, 0.2813, 0), rgba=WORKSPACE_FRAME_GRAY, material="plastic",
-        col_size=(0.053, 0.0187, 0.0036), col_pos=(-0.1325, 0.2813, 0.0036), collision_default=collision_default
-    )
-    # North 03 is the arm base for the overhead camera (Yellow plastic).
-    spec.add_mesh(
-        name="overhead_cam_arm_base",
-        file=str(OVERHEAD_MOUNT_STL_DIR / "arm_base.stl"),
-        scale=(0.001, 0.001, 0.001)
-    )
+    The plate is the printed ``arm_base.stl`` mount; the mesh origin sits 0.0534 m
+    in x and 0.0491 m in y from the collision-box centre, so both are offset from
+    the nominal plate centre ``(cx, 0.2552)``.
+    """
+    if not any(m.name == "robot_arm_base" for m in spec.meshes):
+        spec.add_mesh(
+            name="robot_arm_base",
+            file=str(OVERHEAD_MOUNT_STL_DIR / "arm_base.stl"),
+            scale=(0.001, 0.001, 0.001),
+        )
     frame.add_geom(
-        name="workspace_frame_north_03_visual",
+        name=f"workspace_frame_{name}_visual",
         type=mujoco.mjtGeom.mjGEOM_MESH,
-        meshname="overhead_cam_arm_base",
-        pos=(-0.0534305, 0.206079, 0.005),
+        meshname="robot_arm_base",
+        pos=(cx - 0.0534305, 0.206079, 0.005),
         quat=(-0.5, -0.5, 0.5, 0.5),
         rgba=WORKSPACE_FRAME_YELLOW,
         material="plastic",
@@ -85,19 +77,75 @@ def add_workspace_frame(
     )
     frame.add_geom(
         default=collision_default,
-        name="workspace_frame_north_03_collision",
+        name=f"workspace_frame_{name}_collision",
         type=mujoco.mjtGeom.mjGEOM_BOX,
-        pos=(0, 0.2552, 0.0036),
+        pos=(cx, 0.2552, 0.0036),
         size=(0.0795196, 0.0448, 0.0036),
         material="collision",
         group=3,
     )
 
+
+def _add_north_single_robot_plate(
+    spec: mujoco.MjSpec,
+    frame: mujoco.MjsBody,
+    collision_default: mujoco.MjsDefault | None,
+) -> None:
+    """One robot arm-base plate at the north centre, flanked by grey plastic strips."""
+    _add_workspace_frame_part(
+        spec, frame, "north_02", WORKSPACE_FRAME_STL_DIR / "part_02_box_11p6.stl",
+        pos=(-0.1375, 0.2813, 0), rgba=WORKSPACE_FRAME_GRAY, material="plastic",
+        col_size=(0.053, 0.0187, 0.0036), col_pos=(-0.1325, 0.2813, 0.0036), collision_default=collision_default
+    )
+    _add_robot_arm_base(spec, frame, "north_03", cx=0.0, collision_default=collision_default)
     _add_workspace_frame_part(
         spec, frame, "north_04", WORKSPACE_FRAME_STL_DIR / "part_02_box_11p6.stl",
         pos=(0.1375, 0.2813, 0), quat=(0, 0, 0, 1), rgba=WORKSPACE_FRAME_GRAY, material="plastic",
         col_size=(0.053, 0.0187, 0.0036), col_pos=(0.1325, 0.2813, 0.0036), collision_default=collision_default
     )
+
+
+def _add_north_dual_robot_plates(
+    spec: mujoco.MjSpec,
+    frame: mujoco.MjsBody,
+    collision_default: mujoco.MjsDefault | None,
+) -> None:
+    """Two robot arm-base plates at local x = ±0.116 with a centre connector."""
+    _add_workspace_frame_part(
+        spec, frame, "north_03", WORKSPACE_FRAME_STL_DIR / "part_04_box_7p3.stl",
+        pos=(0.0, 0.2813, 0), rgba=WORKSPACE_FRAME_GRAY, material="plastic",
+        col_size=(0.0365, 0.0187, 0.0036), collision_default=collision_default
+    )
+    # local +x maps to world +y, so cx = +0.116 is the "left" plate, -0.116 "right".
+    _add_robot_arm_base(spec, frame, "north_left", cx=0.116, collision_default=collision_default)
+    _add_robot_arm_base(spec, frame, "north_right", cx=-0.116, collision_default=collision_default)
+
+
+def add_workspace_frame(
+    spec: mujoco.MjSpec,
+    *,
+    collision_default: mujoco.MjsDefault | None = None,
+    dual_robot: bool = False,
+) -> mujoco.MjsBody:
+    """Add the 60cm calibration workspace_frame to the worldbody.
+
+    With ``dual_robot`` the single centre arm-base plate on the north edge is
+    replaced by two arm-base plates at local x = ±0.116 (the two robot mounts),
+    matching the two-robot hackathon rig.
+    """
+    frame = spec.worldbody.add_body(name="workspace_frame_frame", pos=WORKSPACE_FRAME_POS, quat=WORKSPACE_FRAME_QUAT)
+
+    # North side components. The corner flats (north_01/north_05) are shared; the
+    # centre carries either one robot arm-base plate or two, depending on the rig.
+    _add_workspace_frame_part(
+        spec, frame, "north_01", WORKSPACE_FRAME_STL_DIR / "part_01_box_10p45_flat.stl",
+        pos=(-0.24775, 0.2813, 0), rgba=WORKSPACE_FRAME_RED, material="mdf",
+        col_size=(0.05225, 0.0187, 0.0036), collision_default=collision_default
+    )
+    if dual_robot:
+        _add_north_dual_robot_plates(spec, frame, collision_default)
+    else:
+        _add_north_single_robot_plate(spec, frame, collision_default)
     _add_workspace_frame_part(
         spec, frame, "north_05", WORKSPACE_FRAME_STL_DIR / "part_01_box_10p45_flat.stl",
         pos=(0.24775, 0.2813, 0), quat=(0, 0, 0, 1), rgba=WORKSPACE_FRAME_RED, material="mdf",
