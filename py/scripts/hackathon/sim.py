@@ -28,6 +28,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
+from pick_and_place.decision import select_robot_for_cube
 from pick_and_place.episodes import (
     Episode,
     EpisodeSamplingError,
@@ -114,9 +115,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--robot",
-        choices=("left", "right"),
+        choices=("left", "right", "auto"),
         default=None,
-        help="enable the two-robot hackathon rig and control the given north plate; "
+        help="enable the two-robot hackathon rig; 'left'/'right' fix the controlled "
+        "plate, 'auto' picks the nearest free robot to the cube automatically; "
         "omit for the single-robot scene",
     )
     parser.add_argument(
@@ -163,14 +165,28 @@ def main() -> None:
         else None
     )
 
+    rng = np.random.default_rng()
+
+    robot_side = args.robot
+    if robot_side == "auto":
+        from pick_and_place.episodes import sample_cube
+
+        probe = source if source is not None else sample_cube(rng)
+        robot_side = select_robot_for_cube((probe.x, probe.y, probe.z))
+        if robot_side is None:
+            raise SystemExit("No free robot available.")
+        print(f"[decision] cube at ({probe.x:.3f}, {probe.y:.3f}) → robot '{robot_side}'")
+        if source is None:
+            source = probe  # reuse the sampled pose so we don't draw again
+
     try:
         episode = prepare_episode(
-            np.random.default_rng(),
+            rng,
             source,
             target,
             verbose=True,
             include_environment=args.environment,
-            robot_side=args.robot,
+            robot_side=robot_side,
             drop_orientation=args.drop_orientation,
             preflight_debug=args.preflight_debug,
             preflight_debug_limit=args.preflight_debug_limit,
