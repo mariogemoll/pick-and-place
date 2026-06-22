@@ -23,7 +23,7 @@ from pick_and_place.follower import JOINT_NAMES
 OVERHEAD_FEATURE = "observation.images.camera1"
 WRIST_FEATURE = "observation.images.camera2"
 DEFAULT_CHECKPOINT = "lerobot/smolvla_base"
-DEFAULT_INSTRUCTION = "Pick up the cube and place it on the target."
+DEFAULT_INSTRUCTION = "Pick up the cube and place it at the target."
 
 
 def select_device(requested: str):
@@ -48,35 +48,36 @@ def make_policy(
     """Load a SmolVLA checkpoint with feature specs for our 6-DOF arm and two
     cameras, plus its pre/post-processors.
 
-    SmolVLA pads state/action to a fixed internal width and resizes every camera
-    image to its own square input, so the base weights load against any robot
-    whose dims fit — no finetuning needed to run a forward pass — and the
-    declared image shapes need only name the cameras, not match a fixed size.
+    The saved config is loaded first so architectural settings and image-feature
+    order remain identical to training. State/action and camera shapes are then
+    specialized to this robot. SmolVLA pads state/action to fixed internal widths
+    and resizes every camera image to its own square input.
     The normalization stats come from the checkpoint's own saved processor (the
     base ships its pretraining stats; a fine-tune saves the project dataset's),
     which is why the dataset stays in raw physical units.
     """
     from lerobot.configs.types import FeatureType, PolicyFeature
+    from lerobot.configs.policies import PreTrainedConfig
     from lerobot.policies.factory import make_pre_post_processors
-    from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
     from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
 
     n_joints = len(JOINT_NAMES)
-    config = SmolVLAConfig(
-        input_features={
-            "observation.state": PolicyFeature(type=FeatureType.STATE, shape=(n_joints,)),
-            WRIST_FEATURE: PolicyFeature(
-                type=FeatureType.VISUAL, shape=(3, wrist_hw[0], wrist_hw[1])
-            ),
-            OVERHEAD_FEATURE: PolicyFeature(
-                type=FeatureType.VISUAL, shape=(3, overhead_hw[0], overhead_hw[1])
-            ),
-        },
-        output_features={
-            "action": PolicyFeature(type=FeatureType.ACTION, shape=(n_joints,)),
-        },
-        device=str(device),
-    )
+    config = PreTrainedConfig.from_pretrained(checkpoint)
+    config.input_features = {
+        "observation.state": PolicyFeature(type=FeatureType.STATE, shape=(n_joints,)),
+        # Image order is part of SmolVLA's input contract. Preserve the order
+        # used by training: camera1 (overhead), then camera2 (wrist).
+        OVERHEAD_FEATURE: PolicyFeature(
+            type=FeatureType.VISUAL, shape=(3, overhead_hw[0], overhead_hw[1])
+        ),
+        WRIST_FEATURE: PolicyFeature(
+            type=FeatureType.VISUAL, shape=(3, wrist_hw[0], wrist_hw[1])
+        ),
+    }
+    config.output_features = {
+        "action": PolicyFeature(type=FeatureType.ACTION, shape=(n_joints,)),
+    }
+    config.device = str(device)
     policy = SmolVLAPolicy.from_pretrained(checkpoint, config=config)
     policy.to(device)
     policy.eval()
