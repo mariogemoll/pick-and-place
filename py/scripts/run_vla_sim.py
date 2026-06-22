@@ -57,7 +57,7 @@ from pick_and_place.follower import (
     real_frame_to_sim,
     sim_frame_to_real,
 )
-from pick_and_place.episodes import sample_target
+from pick_and_place.episodes import sample_cube, sample_target
 from pick_and_place.geometry import CUBE_HALF_SIZE
 from pick_and_place.paper_detection import (
     DROP_ZONE_HALF_SIZE,
@@ -162,6 +162,27 @@ def _set_neutral(model: mujoco.MjModel, data: mujoco.MjData) -> None:
     mujoco.mj_forward(model, data)
 
 
+def _cube_freejoint_addrs(model: mujoco.MjModel) -> tuple[int, int]:
+    """Return the (qpos, qvel) base addresses of the pick cube's free joint."""
+    body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pick_cube")
+    return int(model.jnt_qposadr[model.body_jntadr[body_id]]), int(model.body_dofadr[body_id])
+
+
+def _place_cube(data: mujoco.MjData, qadr: int, dofadr: int, xy, yaw: float) -> None:
+    """Drop the cube at ``xy``/``yaw`` (resting on the table) with zero velocity."""
+    half_yaw = yaw / 2.0
+    data.qpos[qadr : qadr + 7] = (
+        xy[0],
+        xy[1],
+        CUBE_HALF_SIZE,
+        math.cos(half_yaw),
+        0.0,
+        0.0,
+        math.sin(half_yaw),
+    )
+    data.qvel[dofadr : dofadr + 6] = 0.0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--instruction", default=DEFAULT_INSTRUCTION, help="language task string")
@@ -213,11 +234,13 @@ def main() -> None:
     device = select_device(args.device)
     print(f"Loading {args.checkpoint} on {device} (first run downloads the weights)...")
 
+    rng = np.random.default_rng(args.seed)
+
     # Sample a random drop zone the same way the recording does, unless pinned.
     if args.target is not None:
         target_xy, target_yaw = tuple(args.target), args.target_yaw
     else:
-        sampled = sample_target(np.random.default_rng(args.seed))
+        sampled = sample_target(rng)
         target_xy, target_yaw = (sampled.x, sampled.y), sampled.yaw
     print(f"Drop zone at ({target_xy[0]:.4f}, {target_xy[1]:.4f}), yaw {target_yaw:.3f} rad")
 
@@ -230,6 +253,7 @@ def main() -> None:
     )
     _set_neutral(model, data)
     joint_adr = _joint_qpos_adr(model)
+    cube_qadr, cube_dofadr = _cube_freejoint_addrs(model)
     ctrl_low = model.actuator_ctrlrange[:, 0].copy()
     ctrl_high = model.actuator_ctrlrange[:, 1].copy()
     # Zero sim->real offsets: the real frame is sim degrees with no calibration
@@ -264,9 +288,41 @@ def main() -> None:
         cv2.namedWindow("wrist", cv2.WINDOW_NORMAL)
         cv2.namedWindow("overhead", cv2.WINDOW_NORMAL)
 
+    def resample_scene() -> None:
+        """Restart the episode: park the arm, drop a freshly sampled cube, draw a
+        freshly sampled drop zone, and reset the policy's action chunk."""
+        _set_neutral(model, data)
+        cube = sample_cube(rng)
+        _place_cube(data, cube_qadr, cube_dofadr, (cube.x, cube.y), cube.yaw)
+        target = sample_target(rng)
+        place_paper_target_marker(
+            model,
+            (target.x, target.y),
+            target.yaw,
+            (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
+            usable=is_cube_drop_allowed(target.x, target.y),
+            alpha=1.0,
+        )
+        mujoco.mj_forward(model, data)
+        policy.reset()
+        print(
+            f"Resampled: cube ({cube.x:.4f}, {cube.y:.4f}) yaw {cube.yaw:.3f}, "
+            f"drop zone ({target.x:.4f}, {target.y:.4f}) yaw {target.yaw:.3f}"
+        )
+
+    # Press Enter (in the viewer or a --show window) to resample the scene. Every
+    # letter key is already bound to a MuJoCo viewer visualization toggle, so a
+    # non-letter key is needed to avoid colliding with one.
+    pending_resample = {"flag": False}
+    GLFW_KEY_ENTER = 257
+
+    def key_callback(keycode: int) -> None:
+        if keycode == GLFW_KEY_ENTER:
+            pending_resample["flag"] = True
+
     viewer_ctx = None
     if not args.headless:
-        viewer_ctx = mujoco.viewer.launch_passive(model, data)
+        viewer_ctx = mujoco.viewer.launch_passive(model, data, key_callback=key_callback)
     viewer = viewer_ctx.__enter__() if viewer_ctx is not None else None
 
     print(f"Instruction: {args.instruction!r}")
@@ -274,10 +330,15 @@ def main() -> None:
         print("Running closed-loop. Actions are NOT task-calibrated (un-finetuned base).")
     else:
         print(f"Running closed-loop with fine-tuned checkpoint {args.checkpoint!r}.")
+    print("Press Enter to resample the cube and drop zone and restart the scene.")
     tick = 0
     try:
         while viewer is None or viewer.is_running():
             tick_start = time.time()
+
+            if pending_resample["flag"]:
+                pending_resample["flag"] = False
+                resample_scene()
 
             wrist_frame = render("wrist_camera")
             overhead_frame = render("overhead_camera")
@@ -292,8 +353,11 @@ def main() -> None:
             if args.show:
                 cv2.imshow("wrist", cv2.cvtColor(wrist_frame, cv2.COLOR_RGB2BGR))
                 cv2.imshow("overhead", cv2.cvtColor(overhead_frame, cv2.COLOR_RGB2BGR))
-                if cv2.waitKey(1) & 0xFF == ord("q"):
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord("q"):
                     break
+                if key in (13, 10):  # Enter / keypad Enter
+                    pending_resample["flag"] = True
             action = predict_action(
                 observation,
                 policy,
