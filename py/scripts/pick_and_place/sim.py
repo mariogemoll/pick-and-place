@@ -2,13 +2,17 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""View the SO-101 pick-and-place trajectory in the sim under real physics.
+"""View SO-101 pick-and-place episodes in the sim under real physics.
 
 The arm is controlled through the model's position-servo actuators: each frame
 the trajectory's joint set points are written to ``data.ctrl`` and the simulation
 is stepped, so gravity and contact are live. The cube gets a free joint and rests
-on the floor as a genuine rigid body. Unexpected collisions are flagged as they
-happen; the viewer loops the trajectory until closed.
+on the floor as a genuine rigid body, and a square marks the drop target on the
+floor. Unexpected collisions are flagged as they happen.
+
+By default the viewer loops forever, planning a fresh episode each time the
+previous one finishes; ``--episodes N`` stops after N. Press Enter in the
+terminal to skip to the next episode immediately, or close the viewer to stop.
 
 Phases: (1) neutral -> hover, (2) hover -> grasp at cube center, (3) grasp,
 (4) lift and carry the grasped cube over to the hover above the target,
@@ -21,6 +25,8 @@ This is sim-only. To run on the physical SO-101 follower, use
 from __future__ import annotations
 
 import argparse
+import sys
+import threading
 import time
 from pathlib import Path
 
@@ -31,18 +37,56 @@ import numpy as np
 from pick_and_place.episodes import (
     Episode,
     EpisodeSamplingError,
+    _build_model,
     is_unexpected,
     prepare_episode,
     scan_contacts,
 )
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.paper_detection import (
+    DROP_ZONE_HALF_SIZE,
+    place_paper_target_marker,
+)
+from pick_and_place.workspace_overlays import PAN_AXIS, is_cube_drop_allowed
+
+# How long the final pose is held after a trajectory finishes, before the next
+# episode is planned, so the placed cube is visible for a beat.
+END_DWELL = 0.8
+
+# GLFW key codes the viewer's key_callback reports for the Return / keypad-Enter
+# keys, used to skip to the next episode from the viewer window.
+_ENTER_KEYS = frozenset({257, 335})
 
 
-def _play(episode: Episode, speed: float) -> None:
-    """Loop the trajectory in a passive viewer, flagging unexpected collisions.
+def _watch_for_skip(skip_event: threading.Event) -> None:
+    """Set ``skip_event`` whenever the user presses Enter in the terminal."""
+    for _ in iter(sys.stdin.readline, ""):
+        skip_event.set()
+
+
+def _show_target_marker(model: mujoco.MjModel, target: CubePose) -> None:
+    """Place the drop-zone square on the floor at the episode target."""
+    place_paper_target_marker(
+        model,
+        (target.x, target.y),
+        target.yaw,
+        (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
+        usable=is_cube_drop_allowed(target.x, target.y),
+    )
+
+
+def _play(
+    episode: Episode,
+    speed: float,
+    viewer: mujoco.viewer.Handle,
+    skip_event: threading.Event,
+) -> None:
+    """Play one episode's trajectory once, flagging unexpected collisions.
 
     The sim steps in real time; the trajectory clock runs at ``speed`` × wall time,
     so a factor below 1.0 slows every phase uniformly for closer inspection.
+    Returns when the trajectory finishes (after a short dwell), when the user
+    presses Enter, or when the viewer is closed.
     """
     model = episode.model
     data = episode.data
@@ -52,33 +96,43 @@ def _play(episode: Episode, speed: float) -> None:
     trajectory = episode.trajectory
 
     prev_contacts: set[tuple[str, str]] = set()
-    with mujoco.viewer.launch_passive(model, data) as viewer:
-        playback_start = data.time
-        while viewer.is_running():
-            step_start = time.time()
-            traj_t = (data.time - playback_start) * speed
-            frame = trajectory.evaluate(traj_t)
-            for name, value in frame.joints.items():
-                data.ctrl[actuator_id[name]] = value
-            data.ctrl[actuator_id["gripper"]] = frame.gripper
-            mujoco.mj_step(model, data)
-            curr_contacts = {
-                (min(n1, n2), max(n1, n2))
-                for n1, n2 in scan_contacts(model, data, robot_geom_ids, env_geom_ids)
-                if is_unexpected(n1, n2)
-            }
-            for pair in curr_contacts - prev_contacts:
-                print(f"collision t={traj_t:.3f}s  {pair[0]} ↔ {pair[1]}")
-            prev_contacts = curr_contacts
+    playback_start = data.time
+    while viewer.is_running():
+        if skip_event.is_set():
+            skip_event.clear()
+            return
+        step_start = time.time()
+        traj_t = (data.time - playback_start) * speed
+        if traj_t > trajectory.duration + END_DWELL:
+            return
+        frame = trajectory.evaluate(traj_t)
+        for name, value in frame.joints.items():
+            data.ctrl[actuator_id[name]] = value
+        data.ctrl[actuator_id["gripper"]] = frame.gripper
+        mujoco.mj_step(model, data)
+        curr_contacts = {
+            (min(n1, n2), max(n1, n2))
+            for n1, n2 in scan_contacts(model, data, robot_geom_ids, env_geom_ids)
+            if is_unexpected(n1, n2)
+        }
+        for pair in curr_contacts - prev_contacts:
+            print(f"collision t={traj_t:.3f}s  {pair[0]} ↔ {pair[1]}")
+        prev_contacts = curr_contacts
 
-            viewer.sync()
-            remaining = model.opt.timestep - (time.time() - step_start)
-            if remaining > 0:
-                time.sleep(remaining)
+        viewer.sync()
+        remaining = model.opt.timestep - (time.time() - step_start)
+        if remaining > 0:
+            time.sleep(remaining)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        default=0,
+        help="number of episodes to play; 0 means loop until the viewer is closed (default: 0)",
+    )
     parser.add_argument(
         "--source",
         type=float,
@@ -126,7 +180,7 @@ def main() -> None:
     parser.add_argument(
         "--plan-only",
         action="store_true",
-        help="prepare and preflight the episode, then exit without opening the viewer",
+        help="prepare and preflight a single episode, then exit without opening the viewer",
     )
     parser.add_argument(
         "--save-failed-trajectories",
@@ -144,6 +198,8 @@ def main() -> None:
 
     if args.speed <= 0.0:
         raise ValueError("--speed must be positive")
+    if args.episodes < 0:
+        raise ValueError("--episodes must be non-negative")
 
     source = (
         CubePose(x=args.source[0], y=args.source[1], z=CUBE_HALF_SIZE)
@@ -156,12 +212,26 @@ def main() -> None:
         else None
     )
 
-    try:
-        episode = prepare_episode(
-            np.random.default_rng(),
+    rng = np.random.default_rng()
+
+    # One persistent scene for the whole run: the cube is a freejoint that
+    # prepare_episode repositions per episode, so a single viewer stays bound.
+    dummy_source = CubePose(x=PAN_AXIS[0] + 0.1, y=PAN_AXIS[1], z=CUBE_HALF_SIZE)
+    model, data = _build_model(
+        dummy_source,
+        include_environment=args.environment,
+        paper_target_marker=True,
+    )
+    mujoco.mj_forward(model, data)
+
+    def plan(verbose: bool) -> Episode:
+        return prepare_episode(
+            rng,
             source,
             target,
-            verbose=True,
+            model=model,
+            data=data,
+            verbose=verbose,
             include_environment=args.environment,
             drop_orientation=args.drop_orientation,
             preflight_debug=args.preflight_debug,
@@ -169,10 +239,12 @@ def main() -> None:
             failed_trajectory_dir=args.save_failed_trajectories,
             failed_trajectory_limit=args.failed_trajectory_limit,
         )
-    except EpisodeSamplingError as exc:
-        raise SystemExit(str(exc)) from exc
 
     if args.plan_only:
+        try:
+            episode = plan(verbose=True)
+        except EpisodeSamplingError as exc:
+            raise SystemExit(str(exc)) from exc
         print(
             f"planned source=({episode.source.x:.3f}, {episode.source.y:.3f}) "
             f"target=({episode.target.x:.3f}, {episode.target.y:.3f}) "
@@ -181,7 +253,36 @@ def main() -> None:
         )
         return
 
-    _play(episode, args.speed)
+    skip_event = threading.Event()
+    if sys.stdin.isatty():
+        threading.Thread(target=_watch_for_skip, args=(skip_event,), daemon=True).start()
+    print("Press Enter (in the viewer or the terminal) to skip to the next episode; "
+          "close the viewer to stop.")
+
+    def on_key(keycode: int) -> None:
+        if keycode in _ENTER_KEYS:
+            skip_event.set()
+
+    with mujoco.viewer.launch_passive(model, data, key_callback=on_key) as viewer:
+        index = 0
+        while viewer.is_running():
+            if args.episodes and index >= args.episodes:
+                break
+            index += 1
+            print(
+                f"\n--- Episode {index}"
+                f"{f'/{args.episodes}' if args.episodes else ''} ---"
+            )
+            try:
+                episode = plan(verbose=True)
+            except EpisodeSamplingError as exc:
+                print(str(exc))
+                # A pinned source/target with no feasible plan fails every time,
+                # so there is nothing to retry — stop rather than spin.
+                break
+            _show_target_marker(model, episode.target)
+            skip_event.clear()
+            _play(episode, args.speed, viewer, skip_event)
 
 
 if __name__ == "__main__":
