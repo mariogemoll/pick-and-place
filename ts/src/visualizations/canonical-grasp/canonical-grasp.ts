@@ -70,6 +70,10 @@ const MIN_GRASP_RADIUS = 0.08;
 // A dense sweep found the first invalid all-yaw radius at 428.75 mm; clamp just
 // below it so both the actual grasp and the 3 cm pregrasp stay reachable.
 const MAX_CANONICAL_GRASP_RADIUS = 0.428;
+// Keep away from the shoulder-pan edge where the camera-facing convention flips
+// inward. The loaded model exposes ±110°; clamp to ±100° to leave a guard band
+// that also covers the smaller-radius cases.
+const MAX_CANONICAL_AZIMUTH = (100 * Math.PI) / 180;
 
 // Snap `nominal` to the nearest of the cube's four face normals (at
 // `cubeYaw + k·90°`). The result is within ±45° of `nominal`, so the wrist twist
@@ -142,9 +146,13 @@ export async function initializeCanonicalGraspVisualization(
     workspace.radial.max,
     MAX_CANONICAL_GRASP_RADIUS
   );
+  const minGraspRadius = MIN_GRASP_RADIUS;
+  const minAzimuth = Math.max(workspace.azimuth.min, -MAX_CANONICAL_AZIMUTH);
+  const maxAzimuth = Math.min(workspace.azimuth.max, MAX_CANONICAL_AZIMUTH);
   const canonicalWorkspace = {
     ...workspace,
-    radial: { ...workspace.radial, max: maxGraspRadius }
+    radial: { ...workspace.radial, min: minGraspRadius, max: maxGraspRadius },
+    azimuth: { min: minAzimuth, max: maxAzimuth }
   };
   const bbox = sectorBoundingBox(canonicalWorkspace);
   const panX = workspace.panAxis.x;
@@ -171,13 +179,21 @@ export async function initializeCanonicalGraspVisualization(
     const radius = radial.radiusMm / 1000;
     const clampedRadius = THREE.MathUtils.clamp(
       radius,
-      MIN_GRASP_RADIUS,
+      minGraspRadius,
       maxGraspRadius
     );
-    if (Math.abs(clampedRadius - radius) < 1e-9) {
+    const clampedAzimuthDeg = THREE.MathUtils.clamp(
+      radial.azimuthDeg,
+      (minAzimuth * 180) / Math.PI,
+      (maxAzimuth * 180) / Math.PI
+    );
+    if (
+      Math.abs(clampedRadius - radius) < 1e-9 &&
+      Math.abs(clampedAzimuthDeg - radial.azimuthDeg) < 1e-9
+    ) {
       return { x, y };
     }
-    return cartesianFromRadial(clampedRadius * 1000, radial.azimuthDeg);
+    return cartesianFromRadial(clampedRadius * 1000, clampedAzimuthDeg);
   };
   const defaultRadial = radialFromCartesian(DEFAULT_CUBE_X, DEFAULT_CUBE_Y);
   const ui = buildUi(parent, {
@@ -191,14 +207,14 @@ export async function initializeCanonicalGraspVisualization(
     },
     radiusRange: {
       min: Math.max(
-        Math.round(MIN_GRASP_RADIUS * 1000),
+        Math.round(minGraspRadius * 1000),
         Math.floor(canonicalWorkspace.radial.min * 1000)
       ),
       max: Math.floor(canonicalWorkspace.radial.max * 1000)
     },
     azimuthRange: {
-      min: Math.ceil((workspace.azimuth.min * 180) / Math.PI),
-      max: Math.floor((workspace.azimuth.max * 180) / Math.PI)
+      min: Math.ceil((canonicalWorkspace.azimuth.min * 180) / Math.PI),
+      max: Math.floor((canonicalWorkspace.azimuth.max * 180) / Math.PI)
     },
     radiusDefault: Math.round(defaultRadial.radiusMm),
     azimuthDefault: Math.round(defaultRadial.azimuthDeg)
@@ -280,7 +296,7 @@ export async function initializeCanonicalGraspVisualization(
     requirePregrasp: boolean
   ): GraspSolution | null {
     const poseRadius = Math.hypot(pose.x - panX, pose.y - panY);
-    if (poseRadius < MIN_GRASP_RADIUS || poseRadius > maxGraspRadius) { return null; }
+    if (poseRadius < minGraspRadius || poseRadius > maxGraspRadius) { return null; }
     const azimuth = Math.atan2(pose.y - panY, pose.x - panX);
     const closings = [azimuth + Math.PI / 2, azimuth - Math.PI / 2]
       .map(nominal => squareToCubeFace(nominal, pose.yaw));
@@ -378,8 +394,8 @@ export async function initializeCanonicalGraspVisualization(
     const solution = solveGrasp(currentPose, approachMode, showPregrasp);
     if (solution === null) {
       vizScene.updateGhostGraspPose(null);
-      ui.status.textContent = radius < MIN_GRASP_RADIUS
-        ? `Too close to the base: keep the cube ≥ ${Math.round(MIN_GRASP_RADIUS * 1000)} mm out.`
+      ui.status.textContent = radius < minGraspRadius
+        ? `Too close to the base: keep the cube ≥ ${Math.round(minGraspRadius * 1000)} mm out.`
         : 'Unreachable: the cube is outside the arm’s reach.';
       ui.status.classList.add('is-invalid');
       ui.branchContainer.replaceChildren();

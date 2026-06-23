@@ -41,9 +41,10 @@ export const DEFAULT_CUBE_Y = 0;
 // Yaw is measured from the radial direction (not the world frame), so the grasp
 // geometry is the same at every azimuth. A cube has 4-fold rotational symmetry
 // about its vertical axis, so two yaws differing by a multiple of 90° present an
-// identical cube; the slider therefore spans a single representative
-// quarter-turn, ±45° either side of square-to-the-radius.
-export const YAW_MIN_DEG = -45;
+// identical cube; the slider therefore spans one representative quarter-turn.
+// The lower boundary is excluded because -45° aliases to +45° and makes the
+// canonical grasp appear to jump at the slider edge.
+export const YAW_MIN_DEG = -44;
 export const YAW_MAX_DEG = 45;
 
 export interface SliderRange { min: number; max: number; }
@@ -137,8 +138,8 @@ export function buildUi(
   radialGroup.style.display = 'none';
   controls.appendChild(radialGroup);
 
-  // Yaw relative to the radial direction; ±45° covers all distinct orientations
-  // under the cube's 4-fold symmetry.
+  // Yaw relative to the radial direction; (-45°, 45°] covers all distinct
+  // orientations under the cube's 4-fold symmetry.
   const yawInput = appendDegreeSliderGroup(
     controls, 'Yaw (from radius)', YAW_MIN_DEG, YAW_MAX_DEG, 0
   );
