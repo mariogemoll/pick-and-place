@@ -5,11 +5,11 @@ import * as THREE from 'three';
 
 import {
   GRIPPER_TARGET_POSITION
-} from '../visualizations/pregrasp-pose-shared/body-factories';
+} from '../visualizations/grasp-pose-shared/body-factories';
 import { type ArmJointName, type So101Kinematics } from './kinematics';
 
-// Closed-form IK for the *simple* pregrasp pose (see
-// src/visualizations/simple-pregrasp-pose). That pose keeps the gripper
+// Closed-form IK for the *simple* grasp pose (see
+// src/visualizations/simple-grasp-pose). That pose keeps the gripper
 // vertical: the wrist-roll axis (gripper z) points straight up, so the tool
 // hangs straight down and the jaws close horizontally onto a vertical cube
 // face. Because the approach direction is fixed (down), the decomposition is
@@ -60,7 +60,7 @@ function solve2R(
   };
 }
 
-export function solveSimplePregraspIk(
+export function solveSimpleGraspIk(
   k: So101Kinematics,
   worldFromGripper: THREE.Matrix4
 ): SimpleIkResult {

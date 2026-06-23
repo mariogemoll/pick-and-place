@@ -51,7 +51,7 @@ export function buildWorkspaceOverlaySpecs(k: So101Kinematics): WorkspaceOverlay
       thetaStart: groundHeightArm.azimuth.min,
       thetaLength: groundHeightArm.azimuth.max - groundHeightArm.azimuth.min
     },
-    // Ground-cube simple-pregrasp workspace.
+    // Ground-cube simple-grasp workspace.
     {
       center: ground.panAxis,
       innerRadius: groundBand.min,
@@ -59,7 +59,7 @@ export function buildWorkspaceOverlaySpecs(k: So101Kinematics): WorkspaceOverlay
       thetaStart: ground.azimuth.min,
       thetaLength: ground.azimuth.max - ground.azimuth.min
     },
-    // Simple-pregrasp workspace with 1 cm clearance above a ground cube.
+    // Simple-grasp workspace with 1 cm clearance above a ground cube.
     {
       center: clearance.panAxis,
       innerRadius: clearanceBand.min,

@@ -45,7 +45,7 @@ from pick_and_place.workspace_overlays import (
     is_cube_placement_allowed,
 )
 
-_CLEARANCE_OVERLAY = next(o for o in WORKSPACE_OVERLAYS if o.name == "workspace_clearance_pregrasp")
+_CLEARANCE_OVERLAY = next(o for o in WORKSPACE_OVERLAYS if o.name == "workspace_clearance_grasp")
 
 # ±radians of random joint perturbation applied to the neutral start/end pose.
 _NEAR_NEUTRAL_JOINT_SCALE = 0.4

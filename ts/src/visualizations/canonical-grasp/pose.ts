@@ -3,16 +3,16 @@
 
 import * as THREE from 'three';
 
-import { SAFETY_MARGIN } from '../pregrasp-pose-shared/bodies';
+import { SAFETY_MARGIN } from '../grasp-pose-shared/bodies';
 import {
   CUBE_HALF_SIZE,
   type CubePose,
   GRIPPER_TARGET_POSITION,
   JAW_CONTACT_POSITION
-} from '../pregrasp-pose-shared/body-factories';
+} from '../grasp-pose-shared/body-factories';
 
 // Distance, along the jaw-closing axis, from the cube centre to the IK target
-// (the jaw contact projected onto the roll axis). As in the simple pregrasp, the
+// (the jaw contact projected onto the roll axis). As in the simple grasp, the
 // fixed jaw is parked SAFETY_MARGIN clear of the cube's near face rather than
 // straddling the centre, so closing the jaws pushes the cube onto the fixed jaw.
 // JAW_CONTACT_POSITION.x is the (negative) inset of the fixed-jaw contact from

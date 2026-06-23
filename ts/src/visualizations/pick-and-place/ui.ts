@@ -4,7 +4,7 @@
 import {
   appendDegreeSliderGroup,
   appendSliderGroup
-} from '../pregrasp-pose-shared/ui';
+} from '../grasp-pose-shared/ui';
 
 export interface PickAndPlaceCubeInputs {
   xInput: HTMLInputElement;
@@ -69,11 +69,11 @@ export function buildUi(
   options: PickAndPlaceUiOptions
 ): PickAndPlaceDom {
   const root = document.createElement('div');
-  root.className = 'visualization simple-pregrasp-ik-viz-root pick-and-place-viz-root';
+  root.className = 'visualization simple-grasp-ik-viz-root pick-and-place-viz-root';
 
   const viewport = document.createElement('div');
   viewport.className =
-    'simple-pregrasp-ik-viz-viewport pick-and-place-viz-viewport';
+    'simple-grasp-ik-viz-viewport pick-and-place-viz-viewport';
 
   const controls = document.createElement('aside');
   controls.className = 'pick-and-place-viz-controls';
@@ -91,7 +91,7 @@ export function buildUi(
   );
 
   const resetButton = document.createElement('button');
-  resetButton.className = 'simple-pregrasp-ik-viz-reset';
+  resetButton.className = 'simple-grasp-ik-viz-reset';
   resetButton.type = 'button';
   resetButton.textContent = 'Reset';
   const runButton = document.createElement('button');
@@ -135,7 +135,7 @@ export function buildUi(
   viewport.append(controls, setupActions, runControls);
 
   const layout = document.createElement('div');
-  layout.className = 'simple-pregrasp-ik-viz-layout';
+  layout.className = 'simple-grasp-ik-viz-layout';
   layout.appendChild(viewport);
   root.appendChild(layout);
 

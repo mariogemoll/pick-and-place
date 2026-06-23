@@ -5,34 +5,34 @@ import { loadWebModel } from '../../web-model';
 import {
   type CubeFace,
   type CubePose,
-  DEFAULT_CUBE_POSE } from '../pregrasp-pose-shared/body-factories';
+  DEFAULT_CUBE_POSE } from '../grasp-pose-shared/body-factories';
 import {
-  createPregraspPoseScene,
-  framePregraspPoseScene
-} from '../pregrasp-pose-shared/scene';
-import { displayMatrix } from '../pregrasp-pose-shared/ui';
+  createGraspPoseScene,
+  frameGraspPoseScene
+} from '../grasp-pose-shared/scene';
+import { displayMatrix } from '../grasp-pose-shared/ui';
 import { createXyDragControls } from '../xy-drag-controls';
-import { createSimplePregraspMatrix } from './pose';
+import { createSimpleGraspMatrix } from './pose';
 import { buildUi } from './ui';
 
-export interface SimplePregraspPoseVisualization {
+export interface SimpleGraspPoseVisualization {
   destroy(): void;
 }
 
-export interface SimplePregraspPoseOptions {
+export interface SimpleGraspPoseOptions {
   modelBasePath?: string;
   modelUrl?: string;
 }
 
-export async function initializeSimplePregraspPoseVisualization(
+export async function initializeSimpleGraspPoseVisualization(
   parent: HTMLElement,
-  options: SimplePregraspPoseOptions = {}
-): Promise<SimplePregraspPoseVisualization> {
+  options: SimpleGraspPoseOptions = {}
+): Promise<SimpleGraspPoseVisualization> {
   const model = await loadWebModel(options.modelUrl);
   const ui = buildUi(parent);
   let currentFace: CubeFace = '+x';
   let currentPose: CubePose = { ...DEFAULT_CUBE_POSE };
-  const vizScene = await createPregraspPoseScene(
+  const vizScene = await createGraspPoseScene(
     ui.pane.viewport, model, options.modelBasePath, 'combined'
   );
   const gripper = vizScene.bodies.root.getObjectByName('gripper_body');
@@ -40,11 +40,11 @@ export async function initializeSimplePregraspPoseVisualization(
 
   function updateScene(): void {
     vizScene.bodies.updateCubePose(currentPose);
-    const matrix = createSimplePregraspMatrix(currentFace, currentPose);
+    const matrix = createSimpleGraspMatrix(currentFace, currentPose);
     if (!gripper) { return; }
     ui.status.textContent = matrix === undefined
       ? 'No solution: the selected face is not vertical.'
-      : 'Valid vertical pregrasp pose';
+      : 'Valid vertical grasp pose';
     ui.status.classList.toggle('is-invalid', matrix === undefined);
     if (matrix && ui.pane.matrixOutput) {
       gripper.matrix.copy(matrix);
@@ -118,12 +118,12 @@ export async function initializeSimplePregraspPoseVisualization(
       input.value = String(defaultValues[index] ?? 0);
       input.dispatchEvent(new Event('input'));
     }
-    framePregraspPoseScene(vizScene);
+    frameGraspPoseScene(vizScene);
   };
   ui.resetButton.addEventListener('click', resetListener);
 
   updateScene();
-  framePregraspPoseScene(vizScene);
+  frameGraspPoseScene(vizScene);
   let animationFrameId = 0;
   let destroyed = false;
   function animate(): void {

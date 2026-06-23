@@ -4,7 +4,7 @@
 import {
   appendDegreeSliderGroup,
   appendSliderGroup
-} from '../pregrasp-pose-shared/ui';
+} from '../grasp-pose-shared/ui';
 
 export type CoordinateMode = 'cartesian' | 'radial';
 
@@ -66,14 +66,14 @@ function appendRadioGroup(
   modes: { value: string; label: string }[]
 ): HTMLInputElement[] {
   const group = document.createElement('div');
-  group.className = 'pregrasp-pose-breakdown-viz-controls-group';
+  group.className = 'grasp-pose-breakdown-viz-controls-group';
   const label = document.createElement('span');
   label.textContent = groupLabel;
   const options = document.createElement('div');
-  options.className = 'pregrasp-pose-breakdown-viz-face-options';
+  options.className = 'grasp-pose-breakdown-viz-face-options';
   const inputs = modes.map((mode, index) => {
     const wrapper = document.createElement('label');
-    wrapper.className = 'pregrasp-pose-breakdown-viz-face-option';
+    wrapper.className = 'grasp-pose-breakdown-viz-face-option';
     const input = document.createElement('input');
     input.type = 'radio';
     input.name = name;

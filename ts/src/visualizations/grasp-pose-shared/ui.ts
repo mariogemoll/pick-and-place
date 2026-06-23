@@ -31,7 +31,7 @@ export interface CubePoseInputs {
   rollInput: HTMLInputElement;
 }
 
-export interface PregraspPosePane {
+export interface GraspPosePane {
   bodySelection: 'combined' | 'cube' | 'gripper';
   element: HTMLElement;
   hingeInput?: HTMLInputElement;
@@ -50,18 +50,18 @@ export function appendSliderGroup(
   unit = ' mm'
 ): HTMLInputElement {
   const group = document.createElement('div');
-  group.className = 'pregrasp-pose-breakdown-viz-controls-group';
+  group.className = 'grasp-pose-breakdown-viz-controls-group';
   const labelEl = document.createElement('span');
   labelEl.textContent = label;
   const input = document.createElement('input');
   input.type = 'range';
-  input.className = 'pregrasp-pose-breakdown-viz-control-slider';
+  input.className = 'grasp-pose-breakdown-viz-control-slider';
   input.min = String(min);
   input.max = String(max);
   input.value = String(value);
   input.step = String(step);
   const outputEl = document.createElement('output');
-  outputEl.className = 'pregrasp-pose-breakdown-viz-control-output';
+  outputEl.className = 'grasp-pose-breakdown-viz-control-output';
   outputEl.textContent = `${value}${unit}`;
   input.addEventListener('input', () => {
     outputEl.textContent = `${input.value}${unit}`;
@@ -95,9 +95,9 @@ export function setDegreeSliderRange(
 
 export function appendFloorModeInput(parent: HTMLElement): HTMLInputElement {
   const group = document.createElement('div');
-  group.className = 'pregrasp-pose-breakdown-viz-controls-group';
+  group.className = 'grasp-pose-breakdown-viz-controls-group';
   const label = document.createElement('label');
-  label.className = 'pregrasp-pose-breakdown-viz-floor-label';
+  label.className = 'grasp-pose-breakdown-viz-floor-label';
   const input = document.createElement('input');
   input.type = 'checkbox';
   input.checked = true;
@@ -118,14 +118,14 @@ export function appendFaceInputs(
   enabledFaces?: ReadonlySet<string>
 ): HTMLInputElement[] {
   const group = document.createElement('div');
-  group.className = 'pregrasp-pose-breakdown-viz-controls-group';
+  group.className = 'grasp-pose-breakdown-viz-controls-group';
   const groupLabel = document.createElement('span');
   groupLabel.textContent = 'Face';
   const options = document.createElement('div');
-  options.className = 'pregrasp-pose-breakdown-viz-face-options';
+  options.className = 'grasp-pose-breakdown-viz-face-options';
   const inputs = faces.map((face, index) => {
     const wrapper = document.createElement('label');
-    wrapper.className = 'pregrasp-pose-breakdown-viz-face-option';
+    wrapper.className = 'grasp-pose-breakdown-viz-face-option';
     const input = document.createElement('input');
     input.type = 'radio';
     input.name = name;
@@ -161,13 +161,13 @@ export function appendCubePoseInputs(
 
 export function createPane(
   title: string,
-  bodySelection: PregraspPosePane['bodySelection'],
+  bodySelection: GraspPosePane['bodySelection'],
   transformStage: TransformStage = 'unaligned',
   withMatrix = false,
   withHingeInput = false
-): PregraspPosePane {
+): GraspPosePane {
   const pane = document.createElement('section');
-  pane.className = 'pregrasp-pose-breakdown-viz-pane';
+  pane.className = 'grasp-pose-breakdown-viz-pane';
 
   const header = document.createElement('header');
   const heading = document.createElement('h3');
@@ -177,10 +177,10 @@ export function createPane(
   let hingeInput: HTMLInputElement | undefined;
   if (withHingeInput) {
     const output = document.createElement('output');
-    output.className = 'pregrasp-pose-breakdown-viz-hinge-output';
+    output.className = 'grasp-pose-breakdown-viz-hinge-output';
     output.textContent = '0°';
     hingeInput = document.createElement('input');
-    hingeInput.className = 'pregrasp-pose-breakdown-viz-hinge-input';
+    hingeInput.className = 'grasp-pose-breakdown-viz-hinge-input';
     hingeInput.type = 'range';
     setDegreeSliderRange(hingeInput, 0, 360);
     hingeInput.value = '0';
@@ -192,18 +192,18 @@ export function createPane(
   pane.appendChild(header);
 
   const viewport = document.createElement('div');
-  viewport.className = 'pregrasp-pose-breakdown-viz-viewport';
+  viewport.className = 'grasp-pose-breakdown-viz-viewport';
   viewport.style.height = `${CANVAS_HEIGHT}px`;
   pane.appendChild(viewport);
 
   let matrixOutput: HTMLOutputElement | undefined;
   if (withMatrix) {
     const matrix = document.createElement('div');
-    matrix.className = 'pregrasp-pose-breakdown-viz-matrix';
+    matrix.className = 'grasp-pose-breakdown-viz-matrix';
     const label = document.createElement('span');
     label.textContent = matrixLabel(transformStage);
     matrixOutput = document.createElement('output');
-    matrixOutput.className = 'pregrasp-pose-breakdown-viz-matrix-output';
+    matrixOutput.className = 'grasp-pose-breakdown-viz-matrix-output';
     matrix.append(label, matrixOutput);
     pane.appendChild(matrix);
   }

@@ -9,15 +9,15 @@ import {
   NEUTRAL_ARM_JOINTS,
   type So101Kinematics
 } from '../../ik/kinematics';
-import { solveSimplePregraspIk } from '../../ik/simple-ik';
-import { SAFETY_MARGIN } from '../pregrasp-pose-shared/bodies';
+import { solveSimpleGraspIk } from '../../ik/simple-ik';
+import { SAFETY_MARGIN } from '../grasp-pose-shared/bodies';
 import {
   createWorldFromCubeContactMatrix,
   createWorldFromCubeMatrix,
   type CubeFace,
   type CubePose
-} from '../pregrasp-pose-shared/body-factories';
-import { createSimplePregraspMatrix } from '../simple-pregrasp-pose/pose';
+} from '../grasp-pose-shared/body-factories';
+import { createSimpleGraspMatrix } from '../simple-grasp-pose/pose';
 
 // Hover keyframes are specified by the height of the tip contact point (center
 // of the tip collision-box face) above the floor. The source hover clears the
@@ -29,7 +29,7 @@ const SOURCE_HOVER_TIP_Z = 0.04;
 const PREDROP_HOVER_TIP_Z = 0.02;
 const POSTDROP_HOVER_TIP_Z = 0.04;
 
-// Gripper joint angle at hover pregrasp: 40° open.
+// Gripper joint angle at hover grasp: 40° open.
 export const GRIPPER_OPEN = 40 * (Math.PI / 180);
 // Gripper joint angle once the jaws have pinched the cube. Geometrically
 // estimated: at this angle the moving jaw's fingertips reach the cube's far
@@ -73,9 +73,9 @@ export const REST_FRAME: RobotPose = {
 
 const REST_PHASE_DURATION = 2.0;
 
-// Duration of stage 1 – neutral → hover pregrasp above source cube.
+// Duration of stage 1 – neutral → hover grasp above source cube.
 const STAGE1_DURATION = 2.0;
-// Duration of stage 2 – hover pregrasp → pregrasp at source cube center.
+// Duration of stage 2 – hover grasp → grasp at source cube center.
 const STAGE2_DURATION = 1.0;
 // Duration of stage 3 – close the gripper, pushing the cube against the fixed
 // jaw.
@@ -119,18 +119,18 @@ const UNIT_SCALE = new THREE.Vector3(1, 1, 1);
 // a cube that is roughly in the +x direction from the pan axis.
 const VERTICAL_FACES: CubeFace[] = ['+x', '-x', '+y', '-y'];
 
-// Simple-pregrasp matrix for `face` shifted up along world Z, or null if the
+// Simple-grasp matrix for `face` shifted up along world Z, or null if the
 // face is not vertical for this pose.
-function pregraspMatrix(
+function graspMatrix(
   face: CubeFace,
   sourcePose: CubePose,
   zOffset = 0
 ): THREE.Matrix4 | null {
-  const pregrasp = createSimplePregraspMatrix(face, sourcePose);
-  if (!pregrasp) { return null; }
-  const pos = new THREE.Vector3().setFromMatrixPosition(pregrasp);
-  pregrasp.setPosition(pos.x, pos.y, pos.z + zOffset);
-  return pregrasp;
+  const grasp = createSimpleGraspMatrix(face, sourcePose);
+  if (!grasp) { return null; }
+  const pos = new THREE.Vector3().setFromMatrixPosition(grasp);
+  grasp.setPosition(pos.x, pos.y, pos.z + zOffset);
+  return grasp;
 }
 
 function smoothstep(t: number): number {
@@ -507,7 +507,7 @@ function planCarry(
   targetPose: CubePose,
   targetHoverOffset: number
 ): CarryPlan | null {
-  const graspGripperMatrix = pregraspMatrix(face, sourcePose);
+  const graspGripperMatrix = graspMatrix(face, sourcePose);
   if (!graspGripperMatrix) { return null; }
   const inwardNormal = new THREE.Vector3(0, 0, 1).transformDirection(
     createWorldFromCubeContactMatrix(face, sourcePose)
@@ -549,7 +549,7 @@ function planCarry(
     for (let i = 0; i <= CARRY_SAMPLES; i++) {
       const gripperMatrix =
         carryGeometryMatrix(plan, k, i / CARRY_SAMPLES).multiply(cubeFromGripper);
-      const result = solveSimplePregraspIk(k, gripperMatrix);
+      const result = solveSimpleGraspIk(k, gripperMatrix);
       if (!(result.type === 'success' &&
         result.branches.some(branch => branch.elbow === elbow))) {
         feasible = false;
@@ -593,12 +593,12 @@ export function computeTrajectory(
   // arrives at the target in an orientation that is fully determined by which
   // physical face was grasped. The grasp therefore has to be chosen so the
   // *whole* motion works with one face and one elbow: the source hover and
-  // pregrasp, the target predrop and postdrop hovers, AND every point of the
+  // grasp, the target predrop and postdrop hovers, AND every point of the
   // carry in between. Faces are tried in preference order; for each, an elbow
   // that solves the four keyframes is only accepted if `planCarry` can also
   // follow the carry without leaving the workspace or exceeding a joint limit.
   let hoverJoints: JointAngles | null = null;
-  let pregraspJoints: JointAngles | null = null;
+  let graspJoints: JointAngles | null = null;
   let targetHoverJoints: JointAngles | null = null;
   let predropJoints: JointAngles | null = null;
   let postdropHoverJoints: JointAngles | null = null;
@@ -609,17 +609,17 @@ export function computeTrajectory(
   const targetHoverOffset = PREDROP_HOVER_TIP_Z - targetPose.z;
   const postdropHoverOffset = POSTDROP_HOVER_TIP_Z - targetPose.z;
   for (const face of VERTICAL_FACES) {
-    const hover = pregraspMatrix(face, sourcePose, sourceHoverOffset);
-    const pregrasp = pregraspMatrix(face, sourcePose);
-    const targetHover = pregraspMatrix(face, targetPose, targetHoverOffset);
-    const postdropHover = pregraspMatrix(face, targetPose, postdropHoverOffset);
-    if (!hover || !pregrasp || !targetHover || !postdropHover) { continue; }
-    const hoverResult = solveSimplePregraspIk(k, hover);
-    const pregraspResult = solveSimplePregraspIk(k, pregrasp);
-    const targetHoverResult = solveSimplePregraspIk(k, targetHover);
+    const hover = graspMatrix(face, sourcePose, sourceHoverOffset);
+    const grasp = graspMatrix(face, sourcePose);
+    const targetHover = graspMatrix(face, targetPose, targetHoverOffset);
+    const postdropHover = graspMatrix(face, targetPose, postdropHoverOffset);
+    if (!hover || !grasp || !targetHover || !postdropHover) { continue; }
+    const hoverResult = solveSimpleGraspIk(k, hover);
+    const graspResult = solveSimpleGraspIk(k, grasp);
+    const targetHoverResult = solveSimpleGraspIk(k, targetHover);
     if (
       hoverResult.type === 'unreachable' ||
-      pregraspResult.type === 'unreachable' ||
+      graspResult.type === 'unreachable' ||
       targetHoverResult.type === 'unreachable'
     ) {
       continue;
@@ -628,26 +628,26 @@ export function computeTrajectory(
     // three keyframes and yield a followable carry.
     for (const elbow of ['up', 'down'] as const) {
       const hoverBranch = hoverResult.branches.find(b => b.elbow === elbow);
-      const pregraspBranch = pregraspResult.branches.find(b => b.elbow === elbow);
+      const graspBranch = graspResult.branches.find(b => b.elbow === elbow);
       const targetHoverBranch = targetHoverResult.branches.find(b => b.elbow === elbow);
-      if (!hoverBranch || !pregraspBranch || !targetHoverBranch) { continue; }
+      if (!hoverBranch || !graspBranch || !targetHoverBranch) { continue; }
       const plan = planCarry(
         k, face, elbow, sourcePose, targetPose, targetHoverOffset
       );
       if (!plan) { continue; }
       const predropMatrix =
         carryGeometryMatrix(plan, k, 1).multiply(plan.cubeFromGripper);
-      const predropResult = solveSimplePregraspIk(k, predropMatrix);
+      const predropResult = solveSimpleGraspIk(k, predropMatrix);
       const predropBranch = predropResult.type === 'success'
         ? predropResult.branches.find(b => b.elbow === elbow)
         : undefined;
-      const postdropHoverResult = solveSimplePregraspIk(k, postdropHover);
+      const postdropHoverResult = solveSimpleGraspIk(k, postdropHover);
       const postdropHoverBranch = postdropHoverResult.type === 'success'
         ? postdropHoverResult.branches.find(b => b.elbow === elbow)
         : undefined;
       if (!predropBranch || !postdropHoverBranch) { continue; }
       hoverJoints = hoverBranch.joints;
-      pregraspJoints = pregraspBranch.joints;
+      graspJoints = graspBranch.joints;
       targetHoverJoints = targetHoverBranch.joints;
       predropJoints = predropBranch.joints;
       postdropHoverJoints = postdropHoverBranch.joints;
@@ -660,7 +660,7 @@ export function computeTrajectory(
   }
   if (
     hoverJoints === null ||
-    pregraspJoints === null ||
+    graspJoints === null ||
     targetHoverJoints === null ||
     predropJoints === null ||
     postdropHoverJoints === null ||
@@ -672,7 +672,7 @@ export function computeTrajectory(
   }
 
   const stage1EndJoints = hoverJoints;
-  const stage2EndJoints = pregraspJoints;
+  const stage2EndJoints = graspJoints;
   const stage4EndJoints = predropJoints;
   const stage5EndJoints = postdropHoverJoints;
   const stage2End = STAGE1_DURATION + STAGE2_DURATION;
@@ -792,7 +792,7 @@ export function computeTrajectory(
         const phase = (t - stage3End) / STAGE4_DURATION;
         const cubeMatrix = carryCubeMatrix(carryPlan, k, phase);
         const gripperMatrix = cubeMatrix.clone().multiply(carryPlan.cubeFromGripper);
-        const result = solveSimplePregraspIk(k, gripperMatrix);
+        const result = solveSimpleGraspIk(k, gripperMatrix);
         const branch = result.type === 'success'
           ? result.branches.find(candidate => candidate.elbow === selectedElbow)
           : undefined;
@@ -804,7 +804,7 @@ export function computeTrajectory(
         };
       }
       if (t >= stage2End) {
-        // Stage 3: hold the arm at pregrasp and close the gripper. Once the
+        // Stage 3: hold the arm at grasp and close the gripper. Once the
         // moving jaw reaches the cube it shoves it flush against the fixed jaw.
         const alpha = smoothstep((t - stage2End) / STAGE3_DURATION);
         const gripper = GRIPPER_OPEN + (GRIPPER_CLOSED - GRIPPER_OPEN) * alpha;
@@ -820,12 +820,12 @@ export function computeTrajectory(
       }
       if (t >= STAGE1_DURATION) {
         const alpha = smoothstep((t - STAGE1_DURATION) / STAGE2_DURATION);
-        const matrix = pregraspMatrix(
+        const matrix = graspMatrix(
           selectedFace,
           sourcePose,
           sourceHoverOffset * (1 - alpha)
         );
-        const result = matrix ? solveSimplePregraspIk(k, matrix) : null;
+        const result = matrix ? solveSimpleGraspIk(k, matrix) : null;
         const branch = result?.type === 'success'
           ? result.branches.find(candidate => candidate.elbow === selectedElbow)
           : undefined;

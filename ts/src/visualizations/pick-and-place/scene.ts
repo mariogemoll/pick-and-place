@@ -13,9 +13,9 @@ import {
   createCubeBody,
   createWorldFromCubeMatrix,
   type CubePose
-} from '../pregrasp-pose-shared/body-factories';
-import { createBodyMaterials } from '../pregrasp-pose-shared/materials';
-import { CANVAS_HEIGHT, CANVAS_WIDTH } from '../pregrasp-pose-shared/ui';
+} from '../grasp-pose-shared/body-factories';
+import { createBodyMaterials } from '../grasp-pose-shared/materials';
+import { CANVAS_HEIGHT, CANVAS_WIDTH } from '../grasp-pose-shared/ui';
 import {
   addWorkspaceOverlaysToScene,
   type WorkspaceOverlaySpec

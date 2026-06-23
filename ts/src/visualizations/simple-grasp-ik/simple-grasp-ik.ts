@@ -9,7 +9,7 @@ import {
 import {
   type SimpleIkBranch,
   type SimpleIkResult,
-  solveSimplePregraspIk
+  solveSimpleGraspIk
 } from '../../ik/simple-ik';
 import {
   anyYawCubeCenterBand,
@@ -21,38 +21,38 @@ import {
   type CubeFace,
   type CubePose,
   DEFAULT_CUBE_POSE
-} from '../pregrasp-pose-shared/body-factories';
-// The pose math is the shared, DRY core: this viz and the SimplePregraspPose
+} from '../grasp-pose-shared/body-factories';
+// The pose math is the shared, DRY core: this viz and the SimpleGraspPose
 // viz both derive the gripper pose from the same function.
-import { createSimplePregraspMatrix } from '../simple-pregrasp-pose/pose';
+import { createSimpleGraspMatrix } from '../simple-grasp-pose/pose';
 import { buildWorkspaceOverlaySpecs } from '../workspace-overlay';
 import { createXyDragControls } from '../xy-drag-controls';
-import { createSimplePregraspIkScene } from './scene';
+import { createSimpleGraspIkScene } from './scene';
 import {
   buildUi,
   DEFAULT_IK_CUBE_X,
   DEFAULT_IK_CUBE_Y
 } from './ui';
 
-export interface SimplePregraspIkVisualization {
+export interface SimpleGraspIkVisualization {
   destroy(): void;
 }
 
-export interface SimplePregraspIkOptions {
+export interface SimpleGraspIkOptions {
   modelBasePath?: string;
   modelUrl?: string;
 }
 
 type Elbow = SimpleIkBranch['elbow'];
 
-export async function initializeSimplePregraspIkVisualization(
+export async function initializeSimpleGraspIkVisualization(
   parent: HTMLElement,
-  options: SimplePregraspIkOptions = {}
-): Promise<SimplePregraspIkVisualization> {
+  options: SimpleGraspIkOptions = {}
+): Promise<SimpleGraspIkVisualization> {
   const model = await loadWebModel(options.modelUrl);
   const kinematics = deriveSo101Kinematics(model);
 
-  // Ground-cube pregrasp workspace: drives the slider ranges.
+  // Ground-cube grasp workspace: drives the slider ranges.
   const workspace = computeSimpleWorkspace(kinematics);
   const band = anyYawCubeCenterBand(workspace);
   const bbox = sectorBoundingBox(workspace);
@@ -96,7 +96,7 @@ export async function initializeSimplePregraspIkVisualization(
     radiusDefault: Math.round(defaultRadial.radiusMm),
     azimuthDefault: Math.round(defaultRadial.azimuthDeg)
   });
-  const vizScene = createSimplePregraspIkScene(
+  const vizScene = createSimpleGraspIkScene(
     ui.viewport, model, options.modelBasePath,
     buildWorkspaceOverlaySpecs(kinematics)
   );
@@ -126,10 +126,10 @@ export async function initializeSimplePregraspIkVisualization(
     if (branches.length < 2) { return; }
     for (const branch of branches) {
       const label = document.createElement('label');
-      label.className = 'simple-pregrasp-ik-viz-branch';
+      label.className = 'simple-grasp-ik-viz-branch';
       const radio = document.createElement('input');
       radio.type = 'radio';
-      radio.name = 'simple-pregrasp-ik-branch';
+      radio.name = 'simple-grasp-ik-branch';
       radio.value = branch.elbow;
       radio.checked = branch.elbow === preferredElbow;
       radio.addEventListener('change', () => {
@@ -148,7 +148,7 @@ export async function initializeSimplePregraspIkVisualization(
   function updateScene(): void {
     vizScene.updateCubePose(currentPose);
 
-    const matrix = createSimplePregraspMatrix(currentFace, currentPose);
+    const matrix = createSimpleGraspMatrix(currentFace, currentPose);
     if (!matrix) {
       result = null;
       ui.status.textContent = 'No solution: the selected face is not vertical.';
@@ -158,7 +158,7 @@ export async function initializeSimplePregraspIkVisualization(
       return;
     }
 
-    result = solveSimplePregraspIk(kinematics, matrix);
+    result = solveSimpleGraspIk(kinematics, matrix);
     if (result.type === 'unreachable') {
       ui.status.textContent = `Unreachable: ${result.reason}.`;
       ui.status.classList.add('is-invalid');

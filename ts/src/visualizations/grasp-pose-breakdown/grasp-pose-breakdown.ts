@@ -11,18 +11,18 @@ import {
   type CubePose,
   SAFETY_MARGIN,
   type TransformStage
-} from '../pregrasp-pose-shared/bodies';
+} from '../grasp-pose-shared/bodies';
 import {
   createGripperFromContactMatrix,
   createWorldFromCubeContactMatrix,
   DEFAULT_CUBE_POSE
-} from '../pregrasp-pose-shared/body-factories';
-import { createPregraspPoseScene } from '../pregrasp-pose-shared/scene';
+} from '../grasp-pose-shared/body-factories';
+import { createGraspPoseScene } from '../grasp-pose-shared/scene';
 import {
   displayMatrix,
   FLOOR_FACES,
   setDegreeSliderRange
-} from '../pregrasp-pose-shared/ui';
+} from '../grasp-pose-shared/ui';
 import {
   buildUi,
   displayCubeContactMatrix,
@@ -30,11 +30,11 @@ import {
   displayJawContactMatrix
 } from './ui';
 
-export interface PregraspPoseBreakdownVisualization {
+export interface GraspPoseBreakdownVisualization {
   destroy(): void;
 }
 
-export interface PregraspPoseBreakdownOptions {
+export interface GraspPoseBreakdownOptions {
   animationDurationMs?: number;
   holdDurationMs?: number;
   modelBasePath?: string;
@@ -44,10 +44,10 @@ export interface PregraspPoseBreakdownOptions {
 const DEFAULT_ANIMATION_DURATION_MS = 2000;
 const DEFAULT_HOLD_DURATION_MS = 3000;
 
-export async function initializePregraspPoseBreakdownVisualization(
+export async function initializeGraspPoseBreakdownVisualization(
   parent: HTMLElement,
-  options: PregraspPoseBreakdownOptions = {}
-): Promise<PregraspPoseBreakdownVisualization> {
+  options: GraspPoseBreakdownOptions = {}
+): Promise<GraspPoseBreakdownVisualization> {
   const animationDurationMs = Math.max(
     options.animationDurationMs ?? DEFAULT_ANIMATION_DURATION_MS, 0
   );
@@ -62,7 +62,7 @@ export async function initializePregraspPoseBreakdownVisualization(
   let currentFace: CubeFace = '+x';
   let currentPose: CubePose = { ...DEFAULT_CUBE_POSE };
   const vizScenes = await Promise.all(ui.panes.map(pane =>
-    createPregraspPoseScene(
+    createGraspPoseScene(
       pane.viewport,
       model,
       options.modelBasePath,

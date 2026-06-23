@@ -6,28 +6,28 @@ import {
   applyGripperTransform,
   type CubeFace,
   type CubePose
-} from '../pregrasp-pose-shared/bodies';
-import { DEFAULT_CUBE_POSE } from '../pregrasp-pose-shared/body-factories';
-import { createPregraspPoseScene } from '../pregrasp-pose-shared/scene';
+} from '../grasp-pose-shared/bodies';
+import { DEFAULT_CUBE_POSE } from '../grasp-pose-shared/body-factories';
+import { createGraspPoseScene } from '../grasp-pose-shared/scene';
 import {
   displayMatrix,
   setDegreeSliderRange
-} from '../pregrasp-pose-shared/ui';
+} from '../grasp-pose-shared/ui';
 import { buildUi, FLOOR_FACES } from './ui';
 
-export interface PregraspPoseVisualization {
+export interface GraspPoseVisualization {
   destroy(): void;
 }
 
-export interface PregraspPoseOptions {
+export interface GraspPoseOptions {
   modelBasePath?: string;
   modelUrl?: string;
 }
 
-export async function initializePregraspPoseVisualization(
+export async function initializeGraspPoseVisualization(
   parent: HTMLElement,
-  options: PregraspPoseOptions = {}
-): Promise<PregraspPoseVisualization> {
+  options: GraspPoseOptions = {}
+): Promise<GraspPoseVisualization> {
   const model = await loadWebModel(options.modelUrl);
   const ui = buildUi(parent);
   let currentFace: CubeFace = '+x';
@@ -36,7 +36,7 @@ export async function initializePregraspPoseVisualization(
   const currentHingeAngle = (): number =>
     Number(ui.hingeInput.value) * Math.PI / 180;
 
-  const vizScene = await createPregraspPoseScene(
+  const vizScene = await createGraspPoseScene(
     ui.pane.viewport,
     model,
     options.modelBasePath,

@@ -7,7 +7,7 @@ This drives the MuJoCo model through position actuators under real physics, so
 each phase emits joint *set points* that a servo tracks rather than poses written
 straight to ``qpos``.
 
-Phases: (1) neutral -> hover, (2) hover -> pregrasp at cube center, (3) close
+Phases: (1) neutral -> hover, (2) hover -> grasp at cube center, (3) close
 gripper to grasp, (4) lift and carry the grasped cube up and over to the hover
 above the target, (5) release, lift clear, and flow back to neutral. The release
 is left to gravity: the gripper set point opens and the cube falls on its own.
@@ -34,24 +34,24 @@ from pick_and_place.geometry import (
     SAFETY_MARGIN,
     VERTICAL_FACES,
     WORLD_UP,
-    pregrasp_matrix,
+    grasp_matrix,
     world_from_cube,
     world_from_cube_contact,
 )
-from pick_and_place.ik import solve_simple_pregrasp_ik
+from pick_and_place.ik import solve_simple_grasp_ik
 from pick_and_place.kinematics import ARM_JOINT_NAMES, So101Kinematics
 from pick_and_place import transforms as tf
 from pick_and_place.transforms import Mat4, Vec3
 from pick_and_place.workspace_overlays import is_cube_drop_allowed, is_vertical_grip_allowed
 
-# Number of intermediate heights checked along the hover→pregrasp descent when
+# Number of intermediate heights checked along the hover→grasp descent when
 # selecting a grasp. Catching joint-limit violations between endpoints prevents
 # the arm from falling back to the joint lerp mid-descent.
 _N_DESCENT_CHECKS = 8
 
 # Tip-contact height of the source hover above the floor (clears the 3 cm cube
 # top by 1 cm). At the grasp the tip sits at the cube-center height, so the
-# world-z offset applied to the pregrasp is ``tip_z - pose.z``.
+# world-z offset applied to the grasp is ``tip_z - pose.z``.
 SOURCE_HOVER_TIP_Z = 0.04
 # Recovery grasps may approach along an arbitrary tool axis. After closing, lift
 # the held cube vertically to this world height before folding into the carry.
@@ -64,7 +64,7 @@ RECOVERY_DROP_CUBE_CENTER_Z = 0.03
 # open jaws clear the cube.
 POSTDROP_LIFT_Z = 0.04
 
-# Gripper joint angle at the hover pregrasp: 40 deg open.
+# Gripper joint angle at the hover grasp: 40 deg open.
 GRIPPER_OPEN = math.radians(40.0)
 # Gripper joint angle commanded during the grasp.
 GRIPPER_GRASP = 0.10
@@ -269,14 +269,14 @@ def _shortest_delta(a: float, b: float) -> float:
 @dataclass(frozen=True)
 class GraspChoice:
     """The face and elbow used to grasp the source cube, with the joint set
-    points solved for the hover and the at-cube pregrasp on that branch."""
+    points solved for the hover and the at-cube grasp on that branch."""
 
     face: CubeFace
     elbow: str
     hover_joints: dict[str, float]
-    pregrasp_joints: dict[str, float]
+    grasp_joints: dict[str, float]
     hover_matrix: Mat4
-    pregrasp_matrix: Mat4
+    grasp_matrix: Mat4
     lift_joints: dict[str, float]
     lift_matrix: Mat4
     inward_normal: Vec3
@@ -310,7 +310,7 @@ def grasp_candidates(k: So101Kinematics, source: CubePose) -> Iterator[GraspChoi
     """Yield every IK-feasible grasp in preference order (naturalness, then elbow-up).
 
     Faces are tried in order of naturalness (outward normal most aligned with
-    cube→robot direction first). For each candidate the entire hover→pregrasp
+    cube→robot direction first). For each candidate the entire hover→grasp
     descent is verified at ``_N_DESCENT_CHECKS`` intermediate heights so the IK
     never needs to fall back to the joint lerp mid-descent.
     """
@@ -319,25 +319,25 @@ def grasp_candidates(k: So101Kinematics, source: CubePose) -> Iterator[GraspChoi
         VERTICAL_FACES, key=lambda f: _face_naturalness(k, f, source), reverse=True
     )
     for face in sorted_faces:
-        hover = pregrasp_matrix(face, source, hover_offset)
-        pregrasp = pregrasp_matrix(face, source)
-        if hover is None or pregrasp is None:
+        hover = grasp_matrix(face, source, hover_offset)
+        grasp = grasp_matrix(face, source)
+        if hover is None or grasp is None:
             continue
-        hover_branches = solve_simple_pregrasp_ik(k, hover)
-        pregrasp_branches = solve_simple_pregrasp_ik(k, pregrasp)
+        hover_branches = solve_simple_grasp_ik(k, hover)
+        grasp_branches = solve_simple_grasp_ik(k, grasp)
         for elbow in ("up", "down"):
             hover_branch = next((b for b in hover_branches if b.elbow == elbow), None)
-            pregrasp_branch = next((b for b in pregrasp_branches if b.elbow == elbow), None)
-            if hover_branch is None or pregrasp_branch is None:
+            grasp_branch = next((b for b in grasp_branches if b.elbow == elbow), None)
+            if hover_branch is None or grasp_branch is None:
                 continue
             descent_ok = True
             for i in range(1, _N_DESCENT_CHECKS):
                 frac = i / _N_DESCENT_CHECKS
-                inter = pregrasp_matrix(face, source, hover_offset * (1.0 - frac))
+                inter = grasp_matrix(face, source, hover_offset * (1.0 - frac))
                 if inter is None:
                     descent_ok = False
                     break
-                if not any(b.elbow == elbow for b in solve_simple_pregrasp_ik(k, inter)):
+                if not any(b.elbow == elbow for b in solve_simple_grasp_ik(k, inter)):
                     descent_ok = False
                     break
             if not descent_ok:
@@ -347,9 +347,9 @@ def grasp_candidates(k: So101Kinematics, source: CubePose) -> Iterator[GraspChoi
                 face=face,
                 elbow=elbow,
                 hover_joints=hover_branch.joints,
-                pregrasp_joints=pregrasp_branch.joints,
+                grasp_joints=grasp_branch.joints,
                 hover_matrix=hover,
-                pregrasp_matrix=pregrasp,
+                grasp_matrix=grasp,
                 lift_joints=hover_branch.joints,
                 lift_matrix=hover,
                 inward_normal=inward_normal,
@@ -403,9 +403,9 @@ def free_grasp_candidates(k: So101Kinematics, source: CubePose) -> Iterator[Gras
                 tf.get_position(grasp)
                 + WORLD_UP * max(0.0, RECOVERY_LIFT_CUBE_Z - source.z),
             )
-            grasp_branches = solve_simple_pregrasp_ik(k, grasp)
-            hover_branches = solve_simple_pregrasp_ik(k, hover)
-            lift_branches = solve_simple_pregrasp_ik(k, recovery_lift)
+            grasp_branches = solve_simple_grasp_ik(k, grasp)
+            hover_branches = solve_simple_grasp_ik(k, hover)
+            lift_branches = solve_simple_grasp_ik(k, recovery_lift)
             for elbow in ("up", "down"):
                 grasp_branch = next((b for b in grasp_branches if b.elbow == elbow), None)
                 hover_branch = next((b for b in hover_branches if b.elbow == elbow), None)
@@ -415,7 +415,7 @@ def free_grasp_candidates(k: So101Kinematics, source: CubePose) -> Iterator[Gras
                 descent_ok = all(
                     any(
                         b.elbow == elbow
-                        for b in solve_simple_pregrasp_ik(
+                        for b in solve_simple_grasp_ik(
                             k,
                             tf.with_position(
                                 grasp,
@@ -430,7 +430,7 @@ def free_grasp_candidates(k: So101Kinematics, source: CubePose) -> Iterator[Gras
                     lift_ok = all(
                         any(
                             b.elbow == elbow
-                            for b in solve_simple_pregrasp_ik(
+                            for b in solve_simple_grasp_ik(
                                 k,
                                 tf.with_position(
                                     grasp,
@@ -449,9 +449,9 @@ def free_grasp_candidates(k: So101Kinematics, source: CubePose) -> Iterator[Gras
                             face="free",
                             elbow=elbow,
                             hover_joints=hover_branch.joints,
-                            pregrasp_joints=grasp_branch.joints,
+                            grasp_joints=grasp_branch.joints,
                             hover_matrix=hover,
-                            pregrasp_matrix=grasp,
+                            grasp_matrix=grasp,
                             lift_joints=lift_branch.joints,
                             lift_matrix=recovery_lift,
                             inward_normal=inward.copy(),
@@ -461,7 +461,7 @@ def free_grasp_candidates(k: So101Kinematics, source: CubePose) -> Iterator[Gras
     def preference(candidate: GraspChoice) -> tuple[float, float, float, int]:
         local_inward = cube_rotation.T @ candidate.inward_normal
         face_alignment_error = 1.0 - float(np.max(np.abs(local_inward)))
-        above_approach_error = 1.0 - float(np.dot(candidate.pregrasp_matrix[:3, 2], WORLD_UP))
+        above_approach_error = 1.0 - float(np.dot(candidate.grasp_matrix[:3, 2], WORLD_UP))
         travel = sum(
             abs(candidate.hover_joints[name] - NEUTRAL_ARM_JOINTS[name]) for name in ARM_JOINT_NAMES
         )
@@ -682,7 +682,7 @@ def plan_carry_candidates(
     are yielded before other free-pitch drops; if preflight rejects them, callers
     can still fall through to the broader free-pitch search.
     """
-    grasp_gripper = grasp.pregrasp_matrix
+    grasp_gripper = grasp.grasp_matrix
     if not is_cube_drop_allowed(target.x, target.y):
         return
     low_grasp_cube = world_from_cube(_pushed_cube(source, grasp.inward_normal, SAFETY_MARGIN))
@@ -722,7 +722,7 @@ def plan_carry_candidates(
         for i in range(_CARRY_SAMPLES + 1):
             gripper_matrix = _carry_geometry_matrix(plan, i / _CARRY_SAMPLES) @ cube_from_gripper
             branch = next(
-                (b for b in solve_simple_pregrasp_ik(k, gripper_matrix) if b.elbow == grasp.elbow),
+                (b for b in solve_simple_grasp_ik(k, gripper_matrix) if b.elbow == grasp.elbow),
                 None,
             )
             if branch is None:
@@ -866,26 +866,26 @@ class DescentPhase:
             self.grasp.hover_matrix,
             tf.get_position(self.grasp.hover_matrix)
             + (
-                tf.get_position(self.grasp.pregrasp_matrix)
+                tf.get_position(self.grasp.grasp_matrix)
                 - tf.get_position(self.grasp.hover_matrix)
             )
             * alpha,
         )
         branch = None
         if self.grasp.face != "free":
-            branches = solve_simple_pregrasp_ik(self.k, matrix)
+            branches = solve_simple_grasp_ik(self.k, matrix)
             branch = next((b for b in branches if b.elbow == self.grasp.elbow), None)
         joints = (
             branch.joints
             if branch is not None
-            else _lerp_joints(self.grasp.hover_joints, self.grasp.pregrasp_joints, alpha)
+            else _lerp_joints(self.grasp.hover_joints, self.grasp.grasp_joints, alpha)
         )
         return Frame(joints=joints, gripper=GRIPPER_OPEN)
 
 
 @dataclass(frozen=True)
 class GraspPhase:
-    pregrasp_joints: dict[str, float]
+    grasp_joints: dict[str, float]
     start_gripper: float = GRIPPER_OPEN
 
     @property
@@ -899,13 +899,13 @@ class GraspPhase:
     def evaluate(self, t: float) -> Frame:
         alpha = _smoothstep(t / self.duration) if self.duration > 0 else 1.0
         gripper = self.start_gripper + (GRIPPER_GRASP - self.start_gripper) * alpha
-        return Frame(joints=self.pregrasp_joints, gripper=gripper)
+        return Frame(joints=self.grasp_joints, gripper=gripper)
 
 
 @dataclass(frozen=True)
 class LiftPhase:
     k: So101Kinematics
-    pregrasp_joints: dict[str, float]
+    grasp_joints: dict[str, float]
     hover_joints: dict[str, float]
 
     @property
@@ -914,12 +914,12 @@ class LiftPhase:
 
     @cached_property
     def duration(self) -> float:
-        return _joint_move_duration(self.k, self.pregrasp_joints, self.hover_joints)
+        return _joint_move_duration(self.k, self.grasp_joints, self.hover_joints)
 
     def evaluate(self, t: float) -> Frame:
         alpha = _timed_arc_fraction(t / self.duration) if self.duration > 0 else 1.0
         return Frame(
-            joints=_lerp_joints(self.pregrasp_joints, self.hover_joints, alpha),
+            joints=_lerp_joints(self.grasp_joints, self.hover_joints, alpha),
             gripper=GRIPPER_GRASP,
         )
 
@@ -936,7 +936,7 @@ class CarryPhase:
     k: So101Kinematics
     carry: CarryPlan
     elbow: str
-    pregrasp_joints: dict[str, float]
+    grasp_joints: dict[str, float]
     predrop_joints: dict[str, float]
 
     @property
@@ -951,13 +951,13 @@ class CarryPhase:
         phase = min(1.0, t / self.duration) if self.duration > 0 else 1.0
         gripper_matrix = _carry_cube_matrix(self.carry, phase) @ self.carry.cube_from_gripper
         branch = next(
-            (b for b in solve_simple_pregrasp_ik(self.k, gripper_matrix) if b.elbow == self.elbow),
+            (b for b in solve_simple_grasp_ik(self.k, gripper_matrix) if b.elbow == self.elbow),
             None,
         )
         joints = (
             branch.joints
             if branch is not None
-            else _lerp_joints(self.pregrasp_joints, self.predrop_joints, _smoothstep(phase))
+            else _lerp_joints(self.grasp_joints, self.predrop_joints, _smoothstep(phase))
         )
         return Frame(joints=joints, gripper=GRIPPER_GRASP)
 
@@ -1080,7 +1080,7 @@ def trajectory_candidates(
         ):
             endpoint = _carry_geometry_matrix(carry, 1.0) @ carry.cube_from_gripper
             predrop_branch = next(
-                (b for b in solve_simple_pregrasp_ik(k, endpoint) if b.elbow == grasp.elbow), None
+                (b for b in solve_simple_grasp_ik(k, endpoint) if b.elbow == grasp.elbow), None
             )
             if predrop_branch is None:
                 continue
@@ -1088,7 +1088,7 @@ def trajectory_candidates(
                 endpoint, tf.get_position(endpoint) + np.array((0.0, 0.0, POSTDROP_LIFT_Z))
             )
             postdrop_branch = next(
-                (b for b in solve_simple_pregrasp_ik(k, postdrop_hover) if b.elbow == grasp.elbow),
+                (b for b in solve_simple_grasp_ik(k, postdrop_hover) if b.elbow == grasp.elbow),
                 None,
             )
             if postdrop_branch is None:
@@ -1097,11 +1097,11 @@ def trajectory_candidates(
             phases = (
                 ApproachPhase(k, start_joints, start_gripper, grasp.hover_joints),
                 DescentPhase(k, grasp),
-                GraspPhase(grasp.pregrasp_joints),
+                GraspPhase(grasp.grasp_joints),
                 (
-                    RecoveryLiftPhase(k, grasp.pregrasp_joints, grasp.lift_joints)
+                    RecoveryLiftPhase(k, grasp.grasp_joints, grasp.lift_joints)
                     if free_grasp
-                    else LiftPhase(k, grasp.pregrasp_joints, grasp.lift_joints)
+                    else LiftPhase(k, grasp.grasp_joints, grasp.lift_joints)
                 ),
                 CarryPhase(k, carry, grasp.elbow, grasp.lift_joints, predrop_branch.joints),
                 ReleasePhase(
@@ -1191,7 +1191,7 @@ def replan_remaining_candidates(
         ):
             endpoint = _carry_geometry_matrix(carry, 1.0) @ carry.cube_from_gripper
             predrop_branch = next(
-                (b for b in solve_simple_pregrasp_ik(k, endpoint) if b.elbow == g.elbow), None
+                (b for b in solve_simple_grasp_ik(k, endpoint) if b.elbow == g.elbow), None
             )
             if predrop_branch is None:
                 continue
@@ -1201,7 +1201,7 @@ def replan_remaining_candidates(
             )
 
             postdrop_branch = next(
-                (b for b in solve_simple_pregrasp_ik(k, postdrop_hover) if b.elbow == g.elbow), None
+                (b for b in solve_simple_grasp_ik(k, postdrop_hover) if b.elbow == g.elbow), None
             )
             if postdrop_branch is None:
                 continue
@@ -1212,11 +1212,11 @@ def replan_remaining_candidates(
                 # We are at the very beginning. Next is Approach.
                 phases.append(ApproachPhase(k, measured_joints, measured_gripper, g.hover_joints))
                 phases.append(DescentPhase(k, g))
-                phases.append(GraspPhase(g.pregrasp_joints, start_gripper=GRIPPER_OPEN))
+                phases.append(GraspPhase(g.grasp_joints, start_gripper=GRIPPER_OPEN))
                 phases.append(
-                    RecoveryLiftPhase(k, g.pregrasp_joints, g.lift_joints)
+                    RecoveryLiftPhase(k, g.grasp_joints, g.lift_joints)
                     if free_grasp
-                    else LiftPhase(k, g.pregrasp_joints, g.lift_joints)
+                    else LiftPhase(k, g.grasp_joints, g.lift_joints)
                 )
                 phases.append(CarryPhase(k, carry, g.elbow, g.lift_joints, predrop_branch.joints))
                 phases.append(
@@ -1230,11 +1230,11 @@ def replan_remaining_candidates(
             elif completed_phase_name == "approach":
                 # Next is Descent. We start from measured hover.
                 phases.append(DescentPhase(k, dataclasses.replace(g, hover_joints=measured_joints)))
-                phases.append(GraspPhase(g.pregrasp_joints, start_gripper=measured_gripper))
+                phases.append(GraspPhase(g.grasp_joints, start_gripper=measured_gripper))
                 phases.append(
-                    RecoveryLiftPhase(k, g.pregrasp_joints, g.lift_joints)
+                    RecoveryLiftPhase(k, g.grasp_joints, g.lift_joints)
                     if free_grasp
-                    else LiftPhase(k, g.pregrasp_joints, g.lift_joints)
+                    else LiftPhase(k, g.grasp_joints, g.lift_joints)
                 )
                 phases.append(CarryPhase(k, carry, g.elbow, g.lift_joints, predrop_branch.joints))
                 phases.append(
@@ -1251,11 +1251,11 @@ def replan_remaining_candidates(
                 # Keep the locked grasp pose as the sim seed and let the real arm
                 # continue tracking that command instead of treating the biased
                 # readback as ground truth.
-                phases.append(GraspPhase(g.pregrasp_joints, start_gripper=measured_gripper))
+                phases.append(GraspPhase(g.grasp_joints, start_gripper=measured_gripper))
                 phases.append(
-                    RecoveryLiftPhase(k, g.pregrasp_joints, g.lift_joints)
+                    RecoveryLiftPhase(k, g.grasp_joints, g.lift_joints)
                     if free_grasp
-                    else LiftPhase(k, g.pregrasp_joints, g.lift_joints)
+                    else LiftPhase(k, g.grasp_joints, g.lift_joints)
                 )
                 phases.append(CarryPhase(k, carry, g.elbow, g.lift_joints, predrop_branch.joints))
                 phases.append(
@@ -1266,14 +1266,14 @@ def replan_remaining_candidates(
                     )
                 )
                 phases.append(RetreatPhase(k, postdrop_branch.joints, end_joints, end_gripper))
-                start_joints = g.pregrasp_joints
+                start_joints = g.grasp_joints
             elif completed_phase_name == "grasp":
                 # Next is Lift. Do this short vertical clearance move from the
                 # locked grasp pose before measuring again for the carry replan.
                 phases.append(
-                    RecoveryLiftPhase(k, g.pregrasp_joints, g.lift_joints)
+                    RecoveryLiftPhase(k, g.grasp_joints, g.lift_joints)
                     if free_grasp
-                    else LiftPhase(k, g.pregrasp_joints, g.lift_joints)
+                    else LiftPhase(k, g.grasp_joints, g.lift_joints)
                 )
                 phases.append(CarryPhase(k, carry, g.elbow, g.lift_joints, predrop_branch.joints))
                 phases.append(
@@ -1285,7 +1285,7 @@ def replan_remaining_candidates(
                     )
                 )
                 phases.append(RetreatPhase(k, postdrop_branch.joints, end_joints, end_gripper))
-                start_joints = g.pregrasp_joints
+                start_joints = g.grasp_joints
             elif completed_phase_name in ("lift", "recovery_lift"):
                 # Now that the cube and jaws are safely above the floor, seed carry
                 # from measured readback again.

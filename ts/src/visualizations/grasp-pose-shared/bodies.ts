@@ -17,7 +17,7 @@ import {
 } from './body-factories';
 import { createBodyMaterials } from './materials';
 
-export interface PregraspPoseBodies {
+export interface GraspPoseBodies {
   root: THREE.Group;
   updateCubePose(pose: CubePose): void;
   destroy(): void;
@@ -38,7 +38,7 @@ export async function createBodies(
   selection: BodySelection = 'combined',
   transformStage: TransformStage = 'unaligned',
   hingeAngle = 0
-): Promise<PregraspPoseBodies> {
+): Promise<GraspPoseBodies> {
   const root = new THREE.Group();
   root.name = 'bodies';
   const materials = createBodyMaterials();

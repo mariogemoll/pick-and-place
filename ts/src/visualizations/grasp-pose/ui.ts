@@ -8,14 +8,14 @@ import {
   appendFloorModeInput,
   createPane,
   FLOOR_FACES,
-  type PregraspPosePane
-} from '../pregrasp-pose-shared/ui';
+  type GraspPosePane
+} from '../grasp-pose-shared/ui';
 
-export { FLOOR_FACES } from '../pregrasp-pose-shared/ui';
+export { FLOOR_FACES } from '../grasp-pose-shared/ui';
 
-export interface PregraspPoseDom {
+export interface GraspPoseDom {
   root: HTMLDivElement;
-  pane: PregraspPosePane;
+  pane: GraspPosePane;
   faceInputs: HTMLInputElement[];
   floorModeInput: HTMLInputElement;
   hingeInput: HTMLInputElement;
@@ -27,16 +27,16 @@ export interface PregraspPoseDom {
   rollInput: HTMLInputElement;
 }
 
-export function buildUi(parent: HTMLElement): PregraspPoseDom {
+export function buildUi(parent: HTMLElement): GraspPoseDom {
   const root = document.createElement('div');
-  root.className = 'visualization pregrasp-pose-viz-root';
+  root.className = 'visualization grasp-pose-viz-root';
 
   const controls = document.createElement('div');
-  controls.className = 'pregrasp-pose-breakdown-viz-controls';
+  controls.className = 'grasp-pose-breakdown-viz-controls';
 
   const floorModeInput = appendFloorModeInput(controls);
   const faceInputs = appendFaceInputs(
-    controls, 'pregrasp-pose-cube-face', undefined, FLOOR_FACES
+    controls, 'grasp-pose-cube-face', undefined, FLOOR_FACES
   );
   const {
     xInput, yInput, zInput, yawInput, pitchInput, rollInput
@@ -45,7 +45,7 @@ export function buildUi(parent: HTMLElement): PregraspPoseDom {
 
   root.appendChild(controls);
 
-  const pane = createPane('Pregrasp pose', 'combined', 'final', true);
+  const pane = createPane('Grasp pose', 'combined', 'final', true);
   root.appendChild(pane.element);
 
   const placeholder = parent.querySelector('.placeholder');

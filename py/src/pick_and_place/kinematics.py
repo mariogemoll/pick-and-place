@@ -55,7 +55,7 @@ class So101Kinematics:
         """World position of the gripper IK target for the given arm joints.
 
         Closed-form forward kinematics of the planar chain, inverting the
-        conventions in ``solve_simple_pregrasp_ik``. Wrist roll spins about the
+        conventions in ``solve_simple_grasp_ik``. Wrist roll spins about the
         approach axis and so does not move the target; only pan and the three
         planar joints matter. Matches the IK target to sub-millimetre.
         """

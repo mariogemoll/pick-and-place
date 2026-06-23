@@ -3,7 +3,7 @@
 
 import type * as THREE from 'three';
 
-import type { CubeFace } from '../pregrasp-pose-shared/bodies';
+import type { CubeFace } from '../grasp-pose-shared/bodies';
 import {
   appendCubePoseInputs,
   appendFaceInputs,
@@ -11,10 +11,10 @@ import {
   createPane,
   FLOOR_FACES,
   formatTranslation,
-  type PregraspPosePane
-} from '../pregrasp-pose-shared/ui';
+  type GraspPosePane
+} from '../grasp-pose-shared/ui';
 
-export type { PregraspPosePane as PregraspPoseBreakdownPane } from '../pregrasp-pose-shared/ui';
+export type { GraspPosePane as GraspPoseBreakdownPane } from '../grasp-pose-shared/ui';
 export {
   appendSliderGroup,
   CANVAS_HEIGHT,
@@ -22,11 +22,11 @@ export {
   createPane,
   displayMatrix,
   FLOOR_FACES
-} from '../pregrasp-pose-shared/ui';
+} from '../grasp-pose-shared/ui';
 
-export interface PregraspPoseBreakdownDom {
+export interface GraspPoseBreakdownDom {
   root: HTMLDivElement;
-  panes: PregraspPosePane[];
+  panes: GraspPosePane[];
   faceInputs: HTMLInputElement[];
   floorModeInput: HTMLInputElement;
   xInput: HTMLInputElement;
@@ -37,16 +37,16 @@ export interface PregraspPoseBreakdownDom {
   rollInput: HTMLInputElement;
 }
 
-export function buildUi(parent: HTMLElement): PregraspPoseBreakdownDom {
+export function buildUi(parent: HTMLElement): GraspPoseBreakdownDom {
   const root = document.createElement('div');
-  root.className = 'visualization pregrasp-pose-breakdown-viz-root';
+  root.className = 'visualization grasp-pose-breakdown-viz-root';
 
   const controls = document.createElement('div');
-  controls.className = 'pregrasp-pose-breakdown-viz-controls';
+  controls.className = 'grasp-pose-breakdown-viz-controls';
 
   const floorModeInput = appendFloorModeInput(controls);
   const faceInputs = appendFaceInputs(
-    controls, 'pregrasp-pose-breakdown-cube-face', undefined, FLOOR_FACES
+    controls, 'grasp-pose-breakdown-cube-face', undefined, FLOOR_FACES
   );
   const {
     xInput, yInput, zInput, yawInput, pitchInput, rollInput
@@ -54,7 +54,7 @@ export function buildUi(parent: HTMLElement): PregraspPoseBreakdownDom {
 
   root.appendChild(controls);
 
-  const panes: PregraspPosePane[] = [
+  const panes: GraspPosePane[] = [
     createPane('Cube', 'cube'),
     createPane('Gripper', 'gripper'),
     createPane('Combined', 'combined'),
@@ -69,12 +69,12 @@ export function buildUi(parent: HTMLElement): PregraspPoseBreakdownDom {
   root.append(...panes.slice(0, 3).map(pane => pane.element));
 
   const transformRow = document.createElement('div');
-  transformRow.className = 'pregrasp-pose-breakdown-viz-transform-row';
+  transformRow.className = 'grasp-pose-breakdown-viz-transform-row';
   transformRow.append(...panes.slice(3, 8).map(pane => pane.element));
   root.appendChild(transformRow);
 
   const finalRow = document.createElement('div');
-  finalRow.className = 'pregrasp-pose-breakdown-viz-final-row';
+  finalRow.className = 'grasp-pose-breakdown-viz-final-row';
   finalRow.append(...panes.slice(8).map(pane => pane.element));
   root.appendChild(finalRow);
 

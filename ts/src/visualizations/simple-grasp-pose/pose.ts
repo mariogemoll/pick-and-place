@@ -3,18 +3,18 @@
 
 import * as THREE from 'three';
 
-import { SAFETY_MARGIN } from '../pregrasp-pose-shared/bodies';
+import { SAFETY_MARGIN } from '../grasp-pose-shared/bodies';
 import {
   createGripperFromContactMatrix,
   createWorldFromCubeContactMatrix,
   type CubeFace,
   type CubePose
-} from '../pregrasp-pose-shared/body-factories';
+} from '../grasp-pose-shared/body-factories';
 
 const VERTICAL_TOLERANCE = 1e-9;
 const WORLD_UP = new THREE.Vector3(0, 0, 1);
 
-export function createSimplePregraspMatrix(
+export function createSimpleGraspMatrix(
   face: CubeFace,
   pose: CubePose
 ): THREE.Matrix4 | undefined {

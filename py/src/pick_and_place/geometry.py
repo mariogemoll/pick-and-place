@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Cube, contact, and pregrasp transforms.
+"""Cube, contact, and grasp transforms.
 
-The "simple pregrasp" pose keeps the gripper vertical (roll axis up, jaws closing
+The "simple grasp" pose keeps the gripper vertical (roll axis up, jaws closing
 horizontally onto a vertical cube face).
 
-Naming note: ``pregrasp`` here is the gripper pose *at* the cube (open, ready to
-close) and a raised ``pregrasp`` (positive ``z_offset``) is the "hover". In
+Naming note: ``grasp`` here is the gripper pose *at* the cube (open, ready to
+close) and a raised ``grasp`` (positive ``z_offset``) is the "hover". In
 canonical grasp terminology the raised pose is the *pre-grasp / approach* pose
 and the at-cube pose is the *grasp* pose.
 """
@@ -104,8 +104,8 @@ def world_from_cube_contact(face: CubeFace, pose: CubePose) -> Mat4:
     return world_from_cube(pose) @ _cube_face_rotation(face) @ _cube_from_contact()
 
 
-def simple_pregrasp_matrix(face: CubeFace, pose: CubePose) -> Mat4 | None:
-    """World-from-gripper for the vertical pregrasp on ``face``, or ``None`` when
+def simple_grasp_matrix(face: CubeFace, pose: CubePose) -> Mat4 | None:
+    """World-from-gripper for the vertical grasp on ``face``, or ``None`` when
     the face is not vertical for this pose."""
     world_from_contact = world_from_cube_contact(face, pose)
     inward_normal = tf.transform_direction(world_from_contact, WORLD_UP)
@@ -121,10 +121,10 @@ def simple_pregrasp_matrix(face: CubeFace, pose: CubePose) -> Mat4 | None:
     return tf.with_position(world_from_gripper, jaw_contact_position - jaw_offset)
 
 
-def pregrasp_matrix(face: CubeFace, pose: CubePose, z_offset: float = 0.0) -> Mat4 | None:
-    """``simple_pregrasp_matrix`` shifted up along world z by ``z_offset``."""
-    pregrasp = simple_pregrasp_matrix(face, pose)
-    if pregrasp is None:
+def grasp_matrix(face: CubeFace, pose: CubePose, z_offset: float = 0.0) -> Mat4 | None:
+    """``simple_grasp_matrix`` shifted up along world z by ``z_offset``."""
+    grasp = simple_grasp_matrix(face, pose)
+    if grasp is None:
         return None
-    pos = tf.get_position(pregrasp)
-    return tf.with_position(pregrasp, pos + np.array((0.0, 0.0, z_offset)))
+    pos = tf.get_position(grasp)
+    return tf.with_position(grasp, pos + np.array((0.0, 0.0, z_offset)))

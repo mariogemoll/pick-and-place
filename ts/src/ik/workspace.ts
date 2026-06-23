@@ -7,16 +7,16 @@ import {
   CUBE_HALF_SIZE,
   DEFAULT_CUBE_POSE,
   GRIPPER_TARGET_POSITION
-} from '../visualizations/pregrasp-pose-shared/body-factories';
-import { createSimplePregraspMatrix } from '../visualizations/simple-pregrasp-pose/pose';
+} from '../visualizations/grasp-pose-shared/body-factories';
+import { createSimpleGraspMatrix } from '../visualizations/simple-grasp-pose/pose';
 import { type So101Kinematics } from './kinematics';
-import { solveSimplePregraspIk } from './simple-ik';
+import { solveSimpleGraspIk } from './simple-ik';
 
 // Cube-center z where the gripper tip (IK contact) is exactly 1 cm above the
 // top of a ground cube: top-of-ground-cube (2×half) + 1 cm clearance.
 export const CUBE_Z_1CM_OVER_GROUND_TOP = CUBE_HALF_SIZE * 2 + 0.010;
 
-// Reachable workspace for the *simple* vertical pregrasp with a cube resting on
+// Reachable workspace for the *simple* vertical grasp with a cube resting on
 // the ground. Because the cube is on the floor and the pose keeps the gripper
 // vertical, the IK target (the jaw contact projected onto the roll axis) sits at
 // a fixed height, with the wrist straight above it. The reachable set therefore
@@ -57,12 +57,12 @@ export interface SimpleWorkspaceSector {
 // Derive the IK target height and face offset for a cube whose center is at
 // `cubeCenterZ`. The target height equals the cube-center z (face-center z for
 // a vertical face). The face offset (cube-center → IK target, horizontal) is
-// z-independent but is computed from the pregrasp geometry to stay in sync.
+// z-independent but is computed from the grasp geometry to stay in sync.
 function deriveSampleGeometry(cubeCenterZ: number): { height: number; faceOffset: number } {
   const samplePose = { ...DEFAULT_CUBE_POSE, z: cubeCenterZ };
-  const worldFromGripper = createSimplePregraspMatrix('+x', samplePose);
+  const worldFromGripper = createSimpleGraspMatrix('+x', samplePose);
   if (worldFromGripper === undefined) {
-    throw new Error(`Simple pregrasp matrix undefined at cubeCenterZ=${cubeCenterZ}`);
+    throw new Error(`Simple grasp matrix undefined at cubeCenterZ=${cubeCenterZ}`);
   }
   const sampleTarget = GRIPPER_TARGET_POSITION.clone().applyMatrix4(worldFromGripper);
   return {
@@ -104,7 +104,7 @@ function radialReachable(
     k.panAxis.y,
     targetHeight
   );
-  return solveSimplePregraspIk(k, verticalGraspMatrix(target, 0)).type === 'success';
+  return solveSimpleGraspIk(k, verticalGraspMatrix(target, 0)).type === 'success';
 }
 
 // Bisect the radial reach boundary between a known-reachable and a known-
@@ -128,7 +128,7 @@ export function computeSimpleWorkspace(k: So101Kinematics): SimpleWorkspaceSecto
   return computeSimpleWorkspaceForCubeZ(k, DEFAULT_CUBE_POSE.z);
 }
 
-// Compute the simple-pregrasp workspace for a cube whose center sits at
+// Compute the simple-grasp workspace for a cube whose center sits at
 // `cubeCenterZ`. Everything else is identical to `computeSimpleWorkspace`.
 export function computeSimpleWorkspaceForCubeZ(
   k: So101Kinematics,
@@ -168,7 +168,7 @@ export function computeSimpleWorkspaceForCubeZ(
 }
 
 // Maximum horizontal (XY) reach of the gripper contact point at a fixed
-// `targetHeight`, for any joint configuration (not restricted to the pregrasp
+// `targetHeight`, for any joint configuration (not restricted to the grasp
 // pose). For each (shoulder_lift, elbow_flex) pair, wrist_flex is solved
 // analytically (two branches from the sin inverse) so there is no wrist_flex
 // scan — the result is exact within the (lift × flex) grid resolution.
@@ -233,7 +233,7 @@ export function computeArmWorkspaceAtHeight(
 
 // Maximum horizontal (XY) reach of the arm at any joint configuration,
 // projected vertically onto the floor. Uses planar-arm FK (shoulder_lift ×
-// elbow_flex × wrist_flex) — not restricted to the simple pregrasp pose.
+// elbow_flex × wrist_flex) — not restricted to the simple grasp pose.
 // wrist_roll is omitted since it only spins the gripper without moving it.
 // `targetHeight` is NaN; the sector spans from the minimum to the maximum
 // radial reach subject to the arm staying above the floor.

@@ -7,11 +7,11 @@ import {
   appendSliderGroup,
   type CubePoseInputs,
   SIDE_FACES
-} from '../pregrasp-pose-shared/ui';
+} from '../grasp-pose-shared/ui';
 
 export type CoordinateMode = 'cartesian' | 'radial';
 
-export interface SimplePregraspIkDom extends CubePoseInputs {
+export interface SimpleGraspIkDom extends CubePoseInputs {
   root: HTMLDivElement;
   viewport: HTMLDivElement;
   faceInputs: HTMLInputElement[];
@@ -34,7 +34,7 @@ export const DEFAULT_IK_CUBE_Y = 0;
 
 export interface SliderRange { min: number; max: number; }
 
-export interface SimplePregraspIkUiOptions {
+export interface SimpleGraspIkUiOptions {
   // X/Y slider ranges in millimetres. Default to the previous wide ranges.
   xRange?: SliderRange;
   yRange?: SliderRange;
@@ -48,21 +48,21 @@ export interface SimplePregraspIkUiOptions {
 
 function appendCoordinateModeInputs(parent: HTMLElement): HTMLInputElement[] {
   const group = document.createElement('div');
-  group.className = 'pregrasp-pose-breakdown-viz-controls-group';
+  group.className = 'grasp-pose-breakdown-viz-controls-group';
   const groupLabel = document.createElement('span');
   groupLabel.textContent = 'Coordinates';
   const options = document.createElement('div');
-  options.className = 'pregrasp-pose-breakdown-viz-face-options';
+  options.className = 'grasp-pose-breakdown-viz-face-options';
   const modes: { value: CoordinateMode; label: string }[] = [
     { value: 'cartesian', label: 'X / Y' },
     { value: 'radial', label: 'Radial' }
   ];
   const inputs = modes.map((mode, index) => {
     const wrapper = document.createElement('label');
-    wrapper.className = 'pregrasp-pose-breakdown-viz-face-option';
+    wrapper.className = 'grasp-pose-breakdown-viz-face-option';
     const input = document.createElement('input');
     input.type = 'radio';
-    input.name = 'simple-pregrasp-ik-coord-mode';
+    input.name = 'simple-grasp-ik-coord-mode';
     input.value = mode.value;
     input.checked = index === 0;
     const label = document.createElement('span');
@@ -78,8 +78,8 @@ function appendCoordinateModeInputs(parent: HTMLElement): HTMLInputElement[] {
 
 export function buildUi(
   parent: HTMLElement,
-  options: SimplePregraspIkUiOptions = {}
-): SimplePregraspIkDom {
+  options: SimpleGraspIkUiOptions = {}
+): SimpleGraspIkDom {
   const xRange = options.xRange ?? { min: 50, max: 500 };
   const yRange = options.yRange ?? { min: -250, max: 250 };
   const radiusRange = options.radiusRange ?? { min: 50, max: 300 };
@@ -87,16 +87,16 @@ export function buildUi(
   const radiusDefault = options.radiusDefault ?? DEFAULT_IK_CUBE_X * 1000;
   const azimuthDefault = options.azimuthDefault ?? 0;
   const root = document.createElement('div');
-  root.className = 'visualization simple-pregrasp-ik-viz-root';
+  root.className = 'visualization simple-grasp-ik-viz-root';
 
   const viewport = document.createElement('div');
-  viewport.className = 'simple-pregrasp-ik-viz-viewport';
+  viewport.className = 'simple-grasp-ik-viz-viewport';
 
   const controls = document.createElement('div');
-  controls.className = 'simple-pregrasp-ik-viz-controls';
+  controls.className = 'simple-grasp-ik-viz-controls';
 
   const faceInputs = appendFaceInputs(
-    controls, 'simple-pregrasp-ik-cube-face', SIDE_FACES
+    controls, 'simple-grasp-ik-cube-face', SIDE_FACES
   );
   // Cube is on the robot-facing −x face by default.
   const facePreset = faceInputs.find(input => input.value === '-x');
@@ -134,21 +134,21 @@ export function buildUi(
   const rollInput = appendDegreeSliderGroup(controls, 'Roll', -180, 180, 0);
 
   const resetButton = document.createElement('button');
-  resetButton.className = 'simple-pregrasp-ik-viz-reset';
+  resetButton.className = 'simple-grasp-ik-viz-reset';
   resetButton.type = 'button';
   resetButton.textContent = 'Reset';
   controls.appendChild(resetButton);
 
   const status = document.createElement('output');
-  status.className = 'simple-pregrasp-ik-viz-status';
+  status.className = 'simple-grasp-ik-viz-status';
   controls.appendChild(status);
 
   const branchContainer = document.createElement('div');
-  branchContainer.className = 'simple-pregrasp-ik-viz-branches';
+  branchContainer.className = 'simple-grasp-ik-viz-branches';
   controls.appendChild(branchContainer);
 
   const layout = document.createElement('div');
-  layout.className = 'simple-pregrasp-ik-viz-layout';
+  layout.className = 'simple-grasp-ik-viz-layout';
   layout.append(viewport, controls);
   root.appendChild(layout);
 

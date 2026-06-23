@@ -52,13 +52,13 @@ WORKSPACE_OVERLAYS = (
     WorkspaceOverlay("workspace_global", 0.0, 0.4418431804405771, 0.0002),
     WorkspaceOverlay("workspace_ground_height_arm", 0.0, 0.42911855464836285, 0.0004),
     WorkspaceOverlay(
-        "workspace_ground_pregrasp",
+        "workspace_ground_grasp",
         0.07330432949931037,
         0.25536116910332146,
         0.0006,
     ),
     WorkspaceOverlay(
-        "workspace_clearance_pregrasp",
+        "workspace_clearance_grasp",
         0.08671592519116689,
         0.24194957341146492,
         0.0008,

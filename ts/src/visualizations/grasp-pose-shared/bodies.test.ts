@@ -18,7 +18,7 @@ import {
   createWorldFromCubeMatrix,
   CUBE_HALF_SIZE } from './body-factories';
 
-describe('pregrasp-pose-breakdown contact transforms', () => {
+describe('grasp-pose-breakdown contact transforms', () => {
   const cameraModulePosition = new THREE.Vector3(0.0025, 0.073357, 0.007515);
   const animatedStagePairs: [TransformStage, TransformStage][] = [
     ['jaw-contact-origin', 'unaligned'],

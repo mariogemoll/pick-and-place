@@ -21,7 +21,7 @@ import {
   CUBE_HALF_SIZE,
   type CubePose,
   DEFAULT_CUBE_POSE,
-  GRIPPER_TARGET_POSITION } from '../pregrasp-pose-shared/body-factories';
+  GRIPPER_TARGET_POSITION } from '../grasp-pose-shared/body-factories';
 import {
   computeTrajectory,
   GRIPPER_CLOSED,
@@ -94,57 +94,57 @@ describe('pick-and-place trajectory', () => {
       expect(neutralDistance(trajectory.evaluate(t).joints)).toBeGreaterThan(1e-6);
     }
 
-    // The original hover-to-pregrasp descent remains unchanged after handoff.
+    // The original hover-to-grasp descent remains unchanged after handoff.
     expect(trajectory.evaluate(4.5)).toEqual(defaultTrajectory.evaluate(2.5));
     // Release and retreat to the post-drop hover also remain unchanged.
     expect(trajectory.evaluate(9)).toEqual(defaultTrajectory.evaluate(7));
   });
 
-  it('lowers vertically from hover to pregrasp while keeping the gripper open', () => {
+  it('lowers vertically from hover to grasp while keeping the gripper open', () => {
     const trajectory = computeTrajectory(kinematics, sourcePose, targetPose);
     if (!trajectory) { throw new Error('expected source pose to be reachable'); }
 
     const start = trajectory.evaluate(0);
     const hover = trajectory.evaluate(2);
     const halfwayDown = trajectory.evaluate(2.5);
-    const pregrasp = trajectory.evaluate(3);
+    const grasp = trajectory.evaluate(3);
     const hoverTarget = gripperTarget(hover.joints);
     const halfwayTarget = gripperTarget(halfwayDown.joints);
-    const pregraspTarget = gripperTarget(pregrasp.joints);
+    const graspTarget = gripperTarget(grasp.joints);
 
     expect(start).toEqual({ ...NEUTRAL_FRAME, sourceCube: sourcePose });
     expect(trajectory.duration).toBe(9.5);
     expect(hover.gripper).toBeCloseTo(GRIPPER_OPEN);
     expect(halfwayDown.gripper).toBeCloseTo(GRIPPER_OPEN);
-    expect(pregrasp.gripper).toBeCloseTo(GRIPPER_OPEN);
-    expect(hoverTarget.x).toBeCloseTo(pregraspTarget.x, 3);
-    expect(hoverTarget.y).toBeCloseTo(pregraspTarget.y, 3);
+    expect(grasp.gripper).toBeCloseTo(GRIPPER_OPEN);
+    expect(hoverTarget.x).toBeCloseTo(graspTarget.x, 3);
+    expect(hoverTarget.y).toBeCloseTo(graspTarget.y, 3);
     // Source hover puts the tip contact 1 cm above the cube top (z = 4 cm),
     // i.e. 2.5 cm above the grasp's face-center contact.
-    expect(hoverTarget.z - pregraspTarget.z).toBeCloseTo(0.025, 3);
-    expect(halfwayTarget.z).toBeCloseTo((hoverTarget.z + pregraspTarget.z) / 2, 3);
+    expect(hoverTarget.z - graspTarget.z).toBeCloseTo(0.025, 3);
+    expect(halfwayTarget.z).toBeCloseTo((hoverTarget.z + graspTarget.z) / 2, 3);
   });
 
   it('closes the gripper and pushes the cube flush against the fixed jaw', () => {
     const trajectory = computeTrajectory(kinematics, sourcePose, targetPose);
     if (!trajectory) { throw new Error('expected source pose to be reachable'); }
 
-    const pregrasp = trajectory.evaluate(3);
+    const grasp = trajectory.evaluate(3);
     // The close runs over stage 3 and completes at t = 4, where stage 4 (the
     // carry) takes over – so sample the fully-closed frame just before then.
     const closed = trajectory.evaluate(4 - 1e-6);
 
     // Gripper goes from open to closed across stage 3.
-    expect(pregrasp.gripper).toBeCloseTo(GRIPPER_OPEN);
+    expect(grasp.gripper).toBeCloseTo(GRIPPER_OPEN);
     expect(closed.gripper).toBeCloseTo(GRIPPER_CLOSED);
 
     // The arm stays put while the gripper closes.
-    expect(closed.joints).toEqual(pregrasp.joints);
+    expect(closed.joints).toEqual(grasp.joints);
 
     // The cube starts at its source pose and is shoved toward the fixed jaw by
     // the safety margin. The grasp face is chosen to make the whole carry
     // feasible, so the slide is along x but its sign depends on that choice.
-    expect(pregrasp.sourceCube).toEqual(sourcePose);
+    expect(grasp.sourceCube).toEqual(sourcePose);
     const slide = Math.hypot(
       closed.sourceCube.x - sourcePose.x,
       closed.sourceCube.y - sourcePose.y

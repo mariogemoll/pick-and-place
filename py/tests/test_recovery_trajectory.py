@@ -47,11 +47,11 @@ def test_free_grasp_recovery_lifts_vertically_before_carry():
     assert release.pre_release_delay == 0.0
     np.testing.assert_allclose(
         grasp.lift_matrix[:2, 3],
-        grasp.pregrasp_matrix[:2, 3],
+        grasp.grasp_matrix[:2, 3],
         atol=1e-12,
     )
     np.testing.assert_allclose(
-        grasp.lift_matrix[2, 3] - grasp.pregrasp_matrix[2, 3],
+        grasp.lift_matrix[2, 3] - grasp.grasp_matrix[2, 3],
         RECOVERY_LIFT_CUBE_Z - source.z,
         atol=1e-12,
     )

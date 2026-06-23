@@ -13,9 +13,9 @@ import {
   createCubeBody,
   createWorldFromCubeMatrix,
   type CubePose
-} from '../pregrasp-pose-shared/body-factories';
-import { createBodyMaterials } from '../pregrasp-pose-shared/materials';
-import { CANVAS_HEIGHT, CANVAS_WIDTH } from '../pregrasp-pose-shared/ui';
+} from '../grasp-pose-shared/body-factories';
+import { createBodyMaterials } from '../grasp-pose-shared/materials';
+import { CANVAS_HEIGHT, CANVAS_WIDTH } from '../grasp-pose-shared/ui';
 import {
   addWorkspaceOverlaysToScene,
   type WorkspaceOverlaySpec
@@ -23,11 +23,11 @@ import {
 
 export type { WorkspaceOverlaySpec };
 
-// Open the fixed/moving jaws to the same angle the pregrasp-pose
+// Open the fixed/moving jaws to the same angle the grasp-pose
 // visualizations use, so the rendered gripper matches the grasp geometry.
 const GRIPPER_OPEN_ANGLE = Math.PI / 3;
 
-export interface SimplePregraspIkScene {
+export interface SimpleGraspIkScene {
   scene: THREE.Scene;
   renderer: THREE.WebGLRenderer;
   camera: THREE.PerspectiveCamera;
@@ -39,12 +39,12 @@ export interface SimplePregraspIkScene {
   destroy(): void;
 }
 
-export function createSimplePregraspIkScene(
+export function createSimpleGraspIkScene(
   viewport: HTMLElement,
   model: WebModel,
   modelBasePath = '/so101_assets',
   workspaces?: WorkspaceOverlaySpec[]
-): SimplePregraspIkScene {
+): SimpleGraspIkScene {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(CANVAS_WIDTH, CANVAS_HEIGHT);

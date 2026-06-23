@@ -10,7 +10,7 @@ import {
 } from '../../ik/kinematics';
 import {
   type SimpleIkBranch,
-  solveSimplePregraspIk
+  solveSimpleGraspIk
 } from '../../ik/simple-ik';
 import {
   computeGlobalXyWorkspace,
@@ -20,7 +20,7 @@ import { loadWebModel } from '../../web-model';
 import {
   type CubePose,
   DEFAULT_CUBE_POSE
-} from '../pregrasp-pose-shared/body-factories';
+} from '../grasp-pose-shared/body-factories';
 import { buildWorkspaceOverlaySpecs } from '../workspace-overlay';
 import { createXyDragControls } from '../xy-drag-controls';
 import { createGraspMatrix } from './pose';
@@ -242,7 +242,7 @@ export async function initializeCanonicalGraspVisualization(
       const approach = approachVector(azimuth, pitch);
       const solutions = closings.flatMap(closingAzimuth => {
         const matrix = createGraspMatrix(pose, closingAzimuth, approach);
-        const result = solveSimplePregraspIk(kinematics, matrix);
+        const result = solveSimpleGraspIk(kinematics, matrix);
         if (result.type !== 'success') { return []; }
         // Camera sits on the gripper's +Y axis; its outward component is that
         // axis dotted with the radial. > 0 faces away from the base, < 0 inward.

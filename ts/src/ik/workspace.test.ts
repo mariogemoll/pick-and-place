@@ -12,11 +12,11 @@ import {
   CUBE_HALF_SIZE,
   type CubeFace,
   type CubePose
-} from '../visualizations/pregrasp-pose-shared/body-factories';
-import { createSimplePregraspMatrix } from '../visualizations/simple-pregrasp-pose/pose';
+} from '../visualizations/grasp-pose-shared/body-factories';
+import { createSimpleGraspMatrix } from '../visualizations/simple-grasp-pose/pose';
 import type { WebModel } from '../web-model';
 import { deriveSo101Kinematics } from './kinematics';
-import { solveSimplePregraspIk } from './simple-ik';
+import { solveSimpleGraspIk } from './simple-ik';
 import {
   anyYawCubeCenterBand,
   computeArmWorkspaceAtHeight,
@@ -37,7 +37,7 @@ const model = JSON.parse(
 const VERTICAL_FACES: CubeFace[] = ['+x', '-x', '+y', '-y'];
 
 // At a cube center (x, y) with the given yaw, can at least one vertical face be
-// grasped by the simple pregrasp IK?
+// grasped by the simple grasp IK?
 function anyFaceSolves(
   k: ReturnType<typeof deriveSo101Kinematics>,
   x: number,
@@ -46,9 +46,9 @@ function anyFaceSolves(
 ): boolean {
   const pose: CubePose = { x, y, z: CUBE_HALF_SIZE, roll: 0, pitch: 0, yaw };
   return VERTICAL_FACES.some(face => {
-    const matrix = createSimplePregraspMatrix(face, pose);
+    const matrix = createSimpleGraspMatrix(face, pose);
     if (matrix === undefined) { return false; }
-    return solveSimplePregraspIk(k, matrix).type === 'success';
+    return solveSimpleGraspIk(k, matrix).type === 'success';
   });
 }
 
@@ -162,7 +162,7 @@ describe('computeArmWorkspaceAtHeight (jaw contact reach at z = 1.5 cm)', () => 
     expect(armWs.radial.max).toBeGreaterThan(0);
   });
 
-  it('outer radius strictly exceeds the pregrasp ground sector', () => {
+  it('outer radius strictly exceeds the grasp ground sector', () => {
     const ground = computeSimpleWorkspace(k);
     expect(armWs.radial.max).toBeGreaterThan(ground.radial.max);
   });
@@ -186,11 +186,11 @@ describe('computeGlobalXyWorkspace (arm max reach, any joint config)', () => {
     expect(global.radial.min).toBeGreaterThanOrEqual(0);
     expect(global.radial.max).toBeGreaterThan(0);
     expect(Number.isNaN(global.targetHeight)).toBe(true);
-    // Must be substantially larger than the pregrasp-only sector.
+    // Must be substantially larger than the grasp-only sector.
     expect(global.radial.max).toBeGreaterThan(0.35);
   });
 
-  it('outer radius exceeds both pregrasp sectors', () => {
+  it('outer radius exceeds both grasp sectors', () => {
     const ground = computeSimpleWorkspace(k);
     const clearance = computeSimpleWorkspaceForCubeZ(k, CUBE_Z_1CM_OVER_GROUND_TOP);
     expect(global.radial.max).toBeGreaterThan(ground.radial.max);

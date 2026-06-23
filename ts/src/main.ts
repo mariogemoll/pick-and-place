@@ -16,6 +16,12 @@ import {
   initDummyVisualization
 } from './visualizations/dummy';
 import {
+  type GraspPoseVisualization,
+  initGraspPoseVisualization } from './visualizations/grasp-pose';
+import {
+  type GraspPoseBreakdownVisualization,
+  initGraspPoseBreakdownVisualization } from './visualizations/grasp-pose-breakdown';
+import {
   type GripperVisualization,
   initGripperVisualization
 } from './visualizations/gripper';
@@ -24,38 +30,30 @@ import {
   type PickAndPlaceVisualization
 } from './visualizations/pick-and-place';
 import {
-  initPregraspPoseVisualization,
-  type PregraspPoseVisualization
-} from './visualizations/pregrasp-pose';
-import {
-  initPregraspPoseBreakdownVisualization,
-  type PregraspPoseBreakdownVisualization
-} from './visualizations/pregrasp-pose-breakdown';
-import {
   initRobotVisualization,
   type RobotVisualization
 } from './visualizations/robot';
 import {
-  initSimplePregraspIkVisualization,
-  type SimplePregraspIkVisualization
-} from './visualizations/simple-pregrasp-ik';
+  initSimpleGraspIkVisualization,
+  type SimpleGraspIkVisualization
+} from './visualizations/simple-grasp-ik';
 import {
-  initSimplePregraspPoseVisualization,
-  type SimplePregraspPoseVisualization
-} from './visualizations/simple-pregrasp-pose';
+  initSimpleGraspPoseVisualization,
+  type SimpleGraspPoseVisualization
+} from './visualizations/simple-grasp-pose';
 import {
   initStandardSceneVisualization,
   type StandardSceneVisualization } from './visualizations/standard-scene';
 
 let dummyVisualization: DummyVisualization | null = null;
 let standardSceneVisualization: StandardSceneVisualization | null = null;
-let pregraspPoseVisualization: PregraspPoseVisualization | null = null;
-let pregraspPoseBreakdownVisualization: PregraspPoseBreakdownVisualization | null = null;
+let graspPoseVisualization: GraspPoseVisualization | null = null;
+let graspPoseBreakdownVisualization: GraspPoseBreakdownVisualization | null = null;
 let gripperVisualization: GripperVisualization | null = null;
 let robotVisualization: RobotVisualization | null = null;
 let bodyTreeVisualization: BodyTreeVisualization | null = null;
-let simplePregraspPoseVisualization: SimplePregraspPoseVisualization | null = null;
-let simplePregraspIkVisualization: SimplePregraspIkVisualization | null = null;
+let simpleGraspPoseVisualization: SimpleGraspPoseVisualization | null = null;
+let simpleGraspIkVisualization: SimpleGraspIkVisualization | null = null;
 let canonicalGraspVisualization: CanonicalGraspVisualization | null = null;
 let pickAndPlaceVisualization: PickAndPlaceVisualization | null = null;
 
@@ -80,35 +78,35 @@ function initialize(): void {
     });
   }
 
-  const pregraspPosePanel = document.getElementById('pregrasp-pose-visualization');
-  if (pregraspPosePanel) {
-    pregraspPoseVisualization?.destroy();
-    pregraspPoseVisualization = null;
+  const graspPosePanel = document.getElementById('grasp-pose-visualization');
+  if (graspPosePanel) {
+    graspPoseVisualization?.destroy();
+    graspPoseVisualization = null;
 
-    void initPregraspPoseVisualization(pregraspPosePanel).then(viz => {
-      pregraspPoseVisualization = viz;
+    void initGraspPoseVisualization(graspPosePanel).then(viz => {
+      graspPoseVisualization = viz;
     });
   }
 
-  const simplePregraspPosePanel =
-    document.getElementById('simple-pregrasp-pose-visualization');
-  if (simplePregraspPosePanel) {
-    simplePregraspPoseVisualization?.destroy();
-    simplePregraspPoseVisualization = null;
+  const simpleGraspPosePanel =
+    document.getElementById('simple-grasp-pose-visualization');
+  if (simpleGraspPosePanel) {
+    simpleGraspPoseVisualization?.destroy();
+    simpleGraspPoseVisualization = null;
 
-    void initSimplePregraspPoseVisualization(simplePregraspPosePanel).then(viz => {
-      simplePregraspPoseVisualization = viz;
+    void initSimpleGraspPoseVisualization(simpleGraspPosePanel).then(viz => {
+      simpleGraspPoseVisualization = viz;
     });
   }
 
-  const simplePregraspIkPanel =
-    document.getElementById('simple-pregrasp-ik-visualization');
-  if (simplePregraspIkPanel) {
-    simplePregraspIkVisualization?.destroy();
-    simplePregraspIkVisualization = null;
+  const simpleGraspIkPanel =
+    document.getElementById('simple-grasp-ik-visualization');
+  if (simpleGraspIkPanel) {
+    simpleGraspIkVisualization?.destroy();
+    simpleGraspIkVisualization = null;
 
-    void initSimplePregraspIkVisualization(simplePregraspIkPanel).then(viz => {
-      simplePregraspIkVisualization = viz;
+    void initSimpleGraspIkVisualization(simpleGraspIkPanel).then(viz => {
+      simpleGraspIkVisualization = viz;
     });
   }
 
@@ -135,14 +133,14 @@ function initialize(): void {
     });
   }
 
-  const pregraspPoseBreakdownPanel =
-    document.getElementById('pregrasp-pose-breakdown-visualization');
-  if (pregraspPoseBreakdownPanel) {
-    pregraspPoseBreakdownVisualization?.destroy();
-    pregraspPoseBreakdownVisualization = null;
+  const graspPoseBreakdownPanel =
+    document.getElementById('grasp-pose-breakdown-visualization');
+  if (graspPoseBreakdownPanel) {
+    graspPoseBreakdownVisualization?.destroy();
+    graspPoseBreakdownVisualization = null;
 
-    void initPregraspPoseBreakdownVisualization(pregraspPoseBreakdownPanel).then(viz => {
-      pregraspPoseBreakdownVisualization = viz;
+    void initGraspPoseBreakdownVisualization(graspPoseBreakdownPanel).then(viz => {
+      graspPoseBreakdownVisualization = viz;
     });
   }
 

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Closed-form IK for the simple (vertical) pregrasp pose.
+"""Closed-form IK for the simple (vertical) grasp pose.
 
 The gripper roll axis points straight up, so the approach is fixed (down) and
 only the two elbow branches of the planar 2R arm remain.
@@ -54,7 +54,7 @@ def _solve_2r(
     return (phi + alpha, -elbow_geom), (phi - alpha, elbow_geom)
 
 
-def solve_simple_pregrasp_ik(
+def solve_simple_grasp_ik(
     k: So101Kinematics, world_from_gripper: Mat4
 ) -> list[IkBranch]:
     """Return the within-limit elbow branches (possibly empty) for the gripper

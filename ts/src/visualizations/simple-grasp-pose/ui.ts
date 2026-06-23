@@ -6,39 +6,39 @@ import {
   appendFaceInputs,
   createPane,
   type CubePoseInputs,
-  type PregraspPosePane,
-  SIDE_FACES } from '../pregrasp-pose-shared/ui';
+  type GraspPosePane,
+  SIDE_FACES } from '../grasp-pose-shared/ui';
 
-export interface SimplePregraspPoseDom extends CubePoseInputs {
+export interface SimpleGraspPoseDom extends CubePoseInputs {
   root: HTMLDivElement;
-  pane: PregraspPosePane;
+  pane: GraspPosePane;
   faceInputs: HTMLInputElement[];
   resetButton: HTMLButtonElement;
   status: HTMLOutputElement;
 }
 
-export function buildUi(parent: HTMLElement): SimplePregraspPoseDom {
+export function buildUi(parent: HTMLElement): SimpleGraspPoseDom {
   const root = document.createElement('div');
-  root.className = 'visualization pregrasp-pose-viz-root';
+  root.className = 'visualization grasp-pose-viz-root';
 
   const controls = document.createElement('div');
-  controls.className = 'pregrasp-pose-breakdown-viz-controls';
+  controls.className = 'grasp-pose-breakdown-viz-controls';
   const faceInputs = appendFaceInputs(
-    controls, 'simple-pregrasp-pose-cube-face', SIDE_FACES
+    controls, 'simple-grasp-pose-cube-face', SIDE_FACES
   );
   const cubePoseInputs = appendCubePoseInputs(controls);
   const resetButton = document.createElement('button');
-  resetButton.className = 'simple-pregrasp-pose-viz-reset';
+  resetButton.className = 'simple-grasp-pose-viz-reset';
   resetButton.type = 'button';
   resetButton.textContent = 'Reset';
   controls.appendChild(resetButton);
   root.appendChild(controls);
 
   const status = document.createElement('output');
-  status.className = 'simple-pregrasp-pose-viz-status';
+  status.className = 'simple-grasp-pose-viz-status';
   root.appendChild(status);
 
-  const pane = createPane('Simple pregrasp pose', 'combined', 'final', true);
+  const pane = createPane('Simple grasp pose', 'combined', 'final', true);
   root.appendChild(pane.element);
 
   const placeholder = parent.querySelector('.placeholder');

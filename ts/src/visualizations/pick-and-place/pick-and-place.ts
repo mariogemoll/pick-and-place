@@ -13,7 +13,7 @@ import { loadWebModel } from '../../web-model';
 import {
   CUBE_HALF_SIZE,
   type CubePose
-} from '../pregrasp-pose-shared/body-factories';
+} from '../grasp-pose-shared/body-factories';
 import { createXyMultiDragControls } from '../xy-drag-controls';
 import { createCarryProfilePlot } from './carry-profile-plot';
 import { createPickAndPlaceScene } from './scene';

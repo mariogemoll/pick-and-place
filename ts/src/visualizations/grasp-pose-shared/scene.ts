@@ -8,28 +8,28 @@ import type { WebModel } from '../../web-model';
 import {
   type BodySelection,
   createBodies,
-  type PregraspPoseBodies,
+  type GraspPoseBodies,
   type TransformStage
 } from './bodies';
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from './ui';
 
-export interface PregraspPoseScene {
+export interface GraspPoseScene {
   scene: THREE.Scene;
   renderer: THREE.WebGLRenderer;
   camera: THREE.PerspectiveCamera;
   orbitControls: OrbitControls;
-  bodies: PregraspPoseBodies;
+  bodies: GraspPoseBodies;
   destroy(): void;
 }
 
-export async function createPregraspPoseScene(
+export async function createGraspPoseScene(
   viewport: HTMLElement,
   model: WebModel,
   modelBasePath = '/so101_assets',
   bodySelection: BodySelection = 'combined',
   transformStage: TransformStage = 'unaligned',
   hingeAngle = 0
-): Promise<PregraspPoseScene> {
+): Promise<GraspPoseScene> {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
   const width = viewport.clientWidth || CANVAS_WIDTH;
@@ -61,7 +61,7 @@ export async function createPregraspPoseScene(
   );
   scene.add(bodies.root);
 
-  framePregraspPoseScene({ camera, orbitControls, bodies });
+  frameGraspPoseScene({ camera, orbitControls, bodies });
 
   return {
     scene,
@@ -77,9 +77,9 @@ export async function createPregraspPoseScene(
   };
 }
 
-export function framePregraspPoseScene(
+export function frameGraspPoseScene(
   { camera, orbitControls, bodies }: Pick<
-    PregraspPoseScene, 'camera' | 'orbitControls' | 'bodies'
+    GraspPoseScene, 'camera' | 'orbitControls' | 'bodies'
   >
 ): void {
   const bounds = new THREE.Box3().setFromObject(bodies.root);

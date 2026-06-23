@@ -5,7 +5,7 @@ import * as THREE from 'three';
 
 import {
   GRIPPER_TARGET_POSITION
-} from '../visualizations/pregrasp-pose-shared/body-factories';
+} from '../visualizations/grasp-pose-shared/body-factories';
 import type { WebJoint, WebModel } from '../web-model';
 
 // The five actuated joints of the SO-101 arm, base to tool, in chain order.

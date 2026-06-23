@@ -13,12 +13,12 @@ import {
   type CubeFace,
   type CubePose,
   DEFAULT_CUBE_POSE
-} from '../visualizations/pregrasp-pose-shared/body-factories';
-import { createSimplePregraspMatrix } from '../visualizations/simple-pregrasp-pose/pose';
+} from '../visualizations/grasp-pose-shared/body-factories';
+import { createSimpleGraspMatrix } from '../visualizations/simple-grasp-pose/pose';
 import type { WebModel } from '../web-model';
 import { bodyWorldTransform } from './fk';
 import { deriveSo101Kinematics } from './kinematics';
-import { solveSimplePregraspIk } from './simple-ik';
+import { solveSimpleGraspIk } from './simple-ik';
 
 const model = JSON.parse(
   readFileSync(
@@ -43,7 +43,7 @@ function gripperPose(joints: Record<string, number>): {
   };
 }
 
-describe('solveSimplePregraspIk', () => {
+describe('solveSimpleGraspIk', () => {
   // Every branch the solver returns must reproduce the requested gripper pose
   // when fed back through forward kinematics. Sweep a grid of side grasps; some
   // are unreachable (notably the far +x face, limited by wrist roll) and are
@@ -54,9 +54,9 @@ describe('solveSimplePregraspIk', () => {
       for (let x = 0.12; x <= 0.32; x += 0.02) {
         for (let y = -0.15; y <= 0.15; y += 0.05) {
           const pose: CubePose = { ...DEFAULT_CUBE_POSE, x, y };
-          const worldFromGripper = createSimplePregraspMatrix(face, pose);
+          const worldFromGripper = createSimpleGraspMatrix(face, pose);
           if (!worldFromGripper) { continue; }
-          const result = solveSimplePregraspIk(k, worldFromGripper);
+          const result = solveSimpleGraspIk(k, worldFromGripper);
           if (result.type !== 'success') { continue; }
 
           const want = {
@@ -89,20 +89,20 @@ describe('solveSimplePregraspIk', () => {
     { face: '-y', x: 0.2, y: -0.06 }
   ];
   it.each(reachableCases)('finds a solution for the $face face at ($x, $y)', ({ face, x, y }) => {
-    const worldFromGripper = createSimplePregraspMatrix(face, {
+    const worldFromGripper = createSimpleGraspMatrix(face, {
       ...DEFAULT_CUBE_POSE, x, y
     });
     if (!worldFromGripper) { throw new Error('expected a vertical pose'); }
-    const result = solveSimplePregraspIk(k, worldFromGripper);
+    const result = solveSimpleGraspIk(k, worldFromGripper);
     expect(result.type).toBe('success');
   });
 
   it('keeps the wrist-roll axis (gripper z) vertical', () => {
-    const worldFromGripper = createSimplePregraspMatrix('-x', {
+    const worldFromGripper = createSimpleGraspMatrix('-x', {
       ...DEFAULT_CUBE_POSE, x: 0.2, y: 0
     });
     if (!worldFromGripper) { throw new Error('expected a vertical pose'); }
-    const result = solveSimplePregraspIk(k, worldFromGripper);
+    const result = solveSimpleGraspIk(k, worldFromGripper);
     if (result.type !== 'success') { throw new Error('expected success'); }
     for (const branch of result.branches) {
       expect(Math.abs(gripperPose(branch.joints).z.z)).toBeGreaterThan(1 - 1e-3);
@@ -110,10 +110,10 @@ describe('solveSimplePregraspIk', () => {
   });
 
   it('reports unreachable for a far-away target', () => {
-    const worldFromGripper = createSimplePregraspMatrix('-x', {
+    const worldFromGripper = createSimpleGraspMatrix('-x', {
       ...DEFAULT_CUBE_POSE, x: 1.5
     });
     if (!worldFromGripper) { throw new Error('expected a vertical pose'); }
-    expect(solveSimplePregraspIk(k, worldFromGripper).type).toBe('unreachable');
+    expect(solveSimpleGraspIk(k, worldFromGripper).type).toBe('unreachable');
   });
 });
