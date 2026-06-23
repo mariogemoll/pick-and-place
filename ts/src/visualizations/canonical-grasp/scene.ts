@@ -12,6 +12,7 @@ import {
 } from '../../web-model';
 import {
   createCubeBody,
+  createGripperBody,
   createWorldFromCubeMatrix,
   type CubePose
 } from '../grasp-pose-shared/body-factories';
@@ -34,16 +35,17 @@ export interface CanonicalGraspScene {
   cube: THREE.Object3D;
   setJoint(name: string, radians: number): void;
   updateCubePose(pose: CubePose): void;
+  updateGhostGraspPose(matrix: THREE.Matrix4 | null): void;
   resize(): void;
   destroy(): void;
 }
 
-export function createCanonicalGraspScene(
+export async function createCanonicalGraspScene(
   viewport: HTMLElement,
   model: WebModel,
   modelBasePath = '/so101_assets',
   workspaces?: WorkspaceOverlaySpec[]
-): CanonicalGraspScene {
+): Promise<CanonicalGraspScene> {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(CANVAS_WIDTH, CANVAS_HEIGHT);
@@ -89,6 +91,34 @@ export function createCanonicalGraspScene(
   const cubePart = createCubeBody(materials);
   scene.add(cubePart.body);
 
+  const ghostGripperPart = await createGripperBody(model, modelBasePath, materials);
+  ghostGripperPart.body.name = 'actual_grasp_ghost';
+  ghostGripperPart.body.visible = false;
+  ghostGripperPart.body.renderOrder = 10;
+  const ghostMaterials: THREE.Material[] = [];
+  ghostGripperPart.body.traverse(object => {
+    if (!(object instanceof THREE.Mesh)) { return; }
+    const mesh = object as THREE.Mesh;
+    const sourceMaterials: THREE.Material[] = Array.isArray(mesh.material)
+      ? mesh.material
+      : [mesh.material];
+    const meshMaterials = sourceMaterials.map(material => {
+      const clone = material.clone();
+      ghostMaterials.push(clone);
+      return clone;
+    });
+    mesh.material = Array.isArray(mesh.material) ? meshMaterials : meshMaterials[0];
+    for (const material of meshMaterials) {
+      if (material instanceof THREE.MeshStandardMaterial ||
+          material instanceof THREE.MeshBasicMaterial) {
+        material.transparent = true;
+        material.opacity = 0.24;
+        material.depthWrite = false;
+      }
+    }
+  });
+  scene.add(ghostGripperPart.body);
+
   function resize(): void {
     const width = viewport.clientWidth || CANVAS_WIDTH;
     const height = viewport.clientHeight || CANVAS_HEIGHT;
@@ -112,6 +142,15 @@ export function createCanonicalGraspScene(
         cubePart.body.position, cubePart.body.quaternion, cubePart.body.scale
       );
     },
+    updateGhostGraspPose(matrix: THREE.Matrix4 | null): void {
+      ghostGripperPart.body.visible = matrix !== null;
+      if (matrix === null) { return; }
+      matrix.decompose(
+        ghostGripperPart.body.position,
+        ghostGripperPart.body.quaternion,
+        ghostGripperPart.body.scale
+      );
+    },
     resize,
     destroy(): void {
       orbitControls.dispose();
@@ -120,6 +159,8 @@ export function createCanonicalGraspScene(
         for (const mat of mats) { mat.dispose(); }
       }
       cubePart.destroy();
+      ghostGripperPart.destroy();
+      for (const material of ghostMaterials) { material.dispose(); }
       materials.destroy();
       disposeOverlays();
     }

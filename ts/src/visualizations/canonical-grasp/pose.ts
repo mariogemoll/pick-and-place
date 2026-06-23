@@ -19,6 +19,9 @@ import {
 // the roll axis, so adding it backs the offset off by that much.
 const FACE_OFFSET = CUBE_HALF_SIZE + SAFETY_MARGIN + JAW_CONTACT_POSITION.x;
 
+// Back-off distance from the contact grasp to the pregrasp pose, in metres.
+export const PREGRASP_DISTANCE = 0.03;
+
 // World-from-gripper matrix for a grasp whose tool reaches the cube along
 // `approach` (a unit world direction from wrist to target) with the jaws closing
 // along the horizontal `closingAzimuth`. The fixed jaw sits one face offset to
@@ -45,4 +48,15 @@ export function createGraspMatrix(
     .applyMatrix3(new THREE.Matrix3().setFromMatrix4(matrix));
   matrix.setPosition(target.sub(offset));
   return matrix;
+}
+
+export function createPregraspMatrix(
+  graspMatrix: THREE.Matrix4,
+  approach: THREE.Vector3,
+  distance = PREGRASP_DISTANCE
+): THREE.Matrix4 {
+  const pregrasp = graspMatrix.clone();
+  const position = new THREE.Vector3().setFromMatrixPosition(pregrasp);
+  pregrasp.setPosition(position.addScaledVector(approach, -distance));
+  return pregrasp;
 }

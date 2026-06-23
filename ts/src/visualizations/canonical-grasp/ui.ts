@@ -27,6 +27,7 @@ export interface CanonicalGraspDom {
   radiusInput: HTMLInputElement;
   azimuthInput: HTMLInputElement;
   yawInput: HTMLInputElement;
+  showPregraspInput: HTMLInputElement;
   resetButton: HTMLButtonElement;
   status: HTMLOutputElement;
   branchContainer: HTMLDivElement;
@@ -148,6 +149,15 @@ export function buildUi(
     [{ value: 'tilt', label: 'Over the top' }, { value: 'side', label: 'From the side' }]
   );
 
+  const pregraspLabel = document.createElement('label');
+  pregraspLabel.className = 'canonical-grasp-viz-checkbox';
+  const showPregraspInput = document.createElement('input');
+  showPregraspInput.type = 'checkbox';
+  const pregraspText = document.createElement('span');
+  pregraspText.textContent = 'Show pregrasp pose';
+  pregraspLabel.append(showPregraspInput, pregraspText);
+  controls.appendChild(pregraspLabel);
+
   const resetButton = document.createElement('button');
   resetButton.className = 'canonical-grasp-viz-reset';
   resetButton.type = 'button';
@@ -177,6 +187,6 @@ export function buildUi(
   return {
     root, viewport, coordModeInputs, approachModeInputs, cartesianGroup,
     radialGroup, xInput, yInput, radiusInput, azimuthInput, yawInput,
-    resetButton, status, branchContainer
+    showPregraspInput, resetButton, status, branchContainer
   };
 }

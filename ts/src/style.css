@@ -660,6 +660,15 @@ canvas {
   color: #475569;
 }
 
+.canonical-grasp-viz-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #475569;
+  cursor: pointer;
+  user-select: none;
+}
+
 @media (width <= 720px) {
   .canonical-grasp-viz-layout {
     grid-template-columns: minmax(0, 1fr);
