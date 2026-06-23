@@ -5,6 +5,7 @@ import * as THREE from 'three';
 
 import { deriveSo101Kinematics, NEUTRAL_ARM_JOINTS } from '../../ik/kinematics';
 import { loadWebModel } from '../../web-model';
+import { robotModelWithBaseOnFloor } from '../robot-model';
 import { buildWorkspaceOverlaySpecs } from '../workspace-overlay';
 import { createRobotScene } from './scene';
 import { buildUi, formatDegrees } from './ui';
@@ -22,7 +23,7 @@ export async function initializeRobotVisualization(
   parent: HTMLElement,
   options: RobotVisualizationOptions = {}
 ): Promise<RobotVisualization> {
-  const model = await loadWebModel(options.modelUrl);
+  const model = robotModelWithBaseOnFloor(await loadWebModel(options.modelUrl));
   const neutralJointValues: Partial<Record<string, number>> = NEUTRAL_ARM_JOINTS;
   const joints = model.bodies.flatMap(body => body.joints).flatMap(joint => {
     if (joint.type !== 'hinge' || joint.range === undefined) { return []; }

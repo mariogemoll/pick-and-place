@@ -38,14 +38,12 @@ from pick_and_place.trajectory import (
 from pick_and_place.workspace_overlays import (
     AZIMUTH_MAX,
     AZIMUTH_MIN,
+    CANONICAL_PICKUP_OVERLAY,
     PAN_AXIS,
-    WORKSPACE_OVERLAYS,
     CUBE_PLACEMENT_OVERLAY,
     is_cube_drop_allowed,
     is_cube_placement_allowed,
 )
-
-_CLEARANCE_OVERLAY = next(o for o in WORKSPACE_OVERLAYS if o.name == "workspace_clearance_grasp")
 
 # ±radians of random joint perturbation applied to the neutral start/end pose.
 _NEAR_NEUTRAL_JOINT_SCALE = 0.4
@@ -68,6 +66,12 @@ _HUNT_PAN_SCALE = 1.7
 # sampled start pose to be accepted, so the arm begins well up in the air rather
 # than skimming (or buried in) the ground.
 MIN_START_CLEARANCE = 0.10
+PICKUP_YAW_DEVIATION = math.pi / 4.0
+
+
+def pickup_yaw_from_azimuth(azimuth: float, deviation: float = 0.0) -> float:
+    """Return cube yaw relative to the local pickup azimuth frame."""
+    return azimuth + deviation
 
 
 class EpisodeSamplingError(RuntimeError):
@@ -90,8 +94,9 @@ class PreflightCollision:
 
 
 def sample_cube(rng: np.random.Generator) -> CubePose:
-    """Sample a cube pose in the clearance sector and inside the frame rails."""
-    r_inner, r_outer = _CLEARANCE_OVERLAY.inner_radius, _CLEARANCE_OVERLAY.outer_radius
+    """Sample a cube pose in the canonical pick-lift sector."""
+    r_inner = CANONICAL_PICKUP_OVERLAY.inner_radius
+    r_outer = CANONICAL_PICKUP_OVERLAY.outer_radius
     while True:
         # Uniform radial sampling to prevent points bunching up at the outer edge.
         r = rng.uniform(r_inner, r_outer)
@@ -100,7 +105,10 @@ def sample_cube(rng: np.random.Generator) -> CubePose:
         y = PAN_AXIS[1] + r * math.sin(theta)
         if is_cube_placement_allowed(x, y):
             break
-    yaw = rng.uniform(0.0, 2 * math.pi)
+    yaw = pickup_yaw_from_azimuth(
+        theta,
+        rng.uniform(-PICKUP_YAW_DEVIATION, PICKUP_YAW_DEVIATION),
+    )
     return CubePose(
         x=x,
         y=y,
@@ -574,8 +582,8 @@ def prepare_episode(
     success or, if ``max_attempts`` is set, that many attempts fail — then raises
     :class:`EpisodeSamplingError`.
 
-    Set ``free_grasp`` for cleanup recovery: the source may be tilted and may
-    lie outside the vertical-face pickup annulus.
+    ``free_grasp`` keeps the low recovery drop timing, but pickup itself uses
+    the same canonical full-range grasp as normal episodes.
     """
     fixed_source = source is not None
     fixed_target = target is not None
@@ -590,7 +598,7 @@ def prepare_episode(
 
     source_allowed = is_cube_drop_allowed if free_grasp else is_cube_placement_allowed
     if fixed_source and not source_allowed(source.x, source.y):
-        zone = "drop zone" if free_grasp else "allowed pickup zone"
+        zone = "allowed drop zone" if free_grasp else "allowed pickup zone"
         reason = f"source ({source.x:.4f}, {source.y:.4f}) is outside the {zone}"
         _write_failed_trajectory_note(failed_trajectory_dir, reason, source=source, target=target)
         raise EpisodeSamplingError(reason)

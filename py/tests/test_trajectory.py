@@ -42,6 +42,21 @@ def test_vertical_zone_prefers_near_vertical_drops():
         assert float(np.dot(axis, WORLD_UP)) >= np.cos(max_angle) - 1e-7
 
 
+def test_grasp_choice_exposes_distillation_metadata():
+    source = CubePose(x=0.20, y=-0.12, z=CUBE_HALF_SIZE)
+    model, _ = _build_model(source)
+    kinematics = derive_kinematics(model)
+
+    grasp = next(grasp_candidates(kinematics, source))
+
+    assert grasp.face in {"+x", "-x", "+y", "-y"}
+    assert grasp.elbow in {"up", "down"}
+    assert 0.0 <= grasp.pitch <= np.pi
+    assert abs(grasp.roll_offset) <= np.pi / 4.0
+    assert np.isfinite(grasp.closing_azimuth)
+    assert np.isfinite(grasp.camera_outward)
+
+
 def test_fixed_target_must_be_in_allowed_drop_zone():
     source = CubePose(x=0.20, y=-0.12, z=CUBE_HALF_SIZE)
     target_on_apriltag_exclusion = CubePose(x=0.10, y=0.20, z=CUBE_HALF_SIZE)

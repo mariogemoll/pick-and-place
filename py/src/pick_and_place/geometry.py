@@ -6,6 +6,11 @@
 The "simple grasp" pose keeps the gripper vertical (roll axis up, jaws closing
 horizontally onto a vertical cube face).
 
+The canonical grasp pose generalizes that same contact geometry: the jaw-closing
+axis is snapped to one of the cube's four side faces, while the approach may
+tilt in the radial/vertical plane so the same grasp works throughout the broader
+floor workspace.
+
 Naming note: ``grasp`` here is the gripper pose *at* the cube (open, ready to
 close) and a raised ``grasp`` (positive ``z_offset``) is the "hover". In
 canonical grasp terminology the raised pose is the *pre-grasp / approach* pose
@@ -19,7 +24,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from pick_and_place import transforms as tf
-from pick_and_place.transforms import Mat4
+from pick_and_place.transforms import Mat4, Vec3
 
 # Fixed-jaw tip collision box (the innermost box of the fixed-jaw model).
 _TIP_BOX_POS = np.array((-0.01189, -0.00015, -0.099363))
@@ -53,6 +58,9 @@ GRIPPER_TARGET_POSITION = np.array((0.0, 0.0, _TIP_BOX_POS[2]))
 CubeFace = str  # one of '+x', '-x', '+y', '-y', '+z', '-z'
 
 VERTICAL_FACES: tuple[CubeFace, ...] = ("+x", "-x", "+y", "-y")
+
+CANONICAL_PREGRASP_DISTANCE = 0.03
+CANONICAL_FACE_OFFSET = CUBE_HALF_SIZE + SAFETY_MARGIN + JAW_CONTACT_POSITION[0]
 
 
 @dataclass(frozen=True)
@@ -128,3 +136,39 @@ def grasp_matrix(face: CubeFace, pose: CubePose, z_offset: float = 0.0) -> Mat4 
         return None
     pos = tf.get_position(grasp)
     return tf.with_position(grasp, pos + np.array((0.0, 0.0, z_offset)))
+
+
+def canonical_grasp_matrix(
+    pose: CubePose,
+    closing_azimuth: float,
+    approach: Vec3,
+) -> Mat4:
+    """World-from-gripper for the full-range canonical grasp.
+
+    ``approach`` is the unit world direction from wrist to cube target.
+    ``closing_azimuth`` is the horizontal jaw-closing direction.
+    """
+    z_axis = -np.asarray(approach, dtype=np.float64)
+    z_axis /= np.linalg.norm(z_axis)
+    x_axis = np.array((np.cos(closing_azimuth), np.sin(closing_azimuth), 0.0))
+    y_axis = np.cross(z_axis, x_axis)
+    y_axis /= np.linalg.norm(y_axis)
+    x_axis = np.cross(y_axis, z_axis)
+    x_axis /= np.linalg.norm(x_axis)
+
+    matrix = tf.make_basis(x_axis, y_axis, z_axis)
+    target = np.array((pose.x, pose.y, pose.z)) - x_axis * CANONICAL_FACE_OFFSET
+    gripper_offset = matrix[:3, :3] @ GRIPPER_TARGET_POSITION
+    return tf.with_position(matrix, target - gripper_offset)
+
+
+def canonical_pregrasp_matrix(
+    grasp: Mat4,
+    approach: Vec3,
+    distance: float = CANONICAL_PREGRASP_DISTANCE,
+) -> Mat4:
+    """Back off from the canonical contact grasp along the approach line."""
+    return tf.with_position(
+        grasp,
+        tf.get_position(grasp) - np.asarray(approach, dtype=np.float64) * distance,
+    )

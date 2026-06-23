@@ -26,23 +26,26 @@ import numpy as np
 from scipy.spatial.transform import Rotation, Slerp
 
 from pick_and_place.geometry import (
-    CUBE_HALF_SIZE,
     CubeFace,
     CubePose,
     GRIPPER_TARGET_POSITION,
-    JAW_CONTACT_POSITION,
+    CANONICAL_PREGRASP_DISTANCE,
     SAFETY_MARGIN,
-    VERTICAL_FACES,
     WORLD_UP,
-    grasp_matrix,
+    canonical_grasp_matrix,
+    canonical_pregrasp_matrix,
     world_from_cube,
-    world_from_cube_contact,
 )
 from pick_and_place.ik import solve_simple_grasp_ik
 from pick_and_place.kinematics import ARM_JOINT_NAMES, So101Kinematics
 from pick_and_place import transforms as tf
 from pick_and_place.transforms import Mat4, Vec3
-from pick_and_place.workspace_overlays import is_cube_drop_allowed, is_vertical_grip_allowed
+from pick_and_place.workspace_overlays import (
+    CANONICAL_PICKUP_OVERLAY,
+    CUBE_PLACEMENT_OVERLAY,
+    is_cube_drop_allowed,
+    is_vertical_grip_allowed,
+)
 
 # Number of intermediate heights checked along the hover→grasp descent when
 # selecting a grasp. Catching joint-limit violations between endpoints prevents
@@ -63,6 +66,53 @@ RECOVERY_DROP_CUBE_CENTER_Z = 0.03
 # Vertical lift after release, preserving the chosen drop orientation until the
 # open jaws clear the cube.
 POSTDROP_LIFT_Z = 0.04
+
+# Full-range canonical grasp limits and search order.
+MIN_CANONICAL_GRASP_RADIUS = CANONICAL_PICKUP_OVERLAY.inner_radius
+MAX_CANONICAL_GRASP_RADIUS = CANONICAL_PICKUP_OVERLAY.outer_radius
+MAX_RECOVERY_GRASP_RADIUS = CUBE_PLACEMENT_OVERLAY.outer_radius
+MIN_CANONICAL_AZIMUTH = CANONICAL_PICKUP_OVERLAY.azimuth_min
+MAX_CANONICAL_AZIMUTH = CANONICAL_PICKUP_OVERLAY.azimuth_max
+# Lift the canonical side grip slightly above the cube center. At the far edge of
+# the pickup sector, the tilted jaw would otherwise put its low collision box a
+# few millimetres through the floor while still being IK-feasible.
+CANONICAL_GRASP_Z_OFFSET = 0.005
+_HORIZONTAL_GRASP_RADIUS = 0.36
+_SQUARE_TOP_DOWN_PITCH = math.pi / 2.0
+_CANONICAL_PITCHES = (
+    _SQUARE_TOP_DOWN_PITCH,
+    *(
+        math.radians(deg)
+        for deg in sorted(
+            (deg for deg in range(10, 171, 2) if deg != 90),
+            key=lambda deg: abs(deg - 90),
+        )
+    ),
+)
+_OUTER_HORIZONTAL_PITCHES = tuple(
+    math.radians(deg)
+    for deg in sorted(range(10, 61, 2), key=lambda deg: (abs(deg - 16), deg))
+)
+_CANONICAL_ROLL_OFFSETS = tuple(
+    math.radians(deg) for deg in (0, -10, 10, -20, 20, -30, 30, -45, 45)
+)
+
+
+def _canonical_pitch_order(radius: float) -> tuple[float, ...]:
+    if radius <= _HORIZONTAL_GRASP_RADIUS:
+        return _CANONICAL_PITCHES
+    return (
+        *_OUTER_HORIZONTAL_PITCHES,
+        *(pitch for pitch in _CANONICAL_PITCHES if pitch not in _OUTER_HORIZONTAL_PITCHES),
+    )
+
+
+def _roll_grasp_about_tool_axis(grasp: Mat4, roll_offset: float) -> Mat4:
+    if roll_offset == 0.0:
+        return grasp
+    out = grasp.copy()
+    out[:3, :3] = grasp[:3, :3] @ tf.rot_z(roll_offset)[:3, :3]
+    return out
 
 # Gripper joint angle at the hover grasp: 40 deg open.
 GRIPPER_OPEN = math.radians(40.0)
@@ -273,6 +323,10 @@ class GraspChoice:
 
     face: CubeFace
     elbow: str
+    pitch: float
+    roll_offset: float
+    closing_azimuth: float
+    camera_outward: float
     hover_joints: dict[str, float]
     grasp_joints: dict[str, float]
     hover_matrix: Mat4
@@ -282,151 +336,120 @@ class GraspChoice:
     inward_normal: Vec3
 
 
-def _face_naturalness(k: So101Kinematics, face: CubeFace, source: CubePose) -> float:
-    """Dot product of the face outward-normal with the cube→robot direction.
-
-    Higher means the face is pointing more toward the robot, i.e. is the most
-    natural side to approach from. Used to sort candidates before trying IK, so
-    the arm never falls through to a far-side face when a near-side one is only
-    slightly roll-blocked.
-    """
-    dx = k.pan_axis[0] - source.x
-    dy = k.pan_axis[1] - source.y
-    dist = math.hypot(dx, dy)
-    if dist < 1e-6:
-        return 0.0
-    c, s = math.cos(source.yaw), math.sin(source.yaw)
-    normals: dict[CubeFace, tuple[float, float]] = {
-        "+x": (c, s),
-        "-x": (-c, -s),
-        "+y": (-s, c),
-        "-y": (s, -c),
-    }
-    nx, ny = normals[face]
-    return (nx * dx + ny * dy) / dist
+def _normalize_angle(angle: float) -> float:
+    result = angle % (2.0 * math.pi)
+    if result > math.pi:
+        result -= 2.0 * math.pi
+    if result <= -math.pi:
+        result += 2.0 * math.pi
+    return result
 
 
-def grasp_candidates(k: So101Kinematics, source: CubePose) -> Iterator[GraspChoice]:
-    """Yield every IK-feasible grasp in preference order (naturalness, then elbow-up).
+def _square_to_cube_face(nominal: float, cube_yaw: float) -> float:
+    quarter = math.pi / 2.0
+    return cube_yaw + round((nominal - cube_yaw) / quarter) * quarter
 
-    Faces are tried in order of naturalness (outward normal most aligned with
-    cube→robot direction first). For each candidate the entire hover→grasp
-    descent is verified at ``_N_DESCENT_CHECKS`` intermediate heights so the IK
-    never needs to fall back to the joint lerp mid-descent.
-    """
-    hover_offset = SOURCE_HOVER_TIP_Z - source.z
-    sorted_faces = sorted(
-        VERTICAL_FACES, key=lambda f: _face_naturalness(k, f, source), reverse=True
+
+def _face_from_closing(closing_azimuth: float, cube_yaw: float) -> CubeFace:
+    local = _normalize_angle(closing_azimuth - cube_yaw)
+    index = int(round(local / (math.pi / 2.0))) % 4
+    return ("+x", "+y", "-x", "-y")[index]
+
+
+def _canonical_approach_vector(radial_azimuth: float, pitch: float) -> Vec3:
+    horizontal = math.cos(pitch)
+    return np.array(
+        (
+            math.cos(radial_azimuth) * horizontal,
+            math.sin(radial_azimuth) * horizontal,
+            -math.sin(pitch),
+        )
     )
-    for face in sorted_faces:
-        hover = grasp_matrix(face, source, hover_offset)
-        grasp = grasp_matrix(face, source)
-        if hover is None or grasp is None:
-            continue
-        hover_branches = solve_simple_grasp_ik(k, hover)
-        grasp_branches = solve_simple_grasp_ik(k, grasp)
-        for elbow in ("up", "down"):
-            hover_branch = next((b for b in hover_branches if b.elbow == elbow), None)
-            grasp_branch = next((b for b in grasp_branches if b.elbow == elbow), None)
-            if hover_branch is None or grasp_branch is None:
-                continue
-            descent_ok = True
-            for i in range(1, _N_DESCENT_CHECKS):
-                frac = i / _N_DESCENT_CHECKS
-                inter = grasp_matrix(face, source, hover_offset * (1.0 - frac))
-                if inter is None:
-                    descent_ok = False
-                    break
-                if not any(b.elbow == elbow for b in solve_simple_grasp_ik(k, inter)):
-                    descent_ok = False
-                    break
-            if not descent_ok:
-                continue
-            inward_normal = tf.transform_direction(world_from_cube_contact(face, source), WORLD_UP)
-            yield GraspChoice(
-                face=face,
-                elbow=elbow,
-                hover_joints=hover_branch.joints,
-                grasp_joints=grasp_branch.joints,
-                hover_matrix=hover,
-                grasp_matrix=grasp,
-                lift_joints=hover_branch.joints,
-                lift_matrix=hover,
-                inward_normal=inward_normal,
-            )
 
 
-def free_grasp_candidates(k: So101Kinematics, source: CubePose) -> Iterator[GraspChoice]:
-    """Yield cleanup grasps with a horizontal jaw axis and free tool pitch."""
-    cube_matrix = world_from_cube(source)
-    cube_rotation = cube_matrix[:3, :3]
-    cube_center = tf.get_position(cube_matrix)
-    samples: list[tuple[float, float]] = []
-    for wrist_roll in np.linspace(
-        k.joint_limits["wrist_roll"].min,
-        k.joint_limits["wrist_roll"].max,
-        16,
+def _grasp_candidates(
+    k: So101Kinematics,
+    source: CubePose,
+    *,
+    max_radius: float,
+) -> Iterator[GraspChoice]:
+    """Yield full-range canonical grasps in preference order.
+
+    The jaw-closing axis is perpendicular to the radial line from the pan axis
+    and snapped to the nearest cube face. The approach starts square top-down and
+    tilts only as far as needed to make both the contact grasp and the 3 cm
+    pregrasp reachable, preferring the orientation with the wrist camera facing
+    outward from the base.
+    """
+    radius = math.hypot(source.x - k.pan_axis[0], source.y - k.pan_axis[1])
+    if (
+        radius < MIN_CANONICAL_GRASP_RADIUS - 1e-9
+        or radius > max_radius + 1e-9
     ):
-        samples.append((-math.pi / 2.0, float(wrist_roll)))
-    lateral_roll = math.pi / 2.0 - k.wrist_roll_zero_twist
-    for tool_pitch in np.linspace(-math.pi, math.pi, 24, endpoint=False):
-        samples.append((float(tool_pitch), lateral_roll))
+        return
+    azimuth = math.atan2(source.y - k.pan_axis[1], source.x - k.pan_axis[0])
+    if (
+        azimuth < MIN_CANONICAL_AZIMUTH - 1e-9
+        or azimuth > MAX_CANONICAL_AZIMUTH + 1e-9
+    ):
+        return
 
-    candidates: list[GraspChoice] = []
-    for tool_pitch, wrist_roll in samples:
-        azimuth = math.atan2(source.y - k.pan_axis[1], source.x - k.pan_axis[0])
-        grasp = tf.identity()
-        inward = np.zeros(3)
-        for _ in range(6):
-            radial = np.array((math.cos(azimuth), math.sin(azimuth), 0.0))
-            lateral = np.array((-math.sin(azimuth), math.cos(azimuth), 0.0))
-            approach = radial * math.cos(tool_pitch) + WORLD_UP * math.sin(tool_pitch)
-            zero_roll_x = np.cross(approach, lateral)
-            zero_roll_x /= np.linalg.norm(zero_roll_x)
-            roll = wrist_roll + k.wrist_roll_zero_twist
-            inward = zero_roll_x * math.cos(roll) + lateral * math.sin(roll)
-            if abs(float(inward[2])) > 0.15:
-                break
-            gripper_z = -approach
-            gripper_y = np.cross(gripper_z, inward)
-            grasp[:3, :3] = np.column_stack((inward, gripper_y, gripper_z))
-            local_inward = cube_rotation.T @ inward
-            extent = CUBE_HALF_SIZE * float(np.sum(np.abs(local_inward)))
-            jaw_contact = cube_center - inward * (extent + SAFETY_MARGIN)
-            grasp[:3, 3] = jaw_contact - grasp[:3, :3] @ JAW_CONTACT_POSITION
-            target = tf.transform_point(grasp, GRIPPER_TARGET_POSITION)
-            azimuth = math.atan2(target[1] - k.pan_axis[1], target[0] - k.pan_axis[0])
-        else:
-            hover = tf.with_position(grasp, tf.get_position(grasp) + grasp[:3, 2] * 0.03)
-            recovery_lift = tf.with_position(
-                grasp,
-                tf.get_position(grasp)
-                + WORLD_UP * max(0.0, RECOVERY_LIFT_CUBE_Z - source.z),
+    closings = tuple(
+        _square_to_cube_face(nominal, source.yaw)
+        for nominal in (azimuth + math.pi / 2.0, azimuth - math.pi / 2.0)
+    )
+    radial = np.array((math.cos(azimuth), math.sin(azimuth), 0.0))
+    first_reachable_pitch: float | None = None
+    pending_inward: list[tuple[float, float, GraspChoice]] = []
+    for pitch in _canonical_pitch_order(radius):
+        approach = _canonical_approach_vector(azimuth, pitch)
+        pitch_candidates: list[tuple[float, float, GraspChoice]] = []
+        for closing in closings:
+            base_grasp = canonical_grasp_matrix(source, closing, approach)
+            unrolled_grasp = tf.with_position(
+                base_grasp,
+                tf.get_position(base_grasp) + WORLD_UP * CANONICAL_GRASP_Z_OFFSET,
             )
-            grasp_branches = solve_simple_grasp_ik(k, grasp)
-            hover_branches = solve_simple_grasp_ik(k, hover)
-            lift_branches = solve_simple_grasp_ik(k, recovery_lift)
-            for elbow in ("up", "down"):
-                grasp_branch = next((b for b in grasp_branches if b.elbow == elbow), None)
-                hover_branch = next((b for b in hover_branches if b.elbow == elbow), None)
-                lift_branch = next((b for b in lift_branches if b.elbow == elbow), None)
-                if grasp_branch is None or hover_branch is None or lift_branch is None:
-                    continue
-                descent_ok = all(
-                    any(
-                        b.elbow == elbow
-                        for b in solve_simple_grasp_ik(
-                            k,
-                            tf.with_position(
-                                grasp,
-                                tf.get_position(grasp)
-                                + grasp[:3, 2] * 0.03 * (1.0 - i / _N_DESCENT_CHECKS),
-                            ),
-                        )
-                    )
-                    for i in range(1, _N_DESCENT_CHECKS)
+            face = _face_from_closing(closing, source.yaw)
+            inward_normal = unrolled_grasp[:3, 0].copy()
+            for roll_offset in _CANONICAL_ROLL_OFFSETS:
+                grasp = _roll_grasp_about_tool_axis(unrolled_grasp, roll_offset)
+                hover = canonical_pregrasp_matrix(grasp, approach, CANONICAL_PREGRASP_DISTANCE)
+                recovery_lift = tf.with_position(
+                    grasp,
+                    tf.get_position(grasp)
+                    + WORLD_UP * max(0.0, RECOVERY_LIFT_CUBE_Z - source.z),
                 )
-                if descent_ok:
+                grasp_branches = solve_simple_grasp_ik(k, grasp)
+                hover_branches = solve_simple_grasp_ik(k, hover)
+                lift_branches = solve_simple_grasp_ik(k, recovery_lift)
+                if not grasp_branches or not hover_branches or not lift_branches:
+                    continue
+                camera_outward = float(np.dot(grasp[:3, 1], radial))
+                for elbow in ("up", "down"):
+                    grasp_branch = next((b for b in grasp_branches if b.elbow == elbow), None)
+                    hover_branch = next((b for b in hover_branches if b.elbow == elbow), None)
+                    lift_branch = next((b for b in lift_branches if b.elbow == elbow), None)
+                    if grasp_branch is None or hover_branch is None or lift_branch is None:
+                        continue
+                    descent_ok = all(
+                        any(
+                            b.elbow == elbow
+                            for b in solve_simple_grasp_ik(
+                                k,
+                                tf.with_position(
+                                    grasp,
+                                    tf.get_position(grasp)
+                                    - approach
+                                    * CANONICAL_PREGRASP_DISTANCE
+                                    * (1.0 - i / _N_DESCENT_CHECKS),
+                                ),
+                            )
+                        )
+                        for i in range(1, _N_DESCENT_CHECKS)
+                    )
+                    if not descent_ok:
+                        continue
                     lift_ok = all(
                         any(
                             b.elbow == elbow
@@ -444,35 +467,71 @@ def free_grasp_candidates(k: So101Kinematics, source: CubePose) -> Iterator[Gras
                     )
                     if not lift_ok:
                         continue
-                    candidates.append(
-                        GraspChoice(
-                            face="free",
-                            elbow=elbow,
-                            hover_joints=hover_branch.joints,
-                            grasp_joints=grasp_branch.joints,
-                            hover_matrix=hover,
-                            grasp_matrix=grasp,
-                            lift_joints=lift_branch.joints,
-                            lift_matrix=recovery_lift,
-                            inward_normal=inward.copy(),
-                        )
+                    pitch_candidates.append(
+                        (
+                            camera_outward,
+                            abs(roll_offset),
+                            GraspChoice(
+                                face=face,
+                                elbow=elbow,
+                                pitch=pitch,
+                                roll_offset=roll_offset,
+                                closing_azimuth=closing,
+                                camera_outward=camera_outward,
+                                hover_joints=hover_branch.joints,
+                                grasp_joints=grasp_branch.joints,
+                                hover_matrix=hover,
+                                grasp_matrix=grasp,
+                                lift_joints=lift_branch.joints,
+                                lift_matrix=recovery_lift,
+                                inward_normal=inward_normal,
+                            ),
+                        ),
                     )
 
-    def preference(candidate: GraspChoice) -> tuple[float, float, float, int]:
-        local_inward = cube_rotation.T @ candidate.inward_normal
-        face_alignment_error = 1.0 - float(np.max(np.abs(local_inward)))
-        above_approach_error = 1.0 - float(np.dot(candidate.grasp_matrix[:3, 2], WORLD_UP))
-        travel = sum(
-            abs(candidate.hover_joints[name] - NEUTRAL_ARM_JOINTS[name]) for name in ARM_JOINT_NAMES
+        if not pitch_candidates:
+            continue
+        if first_reachable_pitch is None:
+            first_reachable_pitch = pitch
+        pitch_candidates.sort(
+            key=lambda item: (
+                item[1] > 0.0,
+                item[0] <= 0.0,
+                0 if item[2].elbow == "up" else 1,
+                item[1],
+                -item[0],
+            )
         )
-        return (
-            face_alignment_error,
-            above_approach_error,
-            travel,
-            0 if candidate.elbow == "up" else 1,
-        )
+        outward = [item for item in pitch_candidates if item[0] > 0.0]
+        if outward:
+            for _, _, candidate in outward:
+                yield candidate
+            for _, _, candidate in pending_inward:
+                yield candidate
+            return
+        pending_inward.extend(pitch_candidates)
 
-    yield from sorted(candidates, key=preference)
+    if first_reachable_pitch is not None:
+        for _, _, candidate in sorted(
+            pending_inward,
+            key=lambda item: (
+                item[1] > 0.0,
+                0 if item[2].elbow == "up" else 1,
+                item[1],
+                -item[0],
+            ),
+        ):
+            yield candidate
+
+
+def grasp_candidates(k: So101Kinematics, source: CubePose) -> Iterator[GraspChoice]:
+    """Yield normal pickup grasps inside the smoke-tested canonical envelope."""
+    yield from _grasp_candidates(k, source, max_radius=MAX_CANONICAL_GRASP_RADIUS)
+
+
+def free_grasp_candidates(k: So101Kinematics, source: CubePose) -> Iterator[GraspChoice]:
+    """Recovery can reach into the broader cleanup area."""
+    yield from _grasp_candidates(k, source, max_radius=MAX_RECOVERY_GRASP_RADIUS)
 
 
 def select_grasp(k: So101Kinematics, source: CubePose) -> GraspChoice:

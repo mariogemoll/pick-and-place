@@ -20,6 +20,7 @@ def test_export_robot_writes_matching_xml_and_web_manifest(tmp_path):
 
     assert manifest["format"] == "pick-and-place-web-model"
     bodies = {body["name"]: body for body in manifest["bodies"]}
+    assert bodies["base"]["position"] == [0.0, 0.0, 0.0072]
     assert bodies["shoulder"]["parent"] == "base"
     assert bodies["shoulder"]["joints"][0]["name"] == "shoulder_pan"
     assert bodies["shoulder"]["joints"][0]["range"] == [

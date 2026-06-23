@@ -4,14 +4,18 @@
 import * as THREE from 'three';
 
 import {
+  type CanonicalGraspChoice,
+  MAX_CANONICAL_AZIMUTH,
+  MAX_CANONICAL_GRASP_RADIUS,
+  MIN_CANONICAL_AZIMUTH,
+  selectCanonicalGrasp
+} from '../../ik/canonical-grasp';
+import {
   ARM_JOINT_NAMES,
   deriveSo101Kinematics,
   NEUTRAL_ARM_JOINTS
 } from '../../ik/kinematics';
-import {
-  type SimpleIkBranch,
-  solveSimpleGraspIk
-} from '../../ik/simple-ik';
+import type { SimpleIkBranch } from '../../ik/simple-ik';
 import {
   computeGlobalXyWorkspace,
   sectorBoundingBox
@@ -21,16 +25,12 @@ import {
   type CubePose,
   DEFAULT_CUBE_POSE
 } from '../grasp-pose-shared/body-factories';
+import { robotModelWithBaseOnFloor } from '../robot-model';
 import { buildWorkspaceOverlaySpecs } from '../workspace-overlay';
 import { createXyDragControls } from '../xy-drag-controls';
-import {
-  createGraspMatrix,
-  createPregraspMatrix,
-  PREGRASP_DISTANCE
-} from './pose';
+import { PREGRASP_DISTANCE } from './pose';
 import { createCanonicalGraspScene } from './scene';
 import {
-  type ApproachMode,
   buildUi,
   DEFAULT_CUBE_X,
   DEFAULT_CUBE_Y
@@ -38,88 +38,8 @@ import {
 
 type Elbow = SimpleIkBranch['elbow'];
 
-interface GraspSolution {
-  graspBranches: SimpleIkBranch[];
-  pregraspBranches: SimpleIkBranch[] | null;
-  // Approach pitch (radians); π/2 is straight down.
-  pitch: number;
-  // Whether the wrist camera faces outward (true) or is forced inward (false).
-  cameraOut: boolean;
-  // Whether the most-top-down reachable grasp would point the camera inward, so
-  // facing it outward costs extra tilt (or, if cameraOut is false, isn't possible).
-  extraTiltForCamera: boolean;
-  // World-from-gripper matrix for the actual contact grasp.
-  matrix: THREE.Matrix4;
-  // Unit world direction from wrist to target.
-  approach: THREE.Vector3;
-  pregraspMatrix: THREE.Matrix4 | null;
-}
-
-interface GraspCandidate {
-  graspBranches: SimpleIkBranch[];
-  pregraspBranches: SimpleIkBranch[] | null;
-  cameraOutward: number;
-  matrix: THREE.Matrix4;
-  pregraspMatrix: THREE.Matrix4 | null;
-}
-
-// Cubes closer than this to the pan axis are out of bounds: the gripper (and
-// camera mount) collide with the robot body regardless of orientation.
-const MIN_GRASP_RADIUS = 0.08;
-// The canonical grasp/pregrasp solver is radius/yaw invariant across azimuth.
-// A dense sweep found the first invalid all-yaw radius at 428.75 mm; clamp just
-// below it so both the actual grasp and the 3 cm pregrasp stay reachable.
-const MAX_CANONICAL_GRASP_RADIUS = 0.428;
-// Keep away from the shoulder-pan edge where the camera-facing convention flips
-// inward. The loaded model exposes ±110°; clamp to ±100° to leave a guard band
-// that also covers the smaller-radius cases.
-const MAX_CANONICAL_AZIMUTH = (100 * Math.PI) / 180;
-
-// Snap `nominal` to the nearest of the cube's four face normals (at
-// `cubeYaw + k·90°`). The result is within ±45° of `nominal`, so the wrist twist
-// needed to square the jaws onto the cube never exceeds the symmetry window.
-function squareToCubeFace(nominal: number, cubeYaw: number): number {
-  const quarter = Math.PI / 2;
-  return cubeYaw + Math.round((nominal - cubeYaw) / quarter) * quarter;
-}
-
-// Unit approach direction (wrist → target) in the radial–vertical plane at
-// `radialAzimuth`. `pitch` is measured from horizontal: π/2 points straight down
-// (the square top-down grasp); tilting away from π/2 lets the tool reach in
-// diagonally for cubes outside the top-down region.
-function approachVector(radialAzimuth: number, pitch: number): THREE.Vector3 {
-  const horizontal = Math.cos(pitch);
-  return new THREE.Vector3(
-    Math.cos(radialAzimuth) * horizontal,
-    Math.sin(radialAzimuth) * horizontal,
-    -Math.sin(pitch)
-  );
-}
-
-// Approach pitches to try (radians). The square top-down grasp (π/2) is always
-// tried first, so inside the top-down region the grasp is square regardless of
-// mode. The remaining pitches are ordered by preference per mode — 'tilt' keeps
-// the approach as vertical as possible, 'side' as horizontal as possible — and
-// the first that reaches wins.
-const SQUARE_PITCH = Math.PI / 2;
-const toRad = (deg: number): number => (deg * Math.PI) / 180;
-const DEGRADE_PITCHES_DEG = ((): number[] => {
-  const degrees: number[] = [];
-  for (let deg = 10; deg <= 170; deg += 2) {
-    if (deg !== 90) { degrees.push(deg); }
-  }
-  return degrees;
-})();
-const TILT_PITCHES = [
-  SQUARE_PITCH,
-  ...[...DEGRADE_PITCHES_DEG].sort((a, b) => Math.abs(a - 90) - Math.abs(b - 90)).map(toRad)
-];
-const SIDE_PITCHES = [
-  SQUARE_PITCH,
-  ...[...DEGRADE_PITCHES_DEG]
-    .sort((a, b) => Math.abs(Math.sin(toRad(a))) - Math.abs(Math.sin(toRad(b))))
-    .map(toRad)
-];
+// Conservative floor-pick band for the canonical pick-lift motion.
+const MIN_GRASP_RADIUS = 0.110;
 
 export interface CanonicalGraspVisualization {
   destroy(): void;
@@ -134,7 +54,7 @@ export async function initializeCanonicalGraspVisualization(
   parent: HTMLElement,
   options: CanonicalGraspOptions = {}
 ): Promise<CanonicalGraspVisualization> {
-  const model = await loadWebModel(options.modelUrl);
+  const model = robotModelWithBaseOnFloor(await loadWebModel(options.modelUrl));
   const kinematics = deriveSo101Kinematics(model);
 
   // Full floor reach (max arm reach projected onto the floor) drives the
@@ -147,7 +67,7 @@ export async function initializeCanonicalGraspVisualization(
     MAX_CANONICAL_GRASP_RADIUS
   );
   const minGraspRadius = MIN_GRASP_RADIUS;
-  const minAzimuth = Math.max(workspace.azimuth.min, -MAX_CANONICAL_AZIMUTH);
+  const minAzimuth = Math.max(workspace.azimuth.min, MIN_CANONICAL_AZIMUTH);
   const maxAzimuth = Math.min(workspace.azimuth.max, MAX_CANONICAL_AZIMUTH);
   const canonicalWorkspace = {
     ...workspace,
@@ -232,10 +152,6 @@ export async function initializeCanonicalGraspVisualization(
   // world yaw is this plus the azimuth, so the grasp geometry — and thus the
   // camera-down bands — stays the same at every azimuth.
   let yawFromRadius = 0;
-  // Persist the operator's elbow choice across pose changes.
-  let preferredElbow: Elbow = 'up';
-  // How to degrade the grasp outside the top-down-reachable region.
-  let approachMode: ApproachMode = 'tilt';
   let showPregrasp = false;
 
   function applyBranch(branch: SimpleIkBranch): void {
@@ -250,137 +166,20 @@ export async function initializeCanonicalGraspVisualization(
     }
   }
 
-  function renderBranches(branches: SimpleIkBranch[]): void {
+  function renderSelectedBranch(elbow: Elbow): void {
     ui.branchContainer.replaceChildren();
-    if (branches.length < 2) { return; }
-    for (const branch of branches) {
-      const label = document.createElement('label');
-      label.className = 'canonical-grasp-viz-branch';
-      const radio = document.createElement('input');
-      radio.type = 'radio';
-      radio.name = 'canonical-grasp-branch';
-      radio.value = branch.elbow;
-      radio.checked = branch.elbow === preferredElbow;
-      radio.addEventListener('change', () => {
-        if (radio.checked) {
-          preferredElbow = branch.elbow;
-          updateScene();
-        }
-      });
-      const span = document.createElement('span');
-      span.textContent = branch.elbow === 'up' ? 'Elbow up' : 'Elbow down';
-      label.append(radio, span);
-      ui.branchContainer.appendChild(label);
-    }
+    const label = document.createElement('label');
+    label.className = 'canonical-grasp-viz-branch';
+    const span = document.createElement('span');
+    span.textContent = elbow === 'up' ? 'Elbow up' : 'Elbow down';
+    label.append(span);
+    ui.branchContainer.appendChild(label);
   }
 
-  // Solve the grasp for a cube pose. The nominal jaw axis is perpendicular to the
-  // radius from the pan axis, twisted to square onto the nearest cube face (≤±45°
-  // away by symmetry). The approach starts straight down and tilts only as far as
-  // needed to reach: inside the top-down region it stays vertical (a square
-  // grasp); outside, it tilts in — no longer a square grasp, but the best the
-  // fixed-approach arm can do.
-  //
-  // Of the two squared orientations (180° apart) one points the wrist camera
-  // outward (away from the base), the other inward — and tilting an outward
-  // camera lifts it up, tilting an inward one drops it toward the floor. We
-  // require the camera to face outward and accept a few extra degrees of tilt to
-  // get it, because the outward orientation sometimes needs tilt to clear the
-  // wrist-roll limit. Inward is taken only when outward is unreachable at any
-  // pitch. Choosing by outward-facing (rather than the camera's height, which is
-  // ~0 for both at a pure top-down grasp) keeps the pick continuous across the
-  // top-down boundary instead of flipping the camera around.
-  function solveGrasp(
-    pose: CubePose,
-    mode: ApproachMode,
-    requirePregrasp: boolean
-  ): GraspSolution | null {
-    const poseRadius = Math.hypot(pose.x - panX, pose.y - panY);
-    if (poseRadius < minGraspRadius || poseRadius > maxGraspRadius) { return null; }
-    const azimuth = Math.atan2(pose.y - panY, pose.x - panX);
-    const closings = [azimuth + Math.PI / 2, azimuth - Math.PI / 2]
-      .map(nominal => squareToCubeFace(nominal, pose.yaw));
-
-    const radial = new THREE.Vector3(Math.cos(azimuth), Math.sin(azimuth), 0);
-    const pitches = mode === 'side' ? SIDE_PITCHES : TILT_PITCHES;
-    let fallback: {
-      pitch: number;
-      candidate: GraspCandidate;
-      matrix: THREE.Matrix4;
-      approach: THREE.Vector3;
-    } | null = null;
-    // Whether the most-top-down reachable orientation faces the camera inward —
-    // i.e. facing it outward costs extra tilt. This is the region of interest.
-    let extraTiltForCamera = false;
-    for (const pitch of pitches) {
-      const approach = approachVector(azimuth, pitch);
-      const graspSolutions = closings.flatMap<GraspCandidate>(closingAzimuth => {
-        const matrix = createGraspMatrix(pose, closingAzimuth, approach);
-        const result = solveSimpleGraspIk(kinematics, matrix);
-        if (result.type !== 'success') { return []; }
-        const pregraspMatrix = createPregraspMatrix(matrix, approach);
-        const pregraspResult = solveSimpleGraspIk(kinematics, pregraspMatrix);
-        // Camera sits on the gripper's +Y axis; its outward component is that
-        // axis dotted with the radial. > 0 faces away from the base, < 0 inward.
-        const cameraOutward = new THREE.Vector3().setFromMatrixColumn(matrix, 1).dot(radial);
-        return [{
-          graspBranches: result.branches,
-          pregraspBranches: pregraspResult.type === 'success' ? pregraspResult.branches : null,
-          cameraOutward,
-          matrix,
-          pregraspMatrix: pregraspResult.type === 'success' ? pregraspMatrix : null
-        }];
-      });
-      if (graspSolutions.length === 0) { continue; }
-      const solutions = requirePregrasp
-        ? graspSolutions.filter(solution => solution.pregraspBranches !== null)
-        : graspSolutions;
-
-      const bestGrasp = graspSolutions.reduce((b, c) =>
-        c.cameraOutward > b.cameraOutward ? c : b
-      );
-      const best = solutions.length > 0
-        ? solutions.reduce((b, c) => c.cameraOutward > b.cameraOutward ? c : b)
-        : bestGrasp;
-      if (
-        fallback === null ||
-        (
-          requirePregrasp &&
-          fallback.candidate.pregraspBranches === null &&
-          solutions.length > 0
-        )
-      ) {
-        // First (most-top-down) reachable pitch.
-        fallback = {
-          pitch,
-          candidate: best,
-          matrix: best.matrix,
-          approach: approach.clone()
-        };
-        extraTiltForCamera = best.cameraOutward < 0;
-      }
-      if (solutions.length > 0 && best.cameraOutward > 0) {
-        return {
-          graspBranches: best.graspBranches,
-          pregraspBranches: best.pregraspBranches,
-          pitch,
-          cameraOut: true,
-          extraTiltForCamera,
-          matrix: best.matrix,
-          approach: approach.clone(),
-          pregraspMatrix: best.pregraspMatrix
-        };
-      }
-    }
-    if (fallback === null) { return null; }
+  function selectedBranch(choice: CanonicalGraspChoice): SimpleIkBranch {
     return {
-      graspBranches: fallback.candidate.graspBranches,
-      pregraspBranches: fallback.candidate.pregraspBranches,
-      pitch: fallback.pitch,
-      cameraOut: false, extraTiltForCamera,
-      matrix: fallback.matrix,
-      approach: fallback.approach,
-      pregraspMatrix: fallback.candidate.pregraspMatrix
+      elbow: choice.elbow,
+      joints: showPregrasp ? choice.hoverJoints : choice.graspJoints
     };
   }
 
@@ -391,7 +190,7 @@ export async function initializeCanonicalGraspVisualization(
     vizScene.updateCubePose(currentPose);
 
     const radius = Math.hypot(currentPose.x - panX, currentPose.y - panY);
-    const solution = solveGrasp(currentPose, approachMode, showPregrasp);
+    const solution = selectCanonicalGrasp(kinematics, currentPose);
     if (solution === null) {
       vizScene.updateGhostGraspPose(null);
       ui.status.textContent = radius < minGraspRadius
@@ -403,40 +202,25 @@ export async function initializeCanonicalGraspVisualization(
       return;
     }
 
-    let branches = solution.graspBranches;
     let pregraspNote = '';
     if (showPregrasp) {
-      if (solution.pregraspBranches !== null && solution.pregraspMatrix !== null) {
-        branches = solution.pregraspBranches;
-        vizScene.updateGhostGraspPose(solution.matrix);
-        pregraspNote = ` Showing pregrasp ${Math.round(PREGRASP_DISTANCE * 1000)} mm back.`;
-      } else {
-        vizScene.updateGhostGraspPose(null);
-        pregraspNote = ' Pregrasp pose is unreachable here.';
-      }
+      vizScene.updateGhostGraspPose(solution.graspMatrix);
+      pregraspNote = ` Showing pregrasp ${Math.round(PREGRASP_DISTANCE * 1000)} mm back.`;
     } else {
       vizScene.updateGhostGraspPose(null);
     }
 
-    const branch = branches.find(candidate => candidate.elbow === preferredElbow)
-      ?? branches[0];
     const tiltDeg = Math.round(Math.abs(90 - (solution.pitch * 180) / Math.PI));
+    const rollDeg = Math.round((solution.rollOffset * 180) / Math.PI);
     const base = tiltDeg === 0
       ? 'Reachable: square top-down grasp.'
       : `Reachable: approach tilted ${tiltDeg}° (not a square grasp).`;
-    let note = '';
-    if (!solution.cameraOut) {
-      note = ' Camera forced inward — no outward grasp reachable here.';
-    } else if (solution.extraTiltForCamera) {
-      note = ' Tilted extra to face the camera outward.';
-    }
-    ui.status.textContent = `${base}${note}${pregraspNote}`;
-    ui.status.classList.toggle(
-      'is-invalid',
-      showPregrasp && solution.pregraspBranches === null
-    );
-    renderBranches(branches);
-    applyBranch(branch);
+    const rollNote = rollDeg === 0 ? '' : ` Wrist roll offset ${rollDeg}°.`;
+    ui.status.textContent =
+      `${base} Oracle face ${solution.face}, elbow ${solution.elbow}.${rollNote}${pregraspNote}`;
+    ui.status.classList.remove('is-invalid');
+    renderSelectedBranch(solution.elbow);
+    applyBranch(selectedBranch(solution));
   }
 
   const yawListener = (): void => {
@@ -517,27 +301,12 @@ export async function initializeCanonicalGraspVisualization(
     return listener;
   });
 
-  const approachModeListeners = ui.approachModeInputs.map(input => {
-    const listener = (): void => {
-      if (!input.checked) { return; }
-      approachMode = input.value === 'side' ? 'side' : 'tilt';
-      updateScene();
-    };
-    input.addEventListener('change', listener);
-    return listener;
-  });
-
   const resetListener = (): void => {
     currentPose = {
       ...DEFAULT_CUBE_POSE, x: DEFAULT_CUBE_X, y: DEFAULT_CUBE_Y
     };
-    preferredElbow = 'up';
-    approachMode = 'tilt';
     showPregrasp = false;
     ui.showPregraspInput.checked = false;
-    for (const input of ui.approachModeInputs) {
-      input.checked = input.value === 'tilt';
-    }
     // Back to Cartesian mode on reset.
     for (const input of ui.coordModeInputs) {
       input.checked = input.value === 'cartesian';
@@ -583,9 +352,6 @@ export async function initializeCanonicalGraspVisualization(
       ui.azimuthInput.removeEventListener('input', applyRadial);
       for (const [index, input] of ui.coordModeInputs.entries()) {
         input.removeEventListener('change', coordModeListeners[index]);
-      }
-      for (const [index, input] of ui.approachModeInputs.entries()) {
-        input.removeEventListener('change', approachModeListeners[index]);
       }
       ui.resetButton.removeEventListener('click', resetListener);
       ui.root.remove();

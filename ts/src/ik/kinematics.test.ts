@@ -28,7 +28,7 @@ describe('deriveSo101Kinematics', () => {
 
   it('places the shoulder_lift pivot in the radial plane', () => {
     expect(k.shoulderLift.radial).toBeCloseTo(0.0304, 4);
-    expect(k.shoulderLift.height).toBeCloseTo(0.1166, 4);
+    expect(k.shoulderLift.height).toBeCloseTo(0.1238, 4);
   });
 
   it('derives the upper-arm link', () => {

@@ -70,8 +70,8 @@ describe('computeSimpleWorkspace', () => {
 
     // Pin the computed numbers so changes to the kinematics are visible here.
     expect(sector.targetHeight).toBeCloseTo(CUBE_HALF_SIZE, 4);
-    expect(sector.radial.min).toBeCloseTo(0.0562, 3);
-    expect(sector.radial.max).toBeCloseTo(0.2725, 3);
+    expect(sector.radial.min).toBeCloseTo(0.0537, 3);
+    expect(sector.radial.max).toBeCloseTo(0.2750, 3);
     expect(sector.azimuth.min).toBeCloseTo(-1.91986, 4);
     expect(sector.azimuth.max).toBeCloseTo(1.91986, 4);
     expect(sector.anyYawReachable).toBe(true);

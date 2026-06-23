@@ -9,6 +9,7 @@ import {
   setJointAngle,
   type WebModel
 } from '../../web-model';
+import { buildWorkspaceFrameBase } from '../environment-model';
 import {
   createCubeBody,
   createWorldFromCubeMatrix,
@@ -38,6 +39,7 @@ export interface PickAndPlaceScene {
 export function createPickAndPlaceScene(
   viewport: HTMLElement,
   model: WebModel,
+  environmentModel: WebModel,
   modelBasePath = '/so101_assets',
   workspace?: WorkspaceOverlaySpec
 ): PickAndPlaceScene {
@@ -80,6 +82,8 @@ export function createPickAndPlaceScene(
   );
 
   const builtModel = buildWebModel(model, modelBasePath);
+  const frameBase = buildWorkspaceFrameBase(environmentModel, modelBasePath);
+  scene.add(frameBase.root);
   scene.add(builtModel.root);
 
   // One colour per cube face, in THREE.BoxGeometry group order
@@ -142,6 +146,9 @@ export function createPickAndPlaceScene(
       orbitControls.dispose();
       renderer.dispose();
       for (const mats of builtModel.materialsByName.values()) {
+        for (const mat of mats) { mat.dispose(); }
+      }
+      for (const mats of frameBase.materialsByName.values()) {
         for (const mat of mats) { mat.dispose(); }
       }
       sourcePart.destroy();

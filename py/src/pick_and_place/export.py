@@ -3,9 +3,8 @@
 
 """Export matching MJCF and web-manifest files for the composed SO-101.
 
-For consumers that need a file on disk (MuJoCo's ``simulate`` viewer, the
-Isaac MJCF importer, and the TypeScript viewer). The exported XML carries an
-absolute meshdir, so both outputs are machine-local build artifacts.
+For consumers that need a file on disk. The exported XML carries an absolute
+meshdir, so both outputs are machine-local build artifacts.
 
 Usage::
 
@@ -32,7 +31,7 @@ from pick_and_place.camera_extrinsics import (
     load_local_camera_extrinsics,
 )
 from pick_and_place.materials import MaterialConfig
-from pick_and_place.scene import build_environment, build_scene
+from pick_and_place.scene import ROBOT_BASE_Z_OFFSET, build_environment, build_scene
 
 _GEOM_TYPES = {
     mujoco.mjtGeom.mjGEOM_PLANE: "plane",
@@ -227,6 +226,7 @@ def export_robot(
         )
     else:
         spec = build_robot(wrist_camera=wrist_camera, materials=materials)
+        spec.body("base").pos = (0.0, 0.0, ROBOT_BASE_Z_OFFSET)
     return _write_outputs(
         spec,
         output,

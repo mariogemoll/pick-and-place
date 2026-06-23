@@ -22,6 +22,7 @@ import {
   type CubePose,
   DEFAULT_CUBE_POSE
 } from '../grasp-pose-shared/body-factories';
+import { robotModelWithBaseOnFloor } from '../robot-model';
 // The pose math is the shared, DRY core: this viz and the SimpleGraspPose
 // viz both derive the gripper pose from the same function.
 import { createSimpleGraspMatrix } from '../simple-grasp-pose/pose';
@@ -49,7 +50,7 @@ export async function initializeSimpleGraspIkVisualization(
   parent: HTMLElement,
   options: SimpleGraspIkOptions = {}
 ): Promise<SimpleGraspIkVisualization> {
-  const model = await loadWebModel(options.modelUrl);
+  const model = robotModelWithBaseOnFloor(await loadWebModel(options.modelUrl));
   const kinematics = deriveSo101Kinematics(model);
 
   // Ground-cube grasp workspace: drives the slider ranges.

@@ -30,6 +30,10 @@ PICK_CUBE_HALF_SIZE = 0.015
 # Plain pick cube colour, used when the AprilTag faces are not requested.
 PICK_CUBE_RGBA = (0.82, 0.12, 0.08, 1.0)
 
+# The real robot is mounted on the workspace frame, elevating its base by the
+# frame's thickness. The floor and cube remain at world Z=0.
+ROBOT_BASE_Z_OFFSET = 0.0072
+
 
 def build_scene(
     *,
@@ -56,11 +60,8 @@ def build_scene(
         dir=(0.0, 0.0, -1.0),
     )
     
-    # The real robot is mounted on the workspace frame, elevating its base
-    # by the frame's thickness (7.2 mm). This is critical for IK solving
-    # because the floor (where the cube rests) is at Z=0.
     base = spec.body("base")
-    base.pos = (0.0, 0.0, 0.0072)
+    base.pos = (0.0, 0.0, ROBOT_BASE_Z_OFFSET)
 
     # Attach overlays to worldbody so they stay on the floor.
     add_workspace_overlays(spec, spec.worldbody)

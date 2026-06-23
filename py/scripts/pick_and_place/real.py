@@ -137,7 +137,7 @@ def track_cube(
         estimate_cube_pose,
         make_cube_detector,
     )
-    from pick_and_place.workspace_overlays import is_cube_drop_allowed, is_cube_pickup_allowed
+    from pick_and_place.workspace_overlays import is_cube_pickup_allowed
 
     camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
     cam_pos = data.cam_xpos[camera_id].copy()
@@ -174,12 +174,11 @@ def track_cube(
             continue
 
         rotation, position = cube_pose_to_world(estimate, cam_pos, cam_rot)
-        allowed = is_cube_drop_allowed if free_grasp else is_cube_pickup_allowed
+        allowed = is_cube_pickup_allowed
         if not allowed(float(position[0]), float(position[1])):
-            zone = "drop zone" if free_grasp else "allowed pick-up zones"
             print(
                 f"Cube seen at ({position[0]:.3f}, {position[1]:.3f}) but outside the "
-                f"{zone}."
+                "allowed pick-up zone."
             )
             if not return_out_of_zone:
                 continue

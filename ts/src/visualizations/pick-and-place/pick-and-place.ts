@@ -33,6 +33,7 @@ export interface PickAndPlaceVisualization {
 }
 
 export interface PickAndPlaceOptions {
+  environmentModelUrl?: string;
   modelBasePath?: string;
   modelUrl?: string;
   initialJointPositions?: Readonly<Record<string, number>>;
@@ -94,7 +95,10 @@ export async function PickAndPlace(
   parent: HTMLElement,
   options: PickAndPlaceOptions = {}
 ): Promise<PickAndPlaceVisualization> {
-  const model = await loadWebModel(options.modelUrl);
+  const [model, environmentModel] = await Promise.all([
+    loadWebModel(options.modelUrl),
+    loadWebModel(options.environmentModelUrl ?? '/environment.json')
+  ]);
   const kinematics = deriveSo101Kinematics(model);
   const workspace = computeSimpleWorkspaceForCubeZ(
     kinematics, CUBE_Z_1CM_OVER_GROUND_TOP
@@ -134,6 +138,7 @@ export async function PickAndPlace(
   const vizScene = createPickAndPlaceScene(
     ui.viewport,
     model,
+    environmentModel,
     options.modelBasePath,
     {
       center: workspace.panAxis,

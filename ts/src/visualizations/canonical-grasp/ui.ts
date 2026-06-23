@@ -8,18 +8,12 @@ import {
 
 export type CoordinateMode = 'cartesian' | 'radial';
 
-// How the grasp degrades once the cube is outside the top-down-reachable region:
-// 'tilt' keeps the approach as vertical as the arm allows, 'side' makes it as
-// horizontal as possible (grabbing the cube more side-on).
-export type ApproachMode = 'tilt' | 'side';
-
 export interface CanonicalGraspDom {
   root: HTMLDivElement;
   viewport: HTMLDivElement;
   // Cube placement can be driven in Cartesian (X/Y) or radial (radius/azimuth
   // about the pan axis) coordinates; the toggle swaps which pair is shown.
   coordModeInputs: HTMLInputElement[];
-  approachModeInputs: HTMLInputElement[];
   cartesianGroup: HTMLDivElement;
   radialGroup: HTMLDivElement;
   xInput: HTMLInputElement;
@@ -144,12 +138,6 @@ export function buildUi(
     controls, 'Yaw (from radius)', YAW_MIN_DEG, YAW_MAX_DEG, 0
   );
 
-  // Only matters once the cube is outside the top-down-reachable region.
-  const approachModeInputs = appendRadioGroup(
-    controls, 'canonical-grasp-approach-mode', 'Outside reach',
-    [{ value: 'tilt', label: 'Over the top' }, { value: 'side', label: 'From the side' }]
-  );
-
   const pregraspLabel = document.createElement('label');
   pregraspLabel.className = 'canonical-grasp-viz-checkbox';
   const showPregraspInput = document.createElement('input');
@@ -186,8 +174,8 @@ export function buildUi(
   }
 
   return {
-    root, viewport, coordModeInputs, approachModeInputs, cartesianGroup,
-    radialGroup, xInput, yInput, radiusInput, azimuthInput, yawInput,
-    showPregraspInput, resetButton, status, branchContainer
+    root, viewport, coordModeInputs, cartesianGroup, radialGroup, xInput,
+    yInput, radiusInput, azimuthInput, yawInput, showPregraspInput,
+    resetButton, status, branchContainer
   };
 }

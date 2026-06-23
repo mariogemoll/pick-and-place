@@ -6,6 +6,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 import { deriveSo101Kinematics } from '../../ik/kinematics';
 import { buildWebModel, loadWebModel } from '../../web-model';
+import { buildEnvironmentModel } from '../environment-model';
 import {
   addWorkspaceOverlaysToScene,
   buildWorkspaceOverlaySpecs
@@ -58,7 +59,7 @@ export function createStandardScene(viewport: HTMLElement): StandardScene {
     // The robot is defined once (so101) and the environment is overlaid on top;
     // both trees are rooted at the world origin, so no stitching is needed.
     const robot = buildWebModel(robotModel, '/so101_assets');
-    const environment = buildWebModel(environmentModel, '/so101_assets');
+    const environment = buildEnvironmentModel(environmentModel, '/so101_assets');
     scene.add(robot.root);
     scene.add(environment.root);
 

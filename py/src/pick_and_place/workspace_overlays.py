@@ -20,15 +20,13 @@ from pick_and_place.geometry import CUBE_HALF_SIZE
 
 WORKSPACE_FRAME_INNER_HALF_EXTENT = 0.2813 - 0.0187
 
-# These values are pinned from ts/src/visualizations/workspace-overlay.ts and
-# ts/src/ik/workspace.ts for the stock SO-101 model. Recompute them when the
-# robot kinematics or the TypeScript workspace definitions change.
+# Fixed SO-101 floor-workspace bounds for the calibrated model. Recompute these
+# when robot kinematics or workspace definitions change.
 PAN_AXIS = (0.0388353, -8.97657e-09)
 AZIMUTH_MIN = -1.9198621771937634
 AZIMUTH_MAX = AZIMUTH_MIN + 3.839724354387525
-_PAN_AXIS = PAN_AXIS
-_AZIMUTH_MIN = AZIMUTH_MIN
-_AZIMUTH_LENGTH = AZIMUTH_MAX - AZIMUTH_MIN
+CANONICAL_PICKUP_AZIMUTH_MIN = math.radians(-100.0)
+CANONICAL_PICKUP_AZIMUTH_MAX = math.radians(100.0)
 
 WORKSPACE_OVERLAY_GROUP = 4
 _SEGMENTS = 96
@@ -36,6 +34,7 @@ _HALF_THICKNESS = 0.00001
 _RGBA = (1.0, 0.4667, 0.0, 0.22)
 _CUBE_PLACEMENT_RGBA = (0.1333, 0.7725, 0.3686, 0.42)
 _CUBE_EXCLUSION_RGBA = (0.9373, 0.2667, 0.2667, 0.62)
+_CANONICAL_PICKUP_RGBA = (0.0, 0.45, 1.0, 0.28)
 
 
 @dataclass(frozen=True)
@@ -46,6 +45,8 @@ class WorkspaceOverlay:
     inner_radius: float
     outer_radius: float
     z: float
+    azimuth_min: float = AZIMUTH_MIN
+    azimuth_max: float = AZIMUTH_MAX
 
 
 WORKSPACE_OVERLAYS = (
@@ -83,6 +84,14 @@ CUBE_PLACEMENT_OVERLAY = WorkspaceOverlay(
     0.4310255047641903,
     0.0010,
 )
+CANONICAL_PICKUP_OVERLAY = WorkspaceOverlay(
+    "workspace_canonical_pickup",
+    0.11,
+    0.426,
+    0.0012,
+    CANONICAL_PICKUP_AZIMUTH_MIN,
+    CANONICAL_PICKUP_AZIMUTH_MAX,
+)
 
 
 def _is_cube_center_allowed(
@@ -97,7 +106,7 @@ def _is_cube_center_allowed(
     azimuth = math.atan2(dy, dx)
     in_clearance_sector = (
         overlay.inner_radius <= radius <= overlay.outer_radius
-        and AZIMUTH_MIN <= azimuth <= AZIMUTH_MAX
+        and overlay.azimuth_min <= azimuth <= overlay.azimuth_max
     )
     if not in_clearance_sector:
         return False
@@ -111,8 +120,8 @@ def _is_cube_center_allowed(
 
 
 def is_cube_pickup_allowed(x: float, y: float) -> bool:
-    """Return whether a floor cube can use the vertical pickup pose."""
-    return _is_cube_center_allowed(x, y, WORKSPACE_OVERLAYS[-1])
+    """Return whether a floor cube can use the canonical pick-lift pose."""
+    return _is_cube_center_allowed(x, y, CANONICAL_PICKUP_OVERLAY)
 
 
 def is_vertical_grip_allowed(x: float, y: float) -> bool:
@@ -183,6 +192,8 @@ def add_workspace_overlays(
         vertices, faces = _annular_sector_mesh(
             overlay.inner_radius,
             overlay.outer_radius,
+            overlay.azimuth_min,
+            overlay.azimuth_max,
         )
         mesh = spec.add_mesh(name=name)
         mesh.uservert = vertices.flatten()
@@ -191,7 +202,7 @@ def add_workspace_overlays(
             name=name,
             type=mujoco.mjtGeom.mjGEOM_MESH,
             meshname=mesh.name,
-            pos=(*_PAN_AXIS, overlay.z),
+            pos=(*PAN_AXIS, overlay.z),
             rgba=_RGBA,
             contype=0,
             conaffinity=0,
@@ -202,6 +213,8 @@ def add_workspace_overlays(
         CUBE_PLACEMENT_OVERLAY.inner_radius,
         CUBE_PLACEMENT_OVERLAY.outer_radius,
         CUBE_PLACEMENT_BOUNDS,
+        CUBE_PLACEMENT_OVERLAY.azimuth_min,
+        CUBE_PLACEMENT_OVERLAY.azimuth_max,
     )
     mesh = spec.add_mesh(name=CUBE_PLACEMENT_OVERLAY.name)
     mesh.uservert = vertices.flatten()
@@ -210,8 +223,29 @@ def add_workspace_overlays(
         name=CUBE_PLACEMENT_OVERLAY.name,
         type=mujoco.mjtGeom.mjGEOM_MESH,
         meshname=mesh.name,
-        pos=(*_PAN_AXIS, CUBE_PLACEMENT_OVERLAY.z),
+        pos=(*PAN_AXIS, CUBE_PLACEMENT_OVERLAY.z),
         rgba=_CUBE_PLACEMENT_RGBA,
+        contype=0,
+        conaffinity=0,
+        group=WORKSPACE_OVERLAY_GROUP,
+    )
+
+    vertices, faces = _clipped_annular_sector_mesh(
+        CANONICAL_PICKUP_OVERLAY.inner_radius,
+        CANONICAL_PICKUP_OVERLAY.outer_radius,
+        CUBE_PLACEMENT_BOUNDS,
+        CANONICAL_PICKUP_OVERLAY.azimuth_min,
+        CANONICAL_PICKUP_OVERLAY.azimuth_max,
+    )
+    mesh = spec.add_mesh(name=CANONICAL_PICKUP_OVERLAY.name)
+    mesh.uservert = vertices.flatten()
+    mesh.userface = faces.flatten()
+    parent.add_geom(
+        name=CANONICAL_PICKUP_OVERLAY.name,
+        type=mujoco.mjtGeom.mjGEOM_MESH,
+        meshname=mesh.name,
+        pos=(*PAN_AXIS, CANONICAL_PICKUP_OVERLAY.z),
+        rgba=_CANONICAL_PICKUP_RGBA,
         contype=0,
         conaffinity=0,
         group=WORKSPACE_OVERLAY_GROUP,
@@ -239,17 +273,19 @@ def _clipped_annular_sector_mesh(
     inner_radius: float,
     outer_radius: float,
     bounds: tuple[float, float, float, float],
+    azimuth_min: float,
+    azimuth_max: float,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return the annular sector clipped to an axis-aligned center rectangle."""
     x_min, x_max, y_min, y_max = bounds
     local_bounds = (
-        x_min - _PAN_AXIS[0],
-        x_max - _PAN_AXIS[0],
-        y_min - _PAN_AXIS[1],
-        y_max - _PAN_AXIS[1],
+        x_min - PAN_AXIS[0],
+        x_max - PAN_AXIS[0],
+        y_min - PAN_AXIS[1],
+        y_max - PAN_AXIS[1],
     )
     sections: list[tuple[float, float, float]] = []
-    for angle in np.linspace(_AZIMUTH_MIN, _AZIMUTH_MIN + _AZIMUTH_LENGTH, _SEGMENTS + 1):
+    for angle in np.linspace(azimuth_min, azimuth_max, _SEGMENTS + 1):
         dx, dy = math.cos(angle), math.sin(angle)
         exits = []
         if dx > 0.0:
@@ -297,9 +333,11 @@ def _clipped_annular_sector_mesh(
 def _annular_sector_mesh(
     inner_radius: float,
     outer_radius: float,
+    azimuth_min: float,
+    azimuth_max: float,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return a closed, thin annular-sector mesh centered at the origin."""
-    angles = np.linspace(_AZIMUTH_MIN, _AZIMUTH_MIN + _AZIMUTH_LENGTH, _SEGMENTS + 1)
+    angles = np.linspace(azimuth_min, azimuth_max, _SEGMENTS + 1)
     outer_xy = np.column_stack((outer_radius * np.cos(angles), outer_radius * np.sin(angles)))
     if math.isclose(inner_radius, 0.0):
         contour_xy = np.vstack((outer_xy, (0.0, 0.0)))
