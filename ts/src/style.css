@@ -585,6 +585,87 @@ canvas {
   }
 }
 
+.canonical-grasp-viz-root {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.canonical-grasp-viz-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 1rem;
+  align-items: start;
+}
+
+.canonical-grasp-viz-viewport {
+  min-width: 0;
+  height: 420px;
+  background: #f4f8ff;
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.canonical-grasp-viz-viewport canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.canonical-grasp-viz-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.canonical-grasp-viz-reset {
+  align-self: flex-start;
+  padding: 0.25rem 0.65rem;
+  color: #334155;
+  cursor: pointer;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+}
+
+.canonical-grasp-viz-reset:hover {
+  background: #f1f5f9;
+}
+
+.canonical-grasp-viz-status {
+  padding: 0.4rem 0.7rem;
+  color: #166534;
+  font-size: 0.8rem;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 6px;
+}
+
+.canonical-grasp-viz-status.is-invalid {
+  color: #991b1b;
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.canonical-grasp-viz-branches {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.canonical-grasp-viz-branch {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: #475569;
+}
+
+@media (width <= 720px) {
+  .canonical-grasp-viz-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .pick-and-place-viz-cube-heading {
   display: flex;
   align-items: center;

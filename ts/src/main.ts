@@ -8,6 +8,10 @@ import {
   initBodyTreeVisualization
 } from './visualizations/body-tree';
 import {
+  type CanonicalGraspVisualization,
+  initCanonicalGraspVisualization
+} from './visualizations/canonical-grasp';
+import {
   type DummyVisualization,
   initDummyVisualization
 } from './visualizations/dummy';
@@ -52,6 +56,7 @@ let robotVisualization: RobotVisualization | null = null;
 let bodyTreeVisualization: BodyTreeVisualization | null = null;
 let simplePregraspPoseVisualization: SimplePregraspPoseVisualization | null = null;
 let simplePregraspIkVisualization: SimplePregraspIkVisualization | null = null;
+let canonicalGraspVisualization: CanonicalGraspVisualization | null = null;
 let pickAndPlaceVisualization: PickAndPlaceVisualization | null = null;
 
 function initialize(): void {
@@ -104,6 +109,17 @@ function initialize(): void {
 
     void initSimplePregraspIkVisualization(simplePregraspIkPanel).then(viz => {
       simplePregraspIkVisualization = viz;
+    });
+  }
+
+  const canonicalGraspPanel =
+    document.getElementById('canonical-grasp-visualization');
+  if (canonicalGraspPanel) {
+    canonicalGraspVisualization?.destroy();
+    canonicalGraspVisualization = null;
+
+    void initCanonicalGraspVisualization(canonicalGraspPanel).then(viz => {
+      canonicalGraspVisualization = viz;
     });
   }
 
