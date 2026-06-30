@@ -10,6 +10,7 @@ dependencies = [
     "gymnasium",
     "imageio[ffmpeg]",
     "lerobot[feetech,smolvla]",
+    "matplotlib",
     "mujoco",
     "numpy",
     "opencv-python",
