@@ -7,6 +7,7 @@ name = "pick-and-place"
 version = "0.0.0"
 dependencies = [
     "fpdf",
+    "gymnasium",
     "imageio[ffmpeg]",
     "lerobot[feetech,smolvla]",
     "mujoco",
@@ -14,6 +15,7 @@ dependencies = [
     "opencv-python",
     "pupil-apriltags",
     "scipy",
+    "stable-baselines3",
     "tqdm",
 ]
 
