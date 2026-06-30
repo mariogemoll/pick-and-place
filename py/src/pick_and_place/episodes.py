@@ -28,12 +28,19 @@ from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.kinematics import So101Kinematics, derive_kinematics
 from pick_and_place.paper_detection import add_paper_target_marker
 from pick_and_place.trajectory import (
+    ApproachPhase,
+    DescentPhase,
     DropOrientation,
     GRIPPER_OPEN,
+    GraspPhase,
+    LiftPhase,
     NEUTRAL_ARM_JOINTS,
+    RecoveryLiftPhase,
     GraspChoice,
     Trajectory,
-    trajectory_candidates,
+    free_grasp_candidates,
+    grasp_candidates,
+    trajectory_candidates_for_grasp,
 )
 from pick_and_place.workspace_overlays import (
     AZIMUTH_MAX,
@@ -91,6 +98,25 @@ class PreflightCollision:
     body2: str
     dist: float
     position: tuple[float, float, float]
+
+
+@dataclass(frozen=True)
+class PlacementError:
+    """Final cube placement error relative to an episode target."""
+
+    cube_xyz: tuple[float, float, float]
+    target_xyz: tuple[float, float, float]
+    dx: float
+    dy: float
+    dz: float
+    xy: float
+
+    def summary(self) -> str:
+        return (
+            f"placement error: xy={self.xy * 1000:.1f} mm "
+            f"(dx={self.dx * 1000:+.1f}, dy={self.dy * 1000:+.1f}), "
+            f"z={self.dz * 1000:+.1f} mm"
+        )
 
 
 def sample_cube(rng: np.random.Generator) -> CubePose:
@@ -183,6 +209,29 @@ def set_cube_pose(model: mujoco.MjModel, data: mujoco.MjData, source: CubePose) 
     data.qvel[qvel_adr:qvel_adr + 6] = 0.0
 
 
+def placement_error(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    target: CubePose,
+) -> PlacementError:
+    """Measure the current cube-center offset from the target center."""
+    mujoco.mj_forward(model, data)
+    cube_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pick_cube")
+    cube_xyz = tuple(float(v) for v in data.xpos[cube_body_id])
+    target_xyz = (float(target.x), float(target.y), float(CUBE_HALF_SIZE))
+    dx = cube_xyz[0] - target_xyz[0]
+    dy = cube_xyz[1] - target_xyz[1]
+    dz = cube_xyz[2] - target_xyz[2]
+    return PlacementError(
+        cube_xyz=cube_xyz,
+        target_xyz=target_xyz,
+        dx=dx,
+        dy=dy,
+        dz=dz,
+        xy=math.hypot(dx, dy),
+    )
+
+
 def build_geom_sets(model: mujoco.MjModel) -> tuple[set[int], set[int]]:
     """Return (robot_geom_ids, env_geom_ids).
 
@@ -250,6 +299,8 @@ def _preflight(
     part of what gets vetted, not just the cube-handling middle.
     """
     shadow = mujoco.MjData(model)
+    if trajectory.source is not None:
+        set_cube_pose(model, shadow, trajectory.source)
     for name, value in trajectory.start_joints.items():
         set_joint(model, shadow, name, value)
         shadow.ctrl[actuator_id[name]] = value
@@ -300,6 +351,67 @@ def _preflight(
                 )
             )
     return events
+
+
+def _body_matrix(model: mujoco.MjModel, data: mujoco.MjData, body_name: str) -> np.ndarray:
+    body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
+    matrix = np.eye(4, dtype=np.float64)
+    matrix[:3, :3] = data.xmat[body_id].reshape(3, 3)
+    matrix[:3, 3] = data.xpos[body_id]
+    return matrix
+
+
+def _measure_post_lift_cube_from_gripper(
+    model: mujoco.MjModel,
+    source: CubePose,
+    actuator_id: dict[str, int],
+    start_joints: dict[str, float],
+    start_gripper: float,
+    kinematics: So101Kinematics,
+    grasp: GraspChoice,
+    *,
+    free_grasp: bool,
+) -> np.ndarray:
+    """Run pick through lift in shadow physics and measure cube→gripper."""
+    shadow = mujoco.MjData(model)
+    set_cube_pose(model, shadow, source)
+    for name, value in start_joints.items():
+        set_joint(model, shadow, name, value)
+        shadow.ctrl[actuator_id[name]] = value
+    set_joint(model, shadow, "gripper", start_gripper)
+    shadow.ctrl[actuator_id["gripper"]] = start_gripper
+    mujoco.mj_forward(model, shadow)
+
+    phases = (
+        ApproachPhase(kinematics, start_joints, start_gripper, grasp.hover_joints),
+        DescentPhase(kinematics, grasp),
+        GraspPhase(grasp.grasp_joints),
+        (
+            RecoveryLiftPhase(kinematics, grasp.grasp_joints, grasp.lift_joints)
+            if free_grasp
+            else LiftPhase(kinematics, grasp.grasp_joints, grasp.lift_joints)
+        ),
+    )
+    duration = sum(phase.duration for phase in phases)
+    elapsed = 0.0
+    while elapsed < duration:
+        t = elapsed
+        frame = phases[-1].evaluate(phases[-1].duration)
+        for phase in phases:
+            if t < phase.duration:
+                frame = phase.evaluate(t)
+                break
+            t -= phase.duration
+        for name, value in frame.joints.items():
+            shadow.ctrl[actuator_id[name]] = value
+        shadow.ctrl[actuator_id["gripper"]] = frame.gripper
+        mujoco.mj_step(model, shadow)
+        elapsed = float(shadow.time)
+
+    mujoco.mj_forward(model, shadow)
+    world_cube = _body_matrix(model, shadow, "pick_cube")
+    world_gripper = _body_matrix(model, shadow, "gripper")
+    return np.linalg.inv(world_cube) @ world_gripper
 
 
 _JAW_PREFIXES = ("fixed_jaw_col", "moving_jaw_col")
@@ -663,86 +775,107 @@ def prepare_episode(
         robot_geom_ids, env_geom_ids = build_geom_sets(ep_model)
 
         trajectory = None
-        for traj in trajectory_candidates(
-            kinematics,
-            ep_source,
-            ep_target,
-            ep_start_joints,
-            ep_start_gripper,
-            end_joints,
-            end_gripper,
-            drop_orientation=drop_orientation,
-            free_grasp=free_grasp,
-        ):
-            grasp = traj.grasp
-            collect_preflight_detail = preflight_debug or failed_trajectory_dir is not None
-            if collect_preflight_detail:
-                detail_events = _preflight(
-                    ep_model,
-                    traj,
-                    actuator_id,
-                    robot_geom_ids,
-                    env_geom_ids,
-                    detailed=True,
-                )
-                unexpected_detail = [
-                    event for event in detail_events if _preflight_collision_is_unexpected(event)
-                ]
-                unexpected = [(event.time, event.geom1, event.geom2) for event in unexpected_detail]
-            else:
-                events = _preflight(ep_model, traj, actuator_id, robot_geom_ids, env_geom_ids)
-                unexpected = [(t, n1, n2) for t, n1, n2 in events if is_unexpected(n1, n2)]
-            if not unexpected:
-                trajectory = traj
+        grasp_iter = (
+            free_grasp_candidates(kinematics, ep_source)
+            if free_grasp
+            else grasp_candidates(kinematics, ep_source)
+        )
+        for candidate_grasp in grasp_iter:
+            cube_from_gripper = _measure_post_lift_cube_from_gripper(
+                ep_model,
+                ep_source,
+                actuator_id,
+                ep_start_joints,
+                ep_start_gripper,
+                kinematics,
+                candidate_grasp,
+                free_grasp=free_grasp,
+            )
+            candidate_trajectories = trajectory_candidates_for_grasp(
+                kinematics,
+                ep_source,
+                ep_target,
+                ep_start_joints,
+                ep_start_gripper,
+                end_joints,
+                end_gripper,
+                candidate_grasp,
+                drop_orientation=drop_orientation,
+                free_grasp=free_grasp,
+                cube_from_gripper=cube_from_gripper,
+            )
+            for traj in candidate_trajectories:
+                grasp = traj.grasp
+                collect_preflight_detail = preflight_debug or failed_trajectory_dir is not None
+                if collect_preflight_detail:
+                    detail_events = _preflight(
+                        ep_model,
+                        traj,
+                        actuator_id,
+                        robot_geom_ids,
+                        env_geom_ids,
+                        detailed=True,
+                    )
+                    unexpected_detail = [
+                        event for event in detail_events if _preflight_collision_is_unexpected(event)
+                    ]
+                    unexpected = [(event.time, event.geom1, event.geom2) for event in unexpected_detail]
+                else:
+                    events = _preflight(ep_model, traj, actuator_id, robot_geom_ids, env_geom_ids)
+                    unexpected = [(t, n1, n2) for t, n1, n2 in events if is_unexpected(n1, n2)]
+                if not unexpected:
+                    trajectory = traj
+                    if verbose:
+                        print(
+                            f"source: x={ep_source.x:.4f}  y={ep_source.y:.4f}"
+                            f"  yaw={math.degrees(ep_source.yaw):.1f}°"
+                            f"  target: x={ep_target.x:.4f}  y={ep_target.y:.4f}"
+                            f"  yaw={math.degrees(ep_target.yaw):.1f}°"
+                        )
+                        print(
+                            f"grasp: face={grasp.face}  elbow={grasp.elbow}"
+                            f"  carry={traj.carry.mode}  (attempt {attempt})"
+                        )
+                    break
+                if preflight_debug:
+                    _print_preflight_debug(
+                        attempt,
+                        traj,
+                        unexpected_detail,
+                        limit=preflight_debug_limit,
+                    )
+                if (
+                    failed_trajectory_dir is not None
+                    and saved_failed_trajectories < failed_trajectory_limit
+                ):
+                    grasp_label = (
+                        "unknown"
+                        if traj.grasp is None
+                        else f"{traj.grasp.face}_{traj.grasp.elbow}"
+                    )
+                    path = (
+                        failed_trajectory_dir
+                        / f"attempt_{attempt:03d}_candidate_{saved_failed_trajectories + 1:03d}_{grasp_label}.npz"
+                    )
+                    _save_failed_preflight_trajectory(
+                        path,
+                        ep_model,
+                        traj,
+                        actuator_id,
+                        unexpected_detail,
+                    )
+                    saved_failed_trajectories += 1
+                    if verbose:
+                        print(f"saved rejected trajectory: {path}")
                 if verbose:
-                    print(
-                        f"source: x={ep_source.x:.4f}  y={ep_source.y:.4f}"
-                        f"  yaw={math.degrees(ep_source.yaw):.1f}°"
-                        f"  target: x={ep_target.x:.4f}  y={ep_target.y:.4f}"
-                        f"  yaw={math.degrees(ep_target.yaw):.1f}°"
-                    )
-                    print(
-                        f"grasp: face={grasp.face}  elbow={grasp.elbow}"
-                        f"  carry={traj.carry.mode}  (attempt {attempt})"
-                    )
+                    seen_pairs: set[tuple[str, str]] = set()
+                    for t, n1, n2 in unexpected:
+                        key = (min(n1, n2), max(n1, n2))
+                        if key not in seen_pairs:
+                            seen_pairs.add(key)
+                            print(f"skip {grasp.face}/{grasp.elbow}: collision t={t:.3f}s  {n1} ↔ {n2}")
+            if trajectory is not None:
                 break
-            if preflight_debug:
-                _print_preflight_debug(
-                    attempt,
-                    traj,
-                    unexpected_detail,
-                    limit=preflight_debug_limit,
-                )
-            if (
-                failed_trajectory_dir is not None
-                and saved_failed_trajectories < failed_trajectory_limit
-            ):
-                grasp_label = (
-                    "unknown"
-                    if traj.grasp is None
-                    else f"{traj.grasp.face}_{traj.grasp.elbow}"
-                )
-                path = (
-                    failed_trajectory_dir
-                    / f"attempt_{attempt:03d}_candidate_{saved_failed_trajectories + 1:03d}_{grasp_label}.npz"
-                )
-                _save_failed_preflight_trajectory(
-                    path,
-                    ep_model,
-                    traj,
-                    actuator_id,
-                    unexpected_detail,
-                )
-                saved_failed_trajectories += 1
-                if verbose:
-                    print(f"saved rejected trajectory: {path}")
-            if verbose:
-                seen_pairs: set[tuple[str, str]] = set()
-                for t, n1, n2 in unexpected:
-                    key = (min(n1, n2), max(n1, n2))
-                    if key not in seen_pairs:
-                        seen_pairs.add(key)
-                        print(f"skip {grasp.face}/{grasp.elbow}: collision t={t:.3f}s  {n1} ↔ {n2}")
 
         if trajectory is not None:
             return Episode(

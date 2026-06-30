@@ -30,6 +30,7 @@ from pick_and_place.episodes import (
     Episode,
     get_joint,
     is_unexpected,
+    placement_error,
     scan_contacts,
 )
 from pick_and_place.executor import (
@@ -201,3 +202,5 @@ def record_episode(
 
         if traj_t >= trajectory.duration:
             break
+
+    print(placement_error(model, data, episode.target).summary())

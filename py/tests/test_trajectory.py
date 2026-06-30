@@ -8,8 +8,15 @@ import numpy as np
 import pytest
 
 import pick_and_place.episodes as episodes
-from pick_and_place.episodes import EpisodeSamplingError, _build_model, prepare_episode
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose, WORLD_UP
+from pick_and_place.episodes import (
+    EpisodeSamplingError,
+    _build_model,
+    placement_error,
+    prepare_episode,
+    set_cube_pose,
+)
+from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.ik import solve_simple_grasp_ik
 from pick_and_place.kinematics import derive_kinematics
 from pick_and_place.trajectory import (
     DROP_CUBE_CENTER_Z,
@@ -19,12 +26,7 @@ from pick_and_place.trajectory import (
 )
 
 
-def _drop_gripper_z(carry: object) -> np.ndarray:
-    drop_cube = _carry_geometry_matrix(carry, 1.0)
-    return drop_cube[:3, :3] @ carry.cube_from_gripper[:3, :3] @ np.array((0.0, 0.0, 1.0))
-
-
-def test_vertical_zone_prefers_near_vertical_drops():
+def test_free_drop_plans_reachable_joint_carry_to_low_release():
     source = CubePose(x=0.20, y=-0.12, z=CUBE_HALF_SIZE)
     target = CubePose(x=0.20, y=-0.05, z=CUBE_HALF_SIZE)
     model, _ = _build_model(source)
@@ -35,11 +37,13 @@ def test_vertical_zone_prefers_near_vertical_drops():
 
     assert carries
     assert all(carry.drop_position[2] == DROP_CUBE_CENTER_Z for carry in carries)
-    drop_z_axes = [_drop_gripper_z(carry) for carry in carries]
-    max_angle = np.deg2rad(15.0)
-    assert any(not np.allclose(axis, WORLD_UP, atol=1e-7) for axis in drop_z_axes)
-    for axis in drop_z_axes:
-        assert float(np.dot(axis, WORLD_UP)) >= np.cos(max_angle) - 1e-7
+    first = carries[0]
+    assert first.mode == "joint"
+    assert first.grasp_joints == grasp.lift_joints
+    assert set(first.cruise_joints) == set(grasp.lift_joints)
+    assert set(first.drop_joints) == set(grasp.lift_joints)
+    drop_gripper = _carry_geometry_matrix(first, 1.0) @ first.cube_from_gripper
+    assert solve_simple_grasp_ik(kinematics, drop_gripper)
 
 
 def test_grasp_choice_exposes_distillation_metadata():
@@ -70,6 +74,21 @@ def test_fixed_target_must_be_in_allowed_drop_zone():
         )
 
 
+def test_placement_error_reports_cube_center_offset():
+    source = CubePose(x=0.20, y=-0.12, z=CUBE_HALF_SIZE)
+    target = CubePose(x=0.21, y=-0.10, z=CUBE_HALF_SIZE)
+    model, data = _build_model(source)
+    set_cube_pose(model, data, source)
+
+    error = placement_error(model, data, target)
+
+    assert error.dx == pytest.approx(-0.01)
+    assert error.dy == pytest.approx(-0.02)
+    assert error.dz == pytest.approx(0.0)
+    assert error.xy == pytest.approx(np.hypot(0.01, 0.02))
+    assert "placement error:" in error.summary()
+
+
 def test_target_sampler_is_retried_across_attempt_budget(monkeypatch):
     source = CubePose(x=0.20, y=-0.12, z=CUBE_HALF_SIZE)
     target = CubePose(x=0.20, y=-0.05, z=CUBE_HALF_SIZE)
@@ -79,7 +98,7 @@ def test_target_sampler_is_retried_across_attempt_budget(monkeypatch):
         sampled_targets.append(target)
         return target
 
-    monkeypatch.setattr(episodes, "trajectory_candidates", lambda *args, **kwargs: ())
+    monkeypatch.setattr(episodes, "grasp_candidates", lambda *args, **kwargs: ())
 
     with pytest.raises(EpisodeSamplingError, match="within 3 attempts"):
         prepare_episode(

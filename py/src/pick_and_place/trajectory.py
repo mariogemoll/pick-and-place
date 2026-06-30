@@ -23,9 +23,10 @@ from dataclasses import dataclass
 from functools import cached_property
 
 import numpy as np
-from scipy.spatial.transform import Rotation, Slerp
+from scipy.spatial.transform import Rotation
 
 from pick_and_place.geometry import (
+    CUBE_HALF_SIZE,
     CubeFace,
     CubePose,
     GRIPPER_TARGET_POSITION,
@@ -44,7 +45,6 @@ from pick_and_place.workspace_overlays import (
     CANONICAL_PICKUP_OVERLAY,
     CUBE_PLACEMENT_OVERLAY,
     is_cube_drop_allowed,
-    is_vertical_grip_allowed,
 )
 
 # Number of intermediate heights checked along the hover→grasp descent when
@@ -61,7 +61,7 @@ SOURCE_HOVER_TIP_Z = 0.04
 RECOVERY_LIFT_CUBE_Z = 0.08
 # Cube-center height at release. Normal episodes release slightly higher than
 # cleanup recovery, where keeping the established low drop is more important.
-DROP_CUBE_CENTER_Z = 0.05
+DROP_CUBE_CENTER_Z = 0.025
 RECOVERY_DROP_CUBE_CENTER_Z = 0.03
 # Vertical lift after release, preserving the chosen drop orientation until the
 # open jaws clear the cube.
@@ -150,10 +150,6 @@ REST_GRIPPER = math.radians((10.5 - 2.3) / 96.2 * 130 - 10)
 JOINT_SPEED = 1.5
 # Cartesian speed of the gripper/cube tip along the carry, m/s. Governs phase 4.
 CARTESIAN_SPEED = 0.45
-# Metres of carry arc that one radian of cube yaw is counted as when retiming the
-# carry. Set so a pure in-place rotation is paced at JOINT_SPEED rather than
-# whipping the wrist through the low-translation stretch of the path.
-CARRY_ROTATION_WEIGHT = CARTESIAN_SPEED / JOINT_SPEED
 # Floor on any speed-derived phase so short moves still have room to ease in/out.
 MIN_TRAVEL_DURATION = 0.5
 
@@ -226,24 +222,6 @@ CARRY_CRUISE_Z = 0.08
 _CARRY_WAYPOINT_PHASES = (0.0, 0.4, 0.6, 1.0)
 # Horizontal travel fraction spent rounding into / out of the cruise.
 _CARRY_CORNER_TRAVEL = 0.25
-# How many points along the carry to check for reachability when planning it.
-_CARRY_SAMPLES = 24
-# Angular resolution of the free drop-pitch search.
-_DROP_PITCH_SAMPLES = 16
-_VERTICAL_DROP_TOOL_PITCH = -math.pi / 2.0
-# In the vertical annulus, prefer near-vertical drops but allow a little pitch
-# freedom so the wrist/camera mount can stay near the neutral -90 deg roll.
-_VERTICAL_DROP_PITCH_OFFSETS = (
-    0.0,
-    math.radians(-5.0),
-    math.radians(5.0),
-    math.radians(-10.0),
-    math.radians(10.0),
-    math.radians(-15.0),
-    math.radians(15.0),
-)
-# Resolution of the arc-length table used to retime the geometric curve.
-_CARRY_ARC_LENGTH_SAMPLES = 2048
 # Fraction of the carry spent smoothly accelerating in and decelerating out.
 _CARRY_EASE_FRACTION = 0.2
 
@@ -589,31 +567,25 @@ def _timed_arc_fraction(phase: float) -> float:
 
 @dataclass(frozen=True)
 class CarryPlan:
-    """The geometric carry of the grasped cube from the pick to the target hover.
+    """Joint-space carry from lifted grasp to a selected free-orientation drop."""
 
-    The cube travels either as a straight Cartesian chord (shortest) or, when
-    that chord would leave the annular workspace, as a polar arc about the pan
-    axis (radius and azimuth swept between the endpoints, which keeps the path
-    inside the sector by construction). The target specifies position only; the
-    final cube orientation is selected by the position-only drop planner.
-    """
-
-    mode: str  # 'straight' or 'polar'
-    # Rigid cube→gripper transform captured at the grasp; the gripper follows the
-    # cube through the carry so the held cube stays flush and lands on target.
+    mode: str
+    # Rigid cube→gripper transform captured at/after the grasp. Playback moves
+    # the arm in joint space, but this transform still defines the selected drop
+    # endpoint and lets diagnostics reconstruct the held cube pose.
     cube_from_gripper: Mat4
     pan_axis: Vec3
     grasp_position: Vec3
     drop_position: Vec3
     grasp_rotation: np.ndarray
     drop_rotation: np.ndarray
+    grasp_joints: dict[str, float]
+    cruise_joints: dict[str, float]
+    drop_joints: dict[str, float]
     grasp_radius: float
     drop_radius: float
     grasp_azimuth: float
     drop_azimuth: float
-    # (parameter, generalized arc length) samples for retiming the curve. The
-    # length includes translation and the planner-selected orientation sweep.
-    arc_table: tuple[tuple[float, float], ...] = ()
 
     @property
     def drop_yaw(self) -> float:
@@ -662,53 +634,17 @@ def _carry_geometry_pose(plan: CarryPlan, parameter: float) -> tuple[Vec3, np.nd
         azimuth = plan.grasp_azimuth + (plan.drop_azimuth - plan.grasp_azimuth) * travel
         x = plan.pan_axis[0] + radius * math.cos(azimuth)
         y = plan.pan_axis[1] + radius * math.sin(azimuth)
-    rotations = Rotation.from_matrix(np.stack((plan.grasp_rotation, plan.drop_rotation)))
-    rotation = Slerp((0.0, 1.0), rotations)(min(1.0, max(0.0, travel))).as_matrix()
+    rotation = plan.grasp_rotation if travel < 0.5 else plan.drop_rotation
     return np.array((x, y, height)), rotation
 
 
 def _carry_geometry_matrix(plan: CarryPlan, parameter: float) -> Mat4:
-    """World cube pose at a geometry parameter. This defines shape only; playback
-    timing is applied separately by ``_carry_cube_matrix``."""
+    """World cube pose at a diagnostic geometry parameter."""
     position, rotation = _carry_geometry_pose(plan, parameter)
     matrix = tf.identity()
     matrix[:3, :3] = rotation
     matrix[:3, 3] = position
     return matrix
-
-
-def _build_arc_table(plan: CarryPlan) -> tuple[tuple[float, float], ...]:
-    """Cumulative generalized arc length along the carry."""
-    table: list[tuple[float, float]] = [(0.0, 0.0)]
-    previous_position, previous_rotation = _carry_geometry_pose(plan, 0.0)
-    length = 0.0
-    for i in range(1, _CARRY_ARC_LENGTH_SAMPLES + 1):
-        parameter = i / _CARRY_ARC_LENGTH_SAMPLES
-        position, rotation = _carry_geometry_pose(plan, parameter)
-        translation = float(np.linalg.norm(position - previous_position))
-        angle = Rotation.from_matrix(previous_rotation.T @ rotation).magnitude()
-        length += translation + angle * CARRY_ROTATION_WEIGHT
-        table.append((parameter, length))
-        previous_position, previous_rotation = position, rotation
-    return tuple(table)
-
-
-def _length_to_parameter(table: tuple[tuple[float, float], ...], length: float) -> float:
-    clamped = min(table[-1][1], max(0.0, length))
-    end = next((j for j, sample in enumerate(table) if sample[1] >= clamped), len(table) - 1)
-    b = table[max(1, end)]
-    a = table[max(0, end - 1)]
-    span = b[1] - a[1]
-    alpha = 0.0 if span == 0 else (clamped - a[1]) / span
-    return a[0] + (b[0] - a[0]) * alpha
-
-
-def _carry_cube_matrix(plan: CarryPlan, phase: float) -> Mat4:
-    """Traverse the geometric curve by arc length, with one global C2
-    ease-in/out. Speed therefore changes only at the start and end, not at the
-    waypoints."""
-    target_length = _timed_arc_fraction(phase) * plan.arc_table[-1][1]
-    return _carry_geometry_matrix(plan, _length_to_parameter(plan.arc_table, target_length))
 
 
 def _pushed_cube(pose: CubePose, inward_normal: Vec3, push: float) -> CubePose:
@@ -724,6 +660,60 @@ def _pushed_cube(pose: CubePose, inward_normal: Vec3, push: float) -> CubePose:
     )
 
 
+def _matrix_from_rotation_translation(rotation: np.ndarray, position: Vec3) -> Mat4:
+    matrix = tf.identity()
+    matrix[:3, :3] = rotation
+    matrix[:3, 3] = position
+    return matrix
+
+
+def _world_gripper_for_cube(
+    cube_from_gripper: Mat4,
+    cube_rotation: np.ndarray,
+    cube_position: Vec3,
+) -> Mat4:
+    return _matrix_from_rotation_translation(cube_rotation, cube_position) @ cube_from_gripper
+
+
+def _drop_cube_rotations(target: CubePose, drop_orientation: DropOrientation) -> Iterator[np.ndarray]:
+    if drop_orientation == "target":
+        yaw_values = (target.yaw,)
+        pitch_values = np.deg2rad((-60, -40, -20, 0, 20, 40, 60))
+        roll_values = np.deg2rad((-90, -60, -30, 0, 30, 60, 90))
+    elif drop_orientation == "free":
+        yaw_values = np.linspace(-math.pi, math.pi, 24, endpoint=False)
+        pitch_values = np.deg2rad((-75, -55, -35, -15, 0, 15, 35, 55, 75))
+        roll_values = np.deg2rad((-90, -60, -30, 0, 30, 60, 90))
+    else:
+        raise ValueError(f"unknown drop_orientation: {drop_orientation}")
+
+    seen: set[tuple[float, ...]] = set()
+
+    def yield_once(rotation: np.ndarray) -> Iterator[np.ndarray]:
+        key = tuple(np.round(rotation.reshape(-1), 8))
+        if key in seen:
+            return
+        seen.add(key)
+        yield rotation
+
+    for yaw in yaw_values:
+        yield from yield_once(Rotation.from_euler("zyx", (yaw, 0.0, 0.0)).as_matrix())
+    for yaw in yaw_values:
+        for pitch in pitch_values:
+            for roll in roll_values:
+                yield from yield_once(Rotation.from_euler("zyx", (yaw, pitch, roll)).as_matrix())
+
+
+def _cube_flatness_cost(cube_rotation: np.ndarray) -> float:
+    return 1.0 - max(abs(float(np.dot(cube_rotation[:, i], WORLD_UP))) for i in range(3))
+
+
+def _joint_distance(a: dict[str, float], b: dict[str, float]) -> float:
+    return math.sqrt(
+        sum(_shortest_delta(a[name], b[name]) ** 2 for name in ARM_JOINT_NAMES)
+    )
+
+
 def plan_carry_candidates(
     k: So101Kinematics,
     grasp: GraspChoice,
@@ -732,20 +722,15 @@ def plan_carry_candidates(
     *,
     drop_orientation: DropOrientation = "free",
     drop_cube_center_z: float = DROP_CUBE_CENTER_Z,
+    cube_from_gripper: Mat4 | None = None,
 ) -> Iterator[CarryPlan]:
-    """Plan the carry for an already-chosen grasp (face + elbow).
-
-    ``drop_orientation="free"`` treats the target as position-only and searches
-    the drop tool pitch. ``"target"`` preserves the target cube orientation.
-    When the target is inside the vertical pickup/drop zone, near-vertical drops
-    are yielded before other free-pitch drops; if preflight rejects them, callers
-    can still fall through to the broader free-pitch search.
-    """
+    """Plan joint-space carries for an already-chosen grasp."""
     grasp_gripper = grasp.grasp_matrix
     if not is_cube_drop_allowed(target.x, target.y):
         return
-    low_grasp_cube = world_from_cube(_pushed_cube(source, grasp.inward_normal, SAFETY_MARGIN))
-    cube_from_gripper = np.linalg.inv(low_grasp_cube) @ grasp_gripper
+    if cube_from_gripper is None:
+        low_grasp_cube = world_from_cube(_pushed_cube(source, grasp.inward_normal, SAFETY_MARGIN))
+        cube_from_gripper = np.linalg.inv(low_grasp_cube) @ grasp_gripper
     lifted_grasp_cube = grasp.lift_matrix @ np.linalg.inv(cube_from_gripper)
 
     target_xy = (target.x, target.y)
@@ -770,101 +755,46 @@ def plan_carry_candidates(
             drop_position[1] - k.pan_axis[1], drop_position[0] - k.pan_axis[0]
         ),
     }
-    plans: list[tuple[tuple[int, float, float, int], CarryPlan]] = []
-    target_allows_vertical_drop = drop_orientation == "free" and is_vertical_grip_allowed(
-        target.x, target.y
-    )
-
-    def consider_plan(plan: CarryPlan, mode_index: int, priority: int) -> None:
-        max_wrist_distance = 0.0
-        wrist_cost = 0.0
-        for i in range(_CARRY_SAMPLES + 1):
-            gripper_matrix = _carry_geometry_matrix(plan, i / _CARRY_SAMPLES) @ cube_from_gripper
-            branch = next(
-                (b for b in solve_simple_grasp_ik(k, gripper_matrix) if b.elbow == grasp.elbow),
-                None,
+    plans: list[tuple[tuple[float, float, float], CarryPlan]] = []
+    cruise_position = np.array((target.x, target.y, max(CARRY_CRUISE_Z, drop_cube_center_z)))
+    for cube_rotation in _drop_cube_rotations(target, drop_orientation):
+        drop_gripper = _world_gripper_for_cube(cube_from_gripper, cube_rotation, drop_position)
+        drop_branches = solve_simple_grasp_ik(k, drop_gripper)
+        if not drop_branches:
+            continue
+        cruise_gripper = _world_gripper_for_cube(cube_from_gripper, cube_rotation, cruise_position)
+        cruise_branches = solve_simple_grasp_ik(k, cruise_gripper)
+        if not cruise_branches:
+            continue
+        for drop_branch in drop_branches:
+            cruise_branch = min(
+                cruise_branches,
+                key=lambda branch: _joint_distance(drop_branch.joints, branch.joints),
             )
-            if branch is None:
-                return
-            wrist_distance = abs(
-                _shortest_delta(NEUTRAL_ARM_JOINTS["wrist_roll"], branch.joints["wrist_roll"])
+            joint_cost = (
+                _joint_distance(grasp.lift_joints, cruise_branch.joints)
+                + _joint_distance(cruise_branch.joints, drop_branch.joints)
             )
-            max_wrist_distance = max(max_wrist_distance, wrist_distance)
-            wrist_cost += wrist_distance * wrist_distance
-        score = (priority, wrist_cost / (_CARRY_SAMPLES + 1), max_wrist_distance, mode_index)
-        plans.append((score, plan))
-
-    def drop_gripper_matrix(tool_pitch: float, wrist_roll: float) -> Mat4:
-        """Construct a kinematically compatible gripper pose at the drop center."""
-        azimuth = math.atan2(target_xy[1] - k.pan_axis[1], target_xy[0] - k.pan_axis[0])
-        cube_from_gripper_rotation = cube_from_gripper[:3, :3]
-        cube_from_gripper_offset = cube_from_gripper[:3, 3]
-        matrix = tf.identity()
-        for _ in range(6):
-            radial = np.array((math.cos(azimuth), math.sin(azimuth), 0.0))
-            lateral = np.array((-math.sin(azimuth), math.cos(azimuth), 0.0))
-            approach = radial * math.cos(tool_pitch) + WORLD_UP * math.sin(tool_pitch)
-            zero_roll_x = np.cross(approach, lateral)
-            zero_roll_x /= np.linalg.norm(zero_roll_x)
-            roll = wrist_roll + k.wrist_roll_zero_twist
-            gripper_x = zero_roll_x * math.cos(roll) + lateral * math.sin(roll)
-            gripper_z = -approach
-            gripper_y = np.cross(gripper_z, gripper_x)
-            gripper_rotation = np.column_stack((gripper_x, gripper_y, gripper_z))
-            cube_rotation = gripper_rotation @ cube_from_gripper_rotation.T
-            matrix[:3, :3] = gripper_rotation
-            matrix[:3, 3] = drop_position + cube_rotation @ cube_from_gripper_offset
-            target = tf.transform_point(matrix, GRIPPER_TARGET_POSITION)
-            azimuth = math.atan2(target[1] - k.pan_axis[1], target[0] - k.pan_axis[0])
-        return matrix
-
-    def evaluate_free_drop(mode: str, tool_pitch: float, mode_index: int) -> None:
-        drop_gripper = drop_gripper_matrix(tool_pitch, NEUTRAL_ARM_JOINTS["wrist_roll"])
-        drop_cube = drop_gripper @ np.linalg.inv(cube_from_gripper)
-        vertical_offset = abs(_shortest_delta(_VERTICAL_DROP_TOOL_PITCH, tool_pitch))
-        is_near_vertical = vertical_offset <= max(abs(x) for x in _VERTICAL_DROP_PITCH_OFFSETS)
-        priority = 0 if target_allows_vertical_drop and is_near_vertical else 1
-        consider_plan(
-            CarryPlan(
-                mode=mode,
-                grasp_rotation=lifted_grasp_cube[:3, :3],
-                drop_rotation=drop_cube[:3, :3],
-                **base,
-            ),
-            mode_index,
-            priority,
-        )
-
-    def evaluate_target_drop(mode: str, mode_index: int) -> None:
-        drop_cube = world_from_cube(dataclasses.replace(target, z=drop_cube_center_z))
-        consider_plan(
-            CarryPlan(
-                mode=mode,
-                grasp_rotation=lifted_grasp_cube[:3, :3],
-                drop_rotation=drop_cube[:3, :3],
-                **base,
-            ),
-            mode_index,
-            0,
-        )
-
-    for mode_index, mode in enumerate(("straight", "polar")):
-        if drop_orientation == "free":
-            if target_allows_vertical_drop:
-                pitch_samples = tuple(
-                    _VERTICAL_DROP_TOOL_PITCH + offset for offset in _VERTICAL_DROP_PITCH_OFFSETS
+            gripper_target_z = tf.transform_point(drop_gripper, GRIPPER_TARGET_POSITION)[2]
+            clearance_cost = max(0.0, CUBE_HALF_SIZE - float(gripper_target_z))
+            score = (_cube_flatness_cost(cube_rotation), clearance_cost, joint_cost)
+            plans.append(
+                (
+                    score,
+                    CarryPlan(
+                        mode="joint",
+                        grasp_rotation=lifted_grasp_cube[:3, :3],
+                        drop_rotation=cube_rotation,
+                        grasp_joints=dict(grasp.lift_joints),
+                        cruise_joints=dict(cruise_branch.joints),
+                        drop_joints=dict(drop_branch.joints),
+                        **base,
+                    ),
                 )
-            else:
-                pitch_samples = np.linspace(-math.pi, math.pi, _DROP_PITCH_SAMPLES, endpoint=False)
-            for tool_pitch in pitch_samples:
-                evaluate_free_drop(mode, float(tool_pitch), mode_index)
-        elif drop_orientation == "target":
-            evaluate_target_drop(mode, mode_index)
-        else:
-            raise ValueError(f"unknown drop_orientation: {drop_orientation}")
+            )
 
     for _, plan in sorted(plans, key=lambda item: item[0]):
-        yield dataclasses.replace(plan, arc_table=_build_arc_table(plan))
+        yield plan
 
 
 @runtime_checkable
@@ -1004,19 +934,21 @@ class CarryPhase:
 
     @cached_property
     def duration(self) -> float:
-        return _cartesian_move_duration(self.carry.arc_table[-1][1])
+        return _joint_move_duration(
+            self.k,
+            self.grasp_joints,
+            self.carry.cruise_joints,
+            self.predrop_joints,
+        )
 
     def evaluate(self, t: float) -> Frame:
         phase = min(1.0, t / self.duration) if self.duration > 0 else 1.0
-        gripper_matrix = _carry_cube_matrix(self.carry, phase) @ self.carry.cube_from_gripper
-        branch = next(
-            (b for b in solve_simple_grasp_ik(self.k, gripper_matrix) if b.elbow == self.elbow),
-            None,
-        )
-        joints = (
-            branch.joints
-            if branch is not None
-            else _lerp_joints(self.grasp_joints, self.predrop_joints, _smoothstep(phase))
+        joints = _spline_joints_through_waypoint(
+            self.grasp_joints,
+            self.carry.cruise_joints,
+            self.predrop_joints,
+            0.5,
+            _timed_arc_fraction(phase),
         )
         return Frame(joints=joints, gripper=GRIPPER_GRASP)
 
@@ -1126,63 +1058,90 @@ def trajectory_candidates(
 ) -> Iterator[Trajectory]:
     """Yield full trajectories from start to end in grasp preference order."""
     candidates = free_grasp_candidates(k, source) if free_grasp else grasp_candidates(k, source)
-    drop_cube_center_z = RECOVERY_DROP_CUBE_CENTER_Z if free_grasp else DROP_CUBE_CENTER_Z
-    release_delay = 0.0 if free_grasp else DROP_DWELL_DURATION
     for grasp in candidates:
-        for carry in plan_carry_candidates(
+        yield from trajectory_candidates_for_grasp(
             k,
-            grasp,
             source,
             target,
+            start_joints,
+            start_gripper,
+            end_joints,
+            end_gripper,
+            grasp,
             drop_orientation=drop_orientation,
-            drop_cube_center_z=drop_cube_center_z,
-        ):
-            endpoint = _carry_geometry_matrix(carry, 1.0) @ carry.cube_from_gripper
-            predrop_branch = next(
-                (b for b in solve_simple_grasp_ik(k, endpoint) if b.elbow == grasp.elbow), None
-            )
-            if predrop_branch is None:
-                continue
-            postdrop_hover = tf.with_position(
-                endpoint, tf.get_position(endpoint) + np.array((0.0, 0.0, POSTDROP_LIFT_Z))
-            )
-            postdrop_branch = next(
-                (b for b in solve_simple_grasp_ik(k, postdrop_hover) if b.elbow == grasp.elbow),
-                None,
-            )
-            if postdrop_branch is None:
-                continue
+            free_grasp=free_grasp,
+        )
 
-            phases = (
-                ApproachPhase(k, start_joints, start_gripper, grasp.hover_joints),
-                DescentPhase(k, grasp),
-                GraspPhase(grasp.grasp_joints),
-                (
-                    RecoveryLiftPhase(k, grasp.grasp_joints, grasp.lift_joints)
-                    if free_grasp
-                    else LiftPhase(k, grasp.grasp_joints, grasp.lift_joints)
-                ),
-                CarryPhase(k, carry, grasp.elbow, grasp.lift_joints, predrop_branch.joints),
-                ReleasePhase(
-                    predrop_branch.joints,
-                    postdrop_branch.joints,
-                    pre_release_delay=release_delay,
-                ),
-                RetreatPhase(k, postdrop_branch.joints, end_joints, end_gripper),
-            )
 
-            yield Trajectory(
-                phases=phases,
-                source=source,
-                target=target,
-                grasp=grasp,
-                carry=carry,
-                drop_orientation=drop_orientation,
-                start_joints=start_joints,
-                start_gripper=start_gripper,
-                end_joints=end_joints,
-                end_gripper=end_gripper,
-            )
+def trajectory_candidates_for_grasp(
+    k: So101Kinematics,
+    source: CubePose,
+    target: CubePose,
+    start_joints: dict[str, float],
+    start_gripper: float,
+    end_joints: dict[str, float],
+    end_gripper: float,
+    grasp: GraspChoice,
+    *,
+    drop_orientation: DropOrientation = "free",
+    free_grasp: bool = False,
+    cube_from_gripper: Mat4 | None = None,
+) -> Iterator[Trajectory]:
+    """Yield full trajectories for one selected grasp."""
+    drop_cube_center_z = RECOVERY_DROP_CUBE_CENTER_Z if free_grasp else DROP_CUBE_CENTER_Z
+    release_delay = 0.0 if free_grasp else DROP_DWELL_DURATION
+    for carry in plan_carry_candidates(
+        k,
+        grasp,
+        source,
+        target,
+        drop_orientation=drop_orientation,
+        drop_cube_center_z=drop_cube_center_z,
+        cube_from_gripper=cube_from_gripper,
+    ):
+        endpoint = _carry_geometry_matrix(carry, 1.0) @ carry.cube_from_gripper
+        predrop_joints = carry.drop_joints
+        postdrop_hover = tf.with_position(
+            endpoint, tf.get_position(endpoint) + np.array((0.0, 0.0, POSTDROP_LIFT_Z))
+        )
+        postdrop_branch = min(
+            solve_simple_grasp_ik(k, postdrop_hover),
+            key=lambda branch: _joint_distance(predrop_joints, branch.joints),
+            default=None,
+        )
+        if postdrop_branch is None:
+            continue
+
+        phases = (
+            ApproachPhase(k, start_joints, start_gripper, grasp.hover_joints),
+            DescentPhase(k, grasp),
+            GraspPhase(grasp.grasp_joints),
+            (
+                RecoveryLiftPhase(k, grasp.grasp_joints, grasp.lift_joints)
+                if free_grasp
+                else LiftPhase(k, grasp.grasp_joints, grasp.lift_joints)
+            ),
+            CarryPhase(k, carry, grasp.elbow, grasp.lift_joints, predrop_joints),
+            ReleasePhase(
+                predrop_joints,
+                postdrop_branch.joints,
+                pre_release_delay=release_delay,
+            ),
+            RetreatPhase(k, postdrop_branch.joints, end_joints, end_gripper),
+        )
+
+        yield Trajectory(
+            phases=phases,
+            source=source,
+            target=target,
+            grasp=grasp,
+            carry=carry,
+            drop_orientation=drop_orientation,
+            start_joints=start_joints,
+            start_gripper=start_gripper,
+            end_joints=end_joints,
+            end_gripper=end_gripper,
+        )
 
 
 def replan_remaining_candidates(
@@ -1249,18 +1208,16 @@ def replan_remaining_candidates(
             drop_cube_center_z=drop_cube_center_z,
         ):
             endpoint = _carry_geometry_matrix(carry, 1.0) @ carry.cube_from_gripper
-            predrop_branch = next(
-                (b for b in solve_simple_grasp_ik(k, endpoint) if b.elbow == g.elbow), None
-            )
-            if predrop_branch is None:
-                continue
+            predrop_joints = carry.drop_joints
 
             postdrop_hover = tf.with_position(
                 endpoint, tf.get_position(endpoint) + np.array((0.0, 0.0, POSTDROP_LIFT_Z))
             )
 
-            postdrop_branch = next(
-                (b for b in solve_simple_grasp_ik(k, postdrop_hover) if b.elbow == g.elbow), None
+            postdrop_branch = min(
+                solve_simple_grasp_ik(k, postdrop_hover),
+                key=lambda branch: _joint_distance(predrop_joints, branch.joints),
+                default=None,
             )
             if postdrop_branch is None:
                 continue
@@ -1277,10 +1234,10 @@ def replan_remaining_candidates(
                     if free_grasp
                     else LiftPhase(k, g.grasp_joints, g.lift_joints)
                 )
-                phases.append(CarryPhase(k, carry, g.elbow, g.lift_joints, predrop_branch.joints))
+                phases.append(CarryPhase(k, carry, g.elbow, g.lift_joints, predrop_joints))
                 phases.append(
                     ReleasePhase(
-                        predrop_branch.joints,
+                        predrop_joints,
                         postdrop_branch.joints,
                         pre_release_delay=release_delay,
                     )
@@ -1295,10 +1252,10 @@ def replan_remaining_candidates(
                     if free_grasp
                     else LiftPhase(k, g.grasp_joints, g.lift_joints)
                 )
-                phases.append(CarryPhase(k, carry, g.elbow, g.lift_joints, predrop_branch.joints))
+                phases.append(CarryPhase(k, carry, g.elbow, g.lift_joints, predrop_joints))
                 phases.append(
                     ReleasePhase(
-                        predrop_branch.joints,
+                        predrop_joints,
                         postdrop_branch.joints,
                         pre_release_delay=release_delay,
                     )
@@ -1316,10 +1273,10 @@ def replan_remaining_candidates(
                     if free_grasp
                     else LiftPhase(k, g.grasp_joints, g.lift_joints)
                 )
-                phases.append(CarryPhase(k, carry, g.elbow, g.lift_joints, predrop_branch.joints))
+                phases.append(CarryPhase(k, carry, g.elbow, g.lift_joints, predrop_joints))
                 phases.append(
                     ReleasePhase(
-                        predrop_branch.joints,
+                        predrop_joints,
                         postdrop_branch.joints,
                         pre_release_delay=release_delay,
                     )
@@ -1334,10 +1291,10 @@ def replan_remaining_candidates(
                     if free_grasp
                     else LiftPhase(k, g.grasp_joints, g.lift_joints)
                 )
-                phases.append(CarryPhase(k, carry, g.elbow, g.lift_joints, predrop_branch.joints))
+                phases.append(CarryPhase(k, carry, g.elbow, g.lift_joints, predrop_joints))
                 phases.append(
                     ReleasePhase(
-                        predrop_branch.joints,
+                        predrop_joints,
                         postdrop_branch.joints,
                         measured_gripper,
                         pre_release_delay=release_delay,
@@ -1348,10 +1305,10 @@ def replan_remaining_candidates(
             elif completed_phase_name in ("lift", "recovery_lift"):
                 # Now that the cube and jaws are safely above the floor, seed carry
                 # from measured readback again.
-                phases.append(CarryPhase(k, carry, g.elbow, measured_joints, predrop_branch.joints))
+                phases.append(CarryPhase(k, carry, g.elbow, measured_joints, predrop_joints))
                 phases.append(
                     ReleasePhase(
-                        predrop_branch.joints,
+                        predrop_joints,
                         postdrop_branch.joints,
                         measured_gripper,
                         pre_release_delay=release_delay,

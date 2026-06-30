@@ -39,6 +39,7 @@ from pick_and_place.episodes import (
     EpisodeSamplingError,
     _build_model,
     is_unexpected,
+    placement_error,
     prepare_episode,
     scan_contacts,
 )
@@ -80,13 +81,12 @@ def _play(
     speed: float,
     viewer: mujoco.viewer.Handle,
     skip_event: threading.Event,
-) -> None:
+) -> bool:
     """Play one episode's trajectory once, flagging unexpected collisions.
 
     The sim steps in real time; the trajectory clock runs at ``speed`` × wall time,
     so a factor below 1.0 slows every phase uniformly for closer inspection.
-    Returns when the trajectory finishes (after a short dwell), when the user
-    presses Enter, or when the viewer is closed.
+    Returns whether the trajectory finished normally after the final dwell.
     """
     model = episode.model
     data = episode.data
@@ -100,11 +100,11 @@ def _play(
     while viewer.is_running():
         if skip_event.is_set():
             skip_event.clear()
-            return
+            return False
         step_start = time.time()
         traj_t = (data.time - playback_start) * speed
         if traj_t > trajectory.duration + END_DWELL:
-            return
+            return True
         frame = trajectory.evaluate(traj_t)
         for name, value in frame.joints.items():
             data.ctrl[actuator_id[name]] = value
@@ -123,6 +123,7 @@ def _play(
         remaining = model.opt.timestep - (time.time() - step_start)
         if remaining > 0:
             time.sleep(remaining)
+    return False
 
 
 def main() -> None:
@@ -282,7 +283,8 @@ def main() -> None:
                 break
             _show_target_marker(model, episode.target)
             skip_event.clear()
-            _play(episode, args.speed, viewer, skip_event)
+            if _play(episode, args.speed, viewer, skip_event):
+                print(placement_error(model, data, episode.target).summary())
 
 
 if __name__ == "__main__":
