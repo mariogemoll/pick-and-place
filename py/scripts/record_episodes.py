@@ -21,10 +21,13 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import multiprocessing as mp
+import os
 from pathlib import Path
 
 import mujoco
 import numpy as np
+from tqdm import tqdm
 
 from pick_and_place.episodes import (
     EpisodeSamplingError,
@@ -81,6 +84,24 @@ def _action_vector(frame) -> np.ndarray:
     return np.asarray(values, dtype=np.float64)
 
 
+def _phase_boundaries(trajectory, times: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Frame index and name of the first sampled frame in each scripted phase.
+
+    The trajectory's per-phase durations give each phase's cumulative start time;
+    mapping that onto the recorded ``times`` stream yields the frame index at
+    which the phase first appears in this episode. Phases are per-episode markers,
+    so a curriculum that resets at "the start of the carry phase" resolves to the
+    right frame regardless of how long this particular trajectory ran.
+    """
+    names = [phase.name for phase in trajectory.phases]
+    start = 0.0
+    boundaries: list[int] = []
+    for phase in trajectory.phases:
+        boundaries.append(int(np.searchsorted(times, start, side="left")))
+        start += phase.duration
+    return np.asarray(boundaries, dtype=np.int64), np.asarray(names)
+
+
 def run_episode(
     episode: Episode, control_hz: float, out_path: Path, *, episode_index: int, seed: int
 ) -> dict[str, np.ndarray]:
@@ -125,6 +146,10 @@ def run_episode(
         if traj_t >= trajectory.duration:
             break
         mujoco.mj_step(model, data)
+
+    phase_boundaries, phase_names = _phase_boundaries(
+        trajectory, recorder.stacked()["time"]
+    )
 
     cube_pos = data.qpos[cube_adr : cube_adr + 3]
     cube_quat = data.qpos[cube_adr + 3 : cube_adr + 7]
@@ -171,10 +196,62 @@ def run_episode(
         success=np.array(success),
         final_xy_error=np.array(xy_err),
         final_yaw_error=np.array(yaw_err),
+        phase_boundaries=phase_boundaries,
+        phase_names=phase_names,
         duration=np.array(trajectory.duration),
         control_hz=np.array(control_hz),
         attempts=np.array(episode.attempts),
         n_collisions=np.array(len(collisions)),
+    )
+
+
+def _record_one(task: tuple[int, int, float, int, str, Path, bool]) -> dict[str, object]:
+    """Record a single episode in isolation, returning a small picklable summary.
+
+    Each episode draws from its own RNG seeded by ``(seed, index)``, so the result
+    is reproducible and independent of how many worker processes run — the whole
+    point of keeping the per-episode work self-contained. Episodes that exhaust
+    their resample budget are reported as skipped rather than raising.
+    """
+    index, seed, control_hz, max_attempts, drop_orientation, out_dir, verbose = task
+    rng = np.random.default_rng(np.random.SeedSequence([seed, index]))
+    try:
+        episode = prepare_episode(
+            rng,
+            max_attempts=max_attempts,
+            verbose=verbose,
+            drop_orientation=drop_orientation,
+        )
+    except EpisodeSamplingError as exc:
+        return {"index": index, "skipped": str(exc)}
+    path = out_dir / f"episode_{index:05d}.npz"
+    record = run_episode(episode, control_hz, path, episode_index=index, seed=seed)
+    return {
+        "index": index,
+        "name": path.name,
+        "frames": int(len(record["time"])),
+        "grasp_face": str(record["grasp_face"]),
+        "grasp_elbow": str(record["grasp_elbow"]),
+        "carry_mode": str(record["carry_mode"]),
+        "drop_orientation": str(record["drop_orientation"]),
+        "xy_err": float(record["final_xy_error"]),
+        "yaw_err": float(record["final_yaw_error"]),
+        "success": bool(record["success"]),
+    }
+
+
+def _print_result(result: dict[str, object]) -> None:
+    index = result["index"]
+    if "skipped" in result:
+        tqdm.write(f"episode {index}: skipped ({result['skipped']})")
+        return
+    tqdm.write(
+        f"episode {index}: {result['frames']} frames, "
+        f"{result['grasp_face']}/{result['grasp_elbow']} "
+        f"{result['carry_mode']}/{result['drop_orientation']}, "
+        f"xy_err={result['xy_err']:.3f}m, "
+        f"yaw_err={math.degrees(result['yaw_err']):.1f}°, "
+        f"{'success' if result['success'] else 'MISS'} -> {result['name']}"
     )
 
 
@@ -206,38 +283,55 @@ def main() -> None:
         default="free",
         help="free searches any reachable drop orientation; target preserves target yaw",
     )
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        default=1,
+        help="parallel worker processes (default 1; episodes are independent)",
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="print the grasp search log")
     args = parser.parse_args()
 
+    if args.jobs < 1:
+        parser.error("--jobs must be at least 1")
+
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    rng = np.random.default_rng(args.seed)
+
+    tasks = [
+        (
+            index,
+            args.seed,
+            args.control_hz,
+            args.max_attempts,
+            args.drop_orientation,
+            args.out_dir,
+            args.verbose,
+        )
+        for index in range(args.num_episodes)
+    ]
 
     successes = 0
     written = 0
-    for index in range(args.num_episodes):
-        try:
-            episode = prepare_episode(
-                rng,
-                max_attempts=args.max_attempts,
-                verbose=args.verbose,
-                drop_orientation=args.drop_orientation,
-            )
-        except EpisodeSamplingError as exc:
-            print(f"episode {index}: skipped ({exc})")
-            continue
-        path = args.out_dir / f"episode_{index:05d}.npz"
-        record = run_episode(episode, args.control_hz, path, episode_index=index, seed=args.seed)
-        written += 1
-        ok = bool(record["success"])
-        successes += ok
-        print(
-            f"episode {index}: {len(record['time'])} frames, "
-            f"{record['grasp_face']}/{record['grasp_elbow']} "
-            f"{record['carry_mode']}/{record['drop_orientation']}, "
-            f"xy_err={float(record['final_xy_error']):.3f}m, "
-            f"yaw_err={math.degrees(float(record['final_yaw_error'])):.1f}°, "
-            f"{'success' if ok else 'MISS'} -> {path.name}"
-        )
+    if args.jobs == 1:
+        results = (_record_one(task) for task in tasks)
+    else:
+        # spawn keeps each worker's MuJoCo/OpenGL state isolated; cap each worker
+        # to one BLAS thread so J processes don't oversubscribe the cores.
+        os.environ.setdefault("OMP_NUM_THREADS", "1")
+        pool = mp.get_context("spawn").Pool(args.jobs)
+        results = pool.imap_unordered(_record_one, tasks)
+    try:
+        with tqdm(total=args.num_episodes, unit="ep") as bar:
+            for result in results:
+                _print_result(result)
+                bar.update(1)
+                if "skipped" not in result:
+                    written += 1
+                    successes += bool(result["success"])
+    finally:
+        if args.jobs != 1:
+            pool.close()
+            pool.join()
 
     meta = {
         "joint_names": list(JOINT_NAMES),
@@ -259,6 +353,8 @@ def main() -> None:
             "qvel": "(T,nv) full sim qvel",
             "cube_start/cube_target/cube_end": "(x, y, z, yaw)",
             "robot_start/robot_end": "(6,) JOINT_NAMES order set points",
+            "phase_boundaries": "(7,) frame index at which each scripted phase begins",
+            "phase_names": "(7,) name of each scripted phase, in order",
             "drop_orientation": "free position-only drop or target yaw-matched drop",
         },
     }
