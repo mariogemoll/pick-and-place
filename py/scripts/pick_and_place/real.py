@@ -321,8 +321,10 @@ def main() -> None:
     parser.add_argument(
         "--target-drop-zone",
         dest="target_drop_zone",
-        action="store_true",
-        help="use the overhead camera to set the target from a black/white drop-zone square",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="use the overhead camera to set the target from a black/white drop-zone square "
+        "(default: on; --no-target-drop-zone to disable)",
     )
     parser.add_argument(
         "--show-drop-zone",
@@ -424,8 +426,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if args.target is not None and args.target_drop_zone:
-        parser.error("--target and --target-drop-zone are mutually exclusive")
+    # A pinned --target wins over the (default-on) drop-zone tracking.
+    if args.target is not None:
+        args.target_drop_zone = False
 
     import cv2
 
