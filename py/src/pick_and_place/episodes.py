@@ -30,7 +30,6 @@ from pick_and_place.paper_detection import add_paper_target_marker
 from pick_and_place.trajectory import (
     ApproachPhase,
     DescentPhase,
-    DropOrientation,
     GRIPPER_OPEN,
     GraspPhase,
     LiftPhase,
@@ -604,7 +603,6 @@ def _save_failed_preflight_trajectory(
         grasp_face=np.array("" if grasp is None else grasp.face),
         grasp_elbow=np.array("" if grasp is None else grasp.elbow),
         carry_mode=np.array("" if carry is None else carry.mode),
-        drop_orientation=np.array(trajectory.drop_orientation),
         duration=np.array(trajectory.duration),
         collision_events=event_rows,
     )
@@ -720,7 +718,6 @@ def prepare_episode(
     include_environment: bool = False,
     offwidth: int = 1280,
     offheight: int = 720,
-    drop_orientation: DropOrientation = "free",
     preflight_debug: bool = False,
     preflight_debug_limit: int = 12,
     failed_trajectory_dir: Path | None = None,
@@ -849,7 +846,6 @@ def prepare_episode(
                 end_joints,
                 end_gripper,
                 candidate_grasp,
-                drop_orientation=drop_orientation,
                 free_grasp=free_grasp,
                 cube_from_gripper=cube_from_gripper,
                 carry_ok=carry_ok,
@@ -880,7 +876,6 @@ def prepare_episode(
                             f"source: x={ep_source.x:.4f}  y={ep_source.y:.4f}"
                             f"  yaw={math.degrees(ep_source.yaw):.1f}°"
                             f"  target: x={ep_target.x:.4f}  y={ep_target.y:.4f}"
-                            f"  yaw={math.degrees(ep_target.yaw):.1f}°"
                         )
                         print(
                             f"grasp: face={grasp.face}  elbow={grasp.elbow}"

@@ -84,16 +84,15 @@ def _build_model(
     source_xy: tuple[float, float],
     source_yaw: float,
     target_xy: tuple[float, float],
-    target_yaw: float,
     render_size: int,
 ):
     """Compile the standard (AprilTag, calibrated-camera) scene with the pick cube
     placed as a free rigid body at the requested pose. Mirrors the layout used by
     the episode tooling so the cameras and cube match what a policy would see.
 
-    The black drop-zone square is rendered at ``target_xy``/``target_yaw`` so the
-    frames match a real recording, where a physical paper square on the table marks
-    where the cube must be placed; without it the policy sees no target.
+    The black drop-zone square is rendered at ``target_xy`` so the frames match a
+    real recording, where a physical paper square on the table marks where the
+    cube must be placed; without it the policy sees no target.
 
     ``render_size`` enlarges the offscreen framebuffer so the camera renders fed to
     the policy fit (MuJoCo defaults to 640x480, too small for a 512 square)."""
@@ -118,7 +117,7 @@ def _build_model(
     place_paper_target_marker(
         model,
         target_xy,
-        target_yaw,
+        0.0,
         (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
         usable=is_cube_drop_allowed(target_xy[0], target_xy[1]),
         alpha=1.0,
@@ -199,7 +198,6 @@ def main() -> None:
         default=None,
         help="pin the drop-zone center (x, y); omit to sample one randomly like the recording",
     )
-    parser.add_argument("--target-yaw", type=float, default=0.0, help="drop-zone yaw (radians)")
     parser.add_argument("--seed", type=int, default=None, help="RNG seed for random target sampling")
     parser.add_argument(
         "--steps",
@@ -238,17 +236,16 @@ def main() -> None:
 
     # Sample a random drop zone the same way the recording does, unless pinned.
     if args.target is not None:
-        target_xy, target_yaw = tuple(args.target), args.target_yaw
+        target_xy = tuple(args.target)
     else:
         sampled = sample_target(rng)
-        target_xy, target_yaw = (sampled.x, sampled.y), sampled.yaw
-    print(f"Drop zone at ({target_xy[0]:.4f}, {target_xy[1]:.4f}), yaw {target_yaw:.3f} rad")
+        target_xy = (sampled.x, sampled.y)
+    print(f"Drop zone at ({target_xy[0]:.4f}, {target_xy[1]:.4f})")
 
     model, data = _build_model(
         tuple(args.source),
         args.source_yaw,
         target_xy,
-        target_yaw,
         args.image_size,
     )
     _set_neutral(model, data)
@@ -298,7 +295,7 @@ def main() -> None:
         place_paper_target_marker(
             model,
             (target.x, target.y),
-            target.yaw,
+            0.0,
             (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
             usable=is_cube_drop_allowed(target.x, target.y),
             alpha=1.0,
@@ -307,7 +304,7 @@ def main() -> None:
         policy.reset()
         print(
             f"Resampled: cube ({cube.x:.4f}, {cube.y:.4f}) yaw {cube.yaw:.3f}, "
-            f"drop zone ({target.x:.4f}, {target.y:.4f}) yaw {target.yaw:.3f}"
+            f"drop zone ({target.x:.4f}, {target.y:.4f})"
         )
 
     # Press Enter (in the viewer or a --show window) to resample the scene. Every

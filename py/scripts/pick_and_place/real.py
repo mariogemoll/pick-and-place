@@ -270,16 +270,8 @@ def track_drop_zone_square(
             )
             continue
 
-        print(
-            f"Tracked drop zone: pos=({target.xy[0]:.3f}, {target.xy[1]:.3f}) "
-            f"yaw={np.degrees(target.yaw):.1f}deg"
-        )
-        return CubePose(
-            x=target.xy[0],
-            y=target.xy[1],
-            z=CUBE_HALF_SIZE,
-            yaw=float(target.yaw),
-        )
+        print(f"Tracked drop zone: pos=({target.xy[0]:.3f}, {target.xy[1]:.3f})")
+        return CubePose(x=target.xy[0], y=target.xy[1], z=CUBE_HALF_SIZE)
 
     return None
 
@@ -344,12 +336,6 @@ def main() -> None:
         choices=("black", "white"),
         default="black",
         help="color of the drop-zone square to detect (default: black)",
-    )
-    parser.add_argument(
-        "--drop-orientation",
-        choices=("free", "target"),
-        default="free",
-        help="free searches any reachable drop orientation; target preserves target yaw",
     )
     parser.add_argument("--follower-port", required=True, help="serial port of the SO-101 follower")
     parser.add_argument("--follower-id", default="folly", help="follower calibration id (default: folly)")
@@ -662,7 +648,6 @@ def main() -> None:
                         max_attempts=EPISODE_MAX_ATTEMPTS,
                         verbose=True,
                         include_environment=args.environment,
-                        drop_orientation=args.drop_orientation,
                         preflight_debug=args.preflight_debug,
                         preflight_debug_limit=args.preflight_debug_limit,
                         failed_trajectory_dir=args.save_failed_trajectories,
@@ -776,7 +761,6 @@ def main() -> None:
                                 max_attempts=EPISODE_MAX_ATTEMPTS,
                                 verbose=True,
                                 include_environment=args.environment,
-                                drop_orientation=args.drop_orientation,
                                 preflight_debug=args.preflight_debug,
                                 preflight_debug_limit=args.preflight_debug_limit,
                                 failed_trajectory_dir=args.save_failed_trajectories,

@@ -931,7 +931,6 @@ def execute_episode(
                     dynamic_grasp,
                     episode.end_joints,
                     episode.end_gripper,
-                    drop_orientation=episode.trajectory.drop_orientation,
                     free_grasp=free_grasp,
                 ),
                 start=1,

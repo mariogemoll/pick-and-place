@@ -18,7 +18,7 @@ from __future__ import annotations
 import dataclasses
 import math
 from collections.abc import Callable, Iterator
-from typing import Literal, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 from dataclasses import dataclass
 from functools import cached_property
 
@@ -225,9 +225,6 @@ _CARRY_WAYPOINT_PHASES = (0.0, 0.4, 0.6, 1.0)
 _CARRY_CORNER_TRAVEL = 0.25
 # Fraction of the carry spent smoothly accelerating in and decelerating out.
 _CARRY_EASE_FRACTION = 0.2
-
-DropOrientation = Literal["free", "target"]
-
 
 @dataclass(frozen=True)
 class Frame:
@@ -685,13 +682,14 @@ def _world_gripper_for_cube(
 
 
 def _drop_cube_rotations(
-    target: CubePose,
-    drop_orientation: DropOrientation,
     *,
     include_yaw_only: bool = True,
     include_tilted: bool = True,
 ) -> Iterator[np.ndarray]:
     """Candidate drop cube rotations, yaw-only ones first.
+
+    The target is a position only (no orientation), so every yaw is searched
+    freely.
 
     ``include_tilted=False`` restricts the search to the yaw-only candidates,
     which is enough whenever a plain vertical-grip hold covers both endpoints
@@ -700,16 +698,9 @@ def _drop_cube_rotations(
     resume with the tilted candidates only, without re-yielding the yaw-only
     ones already tried.
     """
-    if drop_orientation == "target":
-        yaw_values = (target.yaw,)
-        pitch_values = np.deg2rad((-60, -40, -20, 0, 20, 40, 60))
-        roll_values = np.deg2rad((-90, -60, -30, 0, 30, 60, 90))
-    elif drop_orientation == "free":
-        yaw_values = np.linspace(-math.pi, math.pi, 24, endpoint=False)
-        pitch_values = np.deg2rad((-75, -55, -35, -15, 0, 15, 35, 55, 75))
-        roll_values = np.deg2rad((-90, -60, -30, 0, 30, 60, 90))
-    else:
-        raise ValueError(f"unknown drop_orientation: {drop_orientation}")
+    yaw_values = np.linspace(-math.pi, math.pi, 24, endpoint=False)
+    pitch_values = np.deg2rad((-75, -55, -35, -15, 0, 15, 35, 55, 75))
+    roll_values = np.deg2rad((-90, -60, -30, 0, 30, 60, 90))
 
     seen: set[tuple[float, ...]] = set()
 
@@ -769,7 +760,6 @@ def plan_carry_candidates(
     source: CubePose,
     target: CubePose,
     *,
-    drop_orientation: DropOrientation = "free",
     drop_cube_center_z: float = DROP_CUBE_CENTER_Z,
     cube_from_gripper: Mat4 | None = None,
     carry_ok: CarryJointChecker | None = None,
@@ -879,16 +869,12 @@ def plan_carry_candidates(
         is_vertical_grip_allowed(source.x, source.y) and is_vertical_grip_allowed(target.x, target.y)
     )
     if vertical_only:
-        yaw_only_plans = build_plans(
-            _drop_cube_rotations(target, drop_orientation, include_tilted=False)
-        )
+        yaw_only_plans = build_plans(_drop_cube_rotations(include_tilted=False))
         for _, plan in sorted(yaw_only_plans, key=lambda item: item[0]):
             yield plan
-        tilted_plans = build_plans(
-            _drop_cube_rotations(target, drop_orientation, include_yaw_only=False)
-        )
+        tilted_plans = build_plans(_drop_cube_rotations(include_yaw_only=False))
     else:
-        tilted_plans = build_plans(_drop_cube_rotations(target, drop_orientation))
+        tilted_plans = build_plans(_drop_cube_rotations())
 
     for _, plan in sorted(tilted_plans, key=lambda item: item[0]):
         yield plan
@@ -1117,7 +1103,6 @@ class Trajectory:
     target: CubePose | None = None
     grasp: GraspChoice | None = None
     carry: CarryPlan | None = None
-    drop_orientation: DropOrientation = "free"
     start_joints: dict[str, float] = dataclasses.field(
         default_factory=lambda: dict(NEUTRAL_ARM_JOINTS)
     )
@@ -1150,7 +1135,6 @@ def trajectory_candidates(
     end_joints: dict[str, float],
     end_gripper: float,
     *,
-    drop_orientation: DropOrientation = "free",
     free_grasp: bool = False,
     carry_ok: CarryJointChecker | None = None,
 ) -> Iterator[Trajectory]:
@@ -1166,7 +1150,6 @@ def trajectory_candidates(
             end_joints,
             end_gripper,
             grasp,
-            drop_orientation=drop_orientation,
             free_grasp=free_grasp,
             carry_ok=carry_ok,
         )
@@ -1182,7 +1165,6 @@ def trajectory_candidates_for_grasp(
     end_gripper: float,
     grasp: GraspChoice,
     *,
-    drop_orientation: DropOrientation = "free",
     free_grasp: bool = False,
     cube_from_gripper: Mat4 | None = None,
     carry_ok: CarryJointChecker | None = None,
@@ -1195,7 +1177,6 @@ def trajectory_candidates_for_grasp(
         grasp,
         source,
         target,
-        drop_orientation=drop_orientation,
         drop_cube_center_z=drop_cube_center_z,
         cube_from_gripper=cube_from_gripper,
         carry_ok=carry_ok,
@@ -1244,7 +1225,6 @@ def trajectory_candidates_for_grasp(
             target=target,
             grasp=grasp,
             carry=carry,
-            drop_orientation=drop_orientation,
             start_joints=start_joints,
             start_gripper=start_gripper,
             end_joints=end_joints,
@@ -1263,7 +1243,6 @@ def replan_remaining_candidates(
     end_joints: dict[str, float],
     end_gripper: float,
     *,
-    drop_orientation: DropOrientation = "free",
     free_grasp: bool = False,
 ) -> Iterator[Trajectory]:
     """Yield remaining-trajectory candidates from the measured state."""
@@ -1275,7 +1254,6 @@ def replan_remaining_candidates(
             target,
             grasp,
             None,
-            drop_orientation,
             measured_joints,
             measured_gripper,
             end_joints,
@@ -1290,7 +1268,6 @@ def replan_remaining_candidates(
             target,
             grasp,
             None,
-            drop_orientation,
             measured_joints,
             measured_gripper,
             end_joints,
@@ -1312,7 +1289,6 @@ def replan_remaining_candidates(
             g,
             source,
             target,
-            drop_orientation=drop_orientation,
             drop_cube_center_z=drop_cube_center_z,
         ):
             endpoint = _carry_geometry_matrix(carry, 1.0) @ carry.cube_from_gripper
@@ -1444,7 +1420,6 @@ def replan_remaining_candidates(
                 target=target,
                 grasp=g,
                 carry=carry,
-                drop_orientation=drop_orientation,
                 start_joints=start_joints,
                 start_gripper=measured_gripper,
                 end_joints=end_joints,

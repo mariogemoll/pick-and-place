@@ -74,7 +74,6 @@ def run_recording(
     task: str,
     source_xy: tuple[float, float] | None = None,
     target_xy: tuple[float, float] | None = None,
-    drop_orientation: str = "free",
     speed: float = 1.0,
     vcodec: str = "auto",
     streaming_encoding: bool = True,
@@ -135,7 +134,6 @@ def run_recording(
                     data=data,
                     verbose=True,
                     include_environment=True,
-                    drop_orientation=drop_orientation,
                 )
             except EpisodeSamplingError as exc:
                 print(f"{label}Skipping: {exc}")
@@ -148,7 +146,7 @@ def run_recording(
             place_paper_target_marker(
                 model,
                 (ep_target.x, ep_target.y),
-                ep_target.yaw,
+                0.0,
                 (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
                 usable=is_cube_drop_allowed(ep_target.x, ep_target.y),
                 alpha=1.0,
@@ -269,12 +267,6 @@ def main() -> None:
         help="pin the target (x, y); omit to resample each episode",
     )
     parser.add_argument(
-        "--drop-orientation",
-        choices=("free", "target"),
-        default="free",
-        help="free searches any reachable drop orientation; target preserves target yaw",
-    )
-    parser.add_argument(
         "--speed",
         type=float,
         default=1.0,
@@ -336,7 +328,6 @@ def main() -> None:
     common = dict(
         source_xy=tuple(args.source) if args.source is not None else None,
         target_xy=tuple(args.target) if args.target is not None else None,
-        drop_orientation=args.drop_orientation,
         speed=args.speed,
         vcodec=args.vcodec,
         streaming_encoding=args.streaming_encoding,

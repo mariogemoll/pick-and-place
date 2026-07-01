@@ -42,6 +42,7 @@ from pick_and_place.episodes import (
     is_unexpected,
     placement_error,
     prepare_episode,
+    sample_target,
     scan_contacts,
 )
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
@@ -66,12 +67,64 @@ def _watch_for_skip(skip_event: threading.Event) -> None:
         skip_event.set()
 
 
-def _show_target_marker(model: mujoco.MjModel, target: CubePose) -> None:
+def _plate_corners_allowed(cx: float, cy: float, yaw: float, half_size: float) -> bool:
+    """Whether every corner of a ``yaw``-rotated square plate centered at
+    ``(cx, cy)`` still lands inside the allowed drop zone."""
+    c, s = math.cos(yaw), math.sin(yaw)
+    for lx, ly in ((half_size, half_size), (half_size, -half_size), (-half_size, half_size), (-half_size, -half_size)):
+        if not is_cube_drop_allowed(cx + lx * c - ly * s, cy + lx * s + ly * c):
+            return False
+    return True
+
+
+def _sample_marker_yaw(rng: np.random.Generator, cx: float, cy: float) -> float:
+    """Sample a marker yaw in [0, 90) degrees whose plate corners stay in bounds.
+
+    The plate is square, so any yaw outside [0, 90) is equivalent to one inside
+    it. Falls back to yaw 0 (axis-aligned, the smallest possible footprint) if
+    no sampled yaw fits after enough tries. Used for a CLI-pinned ``--target``,
+    where the position itself cannot be resampled.
+    """
+    for _ in range(200):
+        yaw = rng.uniform(0.0, math.pi / 2.0)
+        if _plate_corners_allowed(cx, cy, yaw, DROP_ZONE_HALF_SIZE):
+            return yaw
+    return 0.0
+
+
+def _sample_target_plate(rng: np.random.Generator, max_attempts: int = 200) -> tuple[CubePose, float]:
+    """Jointly sample a target position and marker yaw whose plate footprint
+    fully fits the allowed drop zone; the plate's center is the placement
+    target. Falls back to a freshly sampled position at yaw 0 (the smallest
+    possible footprint) if nothing fits within ``max_attempts``.
+    """
+    for _ in range(max_attempts):
+        candidate = sample_target(rng)
+        yaw = rng.uniform(0.0, math.pi / 2.0)
+        if _plate_corners_allowed(candidate.x, candidate.y, yaw, DROP_ZONE_HALF_SIZE):
+            return candidate, yaw
+    return sample_target(rng), 0.0
+
+
+class _MarkerTargetSampler:
+    """``prepare_episode`` target sampler that also records the marker yaw
+    chosen for the most recently sampled target, so the caller can render a
+    fully-fitting plate around the same point once planning succeeds."""
+
+    def __init__(self) -> None:
+        self.yaw = 0.0
+
+    def __call__(self, rng: np.random.Generator) -> CubePose:
+        target, self.yaw = _sample_target_plate(rng)
+        return target
+
+
+def _show_target_marker(model: mujoco.MjModel, target: CubePose, yaw: float) -> None:
     """Place the drop-zone square on the floor at the episode target."""
     place_paper_target_marker(
         model,
         (target.x, target.y),
-        target.yaw,
+        yaw,
         (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
         usable=is_cube_drop_allowed(target.x, target.y),
     )
@@ -158,18 +211,6 @@ def main() -> None:
         help="target (x, y) on the floor; omit for a random pose in the clearance annulus",
     )
     parser.add_argument(
-        "--target-yaw",
-        type=float,
-        default=0.0,
-        help="target cube yaw in degrees, only used with --target (default: 0.0)",
-    )
-    parser.add_argument(
-        "--drop-orientation",
-        choices=("free", "target"),
-        default="free",
-        help="free searches any reachable drop orientation; target preserves target yaw",
-    )
-    parser.add_argument(
         "--speed",
         type=float,
         default=1.0,
@@ -226,12 +267,7 @@ def main() -> None:
         else None
     )
     target = (
-        CubePose(
-            x=args.target[0],
-            y=args.target[1],
-            z=CUBE_HALF_SIZE,
-            yaw=math.radians(args.target_yaw),
-        )
+        CubePose(x=args.target[0], y=args.target[1], z=CUBE_HALF_SIZE)
         if args.target is not None
         else None
     )
@@ -248,6 +284,8 @@ def main() -> None:
     )
     mujoco.mj_forward(model, data)
 
+    marker_sampler = _MarkerTargetSampler()
+
     def plan(verbose: bool) -> Episode:
         return prepare_episode(
             rng,
@@ -257,11 +295,11 @@ def main() -> None:
             data=data,
             verbose=verbose,
             include_environment=args.environment,
-            drop_orientation=args.drop_orientation,
             preflight_debug=args.preflight_debug,
             preflight_debug_limit=args.preflight_debug_limit,
             failed_trajectory_dir=args.save_failed_trajectories,
             failed_trajectory_limit=args.failed_trajectory_limit,
+            target_sampler=marker_sampler if target is None else None,
         )
 
     if args.plan_only:
@@ -304,7 +342,12 @@ def main() -> None:
                 # A pinned source/target with no feasible plan fails every time,
                 # so there is nothing to retry — stop rather than spin.
                 break
-            _show_target_marker(model, episode.target)
+            marker_yaw = (
+                _sample_marker_yaw(rng, episode.target.x, episode.target.y)
+                if target is not None
+                else marker_sampler.yaw
+            )
+            _show_target_marker(model, episode.target, marker_yaw)
             skip_event.clear()
             if _play(episode, args.speed, viewer, skip_event):
                 print(placement_error(model, data, episode.target).summary())

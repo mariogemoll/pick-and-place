@@ -45,16 +45,9 @@ from pick_and_place.recorder import EpisodeRecorder
 # real follower would be commanded at.
 DEFAULT_CONTROL_HZ = 50.0
 # A grasp is counted successful if the released cube settles within this far (m)
-# of the target in the floor plane and stays on the floor. Yaw is only required
-# when the episode was planned with target-oriented drops.
+# of the target in the floor plane and stays on the floor.
 SUCCESS_XY_TOLERANCE = 0.04
 SUCCESS_Z_TOLERANCE = 0.01
-SUCCESS_YAW_TOLERANCE = math.radians(15.0)
-
-
-def _yaw_error(measured: float, target: float) -> float:
-    """Absolute shortest-arc difference between two yaw angles, in [0, π]."""
-    return abs((measured - target + math.pi) % (2.0 * math.pi) - math.pi)
 # Per-episode budget of pose resamples before that episode is abandoned.
 DEFAULT_MAX_ATTEMPTS = 50
 
@@ -158,17 +151,15 @@ def run_episode(
     def _pose4(p: CubePose) -> np.ndarray:
         return np.array([p.x, p.y, p.z, p.yaw])
 
+    def _pose3(p: CubePose) -> np.ndarray:
+        return np.array([p.x, p.y, p.z])
+
     def _robot6(joints: dict[str, float], gripper: float) -> np.ndarray:
         return np.array([joints[n] for n in JOINT_NAMES[:-1]] + [gripper])
 
     target = episode.target
     xy_err = math.hypot(cube_end[0] - target.x, cube_end[1] - target.y)
     z_err = abs(cube_end[2] - CUBE_HALF_SIZE)
-    yaw_err = _yaw_error(cube_end[3], target.yaw)
-    yaw_ok = (
-        episode.trajectory.drop_orientation == "free"
-        or yaw_err <= SUCCESS_YAW_TOLERANCE
-    )
     # The preflight vets the whole trajectory collision-free, so an accepted
     # episode should run without unexpected contacts; if any slip through, the run
     # clipped the floor or itself and is not a clean demonstration regardless of
@@ -176,7 +167,6 @@ def run_episode(
     success = (
         xy_err <= SUCCESS_XY_TOLERANCE
         and z_err <= SUCCESS_Z_TOLERANCE
-        and yaw_ok
         and len(collisions) == 0
     )
 
@@ -185,17 +175,15 @@ def run_episode(
         episode_index=np.array(episode_index),
         seed=np.array(seed),
         cube_start=_pose4(episode.source),
-        cube_target=_pose4(episode.target),
+        cube_target=_pose3(episode.target),
         cube_end=cube_end,
         robot_start=_robot6(episode.start_joints, episode.start_gripper),
         robot_end=_robot6(episode.end_joints, episode.end_gripper),
         grasp_face=np.array(episode.grasp.face),
         grasp_elbow=np.array(episode.grasp.elbow),
         carry_mode=np.array(episode.trajectory.carry.mode),
-        drop_orientation=np.array(episode.trajectory.drop_orientation),
         success=np.array(success),
         final_xy_error=np.array(xy_err),
-        final_yaw_error=np.array(yaw_err),
         phase_boundaries=phase_boundaries,
         phase_names=phase_names,
         duration=np.array(trajectory.duration),
@@ -205,7 +193,7 @@ def run_episode(
     )
 
 
-def _record_one(task: tuple[int, int, float, int, str, Path, bool]) -> dict[str, object]:
+def _record_one(task: tuple[int, int, float, int, Path, bool]) -> dict[str, object]:
     """Record a single episode in isolation, returning a small picklable summary.
 
     Each episode draws from its own RNG seeded by ``(seed, index)``, so the result
@@ -213,14 +201,13 @@ def _record_one(task: tuple[int, int, float, int, str, Path, bool]) -> dict[str,
     point of keeping the per-episode work self-contained. Episodes that exhaust
     their resample budget are reported as skipped rather than raising.
     """
-    index, seed, control_hz, max_attempts, drop_orientation, out_dir, verbose = task
+    index, seed, control_hz, max_attempts, out_dir, verbose = task
     rng = np.random.default_rng(np.random.SeedSequence([seed, index]))
     try:
         episode = prepare_episode(
             rng,
             max_attempts=max_attempts,
             verbose=verbose,
-            drop_orientation=drop_orientation,
         )
     except EpisodeSamplingError as exc:
         return {"index": index, "skipped": str(exc)}
@@ -233,9 +220,7 @@ def _record_one(task: tuple[int, int, float, int, str, Path, bool]) -> dict[str,
         "grasp_face": str(record["grasp_face"]),
         "grasp_elbow": str(record["grasp_elbow"]),
         "carry_mode": str(record["carry_mode"]),
-        "drop_orientation": str(record["drop_orientation"]),
         "xy_err": float(record["final_xy_error"]),
-        "yaw_err": float(record["final_yaw_error"]),
         "success": bool(record["success"]),
     }
 
@@ -248,9 +233,8 @@ def _print_result(result: dict[str, object]) -> None:
     tqdm.write(
         f"episode {index}: {result['frames']} frames, "
         f"{result['grasp_face']}/{result['grasp_elbow']} "
-        f"{result['carry_mode']}/{result['drop_orientation']}, "
+        f"{result['carry_mode']}, "
         f"xy_err={result['xy_err']:.3f}m, "
-        f"yaw_err={math.degrees(result['yaw_err']):.1f}°, "
         f"{'success' if result['success'] else 'MISS'} -> {result['name']}"
     )
 
@@ -278,12 +262,6 @@ def main() -> None:
         help=f"pose resamples per episode before giving up (default {DEFAULT_MAX_ATTEMPTS})",
     )
     parser.add_argument(
-        "--drop-orientation",
-        choices=("free", "target"),
-        default="free",
-        help="free searches any reachable drop orientation; target preserves target yaw",
-    )
-    parser.add_argument(
         "--jobs",
         type=int,
         default=1,
@@ -303,7 +281,6 @@ def main() -> None:
             args.seed,
             args.control_hz,
             args.max_attempts,
-            args.drop_orientation,
             args.out_dir,
             args.verbose,
         )
@@ -342,8 +319,6 @@ def main() -> None:
         "num_success": successes,
         "success_xy_tolerance": SUCCESS_XY_TOLERANCE,
         "success_z_tolerance": SUCCESS_Z_TOLERANCE,
-        "success_yaw_tolerance_deg": math.degrees(SUCCESS_YAW_TOLERANCE),
-        "drop_orientation": args.drop_orientation,
         "qpos_layout": "JOINT_NAMES (6) then pick_cube free joint (pos[3] + quat[4])",
         "fields": {
             "time": "(T,) trajectory time in seconds",
@@ -351,11 +326,11 @@ def main() -> None:
             "measured": "(T,6) measured joint positions, JOINT_NAMES order, radians",
             "qpos": "(T,nq) full sim qpos for exact reconstruction",
             "qvel": "(T,nv) full sim qvel",
-            "cube_start/cube_target/cube_end": "(x, y, z, yaw)",
+            "cube_start/cube_end": "(x, y, z, yaw)",
+            "cube_target": "(x, y, z) -- the drop target is position-only",
             "robot_start/robot_end": "(6,) JOINT_NAMES order set points",
             "phase_boundaries": "(7,) frame index at which each scripted phase begins",
             "phase_names": "(7,) name of each scripted phase, in order",
-            "drop_orientation": "free position-only drop or target yaw-matched drop",
         },
     }
     (args.out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
