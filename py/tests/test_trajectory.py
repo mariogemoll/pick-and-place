@@ -13,6 +13,7 @@ from pick_and_place.episodes import (
     _build_model,
     placement_error,
     prepare_episode,
+    sample_recovery_cube,
     set_cube_pose,
 )
 from pick_and_place.geometry import CUBE_HALF_SIZE, CANONICAL_PREGRASP_DISTANCE, CubePose
@@ -27,6 +28,13 @@ from pick_and_place.trajectory import (
     GraspPhase,
     grasp_candidates,
     plan_carry_candidates,
+)
+from pick_and_place.workspace_overlays import (
+    RECOVERY_TARGET_FRAME_BORDER_MARGIN,
+    WORKSPACE_FRAME_INNER_HALF_EXTENT,
+    _world_to_frame_xy,
+    is_cube_pickup_allowed,
+    is_cube_recovery_target_allowed,
 )
 
 
@@ -91,6 +99,19 @@ def test_grasp_phase_waits_at_aligned_pose_before_closing():
     assert phase.evaluate(GRASP_SETTLE_DURATION * 0.5).gripper == pytest.approx(GRIPPER_OPEN)
     assert phase.evaluate(GRASP_SETTLE_DURATION).gripper == pytest.approx(GRIPPER_OPEN)
     assert phase.evaluate(phase.duration).gripper == pytest.approx(GRIPPER_GRASP)
+
+
+def test_recovery_cube_sampler_stays_away_from_workspace_frame_border():
+    rng = np.random.default_rng(0)
+    poses = [sample_recovery_cube(rng) for _ in range(100)]
+    half_extent = WORKSPACE_FRAME_INNER_HALF_EXTENT - RECOVERY_TARGET_FRAME_BORDER_MARGIN
+
+    assert all(is_cube_pickup_allowed(pose.x, pose.y) for pose in poses)
+    assert all(is_cube_recovery_target_allowed(pose.x, pose.y) for pose in poses)
+    for pose in poses:
+        local_x, local_y = _world_to_frame_xy(pose.x, pose.y)
+        assert abs(local_x) <= half_extent
+        assert abs(local_y) <= half_extent
 
 
 def test_fixed_target_must_be_in_allowed_drop_zone():

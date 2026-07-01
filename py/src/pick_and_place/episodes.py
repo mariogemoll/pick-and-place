@@ -44,6 +44,7 @@ from pick_and_place.workspace_overlays import (
     CUBE_PLACEMENT_OVERLAY,
     is_cube_drop_allowed,
     is_cube_placement_allowed,
+    is_cube_recovery_target_allowed,
 )
 
 # ±radians of random joint perturbation applied to the neutral start/end pose.
@@ -135,6 +136,14 @@ def sample_cube(rng: np.random.Generator) -> CubePose:
         z=CUBE_HALF_SIZE,
         yaw=yaw,
     )
+
+
+def sample_recovery_cube(rng: np.random.Generator) -> CubePose:
+    """Sample a conservative pickup-zone target for unrecorded cube recovery."""
+    while True:
+        pose = sample_cube(rng)
+        if is_cube_recovery_target_allowed(pose.x, pose.y):
+            return pose
 
 
 def sample_target(rng: np.random.Generator) -> CubePose:
