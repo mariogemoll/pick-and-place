@@ -25,7 +25,7 @@ import numpy as np
 
 from pick_and_place import build_scene
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
-from pick_and_place.kinematics import So101Kinematics, derive_kinematics
+from pick_and_place.kinematics import ARM_JOINT_NAMES, So101Kinematics, derive_kinematics
 from pick_and_place.paper_detection import add_paper_target_marker
 from pick_and_place.trajectory import (
     ApproachPhase,
@@ -426,6 +426,54 @@ def is_unexpected(n1: str, n2: str) -> bool:
     return not ((_is_jaw(n1) and n2 == "pick_cube") or (_is_jaw(n2) and n1 == "pick_cube"))
 
 
+def make_carry_collision_checker(
+    model: mujoco.MjModel,
+    robot_geom_ids: set[int],
+    env_geom_ids: set[int],
+) -> Callable[[dict[str, float]], bool]:
+    """Build a cheap per-configuration collision check for screening carry
+    candidates during planning, before committing to the much more expensive
+    full-trajectory preflight (``_preflight``, which steps real dynamics).
+
+    Uses pure kinematics + collision detection -- no integration, no contact
+    dynamics -- so it's fast enough to run on every candidate. The cube isn't
+    positioned here (its pose isn't tracked by this cheap check), so it's
+    excluded from the environment set entirely; the full preflight remains the
+    authoritative check for anything cube-related.
+    """
+    shadow = mujoco.MjData(model)
+    cube_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pick_cube")
+    env_geom_ids_no_cube = {gid for gid in env_geom_ids if model.geom_bodyid[gid] != cube_body_id}
+    qpos_adr = {
+        name: model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)]
+        for name in ARM_JOINT_NAMES
+    }
+
+    def check(joints: dict[str, float]) -> bool:
+        for name, value in joints.items():
+            shadow.qpos[qpos_adr[name]] = value
+        mujoco.mj_kinematics(model, shadow)
+        mujoco.mj_collision(model, shadow)
+        for i in range(shadow.ncon):
+            contact = shadow.contact[i]
+            g1, g2 = int(contact.geom[0]), int(contact.geom[1])
+            g1_robot = g1 in robot_geom_ids
+            g2_robot = g2 in robot_geom_ids
+            if not (
+                (g1_robot and g2 in env_geom_ids_no_cube)
+                or (g2_robot and g1 in env_geom_ids_no_cube)
+                or (g1_robot and g2_robot)
+            ):
+                continue
+            n1 = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, g1) or str(g1)
+            n2 = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, g2) or str(g2)
+            if is_unexpected(n1, n2):
+                return False
+        return True
+
+    return check
+
+
 def _preflight_collision_is_unexpected(event: PreflightCollision) -> bool:
     return is_unexpected(event.geom1, event.geom2)
 
@@ -773,6 +821,7 @@ def prepare_episode(
                 continue
 
         robot_geom_ids, env_geom_ids = build_geom_sets(ep_model)
+        carry_ok = make_carry_collision_checker(ep_model, robot_geom_ids, env_geom_ids)
 
         trajectory = None
         grasp_iter = (
@@ -803,6 +852,7 @@ def prepare_episode(
                 drop_orientation=drop_orientation,
                 free_grasp=free_grasp,
                 cube_from_gripper=cube_from_gripper,
+                carry_ok=carry_ok,
             )
             for traj in candidate_trajectories:
                 grasp = traj.grasp

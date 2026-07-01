@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from typing import Literal, Protocol, runtime_checkable
 from dataclasses import dataclass
 from functools import cached_property
@@ -45,6 +45,7 @@ from pick_and_place.workspace_overlays import (
     CANONICAL_PICKUP_OVERLAY,
     CUBE_PLACEMENT_OVERLAY,
     is_cube_drop_allowed,
+    is_vertical_grip_allowed,
 )
 
 # Number of intermediate heights checked along the hover→grasp descent when
@@ -565,6 +566,14 @@ def _timed_arc_fraction(phase: float) -> float:
     return 1.0 - ease * _smootherstep_integral((1.0 - p) / ease) / total_area
 
 
+# Checks a single arm joint configuration for unexpected collisions (e.g. jaw
+# or wrist-camera geometry against the floor or a fixture). Returns True if the
+# configuration is clear. Left as an injected callback rather than importing
+# MuJoCo collision helpers directly here, since those live in episodes.py and
+# importing them back would create a cycle.
+CarryJointChecker = Callable[[dict[str, float]], bool]
+
+
 @dataclass(frozen=True)
 class CarryPlan:
     """Joint-space carry from lifted grasp to a selected free-orientation drop."""
@@ -675,7 +684,22 @@ def _world_gripper_for_cube(
     return _matrix_from_rotation_translation(cube_rotation, cube_position) @ cube_from_gripper
 
 
-def _drop_cube_rotations(target: CubePose, drop_orientation: DropOrientation) -> Iterator[np.ndarray]:
+def _drop_cube_rotations(
+    target: CubePose,
+    drop_orientation: DropOrientation,
+    *,
+    include_yaw_only: bool = True,
+    include_tilted: bool = True,
+) -> Iterator[np.ndarray]:
+    """Candidate drop cube rotations, yaw-only ones first.
+
+    ``include_tilted=False`` restricts the search to the yaw-only candidates,
+    which is enough whenever a plain vertical-grip hold covers both endpoints
+    (see ``plan_carry_candidates``'s vertical-annulus fast path). Pass
+    ``include_yaw_only=False`` alongside a later ``include_tilted=True`` call to
+    resume with the tilted candidates only, without re-yielding the yaw-only
+    ones already tried.
+    """
     if drop_orientation == "target":
         yaw_values = (target.yaw,)
         pitch_values = np.deg2rad((-60, -40, -20, 0, 20, 40, 60))
@@ -696,8 +720,11 @@ def _drop_cube_rotations(target: CubePose, drop_orientation: DropOrientation) ->
         seen.add(key)
         yield rotation
 
-    for yaw in yaw_values:
-        yield from yield_once(Rotation.from_euler("zyx", (yaw, 0.0, 0.0)).as_matrix())
+    if include_yaw_only:
+        for yaw in yaw_values:
+            yield from yield_once(Rotation.from_euler("zyx", (yaw, 0.0, 0.0)).as_matrix())
+    if not include_tilted:
+        return
     for yaw in yaw_values:
         for pitch in pitch_values:
             for roll in roll_values:
@@ -714,6 +741,28 @@ def _joint_distance(a: dict[str, float], b: dict[str, float]) -> float:
     )
 
 
+# Fractions along the grasp->cruise->drop spline sampled for the carry-clearance
+# check. Denser near the drop end, where the arm descends closest to the floor.
+_CARRY_CLEARANCE_SAMPLE_FRACTIONS = (0.0, 0.15, 0.3, 0.45, 0.6, 0.72, 0.82, 0.9, 0.95, 1.0)
+
+
+def _carry_path_clear(
+    carry_ok: CarryJointChecker,
+    grasp_joints: dict[str, float],
+    cruise_joints: dict[str, float],
+    drop_joints: dict[str, float],
+) -> bool:
+    """Check the same joint spline the carry will actually play back, sampled at
+    a handful of fractions, against a caller-supplied collision checker."""
+    for fraction in _CARRY_CLEARANCE_SAMPLE_FRACTIONS:
+        joints = _spline_joints_through_waypoint(
+            grasp_joints, cruise_joints, drop_joints, 0.5, _timed_arc_fraction(fraction)
+        )
+        if not carry_ok(joints):
+            return False
+    return True
+
+
 def plan_carry_candidates(
     k: So101Kinematics,
     grasp: GraspChoice,
@@ -723,6 +772,7 @@ def plan_carry_candidates(
     drop_orientation: DropOrientation = "free",
     drop_cube_center_z: float = DROP_CUBE_CENTER_Z,
     cube_from_gripper: Mat4 | None = None,
+    carry_ok: CarryJointChecker | None = None,
 ) -> Iterator[CarryPlan]:
     """Plan joint-space carries for an already-chosen grasp."""
     grasp_gripper = grasp.grasp_matrix
@@ -755,7 +805,6 @@ def plan_carry_candidates(
             drop_position[1] - k.pan_axis[1], drop_position[0] - k.pan_axis[0]
         ),
     }
-    plans: list[tuple[tuple[float, float, float], CarryPlan]] = []
     # Prefer the nominal cruise height (best floor/frame clearance along the
     # carry), but some orientations are only IK-reachable lower down -- e.g. a
     # side grasp held level loses reachability at some target azimuths well
@@ -766,48 +815,82 @@ def plan_carry_candidates(
         {max(h, drop_cube_center_z) for h in (CARRY_CRUISE_Z, 0.07, 0.06, 0.05)},
         reverse=True,
     )
-    for cube_rotation in _drop_cube_rotations(target, drop_orientation):
-        drop_gripper = _world_gripper_for_cube(cube_from_gripper, cube_rotation, drop_position)
-        drop_branches = solve_simple_grasp_ik(k, drop_gripper)
-        if not drop_branches:
-            continue
-        cruise_branches: list = []
-        for cruise_z in cruise_heights:
-            cruise_position = np.array((target.x, target.y, cruise_z))
-            cruise_gripper = _world_gripper_for_cube(cube_from_gripper, cube_rotation, cruise_position)
-            cruise_branches = solve_simple_grasp_ik(k, cruise_gripper)
-            if cruise_branches:
-                break
-        if not cruise_branches:
-            continue
-        for drop_branch in drop_branches:
-            cruise_branch = min(
-                cruise_branches,
-                key=lambda branch: _joint_distance(drop_branch.joints, branch.joints),
-            )
-            joint_cost = (
-                _joint_distance(grasp.lift_joints, cruise_branch.joints)
-                + _joint_distance(cruise_branch.joints, drop_branch.joints)
-            )
-            gripper_target_z = tf.transform_point(drop_gripper, GRIPPER_TARGET_POSITION)[2]
-            clearance_cost = max(0.0, CUBE_HALF_SIZE - float(gripper_target_z))
-            score = (_cube_flatness_cost(cube_rotation), clearance_cost, joint_cost)
-            plans.append(
-                (
-                    score,
-                    CarryPlan(
-                        mode="joint",
-                        grasp_rotation=lifted_grasp_cube[:3, :3],
-                        drop_rotation=cube_rotation,
-                        grasp_joints=dict(grasp.lift_joints),
-                        cruise_joints=dict(cruise_branch.joints),
-                        drop_joints=dict(drop_branch.joints),
-                        **base,
-                    ),
-                )
-            )
 
-    for _, plan in sorted(plans, key=lambda item: item[0]):
+    def build_plans(rotations: Iterator[np.ndarray]) -> list[tuple[tuple[float, float, float], CarryPlan]]:
+        found: list[tuple[tuple[float, float, float], CarryPlan]] = []
+        for cube_rotation in rotations:
+            drop_gripper = _world_gripper_for_cube(cube_from_gripper, cube_rotation, drop_position)
+            drop_branches = solve_simple_grasp_ik(k, drop_gripper)
+            if not drop_branches:
+                continue
+            cruise_branches: list = []
+            for cruise_z in cruise_heights:
+                cruise_position = np.array((target.x, target.y, cruise_z))
+                cruise_gripper = _world_gripper_for_cube(cube_from_gripper, cube_rotation, cruise_position)
+                cruise_branches = solve_simple_grasp_ik(k, cruise_gripper)
+                if cruise_branches:
+                    break
+            if not cruise_branches:
+                continue
+            for drop_branch in drop_branches:
+                cruise_branch = min(
+                    cruise_branches,
+                    key=lambda branch: _joint_distance(drop_branch.joints, branch.joints),
+                )
+                if carry_ok is not None and not _carry_path_clear(
+                    carry_ok, grasp.lift_joints, cruise_branch.joints, drop_branch.joints
+                ):
+                    continue
+                joint_cost = (
+                    _joint_distance(grasp.lift_joints, cruise_branch.joints)
+                    + _joint_distance(cruise_branch.joints, drop_branch.joints)
+                )
+                gripper_target_z = tf.transform_point(drop_gripper, GRIPPER_TARGET_POSITION)[2]
+                clearance_cost = max(0.0, CUBE_HALF_SIZE - float(gripper_target_z))
+                score = (_cube_flatness_cost(cube_rotation), clearance_cost, joint_cost)
+                found.append(
+                    (
+                        score,
+                        CarryPlan(
+                            mode="joint",
+                            grasp_rotation=lifted_grasp_cube[:3, :3],
+                            drop_rotation=cube_rotation,
+                            grasp_joints=dict(grasp.lift_joints),
+                            cruise_joints=dict(cruise_branch.joints),
+                            drop_joints=dict(drop_branch.joints),
+                            **base,
+                        ),
+                    )
+                )
+        return found
+
+    # When both endpoints sit inside the vertical-grip annulus, a plain
+    # yaw-only hold (the "standard" vertical pick/carry/drop) reaches
+    # everywhere the flat, tilt-free candidates already cover, so try that
+    # much smaller (cheaper) search first. The full tilted-orientation search
+    # still runs as a fallback -- lazily, so it's only ever computed if the
+    # caller keeps asking for more candidates than the yaw-only pass produced.
+    # This matters because IK-reachable is not the same as usable: a yaw-only
+    # candidate can be reachable yet still get rejected downstream (e.g. by the
+    # collision preflight in episodes.py), so falling back only when the
+    # yaw-only pass is *empty* would wrongly give up instead of trying the
+    # tilted candidates.
+    vertical_only = (
+        is_vertical_grip_allowed(source.x, source.y) and is_vertical_grip_allowed(target.x, target.y)
+    )
+    if vertical_only:
+        yaw_only_plans = build_plans(
+            _drop_cube_rotations(target, drop_orientation, include_tilted=False)
+        )
+        for _, plan in sorted(yaw_only_plans, key=lambda item: item[0]):
+            yield plan
+        tilted_plans = build_plans(
+            _drop_cube_rotations(target, drop_orientation, include_yaw_only=False)
+        )
+    else:
+        tilted_plans = build_plans(_drop_cube_rotations(target, drop_orientation))
+
+    for _, plan in sorted(tilted_plans, key=lambda item: item[0]):
         yield plan
 
 
@@ -1069,6 +1152,7 @@ def trajectory_candidates(
     *,
     drop_orientation: DropOrientation = "free",
     free_grasp: bool = False,
+    carry_ok: CarryJointChecker | None = None,
 ) -> Iterator[Trajectory]:
     """Yield full trajectories from start to end in grasp preference order."""
     candidates = free_grasp_candidates(k, source) if free_grasp else grasp_candidates(k, source)
@@ -1084,6 +1168,7 @@ def trajectory_candidates(
             grasp,
             drop_orientation=drop_orientation,
             free_grasp=free_grasp,
+            carry_ok=carry_ok,
         )
 
 
@@ -1100,6 +1185,7 @@ def trajectory_candidates_for_grasp(
     drop_orientation: DropOrientation = "free",
     free_grasp: bool = False,
     cube_from_gripper: Mat4 | None = None,
+    carry_ok: CarryJointChecker | None = None,
 ) -> Iterator[Trajectory]:
     """Yield full trajectories for one selected grasp."""
     drop_cube_center_z = RECOVERY_DROP_CUBE_CENTER_Z if free_grasp else DROP_CUBE_CENTER_Z
@@ -1112,17 +1198,25 @@ def trajectory_candidates_for_grasp(
         drop_orientation=drop_orientation,
         drop_cube_center_z=drop_cube_center_z,
         cube_from_gripper=cube_from_gripper,
+        carry_ok=carry_ok,
     ):
         endpoint = _carry_geometry_matrix(carry, 1.0) @ carry.cube_from_gripper
+        endpoint_position = tf.get_position(endpoint)
         predrop_joints = carry.drop_joints
-        postdrop_hover = tf.with_position(
-            endpoint, tf.get_position(endpoint) + np.array((0.0, 0.0, POSTDROP_LIFT_Z))
-        )
-        postdrop_branch = min(
-            solve_simple_grasp_ik(k, postdrop_hover),
-            key=lambda branch: _joint_distance(predrop_joints, branch.joints),
-            default=None,
-        )
+        # As with the cruise height, some orientations lose IK reachability at the
+        # nominal retreat height well before POSTDROP_LIFT_Z -- fall back to a
+        # lower (but still clear-of-the-cube) retreat rather than discarding an
+        # otherwise-ideal carry candidate over an unreachable retreat alone.
+        postdrop_branch = None
+        for lift_z in (POSTDROP_LIFT_Z, 0.03, 0.02, 0.01):
+            postdrop_hover = tf.with_position(endpoint, endpoint_position + np.array((0.0, 0.0, lift_z)))
+            postdrop_branch = min(
+                solve_simple_grasp_ik(k, postdrop_hover),
+                key=lambda branch: _joint_distance(predrop_joints, branch.joints),
+                default=None,
+            )
+            if postdrop_branch is not None:
+                break
         if postdrop_branch is None:
             continue
 
