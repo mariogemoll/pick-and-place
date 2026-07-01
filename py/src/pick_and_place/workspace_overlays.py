@@ -69,6 +69,10 @@ WORKSPACE_OVERLAYS = (
 # Conservatively inset the frame interior by the cube's circumradius. This
 # keeps every corner clear of the rails for every sampled yaw.
 _CUBE_FRAME_MARGIN = math.sqrt(2.0) * CUBE_HALF_SIZE
+# Recovery drops are intentionally aimed farther from the physical workspace
+# frame than ordinary pickup starts. A recovery can miss its target by a few
+# centimetres; keeping the target inset avoids landing the cube on the rails.
+RECOVERY_TARGET_FRAME_BORDER_MARGIN = 0.06
 _CUBE_FRAME_HALF_EXTENT = WORKSPACE_FRAME_INNER_HALF_EXTENT - _CUBE_FRAME_MARGIN
 _APRILTAG_PLATE_HALF_SIZE = 0.03
 CUBE_APRILTAG_EXCLUSION_HALF_EXTENT = _APRILTAG_PLATE_HALF_SIZE + _CUBE_FRAME_MARGIN
@@ -132,6 +136,15 @@ def is_vertical_grip_allowed(x: float, y: float) -> bool:
 def is_cube_drop_allowed(x: float, y: float) -> bool:
     """Return whether a cube-center drop target is in the broad arm workspace."""
     return _is_cube_center_allowed(x, y, CUBE_PLACEMENT_OVERLAY)
+
+
+def is_cube_recovery_target_allowed(x: float, y: float) -> bool:
+    """Return whether a recovery drop target leaves extra room around the frame."""
+    if not is_cube_pickup_allowed(x, y):
+        return False
+    local_x, local_y = _world_to_frame_xy(x, y)
+    half_extent = WORKSPACE_FRAME_INNER_HALF_EXTENT - RECOVERY_TARGET_FRAME_BORDER_MARGIN
+    return abs(local_x) <= half_extent and abs(local_y) <= half_extent
 
 
 # Backward-compatible name for callers that mean pickup placement.

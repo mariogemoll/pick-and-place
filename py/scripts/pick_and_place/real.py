@@ -52,9 +52,9 @@ from pick_and_place.episodes import (
     PlacementError,
     _build_model,
     prepare_episode,
-    sample_cube,
     sample_hunt_pose,
     sample_near_neutral,
+    sample_recovery_cube,
 )
 from pick_and_place.executor import (
     CONTROL_HZ,
@@ -1036,7 +1036,10 @@ def main() -> None:
         move_to(REST_ARM_JOINTS, REST_GRIPPER, park)
         ended_at_rest = True
 
-    from pick_and_place.workspace_overlays import is_cube_pickup_allowed
+    from pick_and_place.workspace_overlays import (
+        is_cube_pickup_allowed,
+        is_cube_recovery_target_allowed,
+    )
 
     def hunt_for_cube(
         viewer,
@@ -1112,16 +1115,20 @@ def main() -> None:
                 return target
         return None
 
-    def recover_cube(viewer) -> bool:
+    def recover_cube(viewer) -> CubePose | None:
         """Move the cube to a fresh random source pose before the next episode."""
         for recovery_attempt in range(1, CUBE_RECOVERY_MAX_ATTEMPTS + 1):
             print(
                 f"\n--- Cube recovery {recovery_attempt}/{CUBE_RECOVERY_MAX_ATTEMPTS} "
                 "(not recorded) ---"
             )
-            recovery_source = hunt_for_cube(viewer, free_grasp=True)
+            recovery_source = hunt_for_cube(
+                viewer,
+                free_grasp=True,
+                return_out_of_zone=True,
+            )
             if not viewer.is_running():
-                return False
+                return None
             if recovery_source is None:
                 print("Cube recovery could not locate the cube.")
                 continue
@@ -1148,7 +1155,7 @@ def main() -> None:
                         failed_trajectory_dir=args.save_failed_trajectories,
                         failed_trajectory_limit=args.failed_trajectory_limit,
                         free_grasp=True,
-                        target_sampler=sample_cube,
+                        target_sampler=sample_recovery_cube,
                     )
                 except EpisodeSamplingError:
                     print("Cube recovery: no feasible relocation plan.")
@@ -1175,9 +1182,23 @@ def main() -> None:
                 )
                 if status == "restart":
                     raise EpisodeAborted
-                return True
 
-        return False
+                recovered = hunt_for_cube(viewer, return_out_of_zone=True)
+                if recovered is None:
+                    print("Cube recovery completed, but the cube could not be located afterward.")
+                    continue
+                if is_cube_recovery_target_allowed(recovered.x, recovered.y):
+                    print(
+                        "Cube recovery verified pickup start "
+                        f"({recovered.x:.3f}, {recovered.y:.3f})."
+                    )
+                    return recovered
+                print(
+                    "Cube recovery landed too close to/outside the recovery-safe pickup zone "
+                    f"({recovered.x:.3f}, {recovered.y:.3f}); retrying relocation."
+                )
+
+        return None
 
     disable_viewer = (not args.viewer) or (
         (args.show_wrist_cam or args.show_wrist_mixed) and sys.platform == "darwin"
@@ -1261,17 +1282,14 @@ def main() -> None:
                         notifier.alert(
                             "Cube is outside the pickup zone. Running an unrecorded recovery."
                         )
-                        if not recover_cube(viewer):
+                        recovered_source = recover_cube(viewer)
+                        if recovered_source is None:
                             notifier.alert("Cube recovery failed after retries. The run is stopping.")
                             break
-                        source = hunt_for_cube(viewer, debug=overhead_debug)
+                        source = recovered_source
+                        if overhead_debug is not None:
+                            overhead_debug.cube = source
                         if not viewer.is_running():
-                            break
-                        if source is None:
-                            notifier.alert(
-                                f"Cube not found after recovery and {args.max_hunt_tries} looks. "
-                                "The run is stopping."
-                            )
                             break
 
                     current_joints, current_gripper = read_current_sim_pose()
@@ -1399,7 +1417,7 @@ def main() -> None:
                         cooldown_reference_target = episode_target
                         is_last = args.episodes != 0 and ep.index >= args.episodes
                         if not is_last:
-                            if not recover_cube(viewer):
+                            if recover_cube(viewer) is None:
                                 notifier.alert("Cube recovery failed after retries. The run is stopping.")
                                 break
 
