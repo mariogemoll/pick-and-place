@@ -33,13 +33,18 @@ import { createCanonicalGraspScene } from './scene';
 import {
   buildUi,
   DEFAULT_CUBE_X,
-  DEFAULT_CUBE_Y
+  DEFAULT_CUBE_Y,
+  DROP_POSE_Z_MM
 } from './ui';
 
 type Elbow = SimpleIkBranch['elbow'];
 
 // Conservative floor-pick band for the canonical pick-lift motion.
 const MIN_GRASP_RADIUS = 0.110;
+
+// Cube-center height swept in "drop mode" — the held cube's orientation is a
+// don't-care once grasped, so this only overrides z/yaw, never x/y.
+const DROP_POSE_Z = DROP_POSE_Z_MM / 1000;
 
 export interface CanonicalGraspVisualization {
   destroy(): void;
@@ -153,6 +158,7 @@ export async function initializeCanonicalGraspVisualization(
   // camera-down bands — stays the same at every azimuth.
   let yawFromRadius = 0;
   let showPregrasp = false;
+  let dropMode = false;
 
   function applyBranch(branch: SimpleIkBranch): void {
     for (const name of ARM_JOINT_NAMES) {
@@ -190,12 +196,19 @@ export async function initializeCanonicalGraspVisualization(
     vizScene.updateCubePose(currentPose);
 
     const radius = Math.hypot(currentPose.x - panX, currentPose.y - panY);
-    const solution = selectCanonicalGrasp(kinematics, currentPose);
+    // In drop mode, orientation is a don't-care (the cube is held rigidly once
+    // grasped), so only x/y are swept; z/yaw are pinned to the drop height and 0.
+    const searchPose: CubePose = dropMode
+      ? { ...currentPose, z: DROP_POSE_Z, yaw: 0 }
+      : currentPose;
+    const solution = selectCanonicalGrasp(kinematics, searchPose);
     if (solution === null) {
       vizScene.updateGhostGraspPose(null);
       ui.status.textContent = radius < minGraspRadius
         ? `Too close to the base: keep the cube ≥ ${Math.round(minGraspRadius * 1000)} mm out.`
-        : 'Unreachable: the cube is outside the arm’s reach.';
+        : dropMode
+          ? 'Unreachable: no drop pose reaches here.'
+          : 'Unreachable: the cube is outside the arm’s reach.';
       ui.status.classList.add('is-invalid');
       ui.branchContainer.replaceChildren();
       restToNeutral();
@@ -203,7 +216,7 @@ export async function initializeCanonicalGraspVisualization(
     }
 
     let pregraspNote = '';
-    if (showPregrasp) {
+    if (showPregrasp && !dropMode) {
       vizScene.updateGhostGraspPose(solution.graspMatrix);
       pregraspNote = ` Showing pregrasp ${Math.round(PREGRASP_DISTANCE * 1000)} mm back.`;
     } else {
@@ -212,12 +225,19 @@ export async function initializeCanonicalGraspVisualization(
 
     const tiltDeg = Math.round(Math.abs(90 - (solution.pitch * 180) / Math.PI));
     const rollDeg = Math.round((solution.rollOffset * 180) / Math.PI);
-    const base = tiltDeg === 0
-      ? 'Reachable: square top-down grasp.'
-      : `Reachable: approach tilted ${tiltDeg}° (not a square grasp).`;
     const rollNote = rollDeg === 0 ? '' : ` Wrist roll offset ${rollDeg}°.`;
-    ui.status.textContent =
-      `${base} Oracle face ${solution.face}, elbow ${solution.elbow}.${rollNote}${pregraspNote}`;
+    if (dropMode) {
+      const base = tiltDeg === 0
+        ? 'Reachable: square top-down drop pose.'
+        : `Reachable: drop approach tilted ${tiltDeg}° (not top-down).`;
+      ui.status.textContent = `${base} Elbow ${solution.elbow}.${rollNote}`;
+    } else {
+      const base = tiltDeg === 0
+        ? 'Reachable: square top-down grasp.'
+        : `Reachable: approach tilted ${tiltDeg}° (not a square grasp).`;
+      ui.status.textContent =
+        `${base} Oracle face ${solution.face}, elbow ${solution.elbow}.${rollNote}${pregraspNote}`;
+    }
     ui.status.classList.remove('is-invalid');
     renderSelectedBranch(solution.elbow);
     applyBranch(selectedBranch(solution));
@@ -234,6 +254,15 @@ export async function initializeCanonicalGraspVisualization(
     updateScene();
   };
   ui.showPregraspInput.addEventListener('change', pregraspListener);
+
+  const dropModeListener = (): void => {
+    dropMode = ui.dropModeInput.checked;
+    // Yaw and pregrasp are meaningless once orientation is a don't-care.
+    ui.yawInput.disabled = dropMode;
+    ui.showPregraspInput.disabled = dropMode;
+    updateScene();
+  };
+  ui.dropModeInput.addEventListener('change', dropModeListener);
 
   // X/Y and radius/azimuth drive the same cube center; keep both in sync so a
   // mode switch is seamless. The guard stops the programmatic value updates
@@ -307,6 +336,10 @@ export async function initializeCanonicalGraspVisualization(
     };
     showPregrasp = false;
     ui.showPregraspInput.checked = false;
+    ui.showPregraspInput.disabled = false;
+    dropMode = false;
+    ui.dropModeInput.checked = false;
+    ui.yawInput.disabled = false;
     // Back to Cartesian mode on reset.
     for (const input of ui.coordModeInputs) {
       input.checked = input.value === 'cartesian';
@@ -346,6 +379,7 @@ export async function initializeCanonicalGraspVisualization(
       vizScene.destroy();
       ui.yawInput.removeEventListener('input', yawListener);
       ui.showPregraspInput.removeEventListener('change', pregraspListener);
+      ui.dropModeInput.removeEventListener('change', dropModeListener);
       ui.xInput.removeEventListener('input', applyCartesian);
       ui.yInput.removeEventListener('input', applyCartesian);
       ui.radiusInput.removeEventListener('input', applyRadial);

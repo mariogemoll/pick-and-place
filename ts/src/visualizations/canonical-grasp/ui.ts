@@ -22,6 +22,7 @@ export interface CanonicalGraspDom {
   azimuthInput: HTMLInputElement;
   yawInput: HTMLInputElement;
   showPregraspInput: HTMLInputElement;
+  dropModeInput: HTMLInputElement;
   resetButton: HTMLButtonElement;
   status: HTMLOutputElement;
   branchContainer: HTMLDivElement;
@@ -31,6 +32,10 @@ export interface CanonicalGraspDom {
 // of the robot.
 export const DEFAULT_CUBE_X = 0.2;
 export const DEFAULT_CUBE_Y = 0;
+
+// Cube-center height used for the "drop mode" sweep, matching Python's
+// DROP_CUBE_CENTER_Z (py/src/pick_and_place/trajectory.py).
+export const DROP_POSE_Z_MM = 45;
 
 // Yaw is measured from the radial direction (not the world frame), so the grasp
 // geometry is the same at every azimuth. A cube has 4-fold rotational symmetry
@@ -147,6 +152,15 @@ export function buildUi(
   pregraspLabel.append(showPregraspInput, pregraspText);
   controls.appendChild(pregraspLabel);
 
+  const dropModeLabel = document.createElement('label');
+  dropModeLabel.className = 'canonical-grasp-viz-checkbox';
+  const dropModeInput = document.createElement('input');
+  dropModeInput.type = 'checkbox';
+  const dropModeText = document.createElement('span');
+  dropModeText.textContent = `Drop mode (ignore orientation, z = ${DROP_POSE_Z_MM} mm)`;
+  dropModeLabel.append(dropModeInput, dropModeText);
+  controls.appendChild(dropModeLabel);
+
   const resetButton = document.createElement('button');
   resetButton.className = 'canonical-grasp-viz-reset';
   resetButton.type = 'button';
@@ -176,6 +190,6 @@ export function buildUi(
   return {
     root, viewport, coordModeInputs, cartesianGroup, radialGroup, xInput,
     yInput, radiusInput, azimuthInput, yawInput, showPregraspInput,
-    resetButton, status, branchContainer
+    dropModeInput, resetButton, status, branchContainer
   };
 }
