@@ -1259,6 +1259,28 @@ def main() -> None:
                     if not viewer.is_running():
                         break
                     if episode_target is None:
+                        print(
+                            "Drop zone square not found; checking whether the cube is covering it..."
+                        )
+                        covering_cube = hunt_for_cube(
+                            viewer,
+                            return_out_of_zone=True,
+                            debug=overhead_debug,
+                        )
+                        if not viewer.is_running():
+                            break
+                        if covering_cube is not None:
+                            notifier.alert(
+                                "Drop zone is hidden but the cube is visible. "
+                                "Running an unrecorded recovery."
+                            )
+                            recovered_source = recover_cube(viewer)
+                            if recovered_source is None:
+                                notifier.alert(
+                                    "Cube recovery failed after retries. The run is stopping."
+                                )
+                                break
+                            continue
                         notifier.alert(
                             f"Drop zone square not found after {args.max_hunt_tries} looks. "
                             "The run is stopping."
