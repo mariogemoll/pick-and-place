@@ -30,7 +30,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import mujoco
 import numpy as np
@@ -303,6 +303,47 @@ class RecordingSession:
             return 0
         return sum(encoder._dropped_frames.values())
 
+    def save_episode(self, episode_metadata: dict[str, Any] | None = None) -> None:
+        """Commit the pending LeRobot episode, optionally adding episode metadata.
+
+        LeRobot stores frame features and episode metadata through separate paths:
+        arbitrary metadata cannot be added to the per-frame buffer because it is
+        validated against the dataset feature schema. The writer does accept
+        extra episode metadata internally, so temporarily wrap that call and
+        merge our run-specific fields into the episode row.
+        """
+        if self.dataset is None:
+            raise RuntimeError("cannot save episode before the dataset exists")
+        if not episode_metadata:
+            self.dataset.save_episode()
+            return
+
+        meta = self.dataset.writer._meta
+        original_save_episode = meta.save_episode
+
+        def save_episode_with_metadata(
+            episode_index,
+            episode_length,
+            episode_tasks,
+            episode_stats,
+            base_metadata,
+        ):
+            merged = dict(base_metadata)
+            merged.update(episode_metadata)
+            return original_save_episode(
+                episode_index,
+                episode_length,
+                episode_tasks,
+                episode_stats,
+                merged,
+            )
+
+        meta.save_episode = save_episode_with_metadata
+        try:
+            self.dataset.save_episode()
+        finally:
+            meta.save_episode = original_save_episode
+
     def finalize(self) -> None:
         if self.dataset is not None:
             self.dataset.finalize()
@@ -344,6 +385,7 @@ def execute_episode(
     show_wrist_mixed: bool = False,
     failed_trajectory_dir: Path | str | None = None,
     free_grasp: bool = False,
+    success_metadata: Callable[[], dict[str, Any]] | None = None,
 ) -> str:
     """Run one pass of a prepared episode on an already-connected follower.
 
@@ -531,6 +573,7 @@ def execute_episode(
 
     prev_contacts: set[tuple[str, str]] = set()
     episode_status = "incomplete"
+    episode_metadata: dict[str, Any] | None = None
     try:
         # Ramp the real arm onto the trajectory start pose so the arm and the sim
         # are visibly aligned before any playback motion begins.
@@ -1087,6 +1130,8 @@ def execute_episode(
         if record_writer_thread is not None:
             record_queue.put(None)
             record_writer_thread.join(timeout=30.0)
+        if episode_status == "success" and success_metadata is not None:
+            episode_metadata = success_metadata()
         _report_tracking(recorder)
         if recording is not None and recording.dataset is not None and record_writer_thread is not None:
             # The writer thread has drained, so the drop count now covers the whole
@@ -1101,7 +1146,7 @@ def execute_episode(
                     "queue size."
                 )
             if episode_status == "success":
-                recording.dataset.save_episode()
+                recording.save_episode(episode_metadata)
                 print(f"Saved episode to dataset ({len(recorder)} frames).")
             elif recording.dataset.has_pending_frames():
                 recording.dataset.clear_episode_buffer()

@@ -48,6 +48,7 @@ import numpy as np
 from pick_and_place.episode_loop import episode_loop
 from pick_and_place.episodes import (
     EpisodeSamplingError,
+    PlacementError,
     _build_model,
     prepare_episode,
     sample_cube,
@@ -307,6 +308,58 @@ def track_drop_zone_square(
         return CubePose(x=target.xy[0], y=target.xy[1], z=CUBE_HALF_SIZE)
 
     return None
+
+
+def final_placement_metadata(
+    cube: CubePose | None,
+    target: CubePose,
+    *,
+    check_error: str = "",
+) -> dict[str, object]:
+    """Episode metadata for the physical cube's final overhead-camera pose."""
+    target_xyz = (float(target.x), float(target.y), float(CUBE_HALF_SIZE))
+    if cube is None:
+        print("placement error: cube not detected after release")
+        nan = float("nan")
+        return {
+            "placement_detected": False,
+            "placement_check_error": check_error,
+            "placement_cube_x": nan,
+            "placement_cube_y": nan,
+            "placement_cube_z": nan,
+            "placement_target_x": target_xyz[0],
+            "placement_target_y": target_xyz[1],
+            "placement_target_z": target_xyz[2],
+            "placement_dx": nan,
+            "placement_dy": nan,
+            "placement_dz": nan,
+            "placement_xy": nan,
+        }
+
+    cube_xyz = (float(cube.x), float(cube.y), float(cube.z))
+    error = PlacementError(
+        cube_xyz=cube_xyz,
+        target_xyz=target_xyz,
+        dx=cube_xyz[0] - target_xyz[0],
+        dy=cube_xyz[1] - target_xyz[1],
+        dz=cube_xyz[2] - target_xyz[2],
+        xy=float(np.linalg.norm(np.asarray(cube_xyz[:2]) - np.asarray(target_xyz[:2]))),
+    )
+    print(error.summary())
+    return {
+        "placement_detected": True,
+        "placement_check_error": check_error,
+        "placement_cube_x": error.cube_xyz[0],
+        "placement_cube_y": error.cube_xyz[1],
+        "placement_cube_z": error.cube_xyz[2],
+        "placement_target_x": error.target_xyz[0],
+        "placement_target_y": error.target_xyz[1],
+        "placement_target_z": error.target_xyz[2],
+        "placement_dx": error.dx,
+        "placement_dy": error.dy,
+        "placement_dz": error.dz,
+        "placement_xy": error.xy,
+    }
 
 
 def main() -> None:
@@ -1041,6 +1094,27 @@ def main() -> None:
 
                         print(f"\n--- Episode {ep.index}"
                               f"{f'/{args.episodes}' if args.episodes else ''} ---")
+
+                        def check_final_placement() -> dict[str, object]:
+                            print("Checking final cube placement from the overhead camera...")
+                            try:
+                                final_cube = track_cube(
+                                    overhead_cap,
+                                    args.camera_name,
+                                    model,
+                                    data,
+                                    CUBE_LOOK_TIMEOUT,
+                                    return_out_of_zone=True,
+                                )
+                            except Exception as exc:
+                                print(f"placement error: final cube check failed: {exc}")
+                                return final_placement_metadata(
+                                    None,
+                                    episode.target,
+                                    check_error=str(exc),
+                                )
+                            return final_placement_metadata(final_cube, episode.target)
+
                         status = execute_episode(
                             episode,
                             follower=follower,
@@ -1054,6 +1128,7 @@ def main() -> None:
                             show_wrist_cam=args.show_wrist_cam,
                             show_wrist_mixed=args.show_wrist_mixed,
                             failed_trajectory_dir=args.save_failed_trajectories,
+                            success_metadata=check_final_placement,
                         )
 
                         if status == "restart":
