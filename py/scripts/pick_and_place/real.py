@@ -566,9 +566,9 @@ def main() -> None:
     parser.add_argument(
         "--target-change-min-distance",
         type=float,
-        default=0.05,
+        default=0.03,
         help="minimum cooldown target-plate center movement before the run resumes, in metres "
-        "(default: 0.05)",
+        "(default: 0.03)",
     )
     parser.add_argument(
         "--target-change-alert-min-seconds",
@@ -803,9 +803,9 @@ def main() -> None:
     rng = np.random.default_rng()
     # Set by the startup overhead solve; the cooldown drift check compares against it.
     startup_extrinsics: tuple[np.ndarray, np.ndarray] | None = None
-    # Last accepted drop-zone center. Cooldowns require the operator to move away
-    # from this pose before the next episode is planned.
-    last_episode_target: CubePose | None = None
+    # Cooldowns require the operator to move away from the most recent
+    # successfully completed episode's target before the next episode is planned.
+    cooldown_reference_target: CubePose | None = None
 
     # Refuse to start unless the full rig is present: both cameras open and both
     # have calibrated intrinsics. The overhead extrinsics are solved from the
@@ -943,7 +943,8 @@ def main() -> None:
 
     def wait_for_target_plate_change(viewer) -> None:
         """Pause after cooldown until the operator has moved the target plate."""
-        if last_episode_target is None or args.target_change_min_distance == 0:
+        reference = cooldown_reference_target
+        if reference is None or args.target_change_min_distance == 0:
             return
 
         def look_from_current_pose() -> CubePose | None:
@@ -974,7 +975,7 @@ def main() -> None:
                     "Target plate is not visible. Move it into view before the run can continue."
                 )
             else:
-                moved = target_distance(last_episode_target, target)
+                moved = target_distance(reference, target)
                 if moved >= threshold:
                     print(
                         f"Target plate moved {moved * 100.0:.1f}cm "
@@ -987,7 +988,9 @@ def main() -> None:
                 )
                 print(
                     f"Plate movement: {moved * 100.0:.1f}cm "
-                    f"(required {threshold * 100.0:.1f}cm)."
+                    f"(required {threshold * 100.0:.1f}cm); "
+                    f"from ({reference.x:.3f}, {reference.y:.3f}) "
+                    f"to ({target.x:.3f}, {target.y:.3f})."
                 )
             time.sleep(backoff)
             backoff = min(backoff * 2.0, args.target_change_alert_max_seconds)
@@ -998,7 +1001,7 @@ def main() -> None:
         cooldown also gives the operator time to move the target plate; the run
         remains paused until that movement is confirmed by the overhead camera."""
         print(f"Cooldown: resting with torque off for {args.rest_duration:.0f}s...")
-        if last_episode_target is not None and args.target_change_min_distance > 0:
+        if cooldown_reference_target is not None and args.target_change_min_distance > 0:
             notifier.alert(
                 "Cooldown started. Move the target plate before the next episode.",
                 repeat_sound=2,
@@ -1393,7 +1396,7 @@ def main() -> None:
                             raise EpisodeAborted
 
                         ep.complete()
-                        last_episode_target = episode_target
+                        cooldown_reference_target = episode_target
                         is_last = args.episodes != 0 and ep.index >= args.episodes
                         if not is_last:
                             if not recover_cube(viewer):
