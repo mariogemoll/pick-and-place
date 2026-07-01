@@ -25,6 +25,7 @@ This is sim-only. To run on the physical SO-101 follower, use
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import threading
 import time
@@ -143,12 +144,24 @@ def main() -> None:
         help="source cube (x, y) on the floor; omit for a random pose in the clearance annulus",
     )
     parser.add_argument(
+        "--source-yaw",
+        type=float,
+        default=0.0,
+        help="source cube yaw in degrees, only used with --source (default: 0.0)",
+    )
+    parser.add_argument(
         "--target",
         type=float,
         nargs=2,
         metavar=("X", "Y"),
         default=None,
         help="target (x, y) on the floor; omit for a random pose in the clearance annulus",
+    )
+    parser.add_argument(
+        "--target-yaw",
+        type=float,
+        default=0.0,
+        help="target cube yaw in degrees, only used with --target (default: 0.0)",
     )
     parser.add_argument(
         "--drop-orientation",
@@ -203,12 +216,22 @@ def main() -> None:
         raise ValueError("--episodes must be non-negative")
 
     source = (
-        CubePose(x=args.source[0], y=args.source[1], z=CUBE_HALF_SIZE)
+        CubePose(
+            x=args.source[0],
+            y=args.source[1],
+            z=CUBE_HALF_SIZE,
+            yaw=math.radians(args.source_yaw),
+        )
         if args.source is not None
         else None
     )
     target = (
-        CubePose(x=args.target[0], y=args.target[1], z=CUBE_HALF_SIZE)
+        CubePose(
+            x=args.target[0],
+            y=args.target[1],
+            z=CUBE_HALF_SIZE,
+            yaw=math.radians(args.target_yaw),
+        )
         if args.target is not None
         else None
     )
