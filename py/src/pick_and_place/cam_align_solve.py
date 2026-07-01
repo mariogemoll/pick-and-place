@@ -47,6 +47,19 @@ TAG_GEOMS: dict[int, tuple[str, tuple[int, int] | None]] = {
     15: ("workspace_frame_tag_se", (2, +1)),
 }
 
+# Startup-solve plausibility gate. A good solve reprojects to a couple of px and
+# sits ~1 cm / ~2 deg from the model's nominal camera pose; swapped or rotated
+# tags (or wrong intrinsics) push the reprojection error and/or the nominal delta
+# far past these limits, so they are set generously to pass any honest solve while
+# rejecting a mislabelled workspace frame.
+DEFAULT_MAX_REPROJ_PX = 8.0
+DEFAULT_MAX_NOMINAL_DELTA_MM = 40.0
+DEFAULT_MAX_NOMINAL_DELTA_DEG = 6.0
+
+
+class ExtrinsicsSolveError(RuntimeError):
+    """The overhead extrinsics could not be solved or failed a plausibility check."""
+
 
 @dataclass(frozen=True)
 class NominalDelta:
@@ -128,6 +141,18 @@ def average_results(
         quat=tuple(float(v) for v in quat),
         nominal_delta=delta,
     )
+
+
+def pose_delta_mm_deg(
+    pos_a: np.ndarray,
+    quat_a: np.ndarray,
+    pos_b: np.ndarray,
+    quat_b: np.ndarray,
+) -> tuple[float, float]:
+    """Translation (mm) and rotation (deg) between two parent-relative camera poses."""
+    mm = float(np.linalg.norm(np.asarray(pos_a, dtype=float) - np.asarray(pos_b, dtype=float)) * 1000.0)
+    deg = quat_angle_deg(np.asarray(quat_a, dtype=float), np.asarray(quat_b, dtype=float))
+    return mm, deg
 
 
 def tag_world_points(model: mujoco.MjModel, data: mujoco.MjData) -> dict[int, np.ndarray]:
@@ -260,6 +285,188 @@ def solve_camera_pose(
         pos=tuple(float(v) for v in pos),
         quat=tuple(float(v) for v in quat),
         nominal_delta=delta,
+    )
+
+
+def solve_averaged_from_camera(
+    cap: Any,
+    *,
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    camera_name: str,
+    matrix: np.ndarray,
+    dist: np.ndarray,
+    detector: Any,
+    cv2_module: Any,
+    nominal_pos: np.ndarray,
+    nominal_quat: np.ndarray,
+    samples: int,
+    max_seconds: float,
+    width: int,
+    height: int,
+    preview: bool = False,
+) -> SolveResult | None:
+    """Read frames until ``samples`` solve or ``max_seconds`` elapses, then average.
+
+    Returns the averaged pose, or ``None`` if not one frame yielded a solve (all
+    four workspace-frame tags visible) before the loop ended."""
+    start = time.monotonic()
+    results: list[SolveResult] = []
+    while True:
+        frame_rgb = read_camera_frame(cap, cv2_module)
+        if frame_rgb is None:
+            continue
+        if frame_rgb.shape[1] != width or frame_rgb.shape[0] != height:
+            frame_rgb = cv2_module.resize(frame_rgb, (width, height), interpolation=cv2_module.INTER_AREA)
+        result = solve_camera_pose(
+            frame_rgb=frame_rgb,
+            model=model,
+            data=data,
+            camera_name=camera_name,
+            matrix=matrix,
+            dist=dist,
+            detector=detector,
+            cv2_module=cv2_module,
+            nominal_pos=nominal_pos,
+            nominal_quat=nominal_quat,
+        )
+        if result is not None:
+            results.append(result)
+            if samples > 1:
+                print(
+                    f"Sample {len(results)}/{samples}: "
+                    f"{result.reprojection_error_px:.3f} px, "
+                    f"{result.nominal_delta.translation_m * 1000.0:.1f} mm, "
+                    f"{result.nominal_delta.rotation_deg:.2f} deg",
+                    flush=True,
+                )
+        if preview:
+            preview_bgr = cv2_module.cvtColor(frame_rgb, cv2_module.COLOR_RGB2BGR)
+            cv2_module.imshow("cam_align_solve", preview_bgr)
+            key = cv2_module.waitKey(1) & 0xFF
+            if key in (27, ord("q")):
+                break
+        if len(results) >= samples:
+            break
+        if max_seconds > 0.0 and time.monotonic() - start > max_seconds:
+            break
+    if not results:
+        return None
+    return average_results(results, nominal_pos=nominal_pos, nominal_quat=nominal_quat)
+
+
+def apply_solve_result(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    camera_name: str,
+    result: SolveResult,
+) -> None:
+    """Write an (averaged) solved pose onto the compiled model and re-forward."""
+    camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
+    if camera_id < 0:
+        raise ExtrinsicsSolveError(f"unknown camera {camera_name!r}")
+    model.cam_pos[camera_id] = np.array(result.pos, dtype=float)
+    model.cam_quat[camera_id] = np.array(result.quat, dtype=float)
+    mujoco.mj_forward(model, data)
+
+
+def check_solve_plausible(
+    result: SolveResult,
+    *,
+    max_reproj_px: float = DEFAULT_MAX_REPROJ_PX,
+    max_nominal_delta_mm: float = DEFAULT_MAX_NOMINAL_DELTA_MM,
+    max_nominal_delta_deg: float = DEFAULT_MAX_NOMINAL_DELTA_DEG,
+) -> None:
+    """Raise ``ExtrinsicsSolveError`` if a solved pose looks wrong.
+
+    Catches a workspace frame whose tags are swapped, rotated, or placed in the
+    wrong corners (large reprojection error), and a camera that has moved far from
+    where the model expects it (large nominal delta)."""
+    if set(result.used_tags) != set(TAG_GEOMS):
+        raise ExtrinsicsSolveError(
+            f"solved with tags {list(result.used_tags)}; need all four "
+            f"workspace-frame tags {sorted(TAG_GEOMS)}"
+        )
+    if result.reprojection_error_px > max_reproj_px:
+        raise ExtrinsicsSolveError(
+            f"reprojection error {result.reprojection_error_px:.1f}px exceeds "
+            f"{max_reproj_px:.1f}px — workspace-frame tags may be swapped, rotated, "
+            "or in the wrong corners, or the intrinsics are wrong"
+        )
+    delta_mm = result.nominal_delta.translation_m * 1000.0
+    delta_deg = result.nominal_delta.rotation_deg
+    if delta_mm > max_nominal_delta_mm or delta_deg > max_nominal_delta_deg:
+        raise ExtrinsicsSolveError(
+            f"solved pose is {delta_mm:.0f}mm / {delta_deg:.1f}deg from nominal "
+            f"(limits {max_nominal_delta_mm:.0f}mm / {max_nominal_delta_deg:.0f}deg) — "
+            "check the camera mount and the tag placement"
+        )
+
+
+def solve_overhead_extrinsics(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    cap: Any,
+    *,
+    camera_name: str = "overhead_camera",
+    intrinsics_path: Path | None = None,
+    width: int = 1920,
+    height: int = 1080,
+    samples: int = 10,
+    max_seconds: float = 10.0,
+    flush_frames: int = 5,
+    cv2_module: Any | None = None,
+) -> SolveResult | None:
+    """Solve the overhead camera extrinsics live from the workspace-frame tags.
+
+    Returns the averaged ``SolveResult`` (not applied to ``model`` — call
+    ``apply_solve_result`` after validating it), or ``None`` if all four tags were
+    never visible in one frame within ``max_seconds`` (e.g. the arm is occluding
+    them). Raises ``ExtrinsicsSolveError`` if the camera or apriltag dependency is
+    missing."""
+    if cv2_module is None:
+        import cv2 as cv2_module  # type: ignore[no-redef]
+    try:
+        from pupil_apriltags import Detector
+    except ImportError as exc:
+        raise ExtrinsicsSolveError(
+            "solving overhead extrinsics requires opencv-python and pupil-apriltags"
+        ) from exc
+
+    camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
+    if camera_id < 0:
+        raise ExtrinsicsSolveError(f"unknown camera {camera_name!r}")
+    nominal_pos = model.cam_pos[camera_id].copy()
+    nominal_quat = model.cam_quat[camera_id].copy()
+
+    if intrinsics_path is None:
+        local = LOCAL_CAMERA_INTRINSICS_DIR / f"{camera_name}.json"
+        intrinsics_path = local if local.exists() else None
+    if intrinsics_path is not None:
+        matrix, dist = camera_matrix_from_intrinsics(Path(intrinsics_path), width, height)
+    else:
+        matrix, dist = default_camera_matrix(width, height, float(model.cam_fovy[camera_id]))
+
+    # Drop buffered frames so we solve against what the camera sees now.
+    for _ in range(flush_frames):
+        cap.read()
+
+    detector = Detector(families="tagStandard41h12", nthreads=4, refine_edges=True)
+    return solve_averaged_from_camera(
+        cap,
+        model=model,
+        data=data,
+        camera_name=camera_name,
+        matrix=matrix,
+        dist=dist,
+        detector=detector,
+        cv2_module=cv2_module,
+        nominal_pos=nominal_pos,
+        nominal_quat=nominal_quat,
+        samples=samples,
+        max_seconds=max_seconds,
+        width=width,
+        height=height,
     )
 
 
@@ -416,57 +623,23 @@ def main() -> None:
             )
         else:
             cap = open_camera(parse_index_or_path(args.camera), args.width, args.height, args.fps, cv2)
-            start = time.monotonic()
-            results: list[SolveResult] = []
-            while True:
-                frame_rgb = read_camera_frame(cap, cv2)
-                if frame_rgb is None:
-                    continue
-                if frame_rgb.shape[1] != args.width or frame_rgb.shape[0] != args.height:
-                    frame_rgb = cv2.resize(frame_rgb, (args.width, args.height), interpolation=cv2.INTER_AREA)
-                result = solve_camera_pose(
-                    frame_rgb=frame_rgb,
-                    model=model,
-                    data=data,
-                    camera_name=args.camera_name,
-                    matrix=matrix,
-                    dist=dist,
-                    detector=detector,
-                    cv2_module=cv2,
-                    nominal_pos=nominal_pos,
-                    nominal_quat=nominal_quat,
-                )
-                if result is not None:
-                    results.append(result)
-                    if args.samples > 1:
-                        print(
-                            f"Sample {len(results)}/{args.samples}: "
-                            f"{result.reprojection_error_px:.3f} px, "
-                            f"{result.nominal_delta.translation_m * 1000.0:.1f} mm, "
-                            f"{result.nominal_delta.rotation_deg:.2f} deg",
-                            flush=True,
-                        )
-                if args.show:
-                    preview = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-                    cv2.imshow("cam_align_solve", preview)
-                    key = cv2.waitKey(1) & 0xFF
-                    if key in (27, ord("q")):
-                        break
-                if len(results) >= args.samples:
-                    result = average_results(
-                        results,
-                        nominal_pos=nominal_pos,
-                        nominal_quat=nominal_quat,
-                    )
-                    break
-                if args.max_seconds > 0.0 and time.monotonic() - start > args.max_seconds:
-                    if results:
-                        result = average_results(
-                            results,
-                            nominal_pos=nominal_pos,
-                            nominal_quat=nominal_quat,
-                        )
-                    break
+            result = solve_averaged_from_camera(
+                cap,
+                model=model,
+                data=data,
+                camera_name=args.camera_name,
+                matrix=matrix,
+                dist=dist,
+                detector=detector,
+                cv2_module=cv2,
+                nominal_pos=nominal_pos,
+                nominal_quat=nominal_quat,
+                samples=args.samples,
+                max_seconds=args.max_seconds,
+                width=args.width,
+                height=args.height,
+                preview=args.show,
+            )
     finally:
         if renderer is not None:
             renderer.close()

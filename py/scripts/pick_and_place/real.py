@@ -4,6 +4,12 @@
 
 """Run the analytic pick-and-place on the physical SO-101 as a continuous loop.
 
+Refuses to start unless the full rig is present: both the overhead and wrist
+cameras open and both have calibrated intrinsics. It then solves the overhead
+camera extrinsics from the workspace-frame AprilTags and refuses to start if the
+tags are missing or implausible (swapped/rotated). During a long-enough cooldown
+it re-solves and stops the run if the camera has drifted from that startup pose.
+
 Homes the arm to a near-neutral pose, then repeats: look for the cube from the
 current pose (re-homing to fresh near-neutral poses if it can't be seen), plan a
 collision-free ``pick_and_carry`` episode from wherever the arm currently is, and
@@ -47,7 +53,6 @@ from pick_and_place.episodes import (
 from pick_and_place.executor import (
     CONTROL_HZ,
     HARDWARE_SIMULATION_HZ,
-    REAL_ARM_DEFAULT_SPEED,
     RecordingSession,
     clamp_and_warn,
     execute_episode,
@@ -311,28 +316,6 @@ def main() -> None:
         help="pin the source cube (x, y) on the floor; omit to track it with the camera",
     )
     parser.add_argument(
-        "--target",
-        type=float,
-        nargs=2,
-        metavar=("X", "Y"),
-        default=None,
-        help="pin the target (x, y); omit for a random pose in the clearance annulus",
-    )
-    parser.add_argument(
-        "--target-drop-zone",
-        dest="target_drop_zone",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="use the overhead camera to set the target from a black/white drop-zone square "
-        "(default: on; --no-target-drop-zone to disable)",
-    )
-    parser.add_argument(
-        "--show-drop-zone",
-        dest="show_drop_zone",
-        action="store_true",
-        help="show the tracked drop-zone square marker in the MuJoCo viewer",
-    )
-    parser.add_argument(
         "--drop-zone-color",
         dest="drop_zone_color",
         choices=("black", "white"),
@@ -349,23 +332,67 @@ def main() -> None:
     parser.add_argument(
         "--speed",
         type=float,
-        default=None,
-        help="playback speed multiplier of nominal pace "
-        f"(1.0 = nominal; default {REAL_ARM_DEFAULT_SPEED})",
-    )
-    parser.add_argument(
-        "--environment",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="include the calibration workspace_frame and overhead camera mount",
+        default=1.0,
+        help="playback speed multiplier of nominal pace (1.0 = nominal; default: 1.0)",
     )
     parser.add_argument("--camera", default="0", help="OpenCV index/path of the overhead camera (default: 0)")
     parser.add_argument("--camera-name", default="overhead_camera", help="camera name in the model")
+    parser.add_argument(
+        "--recalibrate",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="solve the overhead camera extrinsics live from the workspace-frame AprilTags at "
+        "startup and refuse to start if they are missing or implausible (default: on; "
+        "--no-recalibrate uses the saved sidecar extrinsics instead)",
+    )
+    parser.add_argument(
+        "--recalibrate-samples",
+        type=int,
+        default=10,
+        help="overhead frames to average per extrinsics solve (default: 10)",
+    )
+    parser.add_argument(
+        "--recalibrate-max-seconds",
+        type=float,
+        default=15.0,
+        help="time budget to gather the solve frames before giving up (default: 15)",
+    )
+    parser.add_argument(
+        "--overhead-intrinsics",
+        type=Path,
+        default=None,
+        help="overhead camera intrinsics JSON for the solve (default: local sidecar)",
+    )
+    parser.add_argument(
+        "--recalibrate-check-min-cooldown",
+        type=float,
+        default=15.0,
+        help="during a cooldown at least this long (s), re-solve the overhead extrinsics at "
+        "near-neutral and stop the run if the camera has drifted past the threshold; 0 disables "
+        "the cooldown drift check (default: 15)",
+    )
+    parser.add_argument(
+        "--recalibrate-drift-mm",
+        type=float,
+        default=10.0,
+        help="translation drift from the startup solve that stops the run (default: 10 mm)",
+    )
+    parser.add_argument(
+        "--recalibrate-drift-deg",
+        type=float,
+        default=2.0,
+        help="rotation drift from the startup solve that stops the run (default: 2 deg)",
+    )
     parser.add_argument("--wrist-camera", default="1", help="OpenCV index/path of the wrist camera (default: 1)")
     parser.add_argument("--wrist-intrinsics", default=None, help="path to wrist camera intrinsics JSON")
     parser.add_argument("--show-wrist-cam", action="store_true", help="show the live wrist camera feed")
     parser.add_argument("--show-wrist-mixed", action="store_true", help="overlay the sim render on the wrist feed")
-    parser.add_argument("--no-viewer", action="store_true", help="run headless (no 3D MuJoCo viewer)")
+    parser.add_argument(
+        "--viewer",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="show the 3D MuJoCo viewer (default: off, headless)",
+    )
     parser.add_argument(
         "--preflight-debug",
         action="store_true",
@@ -426,13 +453,16 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # A pinned --target wins over the (default-on) drop-zone tracking.
-    if args.target is not None:
-        args.target_drop_zone = False
-
     import cv2
 
-    from pick_and_place.cam_align_solve import parse_index_or_path
+    from pick_and_place.cam_align_solve import (
+        ExtrinsicsSolveError,
+        apply_solve_result,
+        check_solve_plausible,
+        parse_index_or_path,
+        pose_delta_mm_deg,
+        solve_overhead_extrinsics,
+    )
     from pick_and_place.camera_extrinsics import (
         apply_camera_extrinsics_to_model,
         load_local_camera_extrinsics,
@@ -445,8 +475,8 @@ def main() -> None:
     dummy_source = CubePose(x=PAN_AXIS[0] + 0.1, y=PAN_AXIS[1], z=CUBE_HALF_SIZE)
     model, data = _build_model(
         dummy_source,
-        include_environment=args.environment,
-        paper_target_marker=args.target_drop_zone or args.show_drop_zone,
+        include_environment=True,
+        paper_target_marker=True,
     )
     model.opt.timestep = 1.0 / HARDWARE_SIMULATION_HZ
     apply_camera_extrinsics_to_model(model, load_local_camera_extrinsics())
@@ -460,6 +490,39 @@ def main() -> None:
     clamp_low, clamp_high = follower_clamp_limits(kinematics)
     clip_warned: set[str] = set()
     rng = np.random.default_rng()
+    # Set by the startup overhead solve; the cooldown drift check compares against it.
+    startup_extrinsics: tuple[np.ndarray, np.ndarray] | None = None
+
+    # Refuse to start unless the full rig is present: both cameras open and both
+    # have calibrated intrinsics. The overhead extrinsics are solved from the
+    # workspace-frame tags once the viewer is up; the wrist camera is opened per
+    # episode by the executor, so it is only probed here.
+    from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
+
+    def require_intrinsics(camera_name: str, override) -> None:
+        path = Path(override) if override is not None else LOCAL_CAMERA_INTRINSICS_DIR / f"{camera_name}.json"
+        if not path.exists():
+            raise SystemExit(f"Missing {camera_name} intrinsics at {path}. Calibrate the camera first.")
+
+    require_intrinsics(args.camera_name, args.overhead_intrinsics)
+    require_intrinsics("wrist_camera", args.wrist_intrinsics)
+
+    backend = cv2.CAP_AVFOUNDATION if hasattr(cv2, "CAP_AVFOUNDATION") else cv2.CAP_ANY
+    print("Opening overhead camera...")
+    overhead_cap = cv2.VideoCapture(parse_index_or_path(args.camera), backend)
+    overhead_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+    overhead_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+    if not overhead_cap.isOpened():
+        overhead_cap.release()
+        raise SystemExit(f"Could not open the overhead camera {args.camera!r}.")
+
+    print("Checking wrist camera...")
+    wrist_probe = cv2.VideoCapture(parse_index_or_path(args.wrist_camera), backend)
+    wrist_open = wrist_probe.isOpened()
+    wrist_probe.release()
+    if not wrist_open:
+        overhead_cap.release()
+        raise SystemExit(f"Could not open the wrist camera {args.wrist_camera!r}.")
 
     print("Connecting to follower...")
     # Keep torque on a plain disconnect (crash / mid-loop exit) so the arm holds
@@ -486,18 +549,7 @@ def main() -> None:
     )
     print(f"Recording into LeRobotDataset at: {dataset_root}")
 
-    backend = cv2.CAP_AVFOUNDATION if hasattr(cv2, "CAP_AVFOUNDATION") else cv2.CAP_ANY
-    print("Opening overhead camera...")
-    overhead_cap = cv2.VideoCapture(parse_index_or_path(args.camera), backend)
-    overhead_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-    overhead_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-
-    fixed_target = (
-        CubePose(x=args.target[0], y=args.target[1], z=CUBE_HALF_SIZE)
-        if args.target is not None
-        else None
-    )
-    drop_zone_tracker = PaperTracker() if (args.target_drop_zone or args.show_drop_zone) else None
+    drop_zone_tracker = PaperTracker()
 
     def read_current_sim_pose() -> tuple[dict[str, float], float]:
         """Read the real arm and convert to the sim joint frame."""
@@ -525,8 +577,51 @@ def main() -> None:
         arm, grip = sample_near_neutral(rng)
         move_to(arm, grip, viewer)
 
+    def check_overhead_drift() -> None:
+        """Re-solve the overhead extrinsics from the current (near-neutral) pose and
+        stop the run if the camera has drifted from the startup calibration. Skips
+        quietly if the tags are occluded."""
+        if not args.recalibrate or startup_extrinsics is None:
+            return
+        print("Cooldown drift check: re-solving overhead extrinsics...")
+        cam_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, args.camera_name)
+        saved_pos = model.cam_pos[cam_id].copy()
+        saved_quat = model.cam_quat[cam_id].copy()
+        check = solve_overhead_extrinsics(
+            model,
+            data,
+            overhead_cap,
+            camera_name=args.camera_name,
+            intrinsics_path=args.overhead_intrinsics,
+            samples=args.recalibrate_samples,
+            max_seconds=args.recalibrate_max_seconds,
+            cv2_module=cv2,
+        )
+        # The re-solve only decides whether to stop; the startup calibration stays
+        # live and is never re-applied mid-run.
+        model.cam_pos[cam_id] = saved_pos
+        model.cam_quat[cam_id] = saved_quat
+        mujoco.mj_forward(model, data)
+        if check is None:
+            print("Drift check skipped: could not see all four tags (occluded). Continuing.")
+            return
+        drift_mm, drift_deg = pose_delta_mm_deg(
+            startup_extrinsics[0],
+            startup_extrinsics[1],
+            np.array(check.pos, dtype=float),
+            np.array(check.quat, dtype=float),
+        )
+        print(f"Overhead drift vs startup: {drift_mm:.1f}mm / {drift_deg:.2f}deg.")
+        if drift_mm > args.recalibrate_drift_mm or drift_deg > args.recalibrate_drift_deg:
+            raise SystemExit(
+                f"Overhead camera drifted {drift_mm:.1f}mm / {drift_deg:.2f}deg since startup "
+                f"(limits {args.recalibrate_drift_mm:.0f}mm / {args.recalibrate_drift_deg:.1f}deg). "
+                "Stopping so the operator can check the mount and recalibrate."
+            )
+
     def cooldown(viewer) -> None:
-        """Park at REST with torque off for the cooldown, then re-home near neutral."""
+        """Park at REST with torque off for the cooldown, then re-home near neutral.
+        A long-enough cooldown doubles as an overhead-camera drift check."""
         print(f"Cooldown: resting with torque off for {args.rest_duration:.0f}s...")
         move_to(REST_ARM_JOINTS, REST_GRIPPER, viewer)
         follower.bus.disable_torque()
@@ -534,6 +629,12 @@ def main() -> None:
         follower.bus.enable_torque()
         arm, grip = sample_near_neutral(rng)
         move_to(arm, grip, viewer)
+        if (
+            args.recalibrate
+            and args.recalibrate_check_min_cooldown > 0
+            and args.rest_duration >= args.recalibrate_check_min_cooldown
+        ):
+            check_overhead_drift()
 
     def park_from_interrupt() -> None:
         """User ended the loop: park to NEUTRAL, then REST. The real viewer has
@@ -586,16 +687,13 @@ def main() -> None:
                 return source
         return None
 
-    def hunt_for_drop_zone(viewer, *, hunt: bool) -> CubePose | None:
+    def hunt_for_drop_zone(viewer) -> CubePose | None:
         """Look for the drop-zone square on the overhead camera.
 
-        The arm can sit between the overhead camera and the square, so when
-        ``hunt`` is set we re-home to fresh near-neutral poses up to
-        ``--max-hunt-tries`` times to clear the view, exactly like
-        ``hunt_for_cube``. With ``hunt`` off (marker display only) we take a
-        single look from the current pose. Returns the target or ``None``."""
-        assert drop_zone_tracker is not None
-        tries = args.max_hunt_tries if hunt else 1
+        The arm can sit between the overhead camera and the square, so we re-home
+        to fresh near-neutral poses up to ``--max-hunt-tries`` times to clear the
+        view, exactly like ``hunt_for_cube``. Returns the target or ``None``."""
+        tries = args.max_hunt_tries
         for attempt in range(tries):
             if not viewer.is_running():
                 return None
@@ -606,7 +704,7 @@ def main() -> None:
                 )
                 move_to(arm, grip, viewer)
                 time.sleep(0.5)  # let the camera settle
-            elif hunt:
+            else:
                 print(f"Drop-zone look {attempt + 1}/{tries}: searching from current pose...")
             target = track_drop_zone_square(
                 overhead_cap,
@@ -650,7 +748,7 @@ def main() -> None:
                         data=data,
                         max_attempts=EPISODE_MAX_ATTEMPTS,
                         verbose=True,
-                        include_environment=args.environment,
+                        include_environment=True,
                         preflight_debug=args.preflight_debug,
                         preflight_debug_limit=args.preflight_debug_limit,
                         failed_trajectory_dir=args.save_failed_trajectories,
@@ -685,7 +783,7 @@ def main() -> None:
 
         return False
 
-    disable_viewer = args.no_viewer or (
+    disable_viewer = (not args.viewer) or (
         (args.show_wrist_cam or args.show_wrist_mixed) and sys.platform == "darwin"
     )
     viewer_ctx = MockViewer() if disable_viewer else mujoco.viewer.launch_passive(model, data)
@@ -697,6 +795,38 @@ def main() -> None:
     try:
         with recover_on(KeyboardInterrupt, recover=park_from_interrupt):
             with viewer_ctx as viewer:
+                if args.recalibrate:
+                    print("Solving overhead camera extrinsics from the workspace-frame tags...")
+                    result = solve_overhead_extrinsics(
+                        model,
+                        data,
+                        overhead_cap,
+                        camera_name=args.camera_name,
+                        intrinsics_path=args.overhead_intrinsics,
+                        samples=args.recalibrate_samples,
+                        max_seconds=args.recalibrate_max_seconds,
+                        cv2_module=cv2,
+                    )
+                    if result is None:
+                        raise SystemExit(
+                            "Overhead calibration failed: never saw all four workspace-frame "
+                            "tags in one frame. Clear the camera view and check the tags."
+                        )
+                    try:
+                        check_solve_plausible(result)
+                    except ExtrinsicsSolveError as exc:
+                        raise SystemExit(f"Overhead calibration rejected: {exc}") from exc
+                    apply_solve_result(model, data, args.camera_name, result)
+                    startup_extrinsics = (
+                        np.array(result.pos, dtype=float),
+                        np.array(result.quat, dtype=float),
+                    )
+                    print(
+                        f"Overhead extrinsics solved: {result.reprojection_error_px:.2f}px, "
+                        f"{result.nominal_delta.translation_m * 1000.0:.1f}mm / "
+                        f"{result.nominal_delta.rotation_deg:.2f}deg from nominal."
+                    )
+
                 print("Homing to near-neutral...")
                 arm, grip = sample_near_neutral(rng)
                 move_to(arm, grip, viewer)
@@ -707,21 +837,15 @@ def main() -> None:
                     cooldown=lambda: cooldown(viewer),
                     should_continue=viewer.is_running,
                 ):
-                    episode_target = fixed_target
-                    if drop_zone_tracker is not None:
-                        tracked_target = hunt_for_drop_zone(
-                            viewer, hunt=args.target_drop_zone
+                    episode_target = hunt_for_drop_zone(viewer)
+                    if not viewer.is_running():
+                        break
+                    if episode_target is None:
+                        print(
+                            f"Drop-zone square not found after "
+                            f"{args.max_hunt_tries} looks. Ending loop."
                         )
-                        if not viewer.is_running():
-                            break
-                        if args.target_drop_zone:
-                            if tracked_target is None:
-                                print(
-                                    f"Drop-zone square not found after "
-                                    f"{args.max_hunt_tries} looks. Ending loop."
-                                )
-                                break
-                            episode_target = tracked_target
+                        break
 
                     source = hunt_for_cube(viewer, return_out_of_zone=True)
                     if not viewer.is_running():
@@ -763,7 +887,7 @@ def main() -> None:
                                 data=data,
                                 max_attempts=EPISODE_MAX_ATTEMPTS,
                                 verbose=True,
-                                include_environment=args.environment,
+                                include_environment=True,
                                 preflight_debug=args.preflight_debug,
                                 preflight_debug_limit=args.preflight_debug_limit,
                                 failed_trajectory_dir=args.save_failed_trajectories,
