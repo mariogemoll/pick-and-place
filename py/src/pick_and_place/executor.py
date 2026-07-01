@@ -241,6 +241,11 @@ class RecordingSession:
     vcodec: str = "auto"
     streaming_encoding: bool = True
     image_writer_threads: int = 4
+    # Frames the streaming encoder may buffer per camera. The default of 30 (one
+    # second at 30 Hz) overflows during the descent's visual-servo tick, when
+    # AprilTag detection on the control thread briefly starves the encoder and
+    # frames get dropped. A deeper buffer rides through that spike.
+    encoder_queue_maxsize: int = 300
     dataset: Any = field(default=None, init=False)
 
     def create_dataset(self, wrist_shape: tuple, overhead_shape: tuple) -> None:
@@ -279,6 +284,7 @@ class RecordingSession:
             image_writer_threads=self.image_writer_threads,
             vcodec=self.vcodec,
             streaming_encoding=self.streaming_encoding,
+            encoder_queue_maxsize=self.encoder_queue_maxsize,
             video_backend="pyav",
         )
 
@@ -591,12 +597,13 @@ def execute_episode(
             import cv2
 
             is_descent = isinstance(phase, DescentPhase)
+            show_wrist = show_wrist_cam or show_wrist_mixed
 
             while viewer.is_running():
                 phase_t = (data.time - playback_start) * speed
 
                 bgr = None
-                if wrist_cam is not None and (show_wrist_cam or show_wrist_mixed or is_descent):
+                if wrist_cam is not None and (show_wrist or is_descent):
                     with cam_lock:
                         if cam_frame is not None and cam_frame_id != last_processed_id:
                             last_processed_id = cam_frame_id
@@ -614,97 +621,104 @@ def execute_episode(
 
                         detections = detect_cube_faces(rgb, wrist_tracker.detector)
 
-                        for det in detections:
-                            corners = np.array(det.corners, dtype=np.int32)
-                            cv2.polylines(bgr, [corners], True, (0, 255, 0), 2, cv2.LINE_AA)
-                            cv2.putText(
-                                bgr,
-                                str(det.tag_id),
-                                tuple(corners[0]),
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                0.5,
-                                (255, 255, 0),
-                                1,
-                                cv2.LINE_AA,
-                            )
+                        if show_wrist:
+                            for det in detections:
+                                corners = np.array(det.corners, dtype=np.int32)
+                                cv2.polylines(bgr, [corners], True, (0, 255, 0), 2, cv2.LINE_AA)
+                                cv2.putText(
+                                    bgr,
+                                    str(det.tag_id),
+                                    tuple(corners[0]),
+                                    cv2.FONT_HERSHEY_SIMPLEX,
+                                    0.5,
+                                    (255, 255, 0),
+                                    1,
+                                    cv2.LINE_AA,
+                                )
 
                         estimate = wrist_tracker.update(
                             detections, wrist_camera_matrix, cam_pos, cam_rot, dist=None
                         )
 
                         if estimate is not None:
-                            CV_TO_MJ = np.diag([1.0, -1.0, -1.0])
-                            pos_mj_cam = cam_rot.T @ (estimate.position - cam_pos)
-                            rot_mj_cam = cam_rot.T @ estimate.rotation
-                            tvec = CV_TO_MJ @ pos_mj_cam
-                            rmat = CV_TO_MJ @ rot_mj_cam
-                            rvec, _ = cv2.Rodrigues(rmat)
+                            # Overlay the detected cube pose and TCP onto the wrist
+                            # frame purely for the optional live windows. This is
+                            # skipped when nothing is shown so the descent's
+                            # per-tick vision work does not starve the video
+                            # encoder and drop recorded frames.
+                            if show_wrist:
+                                CV_TO_MJ = np.diag([1.0, -1.0, -1.0])
+                                pos_mj_cam = cam_rot.T @ (estimate.position - cam_pos)
+                                rot_mj_cam = cam_rot.T @ estimate.rotation
+                                tvec = CV_TO_MJ @ pos_mj_cam
+                                rmat = CV_TO_MJ @ rot_mj_cam
+                                rvec, _ = cv2.Rodrigues(rmat)
 
-                            cv2.drawFrameAxes(
-                                bgr, wrist_camera_matrix, np.zeros(5), rvec, tvec, 0.03, 2
-                            )
+                                cv2.drawFrameAxes(
+                                    bgr, wrist_camera_matrix, np.zeros(5), rvec, tvec, 0.03, 2
+                                )
 
-                            s = CUBE_HALF_SIZE
-                            pts_3d = np.float32(
-                                [
-                                    [-s, -s, -s],
-                                    [s, -s, -s],
-                                    [s, s, -s],
-                                    [-s, s, -s],
-                                    [-s, -s, s],
-                                    [s, -s, s],
-                                    [s, s, s],
-                                    [-s, s, s],
+                                s = CUBE_HALF_SIZE
+                                pts_3d = np.float32(
+                                    [
+                                        [-s, -s, -s],
+                                        [s, -s, -s],
+                                        [s, s, -s],
+                                        [-s, s, -s],
+                                        [-s, -s, s],
+                                        [s, -s, s],
+                                        [s, s, s],
+                                        [-s, s, s],
+                                    ]
+                                )
+                                pts_img, _ = cv2.projectPoints(
+                                    pts_3d, rvec, tvec, wrist_camera_matrix, np.zeros(5)
+                                )
+                                pts_img = pts_img.reshape(-1, 2).astype(int)
+                                edges = [
+                                    (0, 1),
+                                    (1, 2),
+                                    (2, 3),
+                                    (3, 0),
+                                    (4, 5),
+                                    (5, 6),
+                                    (6, 7),
+                                    (7, 4),
+                                    (0, 4),
+                                    (1, 5),
+                                    (2, 6),
+                                    (3, 7),
                                 ]
-                            )
-                            pts_img, _ = cv2.projectPoints(
-                                pts_3d, rvec, tvec, wrist_camera_matrix, np.zeros(5)
-                            )
-                            pts_img = pts_img.reshape(-1, 2).astype(int)
-                            edges = [
-                                (0, 1),
-                                (1, 2),
-                                (2, 3),
-                                (3, 0),
-                                (4, 5),
-                                (5, 6),
-                                (6, 7),
-                                (7, 4),
-                                (0, 4),
-                                (1, 5),
-                                (2, 6),
-                                (3, 7),
-                            ]
-                            for i, j in edges:
-                                cv2.line(
-                                    bgr,
-                                    tuple(pts_img[i]),
-                                    tuple(pts_img[j]),
-                                    (0, 165, 255),
-                                    2,
-                                    cv2.LINE_AA,
-                                )
+                                for i, j in edges:
+                                    cv2.line(
+                                        bgr,
+                                        tuple(pts_img[i]),
+                                        tuple(pts_img[j]),
+                                        (0, 165, 255),
+                                        2,
+                                        cv2.LINE_AA,
+                                    )
 
-                            # Draw TCP dot
-                            gripper_id = mujoco.mj_name2id(
-                                model, mujoco.mjtObj.mjOBJ_BODY, "gripper"
-                            )
-                            if gripper_id >= 0:
-                                from pick_and_place.geometry import JAW_CONTACT_POSITION
-
-                                gripper_pos = data.xpos[gripper_id]
-                                gripper_mat = data.xmat[gripper_id].reshape(3, 3)
-                                tcp_world = gripper_pos + gripper_mat @ JAW_CONTACT_POSITION
-                                tcp_cam_mj = cam_rot.T @ (tcp_world - cam_pos)
-                                tcp_cam_cv = np.array(
-                                    [tcp_cam_mj[0], -tcp_cam_mj[1], -tcp_cam_mj[2]]
+                                # Draw TCP dot
+                                gripper_id = mujoco.mj_name2id(
+                                    model, mujoco.mjtObj.mjOBJ_BODY, "gripper"
                                 )
-                                if tcp_cam_cv[2] > 0.01:
-                                    uv = tcp_cam_cv[:2] / tcp_cam_cv[2]
-                                    uv_px = wrist_camera_matrix @ np.array([uv[0], uv[1], 1.0])
-                                    px = (int(uv_px[0]), int(uv_px[1]))
-                                    cv2.circle(bgr, px, 4, (0, 0, 255), -1, cv2.LINE_AA)
-                                    cv2.circle(bgr, px, 4, (255, 255, 255), 1, cv2.LINE_AA)
+                                if gripper_id >= 0:
+                                    from pick_and_place.geometry import JAW_CONTACT_POSITION
+
+                                    gripper_pos = data.xpos[gripper_id]
+                                    gripper_mat = data.xmat[gripper_id].reshape(3, 3)
+                                    tcp_world = gripper_pos + gripper_mat @ JAW_CONTACT_POSITION
+                                    tcp_cam_mj = cam_rot.T @ (tcp_world - cam_pos)
+                                    tcp_cam_cv = np.array(
+                                        [tcp_cam_mj[0], -tcp_cam_mj[1], -tcp_cam_mj[2]]
+                                    )
+                                    if tcp_cam_cv[2] > 0.01:
+                                        uv = tcp_cam_cv[:2] / tcp_cam_cv[2]
+                                        uv_px = wrist_camera_matrix @ np.array([uv[0], uv[1], 1.0])
+                                        px = (int(uv_px[0]), int(uv_px[1]))
+                                        cv2.circle(bgr, px, 4, (0, 0, 255), -1, cv2.LINE_AA)
+                                        cv2.circle(bgr, px, 4, (255, 255, 255), 1, cv2.LINE_AA)
 
                             roll, pitch, yaw = Rotation.from_matrix(estimate.rotation).as_euler(
                                 "xyz"
@@ -770,7 +784,7 @@ def execute_episode(
                                     ]
                                     data.qvel[qvel_adr : qvel_adr + 6] = 0.0
 
-                    if bgr is not None and (show_wrist_cam or show_wrist_mixed):
+                    if bgr is not None and show_wrist:
                         if wrist_undistort_map is not None and not is_descent:
                             bgr = cv2.remap(bgr, *wrist_undistort_map, cv2.INTER_LINEAR)
 
