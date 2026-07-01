@@ -1,17 +1,18 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Gymnasium env for reverse-curriculum pick-and-place.
+"""Gymnasium env for snapshot-curriculum pick-and-place.
 
 The env wraps the same MuJoCo scene the rest of the project builds, with a reset
 that restores a full-state snapshot drawn from a pool of recorded successful
 episodes (see :mod:`pick_and_place.rl.episode_pool`). The curriculum *stage*
-selects which scripted phase the reset starts from; stages run in reverse so the
-policy first learns to finish the task and the reset distribution then walks
-backward toward the neutral start one phase at a time.
+selects which scripted phase the reset starts from. This can express a strict
+reverse curriculum, but the current setup is intentionally looser: first learn
+held-carry, then carry-drop, and only later move the reset window back into
+grasping and approach.
 
-The obs/action interface is identical for every stage, so the network is trained
-once and reused as the reset distribution moves backward:
+The obs/action interface is identical for every stage, so the network can be
+reused as the reset distribution and reward profile change:
 
   observation (29-dim, world frame)
     joint positions   6   5 arm joints + gripper
@@ -24,12 +25,17 @@ once and reused as the reset distribution moves backward:
   action (6-dim)
     absolute joint position targets, JOINT_NAMES order, applied at control_hz.
 
-The reward is a terminal placement score: once the cube has settled on the floor,
-the episode ends and receives a reward based on the cube-target xy distance.
-Within the success tolerance this is 1.0; farther clean floor placements receive
-partial credit. An unexpected collision or the cube leaving the workspace ends
-the episode as a failure; running past a per-episode step budget (scaled to the
-scripted duration remaining from the reset frame) truncates it.
+The reward is selected by a reward profile. The implemented profiles currently
+cover the carry/drop part of the task: ``held-carry`` trains the arm to keep the
+cube grasped and move it above the target, and ``carry-drop`` trains the carried
+cube to settle on the target, with an early-release guard so dropping/throwing
+from far away gets no reward. Earlier skills still need their own profiles: the
+hard one is likely grasping (closing/lifting into a stable hold), followed by
+approach/descent from the neutral start.
+
+An unexpected collision or the cube leaving the workspace ends the episode as a
+failure; running past a per-episode step budget (scaled to the scripted duration
+remaining from the reset frame) truncates it.
 """
 
 from __future__ import annotations
@@ -49,8 +55,12 @@ from pick_and_place.follower import JOINT_NAMES
 from pick_and_place.geometry import CUBE_HALF_SIZE
 from pick_and_place.rl.episode_pool import EpisodePool, ResetSnapshot
 
-# Reverse-curriculum stages: stage k resets at the start of this scripted phase
-# (and anywhere through the end of the trajectory). Stage 0 is the easy tail.
+# Snapshot reset stages: stage k resets at the start of this scripted phase (and
+# anywhere through the end of the trajectory unless the caller narrows the phase
+# window). The stage only selects the reset distribution; the reward profile
+# selects the skill objective. This is not required to be a strict reverse
+# curriculum. Reward profiles for grasping and full approach/descent are
+# intentionally still future work.
 CURRICULUM_PHASES: tuple[str, ...] = (
     "release",  # drop the carried cube onto the target
     "carry",    # carry to the target hover, then drop
@@ -59,6 +69,7 @@ CURRICULUM_PHASES: tuple[str, ...] = (
     "descent",  # descend onto the cube, grasp, ..., drop
     "approach",  # the full task from the neutral start
 )
+REWARD_PROFILES: tuple[str, ...] = ("held-carry", "carry-drop")
 
 # Success oracle, matching record_episodes.py: the cube has settled within this
 # far (m) of the target in the floor plane, sits at cube-half-size above the
@@ -84,11 +95,24 @@ _MIN_CUBE_HEIGHT = -0.05
 _BUDGET_SLACK = 1.5
 _MIN_BUDGET_STEPS = 20
 
-# Terminal shaping once the cube has settled on the floor. A valid but off-target
-# floor placement receives a small base reward plus a linear xy-distance score,
-# while anything within the success tolerance receives the full reward.
-FLOOR_PLACEMENT_REWARD = 0.2
-PLACEMENT_REWARD_MAX_XY_ERROR = 0.20
+# carry-drop reward: progress toward the final floor target, a small one-time
+# release bonus only near the target, and terminal shaping once the cube has
+# settled on the floor. A valid but off-target floor placement receives a linear
+# xy-distance score, while anything within the success tolerance receives the full
+# reward. The score falls to zero fairly close to the target so the policy cannot
+# get useful reward by dropping at the carry start pose.
+PLACEMENT_REWARD_MAX_XY_ERROR = 0.12
+DROP_PROGRESS_SCALE = 5.0
+DROP_TIME_PENALTY = 0.001
+DROP_RELEASE_BONUS = 0.2
+DROP_RELEASE_BONUS_DISTANCE = 0.04
+EARLY_RELEASE_XY_TOLERANCE = 0.10
+GRIPPER_OPENING_THRESHOLD = 0.5
+HELD_CARRY_TARGET_Z = 0.04
+HELD_CARRY_MIN_CUBE_Z = 0.03
+HELD_CARRY_SUCCESS_DISTANCE = 0.025
+HELD_CARRY_PROGRESS_SCALE = 5.0
+HELD_CARRY_TIME_PENALTY = 0.001
 
 
 class ReverseCurriculumEnv(gym.Env):
@@ -102,6 +126,8 @@ class ReverseCurriculumEnv(gym.Env):
         *,
         stage: int = 0,
         phase_fraction: float = 0.0,
+        phase_end_fraction: float | None = None,
+        reward_profile: str = "carry-drop",
         render_mode: str | None = None,
     ) -> None:
         super().__init__()
@@ -112,7 +138,9 @@ class ReverseCurriculumEnv(gym.Env):
                     f"curriculum phase {phase!r} not in pool phases {self.pool.phase_names}"
                 )
         self.set_stage(stage)
+        self.set_reward_profile(reward_profile)
         self.phase_fraction = phase_fraction
+        self.phase_end_fraction = phase_end_fraction
         self.render_mode = render_mode
 
         self.model, self.data, self._marker_mocapid = _build_model()
@@ -158,6 +186,9 @@ class ReverseCurriculumEnv(gym.Env):
         self._sim_steps = max(1, round((1.0 / control_hz) / float(self.model.opt.timestep)))
 
         self._target_xy = np.zeros(2)
+        self._held_carry_prev_distance = math.inf
+        self._drop_prev_distance = math.inf
+        self._drop_release_bonus_paid = False
         self._step_count = 0
         self._max_steps = _MIN_BUDGET_STEPS
         self._viewer = None
@@ -166,20 +197,32 @@ class ReverseCurriculumEnv(gym.Env):
     # -- curriculum ---------------------------------------------------------
 
     def set_stage(self, stage: int) -> None:
-        """Select the reverse-curriculum stage (0 = easy tail, drop-only)."""
+        """Select the reset stage (0 = easy tail, later stages start earlier)."""
         if not 0 <= stage < len(CURRICULUM_PHASES):
             raise ValueError(f"stage {stage} out of range 0..{len(CURRICULUM_PHASES) - 1}")
         self.stage = stage
         self.phase = CURRICULUM_PHASES[stage]
+
+    def set_reward_profile(self, reward_profile: str) -> None:
+        """Select which skill/reward the env is training."""
+        if reward_profile not in REWARD_PROFILES:
+            raise ValueError(f"reward profile {reward_profile!r} not in {REWARD_PROFILES}")
+        self.reward_profile = reward_profile
 
     # -- gym API ------------------------------------------------------------
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
         snapshot = self.pool.sample_reset(
-            self.np_random, self.phase, phase_fraction=self.phase_fraction
+            self.np_random,
+            self.phase,
+            phase_fraction=self.phase_fraction,
+            phase_end_fraction=self.phase_end_fraction,
         )
         self._restore(snapshot)
+        self._held_carry_prev_distance = self._held_carry_distance()
+        self._drop_prev_distance = self._drop_distance()
+        self._drop_release_bonus_paid = False
         remaining = snapshot.total_frames - snapshot.frame
         self._max_steps = max(_MIN_BUDGET_STEPS, math.ceil(remaining * _BUDGET_SLACK))
         self._step_count = 0
@@ -194,29 +237,34 @@ class ReverseCurriculumEnv(gym.Env):
 
         collided = self._has_unexpected_collision()
         out_of_bounds = self._cube_out_of_bounds()
-        settled_on_floor = self._cube_settled_on_floor()
         xy_error = self._cube_xy_error()
-        success = (
-            (not collided)
-            and (not out_of_bounds)
-            and settled_on_floor
-            and xy_error <= SUCCESS_XY_TOLERANCE
-        )
+        if collided or out_of_bounds:
+            reward = 0.0
+            success = False
+            terminated = True
+            settled_on_floor = self._cube_settled_on_floor()
+            early_release = False
+        elif self.reward_profile == "held-carry":
+            reward, success, terminated, settled_on_floor, early_release = (
+                self._held_carry_step_reward(ctrl)
+            )
+        else:
+            reward, success, terminated, settled_on_floor, early_release = (
+                self._carry_drop_step_reward(ctrl, xy_error)
+            )
 
-        terminated = settled_on_floor or collided or out_of_bounds
         truncated = (not terminated) and self._step_count >= self._max_steps
-        reward = (
-            self._placement_reward(xy_error)
-            if settled_on_floor and not (collided or out_of_bounds)
-            else 0.0
-        )
 
         info = {
             "success": success,
             "collision": collided,
             "out_of_bounds": out_of_bounds,
             "settled_on_floor": settled_on_floor,
+            "early_release": early_release,
             "xy_error": xy_error,
+            "held_carry_distance": self._held_carry_distance(),
+            "drop_distance": self._drop_distance(),
+            "reward_profile": self.reward_profile,
         }
         if self.render_mode == "human":
             self.render()
@@ -269,6 +317,7 @@ class ReverseCurriculumEnv(gym.Env):
         return {
             "stage": self.stage,
             "phase": self.phase,
+            "reward_profile": self.reward_profile,
             "reset_frame": snapshot.frame,
             "max_steps": self._max_steps,
             "source": snapshot.source.name,
@@ -295,6 +344,20 @@ class ReverseCurriculumEnv(gym.Env):
         x, y, _ = self._cube_xyz()
         return math.hypot(float(x) - self._target_xy[0], float(y) - self._target_xy[1])
 
+    def _held_carry_distance(self) -> float:
+        target = np.array(
+            (self._target_xy[0], self._target_xy[1], HELD_CARRY_TARGET_Z),
+            dtype=np.float64,
+        )
+        return float(np.linalg.norm(self._cube_xyz() - target))
+
+    def _drop_distance(self) -> float:
+        target = np.array(
+            (self._target_xy[0], self._target_xy[1], CUBE_HALF_SIZE),
+            dtype=np.float64,
+        )
+        return float(np.linalg.norm(self._cube_xyz() - target))
+
     def _cube_settled_on_floor(self) -> bool:
         _, _, z = self._cube_xyz()
         if abs(float(z) - CUBE_HALF_SIZE) > SUCCESS_Z_TOLERANCE:
@@ -305,17 +368,68 @@ class ReverseCurriculumEnv(gym.Env):
             and float(np.linalg.norm(vel[3:])) < SETTLED_ANG_SPEED
         )
 
-    def _placement_reward(self, xy_error: float) -> float:
-        if xy_error <= SUCCESS_XY_TOLERANCE:
-            return 1.0
-        distance_span = PLACEMENT_REWARD_MAX_XY_ERROR - SUCCESS_XY_TOLERANCE
-        if distance_span <= 0.0:
-            return FLOOR_PLACEMENT_REWARD
-        distance_score = 1.0 - min(
-            1.0,
-            max(0.0, (xy_error - SUCCESS_XY_TOLERANCE) / distance_span),
+    def _gripper_opening(self, ctrl: np.ndarray) -> bool:
+        return float(ctrl[-1]) > GRIPPER_OPENING_THRESHOLD
+
+    def _held_carry_step_reward(self, ctrl: np.ndarray) -> tuple[float, bool, bool, bool, bool]:
+        early_release = self._gripper_opening(ctrl)
+        if early_release:
+            return 0.0, False, True, self._cube_settled_on_floor(), True
+        if float(self._cube_xyz()[2]) < HELD_CARRY_MIN_CUBE_Z:
+            return 0.0, False, True, False, False
+        distance = self._held_carry_distance()
+        success = distance <= HELD_CARRY_SUCCESS_DISTANCE
+        if success:
+            return 1.0, True, True, False, False
+        progress = max(0.0, self._held_carry_prev_distance - distance)
+        self._held_carry_prev_distance = min(self._held_carry_prev_distance, distance)
+        reward = HELD_CARRY_PROGRESS_SCALE * progress - HELD_CARRY_TIME_PENALTY
+        return reward, False, False, False, False
+
+    def _carry_drop_step_reward(
+        self, ctrl: np.ndarray, xy_error: float
+    ) -> tuple[float, bool, bool, bool, bool]:
+        early_release = (
+            self._gripper_opening(ctrl) and xy_error > EARLY_RELEASE_XY_TOLERANCE
         )
-        return FLOOR_PLACEMENT_REWARD + (1.0 - FLOOR_PLACEMENT_REWARD) * distance_score
+        if early_release:
+            return 0.0, False, True, self._cube_settled_on_floor(), True
+        settled_on_floor = self._cube_settled_on_floor()
+        success = settled_on_floor and xy_error <= SUCCESS_XY_TOLERANCE
+        distance = self._drop_distance()
+        progress = max(0.0, self._drop_prev_distance - distance)
+        self._drop_prev_distance = min(self._drop_prev_distance, distance)
+        reward = DROP_PROGRESS_SCALE * progress - DROP_TIME_PENALTY
+        if (
+            self._gripper_opening(ctrl)
+            and not self._drop_release_bonus_paid
+            and self._held_carry_distance() <= DROP_RELEASE_BONUS_DISTANCE
+        ):
+            reward += DROP_RELEASE_BONUS
+            self._drop_release_bonus_paid = True
+        if settled_on_floor:
+            reward += self._placement_reward(xy_error)
+        return reward, success, settled_on_floor, settled_on_floor, False
+
+    def _placement_reward(self, xy_error: float) -> float:
+        return self._linear_distance_score(
+            xy_error,
+            SUCCESS_XY_TOLERANCE,
+            PLACEMENT_REWARD_MAX_XY_ERROR,
+        )
+
+    def _linear_distance_score(
+        self, xy_error: float, success_tolerance: float, max_error: float
+    ) -> float:
+        if xy_error <= success_tolerance:
+            return 1.0
+        distance_span = max_error - success_tolerance
+        if distance_span <= 0.0:
+            return 0.0
+        return 1.0 - min(
+            1.0,
+            max(0.0, (xy_error - success_tolerance) / distance_span),
+        )
 
     # -- rendering ----------------------------------------------------------
 

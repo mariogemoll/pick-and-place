@@ -1,14 +1,18 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Reset-snapshot source for the reverse curriculum.
+"""Reset-snapshot source for the RL snapshot curriculum.
 
 A pool of recorded pick-and-place episodes (the ``.npz`` files written by
 ``record_episodes.py``) is the distribution of valid states the curriculum env
-resets into. Every recorded frame is a full ``qpos``/``qvel`` snapshot the sim
-can be restored to exactly, and each episode carries the frame index at which
-each scripted phase begins, so "reset at the start of the carry phase" resolves
-to the right frame in every episode regardless of how long it ran.
+resets into. It can be used for strict reverse curricula, but the current
+training setup composes skills more flexibly: learn a useful carry skill, add
+the drop, and later move the reset window back into grasping and approach.
+
+Every recorded frame is a full ``qpos``/``qvel`` snapshot the sim can be restored
+to exactly, and each episode carries the frame index at which each scripted phase
+begins, so "reset at the start of the carry phase" resolves to the right frame in
+every episode regardless of how long it ran.
 
 Only successful episodes back the distribution: an episode that missed the
 target or clipped something is not a valid state to finish from.
@@ -144,6 +148,22 @@ class EpisodePool:
             left += int(round(phase_fraction * (nxt - left)))
         return min(left, episode.total_frames - 1)
 
+    def _phase_frame(
+        self, episode: _EpisodeIndex, phase: str, phase_fraction: float
+    ) -> int:
+        """Frame at ``phase_fraction`` through ``phase`` for this episode."""
+        names = self.phase_names
+        if phase not in names:
+            raise ValueError(f"phase {phase!r} not in {names}")
+        index = names.index(phase)
+        left = int(episode.phase_boundaries[index])
+        if index + 1 < len(episode.phase_boundaries):
+            right = int(episode.phase_boundaries[index + 1])
+        else:
+            right = episode.total_frames
+        frame = left + int(round(phase_fraction * (right - left)))
+        return min(max(left, frame), episode.total_frames - 1)
+
     def _load(self, path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         cached = self._cache.get(path)
         if cached is None:
@@ -162,17 +182,29 @@ class EpisodePool:
         phase: str,
         *,
         phase_fraction: float = 0.0,
+        phase_end_fraction: float | None = None,
     ) -> ResetSnapshot:
         """Draw a reset snapshot for the curriculum stage that begins at ``phase``.
 
         An episode is picked uniformly at random, then a start frame is sampled
-        uniformly over that episode's allowed region — from the phase's left edge
-        through the final frame — so the policy keeps rehearsing the later phases
-        it has already solved (standard reverse-curriculum behaviour).
+        uniformly over that episode's allowed region. By default this is from the
+        phase's left edge through the final frame, so the policy keeps rehearsing
+        the later phases it has already solved. ``phase_end_fraction`` narrows the
+        right edge to a fraction through the selected phase, which is useful for
+        learning a phase by sweeping backward within it.
         """
         episode = self._episodes[int(rng.integers(len(self._episodes)))]
         left = self._left_edge(episode, phase, phase_fraction)
-        frame = int(rng.integers(left, episode.total_frames))
+        right = (
+            self._phase_frame(episode, phase, phase_end_fraction)
+            if phase_end_fraction is not None
+            else episode.total_frames - 1
+        )
+        if right < left:
+            raise ValueError(
+                f"empty reset window for phase {phase!r}: left frame {left}, right frame {right}"
+            )
+        frame = int(rng.integers(left, right + 1))
         qpos, qvel, commanded = self._load(episode.path)
         return ResetSnapshot(
             qpos=qpos[frame].copy(),

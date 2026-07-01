@@ -2,15 +2,19 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Train one reverse-curriculum stage with Stable-Baselines3 PPO.
+"""Train one RL reset stage / reward-profile pair with Stable-Baselines3 PPO.
 
-This is the stage-0 plumbing smoke test from RL_REVERSE_CURRICULUM.txt, but the
-script accepts any stage so later curriculum work can reuse the same training
-entry point. It saves the policy and VecNormalize state together; resume/eval
-must load both files because the policy was trained against normalized
-observations. Exact bit-for-bit resume reproducibility is not guaranteed once
-VecNormalize statistics continue updating, but the saved pair is the right
-operational checkpoint.
+The reset stage selects which scripted phase supplies reset snapshots; the reward
+profile selects which skill is being trained (for example held-carry vs.
+carry-drop). The current reward profiles cover carry/drop training only; grasping
+and approach/descent are expected to become separate reward profiles once those
+skills are trained.
+
+The script saves the policy and VecNormalize state together; resume/eval must
+load both files because the policy was trained against normalized observations.
+Exact bit-for-bit resume reproducibility is not guaranteed once VecNormalize
+statistics continue updating, but the saved pair is the right operational
+checkpoint.
 """
 
 from __future__ import annotations
@@ -22,9 +26,9 @@ import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
 
-from pick_and_place.rl import CURRICULUM_PHASES, ReverseCurriculumEnv
+from pick_and_place.rl import CURRICULUM_PHASES, REWARD_PROFILES, ReverseCurriculumEnv
 
 
 DEFAULT_TIMESTEPS = 100_000
@@ -45,9 +49,23 @@ class SaveVecNormalizeCallback(BaseCallback):
         return True
 
 
-def _make_env(pool: Path, stage: int, phase_fraction: float, seed: int, rank: int):
+def _make_env(
+    pool: Path,
+    stage: int,
+    phase_fraction: float,
+    phase_end_fraction: float | None,
+    reward_profile: str,
+    seed: int,
+    rank: int,
+):
     def factory():
-        env = ReverseCurriculumEnv(pool, stage=stage, phase_fraction=phase_fraction)
+        env = ReverseCurriculumEnv(
+            pool,
+            stage=stage,
+            phase_fraction=phase_fraction,
+            phase_end_fraction=phase_end_fraction,
+            reward_profile=reward_profile,
+        )
         env.reset(seed=seed + rank)
         return Monitor(env)
 
@@ -59,11 +77,49 @@ def _make_vec_env(
     *,
     stage: int,
     phase_fraction: float,
+    phase_end_fraction: float | None,
+    reward_profile: str,
     seed: int,
     n_envs: int,
+    vec_env: str,
+) -> DummyVecEnv | SubprocVecEnv:
+    factories = [
+        _make_env(
+            pool,
+            stage,
+            phase_fraction,
+            phase_end_fraction,
+            reward_profile,
+            seed,
+            rank,
+        )
+        for rank in range(n_envs)
+    ]
+    if vec_env == "subproc":
+        return SubprocVecEnv(factories, start_method="spawn")
+    return DummyVecEnv(factories)
+
+
+def _make_normalized_env(
+    pool: Path,
+    *,
+    stage: int,
+    phase_fraction: float,
+    phase_end_fraction: float | None,
+    reward_profile: str,
+    seed: int,
+    n_envs: int,
+    vec_env: str,
 ) -> VecNormalize:
-    env = DummyVecEnv(
-        [_make_env(pool, stage, phase_fraction, seed, rank) for rank in range(n_envs)]
+    env = _make_vec_env(
+        pool,
+        stage=stage,
+        phase_fraction=phase_fraction,
+        phase_end_fraction=phase_end_fraction,
+        reward_profile=reward_profile,
+        seed=seed,
+        n_envs=n_envs,
+        vec_env=vec_env,
     )
     return VecNormalize(env, norm_obs=True, norm_reward=False, clip_obs=10.0)
 
@@ -74,7 +130,24 @@ def _load_or_create_model(
     model_path: Path,
     vecnormalize_path: Path,
 ) -> PPO:
-    if not args.resume:
+    if args.resume:
+        if not model_path.exists() or not vecnormalize_path.exists():
+            raise FileNotFoundError(
+                f"--resume requested, but missing {model_path.name} or {vecnormalize_path.name}"
+            )
+        print(f"resuming from {model_path}")
+        return PPO.load(str(model_path), env=env, seed=args.seed, print_system_info=True)
+
+    if args.init_from is not None:
+        init_model_path = args.init_from / "latest.zip"
+        if not init_model_path.exists():
+            raise FileNotFoundError(init_model_path)
+        print(f"initializing from {init_model_path}")
+        model = PPO.load(str(init_model_path), env=env, seed=args.seed, print_system_info=True)
+        model.tensorboard_log = str(args.out_dir / "tensorboard")
+        return model
+
+    else:
         return PPO(
             "MlpPolicy",
             env,
@@ -86,13 +159,6 @@ def _load_or_create_model(
             gamma=args.gamma,
         )
 
-    if not model_path.exists() or not vecnormalize_path.exists():
-        raise FileNotFoundError(
-            f"--resume requested, but missing {model_path.name} or {vecnormalize_path.name}"
-        )
-    print(f"resuming from {model_path}")
-    return PPO.load(str(model_path), env=env, seed=args.seed, print_system_info=True)
-
 
 def _evaluate(
     model: PPO,
@@ -101,10 +167,22 @@ def _evaluate(
     *,
     stage: int,
     phase_fraction: float,
+    phase_end_fraction: float | None,
+    reward_profile: str,
     seed: int,
     episodes: int,
 ) -> tuple[int, float]:
-    env = DummyVecEnv([_make_env(pool, stage, phase_fraction, seed, 10_000)])
+    env = DummyVecEnv([
+        _make_env(
+            pool,
+            stage,
+            phase_fraction,
+            phase_end_fraction,
+            reward_profile,
+            seed,
+            10_000,
+        )
+    ])
     env = VecNormalize.load(str(vecnormalize_path), env)
     env.training = False
     env.norm_reward = False
@@ -147,10 +225,24 @@ def main() -> None:
     )
     parser.add_argument("--stage", type=int, default=0, help="curriculum stage to train")
     parser.add_argument(
+        "--reward-profile",
+        choices=REWARD_PROFILES,
+        default="carry-drop",
+        help="reward profile / skill objective (default: carry-drop)",
+    )
+    parser.add_argument(
         "--phase-fraction",
         type=float,
         default=0.0,
         help="start this fraction into the selected phase (escape hatch; default 0)",
+    )
+    parser.add_argument(
+        "--phase-end-fraction",
+        type=float,
+        help=(
+            "end reset sampling at this fraction through the selected phase instead "
+            "of sampling through trajectory end"
+        ),
     )
     parser.add_argument(
         "--timesteps",
@@ -158,7 +250,13 @@ def main() -> None:
         default=DEFAULT_TIMESTEPS,
         help=f"PPO environment steps to train (default {DEFAULT_TIMESTEPS})",
     )
-    parser.add_argument("--n-envs", type=int, default=1, help="parallel DummyVecEnv envs")
+    parser.add_argument("--n-envs", type=int, default=1, help="parallel env count")
+    parser.add_argument(
+        "--vec-env",
+        choices=("dummy", "subproc"),
+        default="dummy",
+        help="vector env backend (default: dummy; use subproc for true parallel sim)",
+    )
     parser.add_argument("--seed", type=int, default=0, help="training RNG seed")
     parser.add_argument("--n-steps", type=int, default=1024, help="PPO rollout length")
     parser.add_argument("--batch-size", type=int, default=256, help="PPO minibatch size")
@@ -176,35 +274,64 @@ def main() -> None:
         help="deterministic eval episodes after training (default 20)",
     )
     parser.add_argument("--resume", action="store_true", help="resume from latest.zip")
+    parser.add_argument(
+        "--init-from",
+        type=Path,
+        help=(
+            "initialize a new run from another checkpoint directory containing "
+            "latest.zip and vecnormalize.pkl"
+        ),
+    )
     args = parser.parse_args()
 
+    if args.resume and args.init_from is not None:
+        parser.error("--resume and --init-from are mutually exclusive")
     if not 0 <= args.stage < len(CURRICULUM_PHASES):
         parser.error(f"--stage must be in 0..{len(CURRICULUM_PHASES) - 1}")
     if args.n_envs < 1:
         parser.error("--n-envs must be at least 1")
+    if args.vec_env == "subproc" and args.n_envs == 1:
+        parser.error("--vec-env subproc needs --n-envs greater than 1")
     if not 0.0 <= args.phase_fraction < 1.0:
         parser.error("--phase-fraction must be in [0, 1)")
+    if args.phase_end_fraction is not None:
+        if not 0.0 <= args.phase_end_fraction <= 1.0:
+            parser.error("--phase-end-fraction must be in [0, 1]")
+        if args.phase_end_fraction < args.phase_fraction:
+            parser.error("--phase-end-fraction must be >= --phase-fraction")
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     model_path = args.out_dir / "latest.zip"
     vecnormalize_path = args.out_dir / "vecnormalize.pkl"
 
-    env = _make_vec_env(
+    raw_env = _make_vec_env(
         args.pool,
         stage=args.stage,
         phase_fraction=args.phase_fraction,
+        phase_end_fraction=args.phase_end_fraction,
+        reward_profile=args.reward_profile,
         seed=args.seed,
         n_envs=args.n_envs,
+        vec_env=args.vec_env,
     )
     if args.resume:
-        env = VecNormalize.load(str(vecnormalize_path), env.venv)
+        env = VecNormalize.load(str(vecnormalize_path), raw_env)
         env.training = True
         env.norm_reward = False
+    elif args.init_from is not None:
+        init_vecnormalize_path = args.init_from / "vecnormalize.pkl"
+        if not init_vecnormalize_path.exists():
+            raise FileNotFoundError(init_vecnormalize_path)
+        env = VecNormalize.load(str(init_vecnormalize_path), raw_env)
+        env.training = True
+        env.norm_reward = False
+    else:
+        env = VecNormalize(raw_env, norm_obs=True, norm_reward=False, clip_obs=10.0)
 
     phase = CURRICULUM_PHASES[args.stage]
     print(
         f"training stage {args.stage} ({phase!r}) for {args.timesteps} steps "
-        f"with {args.n_envs} env(s)"
+        f"with {args.n_envs} {args.vec_env} env(s), reward={args.reward_profile!r}"
     )
     model = _load_or_create_model(args, env, model_path, vecnormalize_path)
     callbacks: list[BaseCallback] = []
@@ -241,6 +368,8 @@ def main() -> None:
             args.pool,
             stage=args.stage,
             phase_fraction=args.phase_fraction,
+            phase_end_fraction=args.phase_end_fraction,
+            reward_profile=args.reward_profile,
             seed=args.seed + 100_000,
             episodes=args.eval_episodes,
         )

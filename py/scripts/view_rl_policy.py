@@ -8,11 +8,13 @@ This is the policy-action companion to ``view_reset_state.py``: point it at one
 recorded episode or a directory of episodes, choose a phase such as ``release``,
 and it restores each episode's exact phase-boundary snapshot before rolling the
 policy forward in the live MuJoCo viewer. Press Enter to advance to the next
-episode after a rollout finishes, or during a rollout to skip it.
+episode after a rollout finishes, or during a rollout to skip it. Press Backspace
+to restart the current episode from the same phase/fraction.
 
 Run with ``mjpython`` on macOS (the viewer needs the main thread):
 
     mjpython scripts/view_rl_policy.py out/episodes --phase release
+    mjpython scripts/view_rl_policy.py out/episodes --phase carry --phase-fraction 0.8
 """
 
 from __future__ import annotations
@@ -29,10 +31,11 @@ import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
-from pick_and_place.rl import ReverseCurriculumEnv
+from pick_and_place.rl import REWARD_PROFILES, ReverseCurriculumEnv
 from pick_and_place.rl.episode_pool import ResetSnapshot
 
 _ENTER_KEYS = frozenset({257, 335})
+_BACKSPACE_KEYS = frozenset({259})
 _BUDGET_SLACK = 1.5
 _MIN_BUDGET_STEPS = 20
 
@@ -46,12 +49,20 @@ def _episode_paths(path: Path) -> list[Path]:
     return [path]
 
 
-def _watch_for_enter(advance: threading.Event) -> None:
-    for _ in iter(sys.stdin.readline, ""):
-        advance.set()
+def _watch_terminal(advance: threading.Event, restart: threading.Event) -> None:
+    for line in iter(sys.stdin.readline, ""):
+        if line.strip().lower() == "r":
+            restart.set()
+        else:
+            advance.set()
 
 
-def _snapshot(record: np.lib.npyio.NpzFile, path: Path, phase: str) -> ResetSnapshot:
+def _snapshot(
+    record: np.lib.npyio.NpzFile,
+    path: Path,
+    phase: str,
+    phase_fraction: float,
+) -> ResetSnapshot:
     if "phase_boundaries" not in record:
         raise SystemExit(
             f"{path.name} has no phase_boundaries; re-record with current record_episodes.py"
@@ -59,7 +70,17 @@ def _snapshot(record: np.lib.npyio.NpzFile, path: Path, phase: str) -> ResetSnap
     names = [str(n) for n in record["phase_names"]]
     if phase not in names:
         raise SystemExit(f"phase {phase!r} not in {names}")
-    frame = int(record["phase_boundaries"][names.index(phase)])
+    index = names.index(phase)
+    left = int(record["phase_boundaries"][index])
+    right = (
+        int(record["phase_boundaries"][index + 1])
+        if index + 1 < len(record["phase_boundaries"])
+        else int(record["qpos"].shape[0])
+    )
+    frame = min(
+        int(record["qpos"].shape[0]) - 1,
+        left + int(round(phase_fraction * (right - left))),
+    )
     return ResetSnapshot(
         qpos=np.asarray(record["qpos"][frame], dtype=np.float64).copy(),
         qvel=np.asarray(record["qvel"][frame], dtype=np.float64).copy(),
@@ -83,9 +104,10 @@ def _load_policy_env(
     checkpoint_dir: Path,
     pool: Path,
     phase: str,
+    reward_profile: str,
 ) -> tuple[PPO | None, VecNormalize | None, ReverseCurriculumEnv]:
     """Create the RL env and, unless running scripted/random, its normalizer/model."""
-    env = ReverseCurriculumEnv(pool, stage=0)
+    env = ReverseCurriculumEnv(pool, stage=0, reward_profile=reward_profile)
     env.phase = phase
     vec_env = DummyVecEnv([lambda: env])
     vecnormalize_path = checkpoint_dir / "vecnormalize.pkl"
@@ -122,6 +144,18 @@ def main() -> None:
         help="phase boundary to restore before rollout (default: release)",
     )
     parser.add_argument(
+        "--reward-profile",
+        choices=REWARD_PROFILES,
+        default="carry-drop",
+        help="reward profile / skill objective for rollout labels (default: carry-drop)",
+    )
+    parser.add_argument(
+        "--phase-fraction",
+        type=float,
+        default=0.0,
+        help="fraction through the selected phase to restore (default: 0.0)",
+    )
+    parser.add_argument(
         "--mode",
         choices=("policy", "scripted", "random"),
         default="policy",
@@ -143,42 +177,65 @@ def main() -> None:
         action="store_true",
         help="advance to the next episode immediately after each rollout",
     )
+    parser.add_argument(
+        "--debug-keys",
+        action="store_true",
+        help="print MuJoCo viewer key codes received by the key callback",
+    )
     args = parser.parse_args()
 
     paths = _episode_paths(args.path)
     if args.speed <= 0.0:
         parser.error("--speed must be positive")
+    if not 0.0 <= args.phase_fraction <= 1.0:
+        parser.error("--phase-fraction must be in [0, 1]")
 
     pool_path = args.path if args.path.is_dir() else args.path.parent
 
     if args.mode == "policy":
-        model, vec_env, env = _load_policy_env(args.checkpoint_dir, pool_path, args.phase)
+        model, vec_env, env = _load_policy_env(
+            args.checkpoint_dir,
+            pool_path,
+            args.phase,
+            args.reward_profile,
+        )
     else:
         model = None
         vec_env = None
-        env = ReverseCurriculumEnv(pool_path, stage=0)
+        env = ReverseCurriculumEnv(pool_path, stage=0, reward_profile=args.reward_profile)
         env.phase = args.phase
 
     advance = threading.Event()
+    restart = threading.Event()
     if sys.stdin.isatty():
-        threading.Thread(target=_watch_for_enter, args=(advance,), daemon=True).start()
+        threading.Thread(
+            target=_watch_terminal,
+            args=(advance, restart),
+            daemon=True,
+        ).start()
 
     def on_key(keycode: int) -> None:
+        if args.debug_keys:
+            print(f"key pressed: {keycode}", flush=True)
         if keycode in _ENTER_KEYS:
             advance.set()
+        elif keycode in _BACKSPACE_KEYS:
+            restart.set()
 
     step_seconds = env._sim_steps * float(env.model.opt.timestep) / args.speed
     print(
-        f"{len(paths)} episode(s); phase {args.phase!r}; mode={args.mode}. "
-        "Press Enter to skip/advance; close the viewer to stop."
+        f"{len(paths)} episode(s); phase {args.phase!r}; "
+        f"reward={args.reward_profile!r}; mode={args.mode}. "
+        "Enter skips/advances; Backspace restarts; close the viewer to stop."
     )
 
     with mujoco.viewer.launch_passive(env.model, env.data, key_callback=on_key) as viewer:
         viewer.opt.geomgroup[4] = 1
         index = 0
         while viewer.is_running():
+            restart_current = False
             with np.load(paths[index], allow_pickle=True) as record:
-                snapshot = _snapshot(record, paths[index], args.phase)
+                snapshot = _snapshot(record, paths[index], args.phase, args.phase_fraction)
                 commanded = (
                     np.asarray(record["commanded"], dtype=np.float64)
                     if args.mode == "scripted"
@@ -194,16 +251,21 @@ def main() -> None:
             viewer.sync()
             print(
                 f"[{index + 1}/{len(paths)}] {paths[index].name}: "
-                f"{args.phase}@{snapshot.frame}/{snapshot.total_frames}, "
+                f"{args.phase}[{args.phase_fraction:.2f}]@"
+                f"{snapshot.frame}/{snapshot.total_frames}, "
                 f"budget={env._max_steps}"
             )
 
             advance.clear()
+            restart.clear()
             terminated = truncated = False
             step_info = {"success": False, "collision": False, "out_of_bounds": False}
             command_frame = snapshot.frame
-            while viewer.is_running() and not advance.is_set() and not (
-                terminated or truncated
+            while (
+                viewer.is_running()
+                and not advance.is_set()
+                and not restart.is_set()
+                and not (terminated or truncated)
             ):
                 start = time.time()
                 if model is not None:
@@ -229,18 +291,35 @@ def main() -> None:
                 "SUCCESS" if step_info["success"]
                 else "collision" if step_info["collision"]
                 else "out-of-bounds" if step_info["out_of_bounds"]
+                else "restart" if restart.is_set()
                 else "skipped" if advance.is_set() and not (terminated or truncated)
                 else "timeout"
             )
             print(f"[{index + 1}/{len(paths)}] -> {outcome}")
+            if restart.is_set():
+                restart.clear()
+                restart_current = True
 
-            if not args.auto_advance and viewer.is_running() and not advance.is_set():
-                print("Press Enter for next episode.")
-                while viewer.is_running() and not advance.is_set():
+            if (
+                not restart_current
+                and not args.auto_advance
+                and viewer.is_running()
+                and not advance.is_set()
+            ):
+                print("Press Enter for next episode, or Backspace to restart.")
+                while (
+                    viewer.is_running()
+                    and not advance.is_set()
+                    and not restart.is_set()
+                ):
                     viewer.sync()
                     time.sleep(0.03)
+                if restart.is_set():
+                    restart.clear()
+                    restart_current = True
 
-            index = (index + 1) % len(paths)
+            if not restart_current:
+                index = (index + 1) % len(paths)
 
     if vec_env is not None:
         vec_env.close()
