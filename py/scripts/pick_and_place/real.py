@@ -39,6 +39,7 @@ import shutil
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import mujoco
@@ -74,8 +75,10 @@ from pick_and_place.follower import (
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.kinematics import derive_kinematics
 from pick_and_place.paper_detection import (
+    PaperTarget,
     PaperTracker,
     detect_paper_target,
+    project_to_pixel,
     set_paper_target_marker,
 )
 from pick_and_place.safety import EpisodeAborted, recover_on
@@ -98,6 +101,152 @@ EPISODE_MAX_ATTEMPTS = 40
 # next recorded pickup.
 CUBE_RECOVERY_MAX_ATTEMPTS = 3
 DEFAULT_ALERT_SOUND = "/System/Library/Sounds/Blow.aiff"
+
+
+@dataclass
+class OverheadDetectionDebug:
+    """One camera-space detection snapshot for operator verification."""
+
+    bgr: np.ndarray
+    camera_matrix: np.ndarray
+    camera_position: np.ndarray
+    camera_rotation: np.ndarray
+    cube: CubePose | None = None
+    target: PaperTarget | None = None
+
+
+def _draw_overhead_debug_overlay(
+    debug: OverheadDetectionDebug,
+    *,
+    show_distance: bool = False,
+) -> np.ndarray:
+    """Draw the accepted cube and target poses onto an overhead BGR frame."""
+    import cv2
+
+    image = debug.bgr.copy()
+    height, width = image.shape[:2]
+    scale = max(width, height) / 1080.0
+    line = max(2, int(round(2 * scale)))
+    font_scale = 0.65 * scale
+    font_thickness = max(1, int(round(2 * scale)))
+
+    def label(text: str, px: np.ndarray, color: tuple[int, int, int]) -> None:
+        point = tuple(np.round(px).astype(int))
+        cv2.putText(
+            image,
+            text,
+            (point[0] + 8, point[1] - 8),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_scale,
+            color,
+            font_thickness,
+            cv2.LINE_AA,
+        )
+
+    target_center_px = None
+    cube_center_px = None
+    if debug.target is not None:
+        corners_px = project_to_pixel(
+            debug.target.corners_world,
+            debug.camera_matrix,
+            debug.camera_position,
+            debug.camera_rotation,
+        )
+        center_px = project_to_pixel(
+            debug.target.center_world,
+            debug.camera_matrix,
+            debug.camera_position,
+            debug.camera_rotation,
+        )[0]
+        target_center_px = center_px
+        corners = np.round(corners_px).astype(np.int32).reshape(-1, 1, 2)
+        cv2.polylines(image, [corners], True, (255, 255, 0), line, cv2.LINE_AA)
+        cv2.line(
+            image,
+            tuple(corners[0, 0]),
+            tuple(corners[1, 0]),
+            (0, 255, 255),
+            line + 1,
+            cv2.LINE_AA,
+        )
+        cv2.circle(image, tuple(np.round(center_px).astype(int)), line + 3, (0, 0, 255), -1)
+        label("plate", center_px, (255, 255, 0))
+        label("target", center_px + np.array((0.0, 24.0 * scale)), (0, 0, 255))
+
+    if debug.cube is not None:
+        half = CUBE_HALF_SIZE
+        yaw = float(debug.cube.yaw)
+        c, s = np.cos(yaw), np.sin(yaw)
+        rot = np.array([[c, -s], [s, c]])
+        local = np.array([[-half, -half], [half, -half], [half, half], [-half, half]])
+        corners_world = np.zeros((4, 3))
+        corners_world[:, :2] = np.array([debug.cube.x, debug.cube.y]) + local @ rot.T
+        corners_world[:, 2] = debug.cube.z
+        center_world = np.array([[debug.cube.x, debug.cube.y, debug.cube.z]])
+
+        corners_px = project_to_pixel(
+            corners_world,
+            debug.camera_matrix,
+            debug.camera_position,
+            debug.camera_rotation,
+        )
+        center_px = project_to_pixel(
+            center_world,
+            debug.camera_matrix,
+            debug.camera_position,
+            debug.camera_rotation,
+        )[0]
+        cube_center_px = center_px
+        poly = np.round(corners_px).astype(np.int32).reshape(-1, 1, 2)
+        cv2.polylines(image, [poly], True, (0, 165, 255), line, cv2.LINE_AA)
+        cv2.circle(image, tuple(np.round(center_px).astype(int)), line + 3, (0, 0, 255), -1)
+        label("cube", center_px, (0, 165, 255))
+
+    if (
+        show_distance
+        and debug.target is not None
+        and debug.cube is not None
+        and target_center_px is not None
+        and cube_center_px is not None
+    ):
+        start = tuple(np.round(cube_center_px).astype(int))
+        end = tuple(np.round(target_center_px).astype(int))
+        cv2.line(image, start, end, (255, 0, 255), line + 1, cv2.LINE_AA)
+        midpoint = (cube_center_px + target_center_px) / 2.0
+        distance_m = float(
+            np.linalg.norm(
+                np.array([debug.cube.x, debug.cube.y])
+                - np.asarray(debug.target.center_world[:2], dtype=float)
+            )
+        )
+        label(f"{distance_m * 1000.0:.1f} mm", midpoint, (255, 0, 255))
+
+    return image
+
+
+def _write_overhead_debug_image(
+    path: Path,
+    debug: OverheadDetectionDebug,
+    *,
+    show_distance: bool = False,
+) -> None:
+    """Write an overhead verification overlay without touching OpenCV HighGUI."""
+    import cv2
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = _draw_overhead_debug_overlay(debug, show_distance=show_distance)
+    if not cv2.imwrite(str(path), image):
+        print(f"Warning: could not write overhead debug image: {path}")
+
+
+def _empty_overhead_debug() -> OverheadDetectionDebug:
+    """Create a mutable preflight debug snapshot, filled by detections."""
+    return OverheadDetectionDebug(
+        bgr=np.empty((0, 0, 3), dtype=np.uint8),
+        camera_matrix=np.eye(3),
+        camera_position=np.zeros(3),
+        camera_rotation=np.eye(3),
+    )
 
 
 class OperatorNotifier:
@@ -155,6 +304,7 @@ def track_cube(
     *,
     free_grasp: bool = False,
     return_out_of_zone: bool = False,
+    debug: OverheadDetectionDebug | None = None,
 ) -> CubePose | None:
     """Look for the cube on ``cap`` for up to ``timeout`` seconds.
 
@@ -219,7 +369,7 @@ def track_cube(
 
         roll, pitch, yaw = Rotation.from_matrix(rotation).as_euler("xyz")
         print(f"Tracked cube: pos=({position[0]:.3f}, {position[1]:.3f}, {position[2]:.3f})")
-        return CubePose(
+        cube = CubePose(
             x=float(position[0]),
             y=float(position[1]),
             z=CUBE_HALF_SIZE,
@@ -227,6 +377,13 @@ def track_cube(
             pitch=float(pitch) if free_grasp else 0.0,
             yaw=float(yaw),
         )
+        if debug is not None:
+            debug.bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            debug.camera_matrix = camera_matrix.copy()
+            debug.camera_position = cam_pos.copy()
+            debug.camera_rotation = cam_rot.copy()
+            debug.cube = cube
+        return cube
 
     return None
 
@@ -239,6 +396,7 @@ def track_drop_zone_square(
     tracker: PaperTracker,
     target_color: str,
     timeout: float = CUBE_LOOK_TIMEOUT,
+    debug: OverheadDetectionDebug | None = None,
 ) -> CubePose | None:
     """Look for a black/white drop-zone square and return its center as a target."""
     import cv2
@@ -305,6 +463,12 @@ def track_drop_zone_square(
             continue
 
         print(f"Tracked drop zone: pos=({target.xy[0]:.3f}, {target.xy[1]:.3f})")
+        if debug is not None:
+            debug.bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            debug.camera_matrix = camera_matrix.copy()
+            debug.camera_position = cam_pos.copy()
+            debug.camera_rotation = cam_rot.copy()
+            debug.target = target
         return CubePose(x=target.xy[0], y=target.xy[1], z=CUBE_HALF_SIZE)
 
     return None
@@ -511,6 +675,20 @@ def main() -> None:
     parser.add_argument("--show-wrist-cam", action="store_true", help="show the live wrist camera feed")
     parser.add_argument("--show-wrist-mixed", action="store_true", help="overlay the sim render on the wrist feed")
     parser.add_argument(
+        "--save-overhead-debug",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="save preflight/final overhead verification images into the run directory "
+        "(default: on)",
+    )
+    parser.add_argument(
+        "--overhead-debug-dir",
+        type=Path,
+        default=None,
+        help="directory for overhead verification images "
+        "(default: <dataset-root>/overhead_debug)",
+    )
+    parser.add_argument(
         "--viewer",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -581,7 +759,6 @@ def main() -> None:
         parser.error("--target-change-alert-min-seconds must be positive")
     if args.target_change_alert_max_seconds < args.target_change_alert_min_seconds:
         parser.error("--target-change-alert-max-seconds must be at least the minimum")
-
     notifier = OperatorNotifier(
         enabled=args.operator_alerts,
         sound_path=args.alert_sound,
@@ -674,6 +851,11 @@ def main() -> None:
         args.dataset_root
         if args.dataset_root is not None
         else Path(__file__).resolve().parents[2] / "datasets" / timestamp
+    )
+    overhead_debug_dir = (
+        args.overhead_debug_dir
+        if args.overhead_debug_dir is not None
+        else dataset_root / "overhead_debug"
     )
     recording = RecordingSession(
         repo_id=args.repo_id,
@@ -858,11 +1040,15 @@ def main() -> None:
         *,
         free_grasp: bool = False,
         return_out_of_zone: bool = False,
+        debug: OverheadDetectionDebug | None = None,
     ) -> CubePose | None:
         """Look for the cube from the current pose, re-homing near neutral up to
         ``--max-hunt-tries`` times. Returns the cube pose or ``None`` if not found."""
         if args.source is not None and not free_grasp:
-            return CubePose(x=args.source[0], y=args.source[1], z=CUBE_HALF_SIZE)
+            source = CubePose(x=args.source[0], y=args.source[1], z=CUBE_HALF_SIZE)
+            if debug is not None:
+                debug.cube = source
+            return source
         for attempt in range(args.max_hunt_tries):
             if not viewer.is_running():
                 return None
@@ -881,12 +1067,17 @@ def main() -> None:
                 CUBE_LOOK_TIMEOUT,
                 free_grasp=free_grasp,
                 return_out_of_zone=return_out_of_zone,
+                debug=debug,
             )
             if source is not None:
                 return source
         return None
 
-    def hunt_for_drop_zone(viewer) -> CubePose | None:
+    def hunt_for_drop_zone(
+        viewer,
+        *,
+        debug: OverheadDetectionDebug | None = None,
+    ) -> CubePose | None:
         """Look for the drop-zone square on the overhead camera.
 
         The arm can sit between the overhead camera and the square, so we re-home
@@ -912,6 +1103,7 @@ def main() -> None:
                 data,
                 drop_zone_tracker,
                 args.drop_zone_color,
+                debug=debug,
             )
             if target is not None:
                 return target
@@ -1038,7 +1230,8 @@ def main() -> None:
                     cooldown=lambda: cooldown(viewer),
                     should_continue=viewer.is_running,
                 ):
-                    episode_target = hunt_for_drop_zone(viewer)
+                    overhead_debug = _empty_overhead_debug()
+                    episode_target = hunt_for_drop_zone(viewer, debug=overhead_debug)
                     if not viewer.is_running():
                         break
                     if episode_target is None:
@@ -1048,7 +1241,11 @@ def main() -> None:
                         )
                         break
 
-                    source = hunt_for_cube(viewer, return_out_of_zone=True)
+                    source = hunt_for_cube(
+                        viewer,
+                        return_out_of_zone=True,
+                        debug=overhead_debug,
+                    )
                     if not viewer.is_running():
                         break
                     if source is None:
@@ -1064,7 +1261,7 @@ def main() -> None:
                         if not recover_cube(viewer):
                             notifier.alert("Cube recovery failed after retries. The run is stopping.")
                             break
-                        source = hunt_for_cube(viewer)
+                        source = hunt_for_cube(viewer, debug=overhead_debug)
                         if not viewer.is_running():
                             break
                         if source is None:
@@ -1108,9 +1305,33 @@ def main() -> None:
 
                         print(f"\n--- Episode {ep.index}"
                               f"{f'/{args.episodes}' if args.episodes else ''} ---")
+                        initial_overhead_debug = overhead_debug
+                        preflight_debug_written = False
 
                         def check_final_placement() -> dict[str, object]:
+                            nonlocal preflight_debug_written
+
+                            if (
+                                args.save_overhead_debug
+                                and initial_overhead_debug.bgr.size
+                                and not preflight_debug_written
+                            ):
+                                path = (
+                                    overhead_debug_dir
+                                    / f"episode_{ep.index:05d}_preflight.jpg"
+                                )
+                                _write_overhead_debug_image(path, initial_overhead_debug)
+                                print(f"Saved overhead preflight debug image: {path}")
+                                preflight_debug_written = True
+
                             print("Checking final cube placement from the overhead camera...")
+                            final_debug = OverheadDetectionDebug(
+                                bgr=initial_overhead_debug.bgr,
+                                camera_matrix=initial_overhead_debug.camera_matrix,
+                                camera_position=initial_overhead_debug.camera_position,
+                                camera_rotation=initial_overhead_debug.camera_rotation,
+                                target=initial_overhead_debug.target,
+                            )
                             try:
                                 final_cube = track_cube(
                                     overhead_cap,
@@ -1119,14 +1340,34 @@ def main() -> None:
                                     data,
                                     CUBE_LOOK_TIMEOUT,
                                     return_out_of_zone=True,
+                                    debug=final_debug,
                                 )
                             except Exception as exc:
                                 print(f"placement error: final cube check failed: {exc}")
+                                if args.save_overhead_debug and final_debug.bgr.size:
+                                    path = (
+                                        overhead_debug_dir
+                                        / f"episode_{ep.index:05d}_final_failed.jpg"
+                                    )
+                                    _write_overhead_debug_image(
+                                        path,
+                                        final_debug,
+                                        show_distance=True,
+                                    )
+                                    print(f"Saved overhead final debug image: {path}")
                                 return final_placement_metadata(
                                     None,
                                     episode.target,
                                     check_error=str(exc),
                                 )
+                            if args.save_overhead_debug and final_debug.bgr.size:
+                                path = overhead_debug_dir / f"episode_{ep.index:05d}_final.jpg"
+                                _write_overhead_debug_image(
+                                    path,
+                                    final_debug,
+                                    show_distance=final_cube is not None,
+                                )
+                                print(f"Saved overhead final debug image: {path}")
                             return final_placement_metadata(final_cube, episode.target)
 
                         status = execute_episode(
