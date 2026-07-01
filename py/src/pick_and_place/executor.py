@@ -856,6 +856,16 @@ def execute_episode(
 
             completed_phase_name = phase.name
 
+            # Treat approach + descent as one section. The descent is a visual
+            # servo that re-solves IK toward the cube every tick, so replanning
+            # the whole remaining trajectory from the measured hover here (before
+            # the servo has even run) is wasted work: the descent corrects for
+            # any hover-pose error on its own. Advance straight into it.
+            if completed_phase_name == "approach":
+                if len(current_traj.phases) > 1 and current_traj.phases[1].name == "descent":
+                    current_traj = dataclasses.replace(current_traj, phases=current_traj.phases[1:])
+                    continue
+
             if completed_phase_name == "grasp":
                 gripper_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "gripper")
                 cube_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pick_cube")
@@ -908,6 +918,31 @@ def execute_episode(
                         if g.face == phase.face and g.elbow == phase.elbow:
                             dynamic_grasp = g
                             break
+
+                # The descent ended at the servo-corrected grasp pose. Rebuild
+                # just the grasp and lift from that pose and run them from the
+                # locked command (grasp + lift is the contact-critical section,
+                # like grasp + lift already is below). The carry onward is
+                # replanned from measured state after the lift, so there is no
+                # need to enumerate it here.
+                from pick_and_place.trajectory import (
+                    GRIPPER_OPEN,
+                    GraspPhase,
+                    LiftPhase,
+                    RecoveryLiftPhase,
+                )
+
+                lift_cls = RecoveryLiftPhase if free_grasp else LiftPhase
+                grasp_phase = GraspPhase(dynamic_grasp.grasp_joints, start_gripper=GRIPPER_OPEN)
+                lift_phase = lift_cls(
+                    kinematics, dynamic_grasp.grasp_joints, dynamic_grasp.lift_joints
+                )
+                current_traj = dataclasses.replace(
+                    current_traj,
+                    phases=(grasp_phase, lift_phase, *current_traj.phases[3:]),
+                    grasp=dynamic_grasp,
+                )
+                continue
 
             # Checkpoint Replanning
             if len(current_traj.phases) <= 1:
