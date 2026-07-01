@@ -15,7 +15,9 @@ current pose (re-homing to fresh near-neutral poses if it can't be seen), plan a
 collision-free ``pick_and_carry`` episode from wherever the arm currently is, and
 run it on the real arm via ``pick_and_place.executor``. A failed plan or a failed
 checkpoint replan aborts the episode and re-homes. Every ``--rest-every`` episodes
-the arm takes a torque-off cooldown at REST. Press Ctrl-C to stop: the arm parks
+the arm takes a torque-off cooldown at REST; the operator is expected to move the
+target plate during that window, and the run stays halted with repeated audible
+alerts until the plate has moved far enough. Press Ctrl-C to stop: the arm parks
 to NEUTRAL, then REST, and releases torque.
 
 The runner owns the follower, the viewer and the cameras and keeps them alive
@@ -33,6 +35,8 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import shutil
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -92,6 +96,30 @@ EPISODE_MAX_ATTEMPTS = 40
 # unattended collection can continue from a cube location that is usable for the
 # next recorded pickup.
 CUBE_RECOVERY_MAX_ATTEMPTS = 3
+DEFAULT_ALERT_SOUND = "/System/Library/Sounds/Blow.aiff"
+
+
+class OperatorNotifier:
+    """Best-effort audible notices for long unattended hardware runs."""
+
+    def __init__(self, *, enabled: bool, sound_path: str | None) -> None:
+        self.enabled = enabled
+        self.sound_path = sound_path if sound_path and Path(sound_path).exists() else None
+        self._afplay = shutil.which("afplay") if sys.platform == "darwin" else None
+        self._say = shutil.which("say") if sys.platform == "darwin" else None
+
+    def alert(self, message: str, *, repeat_sound: int = 1) -> None:
+        """Print ``message`` and announce it audibly when supported."""
+        print(f"Operator alert: {message}")
+        if not self.enabled:
+            return
+        if self._afplay and self.sound_path:
+            for _ in range(max(1, repeat_sound)):
+                subprocess.run([self._afplay, self.sound_path], check=False)
+        else:
+            print("\a", end="", flush=True)
+        if self._say:
+            subprocess.run([self._say, message], check=False)
 
 
 class MockViewer:
@@ -308,6 +336,36 @@ def main() -> None:
         help="cooldown rest duration in seconds, torque off at REST (default: 30.0)",
     )
     parser.add_argument(
+        "--operator-alerts",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="play a signal sound and speak operator alerts on macOS (default: on)",
+    )
+    parser.add_argument(
+        "--alert-sound",
+        default=DEFAULT_ALERT_SOUND,
+        help=f"sound file to play before spoken alerts (default: {DEFAULT_ALERT_SOUND})",
+    )
+    parser.add_argument(
+        "--target-change-min-distance",
+        type=float,
+        default=0.05,
+        help="minimum cooldown target-plate center movement before the run resumes, in metres "
+        "(default: 0.05)",
+    )
+    parser.add_argument(
+        "--target-change-alert-min-seconds",
+        type=float,
+        default=10.0,
+        help="initial backoff between repeated target-plate alerts (default: 10)",
+    )
+    parser.add_argument(
+        "--target-change-alert-max-seconds",
+        type=float,
+        default=120.0,
+        help="maximum backoff between repeated target-plate alerts (default: 120)",
+    )
+    parser.add_argument(
         "--source",
         type=float,
         nargs=2,
@@ -452,6 +510,17 @@ def main() -> None:
         help="background image-writer threads LeRobot uses for PNG-then-encode mode",
     )
     args = parser.parse_args()
+    if args.target_change_min_distance < 0:
+        parser.error("--target-change-min-distance must be non-negative")
+    if args.target_change_alert_min_seconds <= 0:
+        parser.error("--target-change-alert-min-seconds must be positive")
+    if args.target_change_alert_max_seconds < args.target_change_alert_min_seconds:
+        parser.error("--target-change-alert-max-seconds must be at least the minimum")
+
+    notifier = OperatorNotifier(
+        enabled=args.operator_alerts,
+        sound_path=args.alert_sound,
+    )
 
     import cv2
 
@@ -492,6 +561,9 @@ def main() -> None:
     rng = np.random.default_rng()
     # Set by the startup overhead solve; the cooldown drift check compares against it.
     startup_extrinsics: tuple[np.ndarray, np.ndarray] | None = None
+    # Last accepted drop-zone center. Cooldowns require the operator to move away
+    # from this pose before the next episode is planned.
+    last_episode_target: CubePose | None = None
 
     # Refuse to start unless the full rig is present: both cameras open and both
     # have calibrated intrinsics. The overhead extrinsics are solved from the
@@ -619,10 +691,71 @@ def main() -> None:
                 "Stopping so the operator can check the mount and recalibrate."
             )
 
+    def target_distance(a: CubePose, b: CubePose) -> float:
+        return float(np.hypot(a.x - b.x, a.y - b.y))
+
+    def wait_for_target_plate_change(viewer) -> None:
+        """Pause after cooldown until the operator has moved the target plate."""
+        if last_episode_target is None or args.target_change_min_distance == 0:
+            return
+
+        def look_from_current_pose() -> CubePose | None:
+            if not viewer.is_running():
+                return None
+            print("Checking target plate movement from the current near-neutral pose...")
+            return track_drop_zone_square(
+                overhead_cap,
+                args.camera_name,
+                model,
+                data,
+                drop_zone_tracker,
+                args.drop_zone_color,
+            )
+
+        threshold = args.target_change_min_distance
+        backoff = args.target_change_alert_min_seconds
+        notifier.alert(
+            "Please move the target plate to a substantially different position.",
+            repeat_sound=2,
+        )
+        while viewer.is_running():
+            target = look_from_current_pose()
+            if not viewer.is_running():
+                return
+            if target is None:
+                notifier.alert(
+                    "Target plate is not visible. Move it into view before the run can continue."
+                )
+            else:
+                moved = target_distance(last_episode_target, target)
+                if moved >= threshold:
+                    print(
+                        f"Target plate moved {moved * 100.0:.1f}cm "
+                        f"(required {threshold * 100.0:.1f}cm). Resuming."
+                    )
+                    return
+                notifier.alert(
+                    "Target plate has not moved enough. Move it to a new position before "
+                    "the run can continue."
+                )
+                print(
+                    f"Plate movement: {moved * 100.0:.1f}cm "
+                    f"(required {threshold * 100.0:.1f}cm)."
+                )
+            time.sleep(backoff)
+            backoff = min(backoff * 2.0, args.target_change_alert_max_seconds)
+
     def cooldown(viewer) -> None:
         """Park at REST with torque off for the cooldown, then re-home near neutral.
-        A long-enough cooldown doubles as an overhead-camera drift check."""
+        A long-enough cooldown doubles as an overhead-camera drift check. The
+        cooldown also gives the operator time to move the target plate; the run
+        remains paused until that movement is confirmed by the overhead camera."""
         print(f"Cooldown: resting with torque off for {args.rest_duration:.0f}s...")
+        if last_episode_target is not None and args.target_change_min_distance > 0:
+            notifier.alert(
+                "Cooldown started. Move the target plate before the next episode.",
+                repeat_sound=2,
+            )
         move_to(REST_ARM_JOINTS, REST_GRIPPER, viewer)
         follower.bus.disable_torque()
         time.sleep(args.rest_duration)
@@ -635,6 +768,7 @@ def main() -> None:
             and args.rest_duration >= args.recalibrate_check_min_cooldown
         ):
             check_overhead_drift()
+        wait_for_target_plate_change(viewer)
 
     def park_from_interrupt() -> None:
         """User ended the loop: park to NEUTRAL, then REST. The real viewer has
@@ -841,9 +975,9 @@ def main() -> None:
                     if not viewer.is_running():
                         break
                     if episode_target is None:
-                        print(
-                            f"Drop-zone square not found after "
-                            f"{args.max_hunt_tries} looks. Ending loop."
+                        notifier.alert(
+                            f"Drop zone square not found after {args.max_hunt_tries} looks. "
+                            "The run is stopping."
                         )
                         break
 
@@ -851,20 +985,25 @@ def main() -> None:
                     if not viewer.is_running():
                         break
                     if source is None:
-                        print(f"Cube not found after {args.max_hunt_tries} looks. Ending loop.")
+                        notifier.alert(
+                            f"Cube not found after {args.max_hunt_tries} looks. "
+                            "The run is stopping."
+                        )
                         break
                     if not is_cube_pickup_allowed(source.x, source.y):
-                        print("Cube needs recovery before the next recorded pickup.")
+                        notifier.alert(
+                            "Cube is outside the pickup zone. Running an unrecorded recovery."
+                        )
                         if not recover_cube(viewer):
-                            print("Cube recovery failed after retries. Ending loop.")
+                            notifier.alert("Cube recovery failed after retries. The run is stopping.")
                             break
                         source = hunt_for_cube(viewer)
                         if not viewer.is_running():
                             break
                         if source is None:
-                            print(
-                                f"Cube not found after recovery and "
-                                f"{args.max_hunt_tries} looks. Ending loop."
+                            notifier.alert(
+                                f"Cube not found after recovery and {args.max_hunt_tries} looks. "
+                                "The run is stopping."
                             )
                             break
 
@@ -894,6 +1033,9 @@ def main() -> None:
                                 failed_trajectory_limit=args.failed_trajectory_limit,
                             )
                         except EpisodeSamplingError:
+                            notifier.alert(
+                                "No feasible plan from the current pose. Re-homing the arm."
+                            )
                             print("No feasible plan from the current pose.")
                             raise
 
@@ -915,18 +1057,21 @@ def main() -> None:
                         )
 
                         if status == "restart":
+                            notifier.alert("Episode restarted or aborted. Re-homing the arm.")
                             raise EpisodeAborted
 
                         ep.complete()
+                        last_episode_target = episode_target
                         is_last = args.episodes != 0 and ep.index >= args.episodes
                         if not is_last:
                             if not recover_cube(viewer):
-                                print("Cube recovery failed after retries. Ending loop.")
+                                notifier.alert("Cube recovery failed after retries. The run is stopping.")
                                 break
 
                 # Normal end (episode budget met, cube lost, or viewer closed): the
                 # arm is at the last near-neutral pose — flow it straight to REST.
                 if viewer.is_running():
+                    notifier.alert("Collection loop is done. Moving the arm to rest.")
                     print("Loop done. Moving to REST...")
                     move_to(REST_ARM_JOINTS, REST_GRIPPER, viewer)
                     ended_at_rest = True
