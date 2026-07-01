@@ -19,6 +19,17 @@ from pick_and_place.kinematics import ARM_JOINT_NAMES, So101Kinematics
 from pick_and_place.transforms import Mat4
 
 
+# The 5-DOF arm can only orient the gripper approach axis within the vertical
+# plane spanned by the shoulder-pan radial and world up (pan picks the plane, the
+# three flex joints move in it, wrist-roll spins about the approach). A requested
+# pose whose approach leaves that plane is unreachable; the closed-form solve
+# silently projects it back in-plane and returns a within-limits but wrong branch
+# (metres and tens of degrees off). Reject anything whose approach is more than
+# this far out of plane -- ``sin`` of the out-of-plane angle. Reachable poses sit
+# at ~0; the approximation stays sub-millimetre out to a few degrees.
+MAX_APPROACH_OUT_OF_PLANE = 0.1
+
+
 @dataclass(frozen=True)
 class IkBranch:
     joints: dict[str, float]
@@ -74,6 +85,12 @@ def solve_simple_grasp_ik(
     shoulder_pan = -azimuth
     radial_dir = np.array((np.cos(azimuth), np.sin(azimuth), 0.0))
     plane_normal = np.array((-np.sin(azimuth), np.cos(azimuth), 0.0))
+
+    # The approach must lie in the arm's vertical plane; otherwise the pose is
+    # unreachable and the in-plane solve below would return a wrong branch.
+    approach_unit = approach / np.linalg.norm(approach)
+    if abs(float(np.dot(approach_unit, plane_normal))) > MAX_APPROACH_OUT_OF_PLANE:
+        return []
 
     wrist = target - approach * k.tool_length
     target_radial = (
