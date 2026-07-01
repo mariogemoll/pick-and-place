@@ -756,14 +756,28 @@ def plan_carry_candidates(
         ),
     }
     plans: list[tuple[tuple[float, float, float], CarryPlan]] = []
-    cruise_position = np.array((target.x, target.y, max(CARRY_CRUISE_Z, drop_cube_center_z)))
+    # Prefer the nominal cruise height (best floor/frame clearance along the
+    # carry), but some orientations are only IK-reachable lower down -- e.g. a
+    # side grasp held level loses reachability at some target azimuths well
+    # before it reaches CARRY_CRUISE_Z. Falling back to a lower height there
+    # avoids discarding an otherwise-ideal (flat, low joint-cost) orientation in
+    # favour of one that needlessly reconfigures the arm just to clear cruise.
+    cruise_heights = sorted(
+        {max(h, drop_cube_center_z) for h in (CARRY_CRUISE_Z, 0.07, 0.06, 0.05)},
+        reverse=True,
+    )
     for cube_rotation in _drop_cube_rotations(target, drop_orientation):
         drop_gripper = _world_gripper_for_cube(cube_from_gripper, cube_rotation, drop_position)
         drop_branches = solve_simple_grasp_ik(k, drop_gripper)
         if not drop_branches:
             continue
-        cruise_gripper = _world_gripper_for_cube(cube_from_gripper, cube_rotation, cruise_position)
-        cruise_branches = solve_simple_grasp_ik(k, cruise_gripper)
+        cruise_branches: list = []
+        for cruise_z in cruise_heights:
+            cruise_position = np.array((target.x, target.y, cruise_z))
+            cruise_gripper = _world_gripper_for_cube(cube_from_gripper, cube_rotation, cruise_position)
+            cruise_branches = solve_simple_grasp_ik(k, cruise_gripper)
+            if cruise_branches:
+                break
         if not cruise_branches:
             continue
         for drop_branch in drop_branches:
