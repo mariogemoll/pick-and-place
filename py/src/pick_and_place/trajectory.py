@@ -284,6 +284,62 @@ def _spline_joints_through_waypoint(
     return out
 
 
+# Temporal phase of the non-stopping cruise waypoint within the carry spline.
+_CARRY_SPLINE_WAYPOINT_PHASE = 0.5
+# Spline-parameter samples used to build the arc-length reparameterization table.
+_CARRY_ARC_LENGTH_SAMPLES = 256
+
+
+def _carry_arc_length_table(
+    start: dict[str, float],
+    waypoint: dict[str, float],
+    end: dict[str, float],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Map normalized joint-space arc length to spline parameter for the carry.
+
+    The carry spline's parameter is *not* proportional to joint travel: near the
+    cruise waypoint ``|d(joints)/d(param)|`` is several times its average, so
+    stepping the parameter at a constant rate spikes the joint velocity there.
+    Sampling the spline and inverting its cumulative arc length lets playback
+    advance by equal joint distance instead, flattening the velocity profile to
+    whatever the timing curve intends. Returns ``(arc_fraction, param)`` arrays
+    for ``np.interp``."""
+    params = np.linspace(0.0, 1.0, _CARRY_ARC_LENGTH_SAMPLES)
+    points = np.array(
+        [
+            [
+                _spline_joints_through_waypoint(
+                    start, waypoint, end, _CARRY_SPLINE_WAYPOINT_PHASE, u
+                )[name]
+                for name in ARM_JOINT_NAMES
+            ]
+            for u in params
+        ]
+    )
+    cumulative = np.concatenate(
+        [[0.0], np.cumsum(np.linalg.norm(np.diff(points, axis=0), axis=1))]
+    )
+    total = cumulative[-1]
+    arc_fraction = cumulative / total if total > 0.0 else params
+    return arc_fraction, params
+
+
+def _carry_joints_at_arc_fraction(
+    start: dict[str, float],
+    waypoint: dict[str, float],
+    end: dict[str, float],
+    table: tuple[np.ndarray, np.ndarray],
+    arc_fraction: float,
+) -> dict[str, float]:
+    """Sample the carry spline at a given fraction of its joint-space arc length,
+    using the reparameterization ``table`` from ``_carry_arc_length_table``."""
+    arc_table, param_table = table
+    param = float(np.interp(arc_fraction, arc_table, param_table))
+    return _spline_joints_through_waypoint(
+        start, waypoint, end, _CARRY_SPLINE_WAYPOINT_PHASE, param
+    )
+
+
 def _shortest_delta(a: float, b: float) -> float:
     """Signed angular difference ``b - a`` wrapped to ``[-pi, pi]``."""
     d = (b - a) % (2.0 * math.pi)
@@ -745,9 +801,10 @@ def _carry_path_clear(
 ) -> bool:
     """Check the same joint spline the carry will actually play back, sampled at
     a handful of fractions, against a caller-supplied collision checker."""
+    table = _carry_arc_length_table(grasp_joints, cruise_joints, drop_joints)
     for fraction in _CARRY_CLEARANCE_SAMPLE_FRACTIONS:
-        joints = _spline_joints_through_waypoint(
-            grasp_joints, cruise_joints, drop_joints, 0.5, _timed_arc_fraction(fraction)
+        joints = _carry_joints_at_arc_fraction(
+            grasp_joints, cruise_joints, drop_joints, table, _timed_arc_fraction(fraction)
         )
         if not carry_ok(joints):
             return False
@@ -1024,13 +1081,19 @@ class CarryPhase:
             self.predrop_joints,
         )
 
+    @cached_property
+    def _arc_length_table(self) -> tuple[np.ndarray, np.ndarray]:
+        return _carry_arc_length_table(
+            self.grasp_joints, self.carry.cruise_joints, self.predrop_joints
+        )
+
     def evaluate(self, t: float) -> Frame:
         phase = min(1.0, t / self.duration) if self.duration > 0 else 1.0
-        joints = _spline_joints_through_waypoint(
+        joints = _carry_joints_at_arc_fraction(
             self.grasp_joints,
             self.carry.cruise_joints,
             self.predrop_joints,
-            0.5,
+            self._arc_length_table,
             _timed_arc_fraction(phase),
         )
         return Frame(joints=joints, gripper=GRIPPER_GRASP)

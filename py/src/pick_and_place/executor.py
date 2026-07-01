@@ -4,11 +4,22 @@
 """Drive the physical SO-101 follower through a prepared pick-and-carry episode.
 
 This is the home of the hardware execution path, split out of the sim-only
-``pick_and_place/sim.py`` viewer. Today it is **pure feedforward with the sim as the
-source of truth**: the sim integrates physics, the trajectory's joint set points
-stream out to the real arm at ``CONTROL_HZ``, and motor readback is logged but
-never fed back. The phase state machine for checkpoint replanning (sense → plan →
-execute → re-seed) will grow here — see ``docs/realworld-execution-roadmap.md``.
+``pick_and_place/sim.py`` viewer. The sim is the plant: it integrates physics and
+the trajectory's joint set points stream out to the real arm at ``CONTROL_HZ``.
+
+Feedback is applied at two points, not continuously across the whole episode:
+
+- **Descent (wrist-camera PBVS).** During the descent onto the cube, the wrist
+  camera detects the cube each tick; the estimate is low-pass filtered into the
+  live source pose, the grasp is re-derived for the locked face/elbow, and
+  ``DescentPhase.evaluate`` re-solves IK toward the updated grasp, so the set
+  points track the cube as it descends.
+- **Phase boundaries (checkpoint replanning).** After a completed phase the
+  measured joints are sensed and the remaining trajectory is replanned and
+  preflighted before continuing (sense → plan → execute → re-seed).
+
+The other phases (hover, carry, release, lift) are feedforward playback. Motor
+readback is logged every tick and, at checkpoints, fed back into the replan.
 """
 
 from __future__ import annotations
@@ -62,10 +73,10 @@ HARDWARE_SIMULATION_HZ = 600.0
 # Seconds spent smoothly ramping the real arm onto the trajectory's start pose
 # before playback begins, so there is no jump from wherever it was parked.
 RAMP_DURATION = 2.0
-# Default playback pace for the physical arm: a fraction of the nominal speed so
-# the first hardware passes are gentle. Scaling the trajectory clock slows every
-# phase uniformly without touching the planner. Override with ``speed``.
-REAL_ARM_DEFAULT_SPEED = 0.5
+# Default playback pace for the physical arm: run at the planner's nominal speed.
+# Scaling the trajectory clock slows every phase uniformly without touching the
+# planner. Override with ``speed``.
+REAL_ARM_DEFAULT_SPEED = 1.0
 
 
 def _smoothstep(t: float) -> float:
