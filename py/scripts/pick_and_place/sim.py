@@ -130,6 +130,48 @@ def _show_target_marker(model: mujoco.MjModel, target: CubePose, yaw: float) -> 
     )
 
 
+def _mark_target_point(viewer: mujoco.viewer.Handle, target: CubePose) -> None:
+    """Draw an unambiguous 3-D marker at the exact placement target.
+
+    The translucent floor square reads ambiguously in perspective, so also add a
+    bright sphere at ``(target.x, target.y, CUBE_HALF_SIZE)`` -- precisely where
+    the cube's centre should end up -- with a thin stalk down to the floor so the
+    point is unmistakable from any viewing angle.
+    """
+    scn = viewer.user_scn
+    center = np.array((target.x, target.y, CUBE_HALF_SIZE))
+    scn.ngeom = 0
+    # Stalk from the floor up to the target height.
+    stalk = scn.geoms[scn.ngeom]
+    mujoco.mjv_initGeom(
+        stalk,
+        type=mujoco.mjtGeom.mjGEOM_LINE,
+        size=np.zeros(3),
+        pos=np.zeros(3),
+        mat=np.eye(3).flatten(),
+        rgba=np.array((1.0, 0.1, 0.1, 1.0), dtype=np.float32),
+    )
+    mujoco.mjv_connector(
+        stalk,
+        mujoco.mjtGeom.mjGEOM_LINE,
+        4.0,
+        np.array((target.x, target.y, 0.0)),
+        center,
+    )
+    scn.ngeom += 1
+    # Sphere at the exact target cube centre.
+    sphere = scn.geoms[scn.ngeom]
+    mujoco.mjv_initGeom(
+        sphere,
+        type=mujoco.mjtGeom.mjGEOM_SPHERE,
+        size=np.array((0.006, 0.0, 0.0)),
+        pos=center,
+        mat=np.eye(3).flatten(),
+        rgba=np.array((1.0, 0.1, 0.1, 1.0), dtype=np.float32),
+    )
+    scn.ngeom += 1
+
+
 def _play(
     episode: Episode,
     speed: float,
@@ -348,6 +390,7 @@ def main() -> None:
                 else marker_sampler.yaw
             )
             _show_target_marker(model, episode.target, marker_yaw)
+            _mark_target_point(viewer, episode.target)
             skip_event.clear()
             if _play(episode, args.speed, viewer, skip_event):
                 print(placement_error(model, data, episode.target).summary())
