@@ -4,7 +4,13 @@
 import mujoco
 import numpy as np
 
-from pick_and_place.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
+from pick_and_place.executor import (
+    CONTROL_HZ,
+    DESCENT_SERVO_STABLE_FRAMES,
+    DescentServoConvergence,
+    HARDWARE_SIMULATION_HZ,
+)
+from pick_and_place.geometry import CubePose
 
 
 def test_hardware_physics_substeps_advance_exactly_one_control_tick():
@@ -22,3 +28,21 @@ def test_hardware_physics_substeps_advance_exactly_one_control_tick():
         times.append(data.time)
 
     np.testing.assert_allclose(np.diff(times), 1.0 / CONTROL_HZ, atol=1e-12)
+
+
+def test_descent_servo_convergence_requires_consecutive_stable_targets():
+    tracker = DescentServoConvergence()
+    source = CubePose(x=0.2, y=0.1, z=0.015, roll=0.0, pitch=0.0, yaw=0.2)
+
+    for _ in range(DESCENT_SERVO_STABLE_FRAMES - 1):
+        tracker.observe(source)
+
+    assert not tracker.is_stable()
+
+    tracker.observe(source)
+
+    assert tracker.is_stable()
+
+    tracker.observe(CubePose(x=0.21, y=0.1, z=0.015, roll=0.0, pitch=0.0, yaw=0.2))
+
+    assert not tracker.is_stable()

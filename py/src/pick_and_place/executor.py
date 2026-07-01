@@ -81,11 +81,52 @@ REAL_ARM_DEFAULT_SPEED = 1.0
 # Logging-only pickup heuristic. A held cube should keep the physical gripper
 # encoder noticeably more open than an empty close.
 PICKUP_GRIPPER_MARGIN = 5.0
+# Descent PBVS completion gate. The planned descent duration is still the
+# minimum time needed to physically move from hover to grasp; these values decide
+# whether to wait beyond that for the camera target to settle.
+DESCENT_SERVO_MAX_DURATION = 3.0
+DESCENT_SERVO_STABLE_FRAMES = 6
+DESCENT_SERVO_POSITION_TOLERANCE_M = 0.003
+DESCENT_SERVO_YAW_TOLERANCE_RAD = math.radians(3.0)
 
 
 def _smoothstep(t: float) -> float:
     c = min(1.0, max(0.0, t))
     return c * c * (3.0 - 2.0 * c)
+
+
+@dataclass
+class DescentServoConvergence:
+    """Track whether the wrist-camera servo target has stopped moving."""
+
+    stable_frames: int = 0
+    last_x: float | None = None
+    last_y: float | None = None
+    last_yaw: float | None = None
+
+    def observe(self, source) -> None:
+        if self.last_x is None or self.last_y is None or self.last_yaw is None:
+            self.stable_frames = 1
+        else:
+            xy_delta = math.hypot(source.x - self.last_x, source.y - self.last_y)
+            yaw_delta = abs(_shortest_angle_delta(self.last_yaw, source.yaw))
+            if (
+                xy_delta <= DESCENT_SERVO_POSITION_TOLERANCE_M
+                and yaw_delta <= DESCENT_SERVO_YAW_TOLERANCE_RAD
+            ):
+                self.stable_frames += 1
+            else:
+                self.stable_frames = 1
+        self.last_x = source.x
+        self.last_y = source.y
+        self.last_yaw = source.yaw
+
+    def is_stable(self) -> bool:
+        return self.stable_frames >= DESCENT_SERVO_STABLE_FRAMES
+
+
+def _shortest_angle_delta(start: float, end: float) -> float:
+    return (end - start + math.pi) % (2.0 * math.pi) - math.pi
 
 
 def follower_clamp_limits(kinematics: So101Kinematics) -> tuple[np.ndarray, np.ndarray]:
@@ -648,6 +689,11 @@ def execute_episode(
 
             is_descent = isinstance(phase, DescentPhase)
             show_wrist = show_wrist_cam or show_wrist_mixed
+            descent_convergence = DescentServoConvergence() if is_descent else None
+            descent_saw_detection = False
+            descent_max_duration = (
+                max(phase.duration, DESCENT_SERVO_MAX_DURATION) if is_descent else phase.duration
+            )
 
             while viewer.is_running():
                 phase_t = (data.time - playback_start) * speed
@@ -807,6 +853,9 @@ def execute_episode(
                                 if updated_grasp is not None:
                                     phase = dataclasses.replace(phase, grasp=updated_grasp)
                             dynamic_source = smoothed_source
+                            descent_saw_detection = True
+                            if descent_convergence is not None:
+                                descent_convergence.observe(dynamic_source)
 
                             # Update simulated cube to match camera detection
                             cube_body_id = mujoco.mj_name2id(
@@ -903,7 +952,31 @@ def execute_episode(
 
                 viewer.sync()
 
-                if phase_t >= phase.duration:
+                if is_descent:
+                    if phase_t >= descent_max_duration:
+                        if descent_saw_detection and descent_convergence is not None:
+                            print(
+                                "warning: descent visual servo hit "
+                                f"{descent_max_duration:.1f}s cap before settling "
+                                f"({descent_convergence.stable_frames}/"
+                                f"{DESCENT_SERVO_STABLE_FRAMES} stable frames)"
+                            )
+                        elif wrist_cam is not None:
+                            print(
+                                "warning: descent visual servo hit "
+                                f"{descent_max_duration:.1f}s cap without a cube detection"
+                            )
+                        break
+                    if wrist_cam is None or wrist_tracker is None:
+                        if phase_t >= phase.duration:
+                            break
+                    elif (
+                        phase_t >= phase.duration
+                        and descent_convergence is not None
+                        and descent_convergence.is_stable()
+                    ):
+                        break
+                elif phase_t >= phase.duration:
                     break
 
                 next_tick += control_period
