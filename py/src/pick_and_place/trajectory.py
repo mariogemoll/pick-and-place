@@ -149,11 +149,13 @@ CARTESIAN_SPEED = 0.45
 MIN_TRAVEL_DURATION = 0.5
 
 # Phase 2: fixed, gentle vertical descent from the hover onto the cube.
-DESCENT_DURATION = 1.0
-# Phase 3: close the gripper onto the cube. The follow-up lift is planned from
-# the synthetic grasp pose and gets us clear before trusting readback again, so
-# this can be short rather than a long contact dwell.
-GRASP_DURATION = 0.35
+DESCENT_DURATION = 1.6
+# Phase 3: hold at the final aligned grasp pose before closing, then close the
+# gripper gently onto the cube. The follow-up lift is planned from the synthetic
+# grasp pose and gets us clear before trusting readback again.
+GRASP_SETTLE_DURATION = 0.4
+GRASP_CLOSE_DURATION = 0.45
+GRASP_DURATION = GRASP_SETTLE_DURATION + GRASP_CLOSE_DURATION
 # Hold the normal episode at its final carry pose before opening the gripper.
 DROP_DWELL_DURATION = 0.5
 # Phase 5a: fixed dwell at the drop hover while the gripper opens and the cube
@@ -769,7 +771,14 @@ class GraspPhase:
         return GRASP_DURATION
 
     def evaluate(self, t: float) -> Frame:
-        alpha = _smoothstep(t / self.duration) if self.duration > 0 else 1.0
+        if t <= GRASP_SETTLE_DURATION:
+            return Frame(joints=self.grasp_joints, gripper=self.start_gripper)
+        close_t = t - GRASP_SETTLE_DURATION
+        alpha = (
+            _smoothstep(close_t / GRASP_CLOSE_DURATION)
+            if GRASP_CLOSE_DURATION > 0
+            else 1.0
+        )
         gripper = self.start_gripper + (GRIPPER_GRASP - self.start_gripper) * alpha
         return Frame(joints=self.grasp_joints, gripper=gripper)
 

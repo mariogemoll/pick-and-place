@@ -9,11 +9,11 @@ the trajectory's joint set points stream out to the real arm at ``CONTROL_HZ``.
 
 Feedback is applied at two points, not continuously across the whole episode:
 
-- **Descent (wrist-camera PBVS).** During the descent onto the cube, the wrist
-  camera detects the cube each tick; the estimate is low-pass filtered into the
-  live source pose, the grasp is re-derived for the locked face/elbow, and
-  ``DescentPhase.evaluate`` re-solves IK toward the updated grasp, so the set
-  points track the cube as it descends.
+- **Descent (wrist-camera PBVS).** During the descent onto the cube, a wrist
+  camera worker detects the cube as fast as frames and AprilTag solving allow.
+  The control loop consumes the latest published estimate each tick, low-pass
+  filters it into the live source pose, re-derives the locked face/elbow grasp,
+  and ``DescentPhase.evaluate`` re-solves IK toward the updated grasp.
 - **Phase boundaries (checkpoint replanning).** After a completed phase the
   measured joints are sensed and the remaining trajectory is replanned and
   preflighted before continuing (sense → plan → execute → re-seed).
@@ -59,6 +59,7 @@ from pick_and_place.follower import (
     real_frame_to_sim,
     sim_frame_to_real,
 )
+from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.trajectory import replan_remaining_candidates
 from pick_and_place.kinematics import So101Kinematics
 from pick_and_place.recorder import EpisodeRecorder
@@ -84,10 +85,12 @@ PICKUP_GRIPPER_MARGIN = 5.0
 # Descent PBVS completion gate. The planned descent duration is still the
 # minimum time needed to physically move from hover to grasp; these values decide
 # whether to wait beyond that for the camera target to settle.
-DESCENT_SERVO_MAX_DURATION = 3.0
-DESCENT_SERVO_STABLE_FRAMES = 6
-DESCENT_SERVO_POSITION_TOLERANCE_M = 0.003
-DESCENT_SERVO_YAW_TOLERANCE_RAD = math.radians(3.0)
+DESCENT_SERVO_MAX_DURATION = 4.5
+DESCENT_SERVO_STABLE_FRAMES = 10
+DESCENT_SERVO_POSITION_TOLERANCE_M = 0.0015
+DESCENT_SERVO_YAW_TOLERANCE_RAD = math.radians(1.5)
+DESCENT_SERVO_MAX_NO_DETECTION_RETRIES = 2
+DESCENT_SERVO_BACKUP_DURATION = 0.9
 
 
 def _smoothstep(t: float) -> float:
@@ -123,6 +126,59 @@ class DescentServoConvergence:
 
     def is_stable(self) -> bool:
         return self.stable_frames >= DESCENT_SERVO_STABLE_FRAMES
+
+
+@dataclass
+class DescentServoRetryState:
+    """Reverse to pregrasp and retry when the jaws hide every cube tag."""
+
+    max_retries: int = DESCENT_SERVO_MAX_NO_DETECTION_RETRIES
+    backup_duration: float = DESCENT_SERVO_BACKUP_DURATION
+    retries_started: int = 0
+    backup_start_t: float | None = None
+
+    def is_backing_up(self) -> bool:
+        return self.backup_start_t is not None
+
+    def can_retry(self) -> bool:
+        return self.retries_started < self.max_retries
+
+    def start_backup(self, phase_t: float) -> None:
+        if not self.can_retry():
+            raise RuntimeError("descent servo retry budget exhausted")
+        self.retries_started += 1
+        self.backup_start_t = phase_t
+
+    def command_phase_t(self, phase_t: float, descent_duration: float) -> float:
+        if self.backup_start_t is None:
+            return phase_t
+        alpha = (phase_t - self.backup_start_t) / self.backup_duration
+        return descent_duration * (1.0 - _smoothstep(alpha))
+
+    def backup_complete(self, phase_t: float) -> bool:
+        return (
+            self.backup_start_t is not None
+            and phase_t - self.backup_start_t >= self.backup_duration - 1e-9
+        )
+
+    def finish_backup(self) -> None:
+        self.backup_start_t = None
+
+
+@dataclass(frozen=True)
+class WristServoEstimate:
+    """Latest wrist-camera cube estimate published by the servo worker."""
+
+    frame_id: int
+    source: CubePose
+
+
+@dataclass(frozen=True)
+class WristServoPreview:
+    """Annotated wrist frame for optional live display."""
+
+    frame_id: int
+    bgr: np.ndarray
 
 
 def _shortest_angle_delta(start: float, end: float) -> float:
@@ -505,10 +561,18 @@ def execute_episode(
     cam_lock = threading.Lock()
     cam_frame = None
     cam_frame_id = 0
-    last_processed_id = -1
     cam_running = False
     cam_thread = None
     wrist_renderer = None
+
+    servo_lock = threading.Lock()
+    servo_active = False
+    servo_running = False
+    servo_thread = None
+    servo_camera_pos: np.ndarray | None = None
+    servo_camera_rot: np.ndarray | None = None
+    servo_estimate: WristServoEstimate | None = None
+    servo_preview: WristServoPreview | None = None
 
     # Per-camera reader threads keep these single-slot "latest frame" buffers
     # fresh; the control loop snapshots both once per tick and queues one
@@ -552,6 +616,130 @@ def execute_episode(
                     "task": recording.task,
                 }
             )
+
+    def wrist_servo_worker():
+        """Process wrist frames independently of the control/recording tick."""
+        nonlocal servo_estimate, servo_preview
+
+        import cv2
+        from scipy.spatial.transform import Rotation
+
+        from pick_and_place.cube_detection import detect_cube_faces
+
+        last_frame_id = -1
+        while servo_running:
+            with servo_lock:
+                active = servo_active
+                cam_pos = None if servo_camera_pos is None else servo_camera_pos.copy()
+                cam_rot = None if servo_camera_rot is None else servo_camera_rot.copy()
+            if not active or cam_pos is None or cam_rot is None or wrist_tracker is None:
+                time.sleep(0.002)
+                continue
+
+            with cam_lock:
+                if cam_frame is None or cam_frame_id == last_frame_id:
+                    frame = None
+                else:
+                    last_frame_id = cam_frame_id
+                    frame = cam_frame.copy()
+
+            if frame is None:
+                time.sleep(0.001)
+                continue
+
+            bgr = frame
+            if wrist_undistort_map is not None:
+                bgr = cv2.remap(bgr, *wrist_undistort_map, cv2.INTER_LINEAR)
+            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            detections = detect_cube_faces(rgb, wrist_tracker.detector)
+
+            show_wrist = show_wrist_cam or show_wrist_mixed
+            if show_wrist:
+                for det in detections:
+                    corners = np.array(det.corners, dtype=np.int32)
+                    cv2.polylines(bgr, [corners], True, (0, 255, 0), 2, cv2.LINE_AA)
+                    cv2.putText(
+                        bgr,
+                        str(det.tag_id),
+                        tuple(corners[0]),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5,
+                        (255, 255, 0),
+                        1,
+                        cv2.LINE_AA,
+                    )
+
+            estimate = wrist_tracker.update(
+                detections, wrist_camera_matrix, cam_pos, cam_rot, dist=None
+            )
+            if estimate is not None:
+                _, _, yaw = Rotation.from_matrix(estimate.rotation).as_euler("xyz")
+                source = CubePose(
+                    x=float(estimate.position[0]),
+                    y=float(estimate.position[1]),
+                    z=CUBE_HALF_SIZE,
+                    roll=0.0,
+                    pitch=0.0,
+                    yaw=float(yaw),
+                )
+                with servo_lock:
+                    servo_estimate = WristServoEstimate(last_frame_id, source)
+
+                if show_wrist:
+                    cv_to_mj = np.diag([1.0, -1.0, -1.0])
+                    pos_mj_cam = cam_rot.T @ (estimate.position - cam_pos)
+                    rot_mj_cam = cam_rot.T @ estimate.rotation
+                    tvec = cv_to_mj @ pos_mj_cam
+                    rmat = cv_to_mj @ rot_mj_cam
+                    rvec, _ = cv2.Rodrigues(rmat)
+                    cv2.drawFrameAxes(
+                        bgr, wrist_camera_matrix, np.zeros(5), rvec, tvec, 0.03, 2
+                    )
+
+                    s = CUBE_HALF_SIZE
+                    pts_3d = np.float32(
+                        [
+                            [-s, -s, -s],
+                            [s, -s, -s],
+                            [s, s, -s],
+                            [-s, s, -s],
+                            [-s, -s, s],
+                            [s, -s, s],
+                            [s, s, s],
+                            [-s, s, s],
+                        ]
+                    )
+                    pts_img, _ = cv2.projectPoints(
+                        pts_3d, rvec, tvec, wrist_camera_matrix, np.zeros(5)
+                    )
+                    pts_img = pts_img.reshape(-1, 2).astype(int)
+                    edges = [
+                        (0, 1),
+                        (1, 2),
+                        (2, 3),
+                        (3, 0),
+                        (4, 5),
+                        (5, 6),
+                        (6, 7),
+                        (7, 4),
+                        (0, 4),
+                        (1, 5),
+                        (2, 6),
+                        (3, 7),
+                    ]
+                    for i, j in edges:
+                        cv2.line(
+                            bgr,
+                            tuple(pts_img[i]),
+                            tuple(pts_img[j]),
+                            (0, 165, 255),
+                            2,
+                            cv2.LINE_AA,
+                        )
+
+            if show_wrist:
+                with servo_lock:
+                    servo_preview = WristServoPreview(last_frame_id, bgr)
 
     if wrist_camera is not None and wrist_cam_id >= 0:
         import cv2
@@ -614,6 +802,9 @@ def execute_episode(
 
             cam_thread = threading.Thread(target=cam_reader, daemon=True)
             cam_thread.start()
+            servo_running = True
+            servo_thread = threading.Thread(target=wrist_servo_worker, daemon=True)
+            servo_thread.start()
         else:
             print(f"Warning: could not open wrist camera {wrist_camera!r}")
             wrist_cam = None
@@ -682,153 +873,49 @@ def execute_episode(
 
             # Setup PBVS dynamically updating current source
             from pick_and_place.trajectory import DescentPhase, _shortest_delta, grasp_candidates
-            from pick_and_place.geometry import CubePose, CUBE_HALF_SIZE
-            from scipy.spatial.transform import Rotation
             import dataclasses
             import cv2
 
             is_descent = isinstance(phase, DescentPhase)
             show_wrist = show_wrist_cam or show_wrist_mixed
             descent_convergence = DescentServoConvergence() if is_descent else None
+            descent_retry = DescentServoRetryState() if is_descent else None
             descent_saw_detection = False
             descent_max_duration = (
                 max(phase.duration, DESCENT_SERVO_MAX_DURATION) if is_descent else phase.duration
             )
+            with servo_lock:
+                servo_active = is_descent
+                servo_camera_pos = None
+                servo_camera_rot = None
+                last_servo_frame_id = (
+                    servo_estimate.frame_id if servo_estimate is not None else -1
+                )
+                last_preview_frame_id = servo_preview.frame_id if servo_preview is not None else -1
 
             while viewer.is_running():
-                phase_t = (data.time - playback_start) * speed
+                raw_phase_t = (data.time - playback_start) * speed
+                phase_t = raw_phase_t
+                if descent_retry is not None:
+                    phase_t = descent_retry.command_phase_t(raw_phase_t, phase.duration)
 
                 bgr = None
                 if wrist_cam is not None and (show_wrist or is_descent):
-                    with cam_lock:
-                        if cam_frame is not None and cam_frame_id != last_processed_id:
-                            last_processed_id = cam_frame_id
-                            bgr = cam_frame.copy()
+                    if is_descent and wrist_tracker is not None:
+                        with servo_lock:
+                            servo_camera_pos = data.cam_xpos[wrist_cam_id].copy()
+                            servo_camera_rot = data.cam_xmat[wrist_cam_id].reshape(3, 3).copy()
+                            latest_estimate = servo_estimate
+                            latest_preview = servo_preview
 
-                    if bgr is not None and is_descent and wrist_tracker is not None:
-                        if wrist_undistort_map is not None:
-                            bgr = cv2.remap(bgr, *wrist_undistort_map, cv2.INTER_LINEAR)
-                        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                        if (
+                            latest_estimate is not None
+                            and latest_estimate.frame_id != last_servo_frame_id
+                        ):
+                            last_servo_frame_id = latest_estimate.frame_id
+                            new_source = latest_estimate.source
 
-                        cam_pos = data.cam_xpos[wrist_cam_id]
-                        cam_rot = data.cam_xmat[wrist_cam_id].reshape(3, 3)
-
-                        from pick_and_place.cube_detection import detect_cube_faces
-
-                        detections = detect_cube_faces(rgb, wrist_tracker.detector)
-
-                        if show_wrist:
-                            for det in detections:
-                                corners = np.array(det.corners, dtype=np.int32)
-                                cv2.polylines(bgr, [corners], True, (0, 255, 0), 2, cv2.LINE_AA)
-                                cv2.putText(
-                                    bgr,
-                                    str(det.tag_id),
-                                    tuple(corners[0]),
-                                    cv2.FONT_HERSHEY_SIMPLEX,
-                                    0.5,
-                                    (255, 255, 0),
-                                    1,
-                                    cv2.LINE_AA,
-                                )
-
-                        estimate = wrist_tracker.update(
-                            detections, wrist_camera_matrix, cam_pos, cam_rot, dist=None
-                        )
-
-                        if estimate is not None:
-                            # Overlay the detected cube pose and TCP onto the wrist
-                            # frame purely for the optional live windows. This is
-                            # skipped when nothing is shown so the descent's
-                            # per-tick vision work does not starve the video
-                            # encoder and drop recorded frames.
-                            if show_wrist:
-                                CV_TO_MJ = np.diag([1.0, -1.0, -1.0])
-                                pos_mj_cam = cam_rot.T @ (estimate.position - cam_pos)
-                                rot_mj_cam = cam_rot.T @ estimate.rotation
-                                tvec = CV_TO_MJ @ pos_mj_cam
-                                rmat = CV_TO_MJ @ rot_mj_cam
-                                rvec, _ = cv2.Rodrigues(rmat)
-
-                                cv2.drawFrameAxes(
-                                    bgr, wrist_camera_matrix, np.zeros(5), rvec, tvec, 0.03, 2
-                                )
-
-                                s = CUBE_HALF_SIZE
-                                pts_3d = np.float32(
-                                    [
-                                        [-s, -s, -s],
-                                        [s, -s, -s],
-                                        [s, s, -s],
-                                        [-s, s, -s],
-                                        [-s, -s, s],
-                                        [s, -s, s],
-                                        [s, s, s],
-                                        [-s, s, s],
-                                    ]
-                                )
-                                pts_img, _ = cv2.projectPoints(
-                                    pts_3d, rvec, tvec, wrist_camera_matrix, np.zeros(5)
-                                )
-                                pts_img = pts_img.reshape(-1, 2).astype(int)
-                                edges = [
-                                    (0, 1),
-                                    (1, 2),
-                                    (2, 3),
-                                    (3, 0),
-                                    (4, 5),
-                                    (5, 6),
-                                    (6, 7),
-                                    (7, 4),
-                                    (0, 4),
-                                    (1, 5),
-                                    (2, 6),
-                                    (3, 7),
-                                ]
-                                for i, j in edges:
-                                    cv2.line(
-                                        bgr,
-                                        tuple(pts_img[i]),
-                                        tuple(pts_img[j]),
-                                        (0, 165, 255),
-                                        2,
-                                        cv2.LINE_AA,
-                                    )
-
-                                # Draw TCP dot
-                                gripper_id = mujoco.mj_name2id(
-                                    model, mujoco.mjtObj.mjOBJ_BODY, "gripper"
-                                )
-                                if gripper_id >= 0:
-                                    from pick_and_place.geometry import JAW_CONTACT_POSITION
-
-                                    gripper_pos = data.xpos[gripper_id]
-                                    gripper_mat = data.xmat[gripper_id].reshape(3, 3)
-                                    tcp_world = gripper_pos + gripper_mat @ JAW_CONTACT_POSITION
-                                    tcp_cam_mj = cam_rot.T @ (tcp_world - cam_pos)
-                                    tcp_cam_cv = np.array(
-                                        [tcp_cam_mj[0], -tcp_cam_mj[1], -tcp_cam_mj[2]]
-                                    )
-                                    if tcp_cam_cv[2] > 0.01:
-                                        uv = tcp_cam_cv[:2] / tcp_cam_cv[2]
-                                        uv_px = wrist_camera_matrix @ np.array([uv[0], uv[1], 1.0])
-                                        px = (int(uv_px[0]), int(uv_px[1]))
-                                        cv2.circle(bgr, px, 4, (0, 0, 255), -1, cv2.LINE_AA)
-                                        cv2.circle(bgr, px, 4, (255, 255, 255), 1, cv2.LINE_AA)
-
-                            roll, pitch, yaw = Rotation.from_matrix(estimate.rotation).as_euler(
-                                "xyz"
-                            )
-                            new_source = CubePose(
-                                x=float(estimate.position[0]),
-                                y=float(estimate.position[1]),
-                                z=CUBE_HALF_SIZE,
-                                roll=0.0,
-                                pitch=0.0,
-                                yaw=float(yaw),
-                            )
-
-                            # Smoothly interpolate target to avoid arm jumps
+                            # Smoothly interpolate target to avoid arm jumps.
                             alpha = 0.1
                             smoothed_x = dynamic_source.x * (1 - alpha) + new_source.x * alpha
                             smoothed_y = dynamic_source.y * (1 - alpha) + new_source.y * alpha
@@ -857,7 +944,7 @@ def execute_episode(
                             if descent_convergence is not None:
                                 descent_convergence.observe(dynamic_source)
 
-                            # Update simulated cube to match camera detection
+                            # Update simulated cube to match camera detection.
                             cube_body_id = mujoco.mj_name2id(
                                 model, mujoco.mjtObj.mjOBJ_BODY, "pick_cube"
                             )
@@ -882,6 +969,18 @@ def execute_episode(
                                         math.sin(half_yaw),
                                     ]
                                     data.qvel[qvel_adr : qvel_adr + 6] = 0.0
+
+                        if (
+                            show_wrist
+                            and latest_preview is not None
+                            and latest_preview.frame_id != last_preview_frame_id
+                        ):
+                            last_preview_frame_id = latest_preview.frame_id
+                            bgr = latest_preview.bgr.copy()
+                    elif show_wrist:
+                        with cam_lock:
+                            if cam_frame is not None:
+                                bgr = cam_frame.copy()
 
                     if bgr is not None and show_wrist:
                         if wrist_undistort_map is not None and not is_descent:
@@ -953,6 +1052,30 @@ def execute_episode(
                 viewer.sync()
 
                 if is_descent:
+                    if (
+                        wrist_cam is not None
+                        and wrist_tracker is not None
+                        and not descent_saw_detection
+                        and descent_retry is not None
+                        and not descent_retry.is_backing_up()
+                        and raw_phase_t >= phase.duration
+                        and descent_retry.can_retry()
+                    ):
+                        descent_retry.start_backup(raw_phase_t)
+                        print(
+                            "warning: descent saw no cube tags; backing up to "
+                            "pregrasp and retrying "
+                            f"({descent_retry.retries_started}/"
+                            f"{descent_retry.max_retries})"
+                        )
+                    if descent_retry is not None and descent_retry.is_backing_up():
+                        if descent_retry.backup_complete(raw_phase_t):
+                            descent_retry.finish_backup()
+                            descent_convergence = DescentServoConvergence()
+                            descent_saw_detection = False
+                            playback_start = data.time
+                            next_tick = time.monotonic()
+                        continue
                     if phase_t >= descent_max_duration:
                         if descent_saw_detection and descent_convergence is not None:
                             print(
@@ -961,11 +1084,15 @@ def execute_episode(
                                 f"({descent_convergence.stable_frames}/"
                                 f"{DESCENT_SERVO_STABLE_FRAMES} stable frames)"
                             )
+                            episode_status = "restart"
+                            return "restart"
                         elif wrist_cam is not None:
                             print(
                                 "warning: descent visual servo hit "
                                 f"{descent_max_duration:.1f}s cap without a cube detection"
                             )
+                            episode_status = "restart"
+                            return "restart"
                         break
                     if wrist_cam is None or wrist_tracker is None:
                         if phase_t >= phase.duration:
@@ -1237,6 +1364,11 @@ def execute_episode(
         # Stop the readers first so no new frames are produced, then drain the
         # record queue with a sentinel so every queued tick is added before the
         # episode is committed or discarded.
+        with servo_lock:
+            servo_active = False
+        if servo_thread is not None:
+            servo_running = False
+            servo_thread.join(timeout=1.0)
         if wrist_cam is not None:
             cam_running = False
             if cam_thread is not None:

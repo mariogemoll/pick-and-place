@@ -20,7 +20,7 @@ import {
 const FACE_OFFSET = CUBE_HALF_SIZE + SAFETY_MARGIN + JAW_CONTACT_POSITION.x;
 
 // Back-off distance from the contact grasp to the pregrasp pose, in metres.
-export const PREGRASP_DISTANCE = 0.03;
+export const PREGRASP_DISTANCE = 0.045;
 
 // World-from-gripper matrix for a grasp whose tool reaches the cube along
 // `approach` (a unit world direction from wrist to target) with the jaws closing

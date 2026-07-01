@@ -59,7 +59,7 @@ CubeFace = str  # one of '+x', '-x', '+y', '-y', '+z', '-z'
 
 VERTICAL_FACES: tuple[CubeFace, ...] = ("+x", "-x", "+y", "-y")
 
-CANONICAL_PREGRASP_DISTANCE = 0.03
+CANONICAL_PREGRASP_DISTANCE = 0.045
 CANONICAL_FACE_OFFSET = CUBE_HALF_SIZE + SAFETY_MARGIN + JAW_CONTACT_POSITION[0]
 
 

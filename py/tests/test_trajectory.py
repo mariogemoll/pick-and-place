@@ -15,11 +15,16 @@ from pick_and_place.episodes import (
     prepare_episode,
     set_cube_pose,
 )
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.geometry import CUBE_HALF_SIZE, CANONICAL_PREGRASP_DISTANCE, CubePose
 from pick_and_place.ik import solve_simple_grasp_ik
 from pick_and_place.kinematics import derive_kinematics
 from pick_and_place.trajectory import (
     DROP_CUBE_CENTER_Z,
+    GRASP_CLOSE_DURATION,
+    GRASP_SETTLE_DURATION,
+    GRIPPER_GRASP,
+    GRIPPER_OPEN,
+    GraspPhase,
     grasp_candidates,
     plan_carry_candidates,
 )
@@ -57,6 +62,35 @@ def test_grasp_choice_exposes_distillation_metadata():
     assert abs(grasp.roll_offset) <= np.pi / 4.0
     assert np.isfinite(grasp.closing_azimuth)
     assert np.isfinite(grasp.camera_outward)
+
+
+def test_canonical_pregrasp_stands_further_back_from_cube():
+    source = CubePose(x=0.20, y=-0.12, z=CUBE_HALF_SIZE)
+    model, _ = _build_model(source)
+    kinematics = derive_kinematics(model)
+
+    grasp = next(grasp_candidates(kinematics, source))
+
+    distance = np.linalg.norm(grasp.hover_matrix[:3, 3] - grasp.grasp_matrix[:3, 3])
+
+    assert CANONICAL_PREGRASP_DISTANCE == 0.045
+    assert distance == pytest.approx(CANONICAL_PREGRASP_DISTANCE)
+
+
+def test_grasp_phase_waits_at_aligned_pose_before_closing():
+    joints = {
+        "shoulder_pan": 0.0,
+        "shoulder_lift": 0.0,
+        "elbow_flex": 0.0,
+        "wrist_flex": 0.0,
+        "wrist_roll": 0.0,
+    }
+    phase = GraspPhase(joints)
+
+    assert phase.duration == pytest.approx(GRASP_SETTLE_DURATION + GRASP_CLOSE_DURATION)
+    assert phase.evaluate(GRASP_SETTLE_DURATION * 0.5).gripper == pytest.approx(GRIPPER_OPEN)
+    assert phase.evaluate(GRASP_SETTLE_DURATION).gripper == pytest.approx(GRIPPER_OPEN)
+    assert phase.evaluate(phase.duration).gripper == pytest.approx(GRIPPER_GRASP)
 
 
 def test_fixed_target_must_be_in_allowed_drop_zone():
