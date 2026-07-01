@@ -60,10 +60,10 @@ SOURCE_HOVER_TIP_Z = 0.04
 # Recovery grasps may approach along an arbitrary tool axis. After closing, lift
 # the held cube vertically to this world height before folding into the carry.
 RECOVERY_LIFT_CUBE_Z = 0.08
-# Cube-center height at release. Normal episodes release slightly higher than
-# cleanup recovery, where keeping the established low drop is more important.
-DROP_CUBE_CENTER_Z = 0.025
-RECOVERY_DROP_CUBE_CENTER_Z = 0.03
+# Cube-center height at release. Kept higher than the low simulated drop so
+# the physical gripper stays clear of the floor with calibration/readback error.
+DROP_CUBE_CENTER_Z = 0.045
+RECOVERY_DROP_CUBE_CENTER_Z = 0.05
 # Vertical lift after release, preserving the chosen drop orientation until the
 # open jaws clear the cube.
 POSTDROP_LIFT_Z = 0.04
@@ -213,10 +213,10 @@ def _cartesian_move_duration(distance: float) -> float:
     return max(MIN_TRAVEL_DURATION, distance / CARTESIAN_SPEED)
 
 
-# Cube-center height of the level cruise. Above the predrop hover (2 cm) so the
-# cube genuinely rises then descends; clears the cube top with room to spare
+# Cube-center height of the level cruise. Above the predrop hover so the cube
+# genuinely rises then descends; clears the cube top with room to spare
 # mid-traverse.
-CARRY_CRUISE_Z = 0.08
+CARRY_CRUISE_Z = 0.10
 # The side-view carry is one C2 spline through four waypoints: leave the pick
 # vertically, round into a level cruise, hold the cruise, round down and arrive
 # vertically. The waypoint phases below place the cruise in the middle 20 %.
@@ -859,7 +859,7 @@ def plan_carry_candidates(
     # avoids discarding an otherwise-ideal (flat, low joint-cost) orientation in
     # favour of one that needlessly reconfigures the arm just to clear cruise.
     cruise_heights = sorted(
-        {max(h, drop_cube_center_z) for h in (CARRY_CRUISE_Z, 0.07, 0.06, 0.05)},
+        {max(h, drop_cube_center_z) for h in (CARRY_CRUISE_Z, 0.09, 0.08, 0.07)},
         reverse=True,
     )
 
