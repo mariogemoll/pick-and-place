@@ -446,6 +446,18 @@ def main() -> None:
         default=1.0,
         help="playback speed multiplier of nominal pace (1.0 = nominal; default: 1.0)",
     )
+    parser.add_argument(
+        "--pickup-empty-gripper-position",
+        type=float,
+        default=2.3,
+        help="physical gripper readback expected after an empty close (default: 2.3)",
+    )
+    parser.add_argument(
+        "--pickup-gripper-margin",
+        type=float,
+        default=5.0,
+        help="minimum readback above empty-close to log pickup_detected=true (default: 5.0)",
+    )
     parser.add_argument("--camera", default="0", help="OpenCV index/path of the overhead camera (default: 0)")
     parser.add_argument("--camera-name", default="overhead_camera", help="camera name in the model")
     parser.add_argument(
@@ -963,6 +975,8 @@ def main() -> None:
                     show_wrist_mixed=args.show_wrist_mixed,
                     failed_trajectory_dir=args.save_failed_trajectories,
                     free_grasp=True,
+                    pickup_empty_gripper_position=args.pickup_empty_gripper_position,
+                    pickup_gripper_margin=args.pickup_gripper_margin,
                 )
                 if status == "restart":
                     raise EpisodeAborted
@@ -1128,6 +1142,8 @@ def main() -> None:
                             show_wrist_cam=args.show_wrist_cam,
                             show_wrist_mixed=args.show_wrist_mixed,
                             failed_trajectory_dir=args.save_failed_trajectories,
+                            pickup_empty_gripper_position=args.pickup_empty_gripper_position,
+                            pickup_gripper_margin=args.pickup_gripper_margin,
                             success_metadata=check_final_placement,
                         )
 

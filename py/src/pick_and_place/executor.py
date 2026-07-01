@@ -50,6 +50,7 @@ from pick_and_place.episodes import (
 from pick_and_place.follower import (
     ARM_JOINT_NAMES,
     GRIPPER_INDEX,
+    GRIPPER_READBACK_CLOSED,
     JOINT_NAMES,
     action_to_joints,
     clamp_joints,
@@ -77,6 +78,9 @@ RAMP_DURATION = 2.0
 # Scaling the trajectory clock slows every phase uniformly without touching the
 # planner. Override with ``speed``.
 REAL_ARM_DEFAULT_SPEED = 1.0
+# Logging-only pickup heuristic. A held cube should keep the physical gripper
+# encoder noticeably more open than an empty close.
+PICKUP_GRIPPER_MARGIN = 5.0
 
 
 def _smoothstep(t: float) -> float:
@@ -385,6 +389,8 @@ def execute_episode(
     show_wrist_mixed: bool = False,
     failed_trajectory_dir: Path | str | None = None,
     free_grasp: bool = False,
+    pickup_empty_gripper_position: float = GRIPPER_READBACK_CLOSED,
+    pickup_gripper_margin: float = PICKUP_GRIPPER_MARGIN,
     success_metadata: Callable[[], dict[str, Any]] | None = None,
 ) -> str:
     """Run one pass of a prepared episode on an already-connected follower.
@@ -574,6 +580,7 @@ def execute_episode(
     prev_contacts: set[tuple[str, str]] = set()
     episode_status = "incomplete"
     episode_metadata: dict[str, Any] | None = None
+    pickup_metadata: dict[str, Any] | None = None
     try:
         # Ramp the real arm onto the trajectory start pose so the arm and the sim
         # are visibly aligned before any playback motion begins.
@@ -1001,6 +1008,34 @@ def execute_episode(
                 )
                 continue
 
+            if completed_phase_name in ("lift", "recovery_lift") and pickup_metadata is None:
+                actual = action_to_joints(follower.get_observation(), commanded)
+                gripper_position = float(actual[GRIPPER_INDEX])
+                gripper_delta = gripper_position - pickup_empty_gripper_position
+                pickup_detected = gripper_delta >= pickup_gripper_margin
+                confidence = (
+                    gripper_delta / pickup_gripper_margin
+                    if pickup_gripper_margin > 0.0
+                    else float("inf")
+                )
+                pickup_metadata = {
+                    "pickup_check_phase": completed_phase_name,
+                    "pickup_detected": pickup_detected,
+                    "pickup_gripper_position": gripper_position,
+                    "pickup_empty_gripper_position": float(pickup_empty_gripper_position),
+                    "pickup_gripper_margin": float(pickup_gripper_margin),
+                    "pickup_gripper_delta": gripper_delta,
+                    "pickup_confidence": confidence,
+                }
+                status = "held?" if pickup_detected else "empty?"
+                print(
+                    "Pickup check after "
+                    f"{completed_phase_name}: gripper={gripper_position:.1f}, "
+                    f"empty={pickup_empty_gripper_position:.1f}, "
+                    f"delta={gripper_delta:+.1f} "
+                    f"(margin {pickup_gripper_margin:.1f}) -> {status}"
+                )
+
             # Checkpoint Replanning
             if len(current_traj.phases) <= 1:
                 episode_status = "success"
@@ -1130,8 +1165,14 @@ def execute_episode(
         if record_writer_thread is not None:
             record_queue.put(None)
             record_writer_thread.join(timeout=30.0)
-        if episode_status == "success" and success_metadata is not None:
-            episode_metadata = success_metadata()
+        if episode_status == "success":
+            episode_metadata = {}
+            if pickup_metadata is not None:
+                episode_metadata.update(pickup_metadata)
+            if success_metadata is not None:
+                episode_metadata.update(success_metadata())
+            if not episode_metadata:
+                episode_metadata = None
         _report_tracking(recorder)
         if recording is not None and recording.dataset is not None and record_writer_thread is not None:
             # The writer thread has drained, so the drop count now covers the whole
