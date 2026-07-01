@@ -20,7 +20,6 @@ from pick_and_place.ik import solve_simple_grasp_ik
 from pick_and_place.kinematics import derive_kinematics
 from pick_and_place.trajectory import (
     DROP_CUBE_CENTER_Z,
-    _carry_geometry_matrix,
     grasp_candidates,
     plan_carry_candidates,
 )
@@ -33,7 +32,7 @@ def test_free_drop_plans_reachable_joint_carry_to_low_release():
     kinematics = derive_kinematics(model)
     grasp = next(grasp_candidates(kinematics, source))
 
-    carries = list(plan_carry_candidates(kinematics, grasp, source, target))
+    carries = list(plan_carry_candidates(kinematics, grasp, target))
 
     assert carries
     assert all(carry.drop_position[2] == DROP_CUBE_CENTER_Z for carry in carries)
@@ -42,8 +41,7 @@ def test_free_drop_plans_reachable_joint_carry_to_low_release():
     assert first.grasp_joints == grasp.lift_joints
     assert set(first.cruise_joints) == set(grasp.lift_joints)
     assert set(first.drop_joints) == set(grasp.lift_joints)
-    drop_gripper = _carry_geometry_matrix(first, 1.0) @ first.cube_from_gripper
-    assert solve_simple_grasp_ik(kinematics, drop_gripper)
+    assert solve_simple_grasp_ik(kinematics, first.drop_matrix)
 
 
 def test_grasp_choice_exposes_distillation_metadata():

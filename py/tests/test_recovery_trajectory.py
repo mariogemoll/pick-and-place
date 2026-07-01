@@ -35,6 +35,7 @@ def test_free_grasp_recovery_lifts_vertically_before_carry():
         "grasp",
         "recovery_lift",
         "carry",
+        "drop_descent",
         "release",
         "retreat",
     ]

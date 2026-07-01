@@ -1037,10 +1037,20 @@ def execute_episode(
                     continue
 
             if completed_phase_name == "carry":
-                # Treat carry + release/lift as one contact-critical section.
-                # At the low predrop pose, motor readback can map clear hardware
-                # several millimetres through the sim floor. Release and lift
-                # from the locked planned endpoint, then trust readback again.
+                # The cruise waypoint is a safe, elevated, non-contact point --
+                # nothing risky has happened yet, so a checkpoint here is wasted
+                # work (and one more opportunity for ordinary sensor noise to
+                # abort an otherwise-fine episode). Advance straight into the
+                # drop descent from the locked plan.
+                if len(current_traj.phases) > 1 and current_traj.phases[1].name == "drop_descent":
+                    current_traj = dataclasses.replace(current_traj, phases=current_traj.phases[1:])
+                    continue
+
+            if completed_phase_name == "drop_descent":
+                # Treat the drop descent + release/lift as one contact-critical
+                # section. At the low drop pose, motor readback can map clear
+                # hardware several millimetres through the sim floor. Release and
+                # lift from the locked planned endpoint, then trust readback again.
                 if len(current_traj.phases) > 1 and current_traj.phases[1].name == "release":
                     current_traj = dataclasses.replace(current_traj, phases=current_traj.phases[1:])
                     continue

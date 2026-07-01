@@ -28,13 +28,8 @@ from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.kinematics import ARM_JOINT_NAMES, So101Kinematics, derive_kinematics
 from pick_and_place.paper_detection import add_paper_target_marker
 from pick_and_place.trajectory import (
-    ApproachPhase,
-    DescentPhase,
     GRIPPER_OPEN,
-    GraspPhase,
-    LiftPhase,
     NEUTRAL_ARM_JOINTS,
-    RecoveryLiftPhase,
     GraspChoice,
     Trajectory,
     free_grasp_candidates,
@@ -352,65 +347,6 @@ def _preflight(
     return events
 
 
-def _body_matrix(model: mujoco.MjModel, data: mujoco.MjData, body_name: str) -> np.ndarray:
-    body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body_name)
-    matrix = np.eye(4, dtype=np.float64)
-    matrix[:3, :3] = data.xmat[body_id].reshape(3, 3)
-    matrix[:3, 3] = data.xpos[body_id]
-    return matrix
-
-
-def _measure_post_lift_cube_from_gripper(
-    model: mujoco.MjModel,
-    source: CubePose,
-    actuator_id: dict[str, int],
-    start_joints: dict[str, float],
-    start_gripper: float,
-    kinematics: So101Kinematics,
-    grasp: GraspChoice,
-    *,
-    free_grasp: bool,
-) -> np.ndarray:
-    """Run pick through lift in shadow physics and measure cube→gripper."""
-    shadow = mujoco.MjData(model)
-    set_cube_pose(model, shadow, source)
-    for name, value in start_joints.items():
-        set_joint(model, shadow, name, value)
-        shadow.ctrl[actuator_id[name]] = value
-    set_joint(model, shadow, "gripper", start_gripper)
-    shadow.ctrl[actuator_id["gripper"]] = start_gripper
-    mujoco.mj_forward(model, shadow)
-
-    phases = (
-        ApproachPhase(kinematics, start_joints, start_gripper, grasp.hover_joints),
-        DescentPhase(kinematics, grasp),
-        GraspPhase(grasp.grasp_joints),
-        (
-            RecoveryLiftPhase(kinematics, grasp.grasp_joints, grasp.lift_joints)
-            if free_grasp
-            else LiftPhase(kinematics, grasp.grasp_joints, grasp.lift_joints)
-        ),
-    )
-    duration = sum(phase.duration for phase in phases)
-    elapsed = 0.0
-    while elapsed < duration:
-        t = elapsed
-        frame = phases[-1].evaluate(phases[-1].duration)
-        for phase in phases:
-            if t < phase.duration:
-                frame = phase.evaluate(t)
-                break
-            t -= phase.duration
-        for name, value in frame.joints.items():
-            shadow.ctrl[actuator_id[name]] = value
-        shadow.ctrl[actuator_id["gripper"]] = frame.gripper
-        mujoco.mj_step(model, shadow)
-        elapsed = float(shadow.time)
-
-    mujoco.mj_forward(model, shadow)
-    world_cube = _body_matrix(model, shadow, "pick_cube")
-    world_gripper = _body_matrix(model, shadow, "gripper")
-    return np.linalg.inv(world_cube) @ world_gripper
 
 
 _JAW_PREFIXES = ("fixed_jaw_col", "moving_jaw_col")
@@ -827,16 +763,6 @@ def prepare_episode(
             else grasp_candidates(kinematics, ep_source)
         )
         for candidate_grasp in grasp_iter:
-            cube_from_gripper = _measure_post_lift_cube_from_gripper(
-                ep_model,
-                ep_source,
-                actuator_id,
-                ep_start_joints,
-                ep_start_gripper,
-                kinematics,
-                candidate_grasp,
-                free_grasp=free_grasp,
-            )
             candidate_trajectories = trajectory_candidates_for_grasp(
                 kinematics,
                 ep_source,
@@ -847,7 +773,6 @@ def prepare_episode(
                 end_gripper,
                 candidate_grasp,
                 free_grasp=free_grasp,
-                cube_from_gripper=cube_from_gripper,
                 carry_ok=carry_ok,
             )
             for traj in candidate_trajectories:
