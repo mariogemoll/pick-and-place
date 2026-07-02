@@ -923,16 +923,19 @@ def main() -> None:
     def target_distance(a: CubePose, b: CubePose) -> float:
         return float(np.hypot(a.x - b.x, a.y - b.y))
 
-    def wait_for_target_plate_change(viewer) -> None:
-        """Pause after cooldown until the operator has moved the target plate."""
+    def wait_for_rest_and_target_plate_change(viewer, min_rest_until: float) -> None:
+        """Stay at REST with torque off until cooldown and target movement are done."""
         reference = cooldown_reference_target
         if reference is None or args.target_change_min_distance == 0:
+            remaining = min_rest_until - time.time()
+            if remaining > 0.0:
+                time.sleep(remaining)
             return
 
-        def look_from_current_pose() -> CubePose | None:
+        def look_from_rest_pose() -> CubePose | None:
             if not viewer.is_running():
                 return None
-            print("Checking target plate movement from the current near-neutral pose...")
+            print("Checking target plate movement while resting with torque off...")
             return track_drop_zone_square(
                 overhead_cap,
                 args.camera_name,
@@ -949,7 +952,7 @@ def main() -> None:
             repeat_sound=2,
         )
         while viewer.is_running():
-            target = look_from_current_pose()
+            target = look_from_rest_pose()
             if not viewer.is_running():
                 return
             if target is None:
@@ -959,10 +962,19 @@ def main() -> None:
             else:
                 moved = target_distance(reference, target)
                 if moved >= threshold:
-                    print(
-                        f"Target plate moved {moved * 100.0:.1f}cm "
-                        f"(required {threshold * 100.0:.1f}cm). Resuming."
-                    )
+                    remaining = min_rest_until - time.time()
+                    if remaining > 0.0:
+                        print(
+                            f"Target plate moved {moved * 100.0:.1f}cm "
+                            f"(required {threshold * 100.0:.1f}cm). "
+                            f"Finishing {remaining:.0f}s rest."
+                        )
+                        time.sleep(remaining)
+                    else:
+                        print(
+                            f"Target plate moved {moved * 100.0:.1f}cm "
+                            f"(required {threshold * 100.0:.1f}cm). Resuming."
+                        )
                     return
                 notifier.alert(
                     "Target plate has not moved enough. Move it to a new position before "
@@ -990,7 +1002,9 @@ def main() -> None:
             )
         move_to(REST_ARM_JOINTS, REST_GRIPPER, viewer)
         follower.bus.disable_torque()
-        time.sleep(args.rest_duration)
+        wait_for_rest_and_target_plate_change(viewer, time.time() + args.rest_duration)
+        if not viewer.is_running():
+            return
         follower.bus.enable_torque()
         arm, grip = sample_near_neutral(rng)
         move_to(arm, grip, viewer)
@@ -1000,7 +1014,6 @@ def main() -> None:
             and args.rest_duration >= args.recalibrate_check_min_cooldown
         ):
             check_overhead_drift()
-        wait_for_target_plate_change(viewer)
 
     def park_from_interrupt() -> None:
         """User ended the loop: park to NEUTRAL, then REST. The real viewer has
