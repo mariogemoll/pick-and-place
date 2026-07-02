@@ -946,7 +946,9 @@ def main() -> None:
             )
 
         threshold = args.target_change_min_distance
-        backoff = args.target_change_alert_min_seconds
+        poll_interval = 1.0
+        alert_interval = args.target_change_alert_min_seconds
+        next_alert_time = time.time()
         notifier.alert(
             "Please move the target plate to a substantially different position.",
             repeat_sound=2,
@@ -956,9 +958,15 @@ def main() -> None:
             if not viewer.is_running():
                 return
             if target is None:
-                notifier.alert(
-                    "Target plate is not visible. Move it into view before the run can continue."
-                )
+                if time.time() >= next_alert_time:
+                    notifier.alert(
+                        "Target plate is not visible. Move it into view before the run can continue."
+                    )
+                    next_alert_time = time.time() + alert_interval
+                    alert_interval = min(
+                        alert_interval * 2.0,
+                        args.target_change_alert_max_seconds,
+                    )
             else:
                 moved = target_distance(reference, target)
                 if moved >= threshold:
@@ -976,18 +984,23 @@ def main() -> None:
                             f"(required {threshold * 100.0:.1f}cm). Resuming."
                         )
                     return
-                notifier.alert(
-                    "Target plate has not moved enough. Move it to a new position before "
-                    "the run can continue."
-                )
-                print(
-                    f"Plate movement: {moved * 100.0:.1f}cm "
-                    f"(required {threshold * 100.0:.1f}cm); "
-                    f"from ({reference.x:.3f}, {reference.y:.3f}) "
-                    f"to ({target.x:.3f}, {target.y:.3f})."
-                )
-            time.sleep(backoff)
-            backoff = min(backoff * 2.0, args.target_change_alert_max_seconds)
+                if time.time() >= next_alert_time:
+                    notifier.alert(
+                        "Target plate has not moved enough. Move it to a new position before "
+                        "the run can continue."
+                    )
+                    print(
+                        f"Plate movement: {moved * 100.0:.1f}cm "
+                        f"(required {threshold * 100.0:.1f}cm); "
+                        f"from ({reference.x:.3f}, {reference.y:.3f}) "
+                        f"to ({target.x:.3f}, {target.y:.3f})."
+                    )
+                    next_alert_time = time.time() + alert_interval
+                    alert_interval = min(
+                        alert_interval * 2.0,
+                        args.target_change_alert_max_seconds,
+                    )
+            time.sleep(poll_interval)
 
     def cooldown(viewer) -> None:
         """Park at REST with torque off for the cooldown, then re-home near neutral.
