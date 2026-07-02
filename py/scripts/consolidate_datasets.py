@@ -13,11 +13,10 @@ already handles episode/frame reindexing, video concatenation, task-string
 unification, and stats aggregation across dataset roots with an identical
 schema.
 
-Every episode is kept, successful or not; a derived ``success`` column
-(``placement_detected & placement_xy <= --success-xy-tolerance``) is added to
-the merged episode metadata afterward so consumers have a sane default
-without recomputing it, while the raw fields (``placement_xy``,
-``pickup_gripper_delta``, etc.) remain available for other definitions.
+Every episode is kept, successful or not, with its raw fields untouched
+(``placement_detected``, ``placement_cube_*``, ``placement_target_*``,
+``pickup_gripper_delta``, etc.) so any consumer can define and threshold
+"success" themselves rather than trusting a bolted-on derived column.
 
 Dry run by default (prints the discovered grouping only); pass ``--write`` to
 actually merge. Source run directories are never modified or deleted.
@@ -27,12 +26,9 @@ from __future__ import annotations
 
 import argparse
 import datetime
-import math
 from pathlib import Path
 
 import pandas as pd
-
-DEFAULT_SUCCESS_XY_TOLERANCE = 0.04
 
 
 def discover_runs(source_root: Path) -> list[tuple[datetime.datetime, Path]]:
@@ -55,9 +51,7 @@ def group_by_day(
     by_day: dict[datetime.date, list[tuple[datetime.datetime, Path]]] = {}
     for ts, root in runs:
         by_day.setdefault(ts.date(), []).append((ts, root))
-    return {
-        day: [root for _, root in sorted(entries)] for day, entries in sorted(by_day.items())
-    }
+    return {day: [root for _, root in sorted(entries)] for day, entries in sorted(by_day.items())}
 
 
 def source_episode_count(run_root: Path) -> int:
@@ -65,24 +59,6 @@ def source_episode_count(run_root: Path) -> int:
     for parquet_path in sorted(run_root.glob("meta/episodes/chunk-*/file-*.parquet")):
         total += len(pd.read_parquet(parquet_path, columns=["episode_index"]))
     return total
-
-
-def add_success_column(day_root: Path, xy_tolerance: float) -> tuple[int, int]:
-    """Write a ``success`` column into every merged episode metadata file.
-
-    Returns ``(total_episodes, total_success)``.
-    """
-    total = 0
-    successes = 0
-    for parquet_path in sorted(day_root.glob("meta/episodes/chunk-*/file-*.parquet")):
-        df = pd.read_parquet(parquet_path)
-        detected = df["placement_detected"].fillna(False).astype(bool)
-        xy_ok = df["placement_xy"].fillna(math.inf) <= xy_tolerance
-        df["success"] = detected & xy_ok
-        df.to_parquet(parquet_path, index=False)
-        total += len(df)
-        successes += int(df["success"].sum())
-    return total, successes
 
 
 def main() -> None:
@@ -101,13 +77,6 @@ def main() -> None:
         help="output root; each day is written to <out-dir>/<YYYYMMDD> "
         "(default: repo root datasets/)",
     )
-    parser.add_argument(
-        "--success-xy-tolerance",
-        type=float,
-        default=DEFAULT_SUCCESS_XY_TOLERANCE,
-        help=f"placement xy error (m) at or below which an episode with a "
-        f"detected placement counts as success (default: {DEFAULT_SUCCESS_XY_TOLERANCE:g})",
-    )
     parser.add_argument("--write", action="store_true", help="perform the merge")
     args = parser.parse_args()
 
@@ -122,8 +91,7 @@ def main() -> None:
         episode_count = sum(source_episode_count(root) for root in day_roots)
         out_path = args.out_dir / f"{day:%Y%m%d}"
         print(
-            f"  {day:%Y-%m-%d}: {len(day_roots)} run(s), {episode_count} episode(s) "
-            f"-> {out_path}"
+            f"  {day:%Y-%m-%d}: {len(day_roots)} run(s), {episode_count} episode(s) -> {out_path}"
         )
 
     if not args.write:
@@ -146,17 +114,14 @@ def main() -> None:
             aggr_root=out_path,
         )
 
-        merged_total, merged_success = add_success_column(out_path, args.success_xy_tolerance)
+        merged_total = source_episode_count(out_path)
         if merged_total != source_total:
             raise SystemExit(
                 f"Episode count mismatch after merging {day:%Y-%m-%d}: "
                 f"{source_total} source vs {merged_total} merged. "
                 f"Merged output left at {out_path} for inspection."
             )
-        print(
-            f"  Wrote {merged_total} episode(s) to {out_path} "
-            f"({merged_success} success under xy<={args.success_xy_tolerance:g}m)"
-        )
+        print(f"  Wrote {merged_total} episode(s) to {out_path}")
 
 
 if __name__ == "__main__":

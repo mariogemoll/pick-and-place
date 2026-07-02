@@ -35,7 +35,14 @@ def placement_error_metadata(
     detected: bool,
     check_error: str = "",
 ) -> dict[str, Any]:
-    """Return scalar final-placement metadata using the real-run column names."""
+    """Return scalar final-placement metadata using the real-run column names.
+
+    Only the measured cube/target points are stored. The error vector
+    (dx/dy/dz/xy) is a pure function of those two points, so it isn't
+    persisted -- storing it as its own columns risked drifting out of sync
+    with the points it was computed from, and any consumer can recompute it
+    (with whatever tolerance they want) from the raw positions.
+    """
     if error is None:
         nan = float("nan")
         return {
@@ -47,10 +54,6 @@ def placement_error_metadata(
             "placement_target_x": nan,
             "placement_target_y": nan,
             "placement_target_z": nan,
-            "placement_dx": nan,
-            "placement_dy": nan,
-            "placement_dz": nan,
-            "placement_xy": nan,
         }
 
     return {
@@ -62,8 +65,4 @@ def placement_error_metadata(
         "placement_target_x": error.target_xyz[0],
         "placement_target_y": error.target_xyz[1],
         "placement_target_z": error.target_xyz[2],
-        "placement_dx": error.dx,
-        "placement_dy": error.dy,
-        "placement_dz": error.dz,
-        "placement_xy": error.xy,
     }

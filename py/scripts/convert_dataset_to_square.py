@@ -129,7 +129,26 @@ def main() -> None:
         default=4,
         help="background image-writer threads for PNG-then-encode mode",
     )
+    parser.add_argument(
+        "--encoder-queue-maxsize",
+        type=int,
+        default=3000,
+        help=(
+            "frames the streaming encoder may buffer per camera before raising on a drop "
+            "(default: 3000, much deeper than live recording's 300 since this is an "
+            "offline batch job with no real-time constraint)"
+        ),
+    )
+    parser.add_argument(
+        "--exclude-episodes",
+        default="",
+        help=(
+            "comma-separated source episode_index values to drop entirely from the output "
+            "(e.g. a known-corrupt episode); output episode indices renumber accordingly"
+        ),
+    )
     args = parser.parse_args()
+    exclude_episodes = {int(e) for e in args.exclude_episodes.split(",") if e.strip()}
 
     import cv2
     import pandas as pd
@@ -157,14 +176,22 @@ def main() -> None:
         pd.read_parquet(p) for p in sorted((args.src / "meta" / "episodes").rglob("*.parquet"))
     ).sort_values("episode_index")
     metadata_columns = episode_metadata_columns(episodes)
-    # A column with missing values on some episodes (e.g. a check that only
-    # newer episodes have) mixes real values with pandas' float NaN, which
-    # pyarrow then rejects when episode metadata rows are later batched into
-    # one table (a NaN sitting in an otherwise-string column, say). Normalize
-    # every metadata column's missing values to plain ``None`` so pyarrow
-    # always sees one consistent null representation.
+    # A string column with missing values on some episodes (e.g. a check that
+    # only newer episodes have) stores those as pandas' float NaN, not a
+    # string. Episode metadata is written to the output dataset in batches of
+    # consecutive episodes, and pyarrow infers each batch's column type from
+    # its own values: a batch mixing NaN with real strings infers a type
+    # pyarrow rejects outright, while a batch that is *entirely* NaN would
+    # infer ``null``, which then conflicts with the ``string`` type an
+    # earlier, non-empty batch already established for the same column.
+    # Filling with an empty string instead of ``None`` sidesteps both cases,
+    # since every value is then a real ``str`` and the column always infers
+    # as ``string`` no matter how episodes land in a batch. Numeric columns
+    # don't need this: their native NaN already infers as ``float64``
+    # consistently whether or not a batch happens to be all-missing.
     for col in metadata_columns:
-        episodes[col] = episodes[col].astype(object).where(episodes[col].notna(), None)
+        if pd.api.types.is_string_dtype(episodes[col]):
+            episodes[col] = episodes[col].astype(object).where(episodes[col].notna(), "")
     metadata_by_episode = {
         int(row["episode_index"]): {col: row[col] for col in metadata_columns}
         for row in episodes.to_dict("records")
@@ -182,6 +209,7 @@ def main() -> None:
     actions = rows["action"].to_numpy()
     episode_indices = rows["episode_index"].to_numpy()
     task_indices = rows["task_index"].to_numpy()
+    row_indices = rows["index"].to_numpy()
 
     streams = {
         feature: decode_frames(
@@ -200,9 +228,10 @@ def main() -> None:
         for feature in FEATURE_TO_CAMERA
     }
 
+    exclude_note = f", excluding episode(s) {sorted(exclude_episodes)}" if exclude_episodes else ""
     print(
         f"Converting {episodes.shape[0]} episode(s), {len(rows)} frame(s) "
-        f"from {args.src} -> {dst_root}"
+        f"from {args.src} -> {dst_root}{exclude_note}"
     )
 
     recording = RecordingSession(
@@ -213,35 +242,57 @@ def main() -> None:
         vcodec=args.vcodec,
         streaming_encoding=args.streaming_encoding,
         image_writer_threads=args.image_writer_threads,
+        encoder_queue_maxsize=args.encoder_queue_maxsize,
     )
     recording.create_dataset((args.size, args.size, 3), (args.size, args.size, 3))
 
     # Built lazily once the first frame reveals each camera's stored resolution.
     undistort_maps: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-    current_episode = 0
+    current_episode = int(episode_indices[0])
+    episode_has_frames = False
+    # A source episode can have more rows than real video frames (e.g. a
+    # corrupted merge that duplicated some rows under the same global
+    # ``index``); the video was only ever encoded once per unique ``index``.
+    # Pulling a stream frame only when ``index`` actually advances keeps the
+    # two camera streams correctly positioned for every later episode
+    # regardless of such duplicates, instead of desyncing partway through.
+    last_row_index: int | None = None
+    last_processed: dict[str, np.ndarray] = {}
 
     try:
         for i in tqdm(range(len(states)), desc="Converting frames", unit="frame"):
             episode = int(episode_indices[i])
             if episode != current_episode:
-                recording.save_episode(metadata_by_episode[current_episode])
+                if episode_has_frames:
+                    recording.save_episode(metadata_by_episode[current_episode])
                 current_episode = episode
+                episode_has_frames = False
+
+            row_index = int(row_indices[i])
+            if row_index != last_row_index:
+                pulled: dict[str, np.ndarray] = {}
+                for feature, camera in FEATURE_TO_CAMERA.items():
+                    rgb = next(streams[feature])
+                    if camera not in undistort_maps:
+                        h, w = rgb.shape[:2]
+                        undistort_maps[camera] = build_undistort_map(
+                            intrinsics_by_camera[camera], w, h, cv2
+                        )
+                    pulled[feature] = transform_frame(rgb, undistort_maps[camera], args.size, cv2)
+                last_processed = pulled
+                last_row_index = row_index
+
+            if episode in exclude_episodes:
+                continue
 
             frame: dict[str, Any] = {
                 "observation.state": np.asarray(states[i], np.float32),
                 "action": np.asarray(actions[i], np.float32),
                 "task": task_by_index[int(task_indices[i])],
+                **last_processed,
             }
-            for feature, camera in FEATURE_TO_CAMERA.items():
-                rgb = next(streams[feature])
-                if camera not in undistort_maps:
-                    h, w = rgb.shape[:2]
-                    undistort_maps[camera] = build_undistort_map(
-                        intrinsics_by_camera[camera], w, h, cv2
-                    )
-                frame[feature] = transform_frame(rgb, undistort_maps[camera], args.size, cv2)
-
             recording.dataset.add_frame(frame)
+            episode_has_frames = True
 
             dropped = recording.dropped_frame_count()
             if dropped:
@@ -251,7 +302,8 @@ def main() -> None:
                     "--no-streaming-encoding."
                 )
 
-        recording.save_episode(metadata_by_episode[current_episode])
+        if episode_has_frames:
+            recording.save_episode(metadata_by_episode[current_episode])
     finally:
         recording.finalize()
 

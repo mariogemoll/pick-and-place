@@ -51,10 +51,6 @@ PLACEMENT_COLUMNS = (
     "placement_target_x",
     "placement_target_y",
     "placement_target_z",
-    "placement_dx",
-    "placement_dy",
-    "placement_dz",
-    "placement_xy",
 )
 
 
@@ -66,7 +62,12 @@ def _build_calibrated_overhead(camera_name: str) -> tuple[Any, Any, np.ndarray, 
     camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
     if camera_id < 0:
         raise SystemExit(f"unknown camera {camera_name!r}")
-    return model, data, data.cam_xpos[camera_id].copy(), data.cam_xmat[camera_id].reshape(3, 3).copy()
+    return (
+        model,
+        data,
+        data.cam_xpos[camera_id].copy(),
+        data.cam_xmat[camera_id].reshape(3, 3).copy(),
+    )
 
 
 def _video_path(dataset_root: Path, row: pd.Series) -> Path | None:
@@ -154,7 +155,9 @@ def _detect_final_cube(
     return last_pose
 
 
-def _placement_row(cube: CubePose | None, target: CubePose, check_error: str = "") -> dict[str, Any]:
+def _placement_row(
+    cube: CubePose | None, target: CubePose, check_error: str = ""
+) -> dict[str, Any]:
     if cube is None:
         row = placement_error_metadata(None, detected=False, check_error=check_error)
         row.update(
