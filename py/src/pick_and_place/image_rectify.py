@@ -53,3 +53,23 @@ def transform_frame(
     y0 = (h - side) // 2
     crop = rectified[y0 : y0 + side, x0 : x0 + side]
     return cv2.resize(crop, (size, size), interpolation=cv2.INTER_AREA)
+
+
+def rectified_square_camera_matrix(intrinsics: dict[str, Any], size: int) -> list[list[float]]:
+    """The 3x3 camera matrix a frame processed by ``transform_frame`` obeys.
+
+    Mirrors ``build_undistort_map``'s rectified pinhole (focal length ``fy`` on
+    both axes, principal point at the frame center) without needing a frame or
+    ``cv2``: the center-square crop keeps that already-centered principal point
+    centered, and the final resize scales everything uniformly, so the result
+    is an analytic function of the calibration alone.
+    """
+    matrix = np.array(intrinsics["camera_matrix"], dtype=float)
+    width = float(intrinsics["width"])
+    height = float(intrinsics["height"])
+    fy = float(matrix[1, 1])
+    side = min(width, height)
+    scale = size / side
+    f = fy * scale
+    c = size / 2.0
+    return [[f, 0.0, c], [0.0, f, c], [0.0, 0.0, 1.0]]

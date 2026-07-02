@@ -25,6 +25,7 @@ from pick_and_place.camera_intrinsics import (
     CAMERA_INTRINSICS_BY_NAME,
     load_local_camera_intrinsics,
 )
+from pick_and_place.image_rectify import rectified_square_camera_matrix
 from pick_and_place.scene import build_environment
 
 
@@ -54,10 +55,9 @@ def cv_world_to_camera_matrix(
         [-rot[0][1], -rot[1][1], -rot[2][1]],
         [-rot[0][2], -rot[1][2], -rot[2][2]],
     ]
-    return [
-        row + [-sum(row[i] * pos[i] for i in range(3))]
-        for row in transform
-    ] + [[0.0, 0.0, 0.0, 1.0]]
+    return [row + [-sum(row[i] * pos[i] for i in range(3))] for row in transform] + [
+        [0.0, 0.0, 0.0, 1.0]
+    ]
 
 
 def _camera_key(camera_name: str) -> str:
@@ -65,16 +65,22 @@ def _camera_key(camera_name: str) -> str:
 
 
 def _intrinsics_by_name() -> dict[str, dict[str, Any]]:
-    intrinsics = {
-        name: dict(value)
-        for name, value in CAMERA_INTRINSICS_BY_NAME.items()
-    }
+    intrinsics = {name: dict(value) for name, value in CAMERA_INTRINSICS_BY_NAME.items()}
     intrinsics.update(load_local_camera_intrinsics())
     return intrinsics
 
 
-def export_camera_calibrations() -> dict[str, dict[str, Any]]:
-    """Build the calibrated environment and return generic camera calibration."""
+def export_camera_calibrations(square_size: int | None = None) -> dict[str, dict[str, Any]]:
+    """Build the calibrated environment and return generic camera calibration.
+
+    By default the intrinsics describe the raw, lens-distorted camera at its
+    native resolution, matching what a recorded (unconverted) dataset's video
+    pixels are. Pass ``square_size`` to instead describe the rectified,
+    center-cropped square that ``convert_dataset_to_square.py`` produces --
+    extrinsics are unaffected by that conversion, but the pinhole intrinsics
+    (focal length, principal point, image size) are not the same matrix once
+    the frame has been undistorted, cropped, and resized.
+    """
     spec = build_environment()
     model = spec.compile()
     data = mujoco.MjData(model)
@@ -94,24 +100,33 @@ def export_camera_calibrations() -> dict[str, dict[str, Any]]:
 
         width = intrinsics.get("width")
         height = intrinsics.get("height")
+        if square_size is not None:
+            payload_intrinsics = rectified_square_camera_matrix(intrinsics, square_size)
+            image_size = [square_size, square_size]
+        else:
+            payload_intrinsics = camera_matrix
+            image_size = (
+                [int(width), int(height)] if width is not None and height is not None else None
+            )
+
         payload: dict[str, Any] = {
             "camera": name,
-            "intrinsics": camera_matrix,
+            "intrinsics": payload_intrinsics,
             "world_to_camera": cv_world_to_camera_matrix(
                 data.cam_xpos[camera_id].tolist(),
                 data.cam_xmat[camera_id].reshape(3, 3).tolist(),
             ),
         }
-        if width is not None and height is not None:
-            payload["image_size"] = [int(width), int(height)]
+        if image_size is not None:
+            payload["image_size"] = image_size
         calibrations[_camera_key(name)] = payload
     return calibrations
 
 
-def write_camera_calibrations(path: Path) -> Path:
+def write_camera_calibrations(path: Path, square_size: int | None = None) -> Path:
     """Write generic camera calibration JSON to ``path``."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(export_camera_calibrations(), indent=2) + "\n")
+    path.write_text(json.dumps(export_camera_calibrations(square_size), indent=2) + "\n")
     return path
 
 
@@ -124,8 +139,17 @@ def main() -> None:
         default=Path("out/camera_calibrations.json"),
         help="output JSON path",
     )
+    parser.add_argument(
+        "--square-size",
+        type=int,
+        default=None,
+        help=(
+            "emit intrinsics for the rectified square crop convert_dataset_to_square.py "
+            "produces (e.g. 512), instead of the raw native-resolution camera"
+        ),
+    )
     args = parser.parse_args()
-    path = write_camera_calibrations(args.output)
+    path = write_camera_calibrations(args.output, args.square_size)
     print(f"Wrote {path}")
 
 
