@@ -9,6 +9,7 @@ build
 pnpm-lock.yaml
 *.log
 /assets/apriltags
+/datasets
 /dist_assets
 /intermediary-glb
 /config/camera_intrinsics/*.json

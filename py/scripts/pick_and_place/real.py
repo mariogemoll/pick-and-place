@@ -329,14 +329,9 @@ def track_cube(
     cam_rot = data.cam_xmat[camera_id].reshape(3, 3).copy()
 
     intrinsics = LOCAL_CAMERA_INTRINSICS_DIR / f"{camera_name}.json"
-    if intrinsics.exists():
-        camera_matrix, undistort_map = load_intrinsics(intrinsics, 1920, 1080, cv2)
-    else:
-        focal = (1080 / 2.0) / np.tan(np.radians(model.cam_fovy[camera_id]) / 2.0)
-        camera_matrix = np.array(
-            [[focal, 0, 1920 / 2.0], [0, focal, 1080 / 2.0], [0, 0, 1]], dtype=float
-        )
-        undistort_map = None
+    if not intrinsics.exists():
+        raise RuntimeError(f"Missing {camera_name} intrinsics at {intrinsics}")
+    camera_matrix, undistort_map = load_intrinsics(intrinsics, 1920, 1080, cv2)
 
     detector = make_cube_detector()
 
@@ -420,14 +415,9 @@ def track_drop_zone_square(
     cam_rot = data.cam_xmat[camera_id].reshape(3, 3).copy()
 
     intrinsics = LOCAL_CAMERA_INTRINSICS_DIR / f"{camera_name}.json"
-    if intrinsics.exists():
-        camera_matrix, undistort_map = load_intrinsics(intrinsics, 1920, 1080, cv2)
-    else:
-        focal = (1080 / 2.0) / np.tan(np.radians(model.cam_fovy[camera_id]) / 2.0)
-        camera_matrix = np.array(
-            [[focal, 0, 1920 / 2.0], [0, focal, 1080 / 2.0], [0, 0, 1]], dtype=float
-        )
-        undistort_map = None
+    if not intrinsics.exists():
+        raise RuntimeError(f"Missing {camera_name} intrinsics at {intrinsics}")
+    camera_matrix, undistort_map = load_intrinsics(intrinsics, 1920, 1080, cv2)
 
     for _ in range(5):
         cap.read()
@@ -602,7 +592,7 @@ def main() -> None:
         "--pickup-gripper-margin",
         type=float,
         default=5.0,
-        help="minimum readback above empty-close to log pickup_detected=true (default: 5.0)",
+        help="denominator for pickup_confidence = gripper_delta / margin (default: 5.0)",
     )
     parser.add_argument("--camera", default="0", help="OpenCV index/path of the overhead camera (default: 0)")
     parser.add_argument("--camera-name", default="overhead_camera", help="camera name in the model")

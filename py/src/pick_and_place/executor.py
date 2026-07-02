@@ -764,21 +764,18 @@ def execute_episode(
             else:
                 intrinsics_path = Path(intrinsics_path)
 
-            if intrinsics_path.exists():
-                from pick_and_place.camera_compare import load_intrinsics
+            if not intrinsics_path.exists():
+                raise RuntimeError(f"Missing wrist camera intrinsics at {intrinsics_path}")
 
-                wrist_camera_matrix, wrist_undistort_map = load_intrinsics(
-                    intrinsics_path, 1280, 720, cv2
-                )
-                rect_fy = float(wrist_camera_matrix[1, 1])
-                model.cam_fovy[wrist_cam_id] = float(
-                    np.degrees(2.0 * np.arctan((720 / 2.0) / rect_fy))
-                )
-            else:
-                focal = (720 / 2.0) / np.tan(np.radians(model.cam_fovy[wrist_cam_id]) / 2.0)
-                wrist_camera_matrix = np.array(
-                    [[focal, 0, 1280 / 2.0], [0, focal, 720 / 2.0], [0, 0, 1]], dtype=float
-                )
+            from pick_and_place.camera_compare import load_intrinsics
+
+            wrist_camera_matrix, wrist_undistort_map = load_intrinsics(
+                intrinsics_path, 1280, 720, cv2
+            )
+            rect_fy = float(wrist_camera_matrix[1, 1])
+            model.cam_fovy[wrist_cam_id] = float(
+                np.degrees(2.0 * np.arctan((720 / 2.0) / rect_fy))
+            )
 
             if show_wrist_mixed:
                 render_w, render_h = 1280, 720
@@ -1222,7 +1219,6 @@ def execute_episode(
                 actual = action_to_joints(follower.get_observation(), commanded)
                 gripper_position = float(actual[GRIPPER_INDEX])
                 gripper_delta = gripper_position - pickup_empty_gripper_position
-                pickup_detected = gripper_delta >= pickup_gripper_margin
                 confidence = (
                     gripper_delta / pickup_gripper_margin
                     if pickup_gripper_margin > 0.0
@@ -1230,20 +1226,18 @@ def execute_episode(
                 )
                 pickup_metadata = {
                     "pickup_check_phase": completed_phase_name,
-                    "pickup_detected": pickup_detected,
                     "pickup_gripper_position": gripper_position,
                     "pickup_empty_gripper_position": float(pickup_empty_gripper_position),
                     "pickup_gripper_margin": float(pickup_gripper_margin),
                     "pickup_gripper_delta": gripper_delta,
                     "pickup_confidence": confidence,
                 }
-                status = "held?" if pickup_detected else "empty?"
                 print(
                     "Pickup check after "
                     f"{completed_phase_name}: gripper={gripper_position:.1f}, "
                     f"empty={pickup_empty_gripper_position:.1f}, "
                     f"delta={gripper_delta:+.1f} "
-                    f"(margin {pickup_gripper_margin:.1f}) -> {status}"
+                    f"(margin {pickup_gripper_margin:.1f})"
                 )
 
             # Checkpoint Replanning
