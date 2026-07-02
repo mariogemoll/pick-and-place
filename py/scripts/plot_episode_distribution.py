@@ -2,15 +2,16 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Plot the spread of cube source and target poses across a recorded episode dir.
+"""Plot the spread of cube source and target poses across recorded episodes.
 
-Each episode ``.npz`` stores the initial cube pose (``cube_start`` = x, y, z, yaw)
-and the drop target (``cube_target`` = x, y, z, yaw). This reads every episode in
-a directory and renders a 2x2 figure: the top row covers the initial cube poses
-(a scatter map with yaw drawn as short heading arrows, plus a position heatmap)
-and the bottom row covers the targets (scatter map and heatmap). The allowed
-sampling zone for each role is shaded underneath so the spread can be read against
-the workspace it was drawn from.
+Supports both raw ``episode_*.npz`` directories and LeRobotDataset roots whose
+episode metadata contains scalar ``cube_start_*`` and ``cube_target_*`` columns.
+Passing a parent directory such as ``datasets/`` aggregates all LeRobotDataset
+children under it.
+The figure's top row covers initial cube poses (scatter with yaw heading arrows,
+plus a position heatmap); the bottom row covers drop targets. The allowed
+sampling zone for each role is shaded underneath so the spread can be read
+against the workspace it was drawn from.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 
 from pick_and_place.episodes import sample_cube, sample_target
 from pick_and_place.workspace_overlays import (
@@ -61,18 +63,94 @@ def nominal_samples(sampler, n: int = _NOMINAL_SAMPLES, seed: int = _NOMINAL_SEE
     return out
 
 
-def load_poses(episode_dir: Path) -> tuple[np.ndarray, np.ndarray]:
-    """Return (sources, targets), each an (N, 4) array of (x, y, z, yaw)."""
+def _pose4(values: np.ndarray) -> np.ndarray:
+    """Normalize a saved pose vector to (x, y, z, yaw)."""
+    values = np.asarray(values, dtype=float)
+    if values.shape[0] >= 4:
+        return values[[0, 1, 2, 3]]
+    if values.shape[0] == 3:
+        return np.array([values[0], values[1], values[2], 0.0], dtype=float)
+    raise ValueError(f"expected 3 or 4 pose values, got {values.shape[0]}")
+
+
+def _load_npz_poses(episode_dir: Path) -> tuple[np.ndarray, np.ndarray] | None:
     files = sorted(episode_dir.glob("episode_*.npz"))
     if not files:
-        raise SystemExit(f"no episode_*.npz files found in {episode_dir}")
+        return None
     sources = []
     targets = []
     for path in files:
         data = np.load(path, allow_pickle=True)
-        sources.append(data["cube_start"])
-        targets.append(data["cube_target"])
+        sources.append(_pose4(data["cube_start"]))
+        targets.append(_pose4(data["cube_target"]))
     return np.asarray(sources, dtype=float), np.asarray(targets, dtype=float)
+
+
+def _load_lerobot_poses(dataset_root: Path) -> tuple[np.ndarray, np.ndarray] | None:
+    files = sorted(dataset_root.glob("meta/episodes/chunk-*/file-*.parquet"))
+    if not files:
+        return None
+    df = pd.concat((pd.read_parquet(path) for path in files), ignore_index=True)
+    required = {
+        "cube_start_x",
+        "cube_start_y",
+        "cube_start_z",
+        "cube_start_yaw",
+        "cube_target_x",
+        "cube_target_y",
+        "cube_target_z",
+        "cube_target_yaw",
+    }
+    missing = sorted(required - set(df.columns))
+    if missing:
+        raise SystemExit(
+            f"{dataset_root} is a LeRobotDataset but is missing pose metadata: "
+            f"{', '.join(missing)}"
+        )
+    sources = df[
+        ["cube_start_x", "cube_start_y", "cube_start_z", "cube_start_yaw"]
+    ].to_numpy(dtype=float)
+    targets = df[
+        ["cube_target_x", "cube_target_y", "cube_target_z", "cube_target_yaw"]
+    ].to_numpy(dtype=float)
+    finite = np.isfinite(sources).all(axis=1) & np.isfinite(targets).all(axis=1)
+    if not finite.all():
+        raise SystemExit(f"{dataset_root} contains {int((~finite).sum())} row(s) with missing poses")
+    return sources, targets
+
+
+def _lerobot_children(parent: Path) -> list[Path]:
+    """Return child LeRobotDataset roots under ``parent``."""
+    return sorted(path.parent.parent for path in parent.glob("*/meta/info.json"))
+
+
+def load_poses(episode_dir: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Return (sources, targets), each an (N, 4) array of (x, y, z, yaw)."""
+    poses = _load_npz_poses(episode_dir)
+    if poses is not None:
+        return poses
+    poses = _load_lerobot_poses(episode_dir)
+    if poses is not None:
+        return poses
+    raise SystemExit(f"no episode_*.npz files or LeRobot episode metadata found in {episode_dir}")
+
+
+def load_many(paths: list[Path]) -> tuple[np.ndarray, np.ndarray, list[Path]]:
+    """Load and concatenate poses from paths or parent directories."""
+    sources = []
+    targets = []
+    loaded = []
+    for path in paths:
+        children = _lerobot_children(path)
+        candidates = children if children else [path]
+        for candidate in candidates:
+            src, tgt = load_poses(candidate)
+            sources.append(src)
+            targets.append(tgt)
+            loaded.append(candidate)
+    if not sources:
+        raise SystemExit("no episode metadata found")
+    return np.concatenate(sources), np.concatenate(targets), loaded
 
 
 def allowed_mask(
@@ -205,19 +283,26 @@ def draw_marginal(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("episode_dir", type=Path, help="directory of episode_*.npz files")
+    parser.add_argument(
+        "episode_dirs",
+        nargs="+",
+        type=Path,
+        help="episode dir(s), LeRobotDataset root(s), or parent dirs such as datasets/",
+    )
     parser.add_argument(
         "-o",
         "--out",
         type=Path,
         default=None,
-        help="output image path (default: <episode_dir>/pose_distribution.png)",
+        help="output image path (default: <first input>/pose_distribution.png)",
     )
     parser.add_argument("--bins", type=int, default=40, help="heatmap bins per axis")
     parser.add_argument("--show", action="store_true", help="open an interactive window")
     args = parser.parse_args()
 
-    sources, targets = load_poses(args.episode_dir)
+    sources, targets, loaded = load_many(args.episode_dirs)
+    if len(loaded) > 1:
+        print(f"loaded {len(loaded)} dataset(s), {len(sources)} episode(s)")
     nominal_sources = nominal_samples(sample_cube)
     nominal_targets = nominal_samples(sample_target)
 
@@ -291,10 +376,11 @@ def main() -> None:
         title="Target azimuth: realized vs nominal",
     )
 
-    fig.suptitle(f"Episode pose distribution — {args.episode_dir}  ({len(sources)} episodes)")
+    label = str(args.episode_dirs[0]) if len(args.episode_dirs) == 1 else f"{len(loaded)} datasets"
+    fig.suptitle(f"Episode pose distribution — {label}  ({len(sources)} episodes)")
     fig.tight_layout(rect=(0, 0, 1, 0.98))
 
-    out_path = args.out or (args.episode_dir / "pose_distribution.png")
+    out_path = args.out or (args.episode_dirs[0] / "pose_distribution.png")
     fig.savefig(out_path, dpi=140)
     print(f"wrote {out_path}")
     if args.show:

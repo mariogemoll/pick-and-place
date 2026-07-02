@@ -46,6 +46,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
+from pick_and_place.dataset_metadata import cube_pose_metadata, placement_error_metadata
 from pick_and_place.episode_loop import episode_loop
 from pick_and_place.episodes import (
     EpisodeSamplingError,
@@ -484,21 +485,15 @@ def final_placement_metadata(
     target_xyz = (float(target.x), float(target.y), float(CUBE_HALF_SIZE))
     if cube is None:
         print("placement error: cube not detected after release")
-        nan = float("nan")
-        return {
-            "placement_detected": False,
-            "placement_check_error": check_error,
-            "placement_cube_x": nan,
-            "placement_cube_y": nan,
-            "placement_cube_z": nan,
-            "placement_target_x": target_xyz[0],
-            "placement_target_y": target_xyz[1],
-            "placement_target_z": target_xyz[2],
-            "placement_dx": nan,
-            "placement_dy": nan,
-            "placement_dz": nan,
-            "placement_xy": nan,
-        }
+        metadata = placement_error_metadata(None, detected=False, check_error=check_error)
+        metadata.update(
+            {
+                "placement_target_x": target_xyz[0],
+                "placement_target_y": target_xyz[1],
+                "placement_target_z": target_xyz[2],
+            }
+        )
+        return metadata
 
     cube_xyz = (float(cube.x), float(cube.y), float(cube.z))
     error = PlacementError(
@@ -510,20 +505,7 @@ def final_placement_metadata(
         xy=float(np.linalg.norm(np.asarray(cube_xyz[:2]) - np.asarray(target_xyz[:2]))),
     )
     print(error.summary())
-    return {
-        "placement_detected": True,
-        "placement_check_error": check_error,
-        "placement_cube_x": error.cube_xyz[0],
-        "placement_cube_y": error.cube_xyz[1],
-        "placement_cube_z": error.cube_xyz[2],
-        "placement_target_x": error.target_xyz[0],
-        "placement_target_y": error.target_xyz[1],
-        "placement_target_z": error.target_xyz[2],
-        "placement_dx": error.dx,
-        "placement_dy": error.dy,
-        "placement_dz": error.dz,
-        "placement_xy": error.xy,
-    }
+    return placement_error_metadata(error, detected=True, check_error=check_error)
 
 
 def main() -> None:
@@ -1353,6 +1335,7 @@ def main() -> None:
 
                         def check_final_placement() -> dict[str, object]:
                             nonlocal preflight_debug_written
+                            metadata = cube_pose_metadata(episode.source, episode.target)
 
                             if (
                                 args.save_overhead_debug
@@ -1398,11 +1381,14 @@ def main() -> None:
                                         show_distance=True,
                                     )
                                     print(f"Saved overhead final debug image: {path}")
-                                return final_placement_metadata(
-                                    None,
-                                    episode.target,
-                                    check_error=str(exc),
+                                metadata.update(
+                                    final_placement_metadata(
+                                        None,
+                                        episode.target,
+                                        check_error=str(exc),
+                                    )
                                 )
+                                return metadata
                             if args.save_overhead_debug and final_debug.bgr.size:
                                 path = overhead_debug_dir / f"episode_{ep.index:05d}_final.jpg"
                                 _write_overhead_debug_image(
@@ -1411,7 +1397,8 @@ def main() -> None:
                                     show_distance=final_cube is not None,
                                 )
                                 print(f"Saved overhead final debug image: {path}")
-                            return final_placement_metadata(final_cube, episode.target)
+                            metadata.update(final_placement_metadata(final_cube, episode.target))
+                            return metadata
 
                         status = execute_episode(
                             episode,

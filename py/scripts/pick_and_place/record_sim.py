@@ -39,9 +39,11 @@ from pick_and_place.camera_extrinsics import (
     load_local_camera_extrinsics,
 )
 from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
+from pick_and_place.dataset_metadata import cube_pose_metadata, placement_error_metadata
 from pick_and_place.episodes import (
     EpisodeSamplingError,
     _build_model,
+    placement_error,
     prepare_episode,
 )
 from pick_and_place.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ, RecordingSession
@@ -159,7 +161,10 @@ def run_recording(
                 viewer=viewer if use_viewer else None,
                 speed=speed,
             )
-            recording.dataset.save_episode()
+            error = placement_error(model, data, episode.target)
+            metadata = cube_pose_metadata(episode.source, episode.target)
+            metadata.update(placement_error_metadata(error, detected=True))
+            recording.save_episode(metadata)
             recorded += 1
             print(f"{label}Saved episode to dataset ({recorded} total).")
     finally:
