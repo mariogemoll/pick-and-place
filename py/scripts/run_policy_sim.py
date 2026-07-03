@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Run a SmolVLA policy in the sim, closed-loop.
+"""Run a LeRobot policy (ACT, SmolVLA, ...) in the sim, closed-loop.
 
 Pass ``--checkpoint`` to evaluate a fine-tuned policy; the default is the base
 ``lerobot/smolvla_base``. The base is a plumbing spike, not a working manipulator
@@ -11,7 +11,8 @@ actions are not meaningful (the arm moves but does not solve the task). A policy
 fine-tuned on the project's dataset is the real use case. Either way the loop is
 the same: render the sim cameras, build the observation a LeRobot policy expects
 (two images + proprio state + a language instruction), run ``select_action``, and
-feed the result back into the sim as position targets.
+feed the result back into the sim as position targets. The concrete policy class
+is resolved from the checkpoint, so the same script serves whatever was trained.
 
 The policy speaks the real (hardware) frame the dataset was recorded in — arm
 joints in degrees, gripper as a 0-100 position — while MuJoCo speaks radians. The
@@ -65,12 +66,11 @@ from pick_and_place.paper_detection import (
 )
 from pick_and_place.trajectory import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
 from pick_and_place.workspace_overlays import is_cube_drop_allowed
-from pick_and_place.vla import (
+from pick_and_place.policy import (
     DEFAULT_CHECKPOINT,
     DEFAULT_INSTRUCTION,
-    OVERHEAD_FEATURE,
-    WRIST_FEATURE,
     make_policy,
+    resolve_checkpoint_cameras,
     select_device,
 )
 
@@ -83,7 +83,8 @@ def _build_model(
     source_xy: tuple[float, float],
     source_yaw: float,
     target_xy: tuple[float, float],
-    render_size: int,
+    render_h: int,
+    render_w: int,
 ):
     """Compile the standard (AprilTag, calibrated-camera) scene with the pick cube
     placed as a free rigid body at the requested pose. Mirrors the layout used by
@@ -93,11 +94,11 @@ def _build_model(
     real recording, where a physical paper square on the table marks where the
     cube must be placed; without it the policy sees no target.
 
-    ``render_size`` enlarges the offscreen framebuffer so the camera renders fed to
-    the policy fit (MuJoCo defaults to 640x480, too small for a 512 square)."""
+    ``render_h``/``render_w`` enlarge the offscreen framebuffer so the camera
+    renders fed to the policy fit whatever resolution the checkpoint expects."""
     spec = build_scene(include_environment=True)
-    spec.visual.global_.offwidth = max(spec.visual.global_.offwidth, render_size)
-    spec.visual.global_.offheight = max(spec.visual.global_.offheight, render_size)
+    spec.visual.global_.offwidth = max(spec.visual.global_.offwidth, render_w)
+    spec.visual.global_.offheight = max(spec.visual.global_.offheight, render_h)
     apply_camera_extrinsics_to_spec(spec, load_local_camera_extrinsics())
     intrinsics = load_local_camera_intrinsics()
     for camera in spec.cameras:
@@ -186,7 +187,18 @@ def main() -> None:
     parser.add_argument("--instruction", default=DEFAULT_INSTRUCTION, help="language task string")
     parser.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT, help="HF policy checkpoint")
     parser.add_argument("--device", default="auto", help="auto | cpu | mps | cuda")
-    parser.add_argument("--image-size", type=int, default=512, help="square render size fed to the VLA")
+    parser.add_argument(
+        "--image-height",
+        type=int,
+        default=None,
+        help="render height fed to the policy (default: the checkpoint's training height, else 480)",
+    )
+    parser.add_argument(
+        "--image-width",
+        type=int,
+        default=None,
+        help="render width fed to the policy (default: the checkpoint's training width, else 640)",
+    )
     parser.add_argument("--source", type=float, nargs=2, metavar=("X", "Y"), default=(0.22, 0.0))
     parser.add_argument("--source-yaw", type=float, default=0.0, help="cube yaw (radians)")
     parser.add_argument(
@@ -226,10 +238,21 @@ def main() -> None:
     if args.show and not args.headless:
         parser.error("--show requires --headless")
 
+    override = (args.image_height, args.image_width)
+    if any(override) and not all(override):
+        parser.error("pass both --image-height and --image-width, or neither")
+    image_hw, (overhead_key, wrist_key) = resolve_checkpoint_cameras(
+        args.checkpoint, override_hw=(args.image_height, args.image_width) if all(override) else None
+    )
+
     from lerobot.utils.control_utils import predict_action
 
     device = select_device(args.device)
     print(f"Loading {args.checkpoint} on {device} (first run downloads the weights)...")
+    print(
+        f"Feeding {image_hw[1]}x{image_hw[0]} (WxH) frames as {overhead_key!r} (overhead) "
+        f"and {wrist_key!r} (wrist)."
+    )
 
     rng = np.random.default_rng(args.seed)
 
@@ -245,7 +268,8 @@ def main() -> None:
         tuple(args.source),
         args.source_yaw,
         target_xy,
-        args.image_size,
+        image_hw[0],
+        image_hw[1],
     )
     _set_neutral(model, data)
     joint_adr = _joint_qpos_adr(model)
@@ -253,8 +277,10 @@ def main() -> None:
     ctrl_low = model.actuator_ctrlrange[:, 0].copy()
     ctrl_high = model.actuator_ctrlrange[:, 1].copy()
 
-    hw = (args.image_size, args.image_size)
-    policy, preprocessor, postprocessor = make_policy(args.checkpoint, hw, hw, device)
+    hw = image_hw
+    policy, preprocessor, postprocessor = make_policy(
+        args.checkpoint, hw, (overhead_key, wrist_key), device
+    )
     policy.reset()
 
     renderer = mujoco.Renderer(model, height=hw[0], width=hw[1])
@@ -337,8 +363,8 @@ def main() -> None:
             overhead_frame = render("overhead_camera")
             observation = {
                 "observation.state": _sim_state_to_real(data.qpos[joint_adr]),
-                WRIST_FEATURE: wrist_frame,
-                OVERHEAD_FEATURE: overhead_frame,
+                overhead_key: overhead_frame,
+                wrist_key: wrist_frame,
             }
             if wrist_writer is not None:
                 wrist_writer.append_data(wrist_frame)

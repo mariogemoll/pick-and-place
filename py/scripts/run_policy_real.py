@@ -2,9 +2,9 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Run a SmolVLA policy on the physical SO-101, closed-loop.
+"""Run a LeRobot policy (ACT, SmolVLA, ...) on the physical SO-101, closed-loop.
 
-The hardware counterpart to ``run_vla_sim.py``. Where the sim run renders MuJoCo
+The hardware counterpart to ``run_policy_sim.py``. Where the sim run renders MuJoCo
 cameras and integrates physics, this reads two real cameras and a real arm: each
 control tick it snapshots the latest overhead and wrist frames, reads the
 follower's joints, runs ``select_action``, and streams the predicted joints back
@@ -20,10 +20,11 @@ and no radians anywhere on the policy path; MuJoCo is loaded only to derive
 those joint limits and the neutral start pose.
 
 The cameras do need conversion: each raw, lens-distorted frame is undistorted
-with its calibrated intrinsics, center-cropped to a square, and resized to
-512x512 every tick, via the same geometry ``convert_dataset_resolution.py``
-applies to recorded datasets — so the live frames fed to the policy match the
-ones it was fine-tuned on, pixel-geometry for pixel-geometry.
+with its calibrated intrinsics, center-cropped to the policy's aspect ratio, and
+resized to its input resolution every tick, via the same geometry
+``convert_dataset_resolution.py`` applies to recorded datasets — so the live
+frames fed to the policy match the ones it was fine-tuned on, pixel-geometry for
+pixel-geometry. The resolution defaults to whatever the checkpoint was trained on.
 
 ``--checkpoint`` selects the policy; the default ``lerobot/smolvla_base`` is an
 un-finetuned plumbing spike (the arm moves but does not solve the task). A
@@ -64,7 +65,7 @@ from pick_and_place.follower import (
     make_so101_follower,
     sim_frame_to_real,
 )
-from pick_and_place.image_rectify import SQUARE_SIZE, build_undistort_map, transform_frame
+from pick_and_place.image_rectify import build_undistort_map, transform_frame
 from pick_and_place.kinematics import derive_kinematics
 from pick_and_place.trajectory import (
     NEUTRAL_ARM_JOINTS,
@@ -72,12 +73,11 @@ from pick_and_place.trajectory import (
     REST_ARM_JOINTS,
     REST_GRIPPER,
 )
-from pick_and_place.vla import (
+from pick_and_place.policy import (
     DEFAULT_CHECKPOINT,
     DEFAULT_INSTRUCTION,
-    OVERHEAD_FEATURE,
-    WRIST_FEATURE,
     make_policy,
+    resolve_checkpoint_cameras,
     select_device,
 )
 
@@ -175,6 +175,18 @@ def main() -> None:
     parser.add_argument("--camera", default="0", help="OpenCV index/path of the overhead camera")
     parser.add_argument("--wrist-camera", default="1", help="OpenCV index/path of the wrist camera")
     parser.add_argument(
+        "--image-height",
+        type=int,
+        default=None,
+        help="height fed to the policy (default: the checkpoint's training height, else 480)",
+    )
+    parser.add_argument(
+        "--image-width",
+        type=int,
+        default=None,
+        help="width fed to the policy (default: the checkpoint's training width, else 640)",
+    )
+    parser.add_argument(
         "--steps",
         type=int,
         default=0,
@@ -201,10 +213,21 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    override = (args.image_height, args.image_width)
+    if any(override) and not all(override):
+        parser.error("pass both --image-height and --image-width, or neither")
+    (img_h, img_w), (overhead_key, wrist_key) = resolve_checkpoint_cameras(
+        args.checkpoint, override_hw=(args.image_height, args.image_width) if all(override) else None
+    )
+
     import cv2
 
     device = select_device(args.device)
     print(f"Loading {args.checkpoint} on {device} (first run downloads the weights)...")
+    print(
+        f"Feeding {img_w}x{img_h} (WxH) frames as {overhead_key!r} (overhead) "
+        f"and {wrist_key!r} (wrist)."
+    )
 
     # MuJoCo is used only for the joint limits (to clamp commands) and to map the
     # neutral sim pose into the real frame for the start ramp — never stepped.
@@ -228,9 +251,9 @@ def main() -> None:
     first_overhead = overhead.wait_for_first()
     first_wrist = wrist.wait_for_first()
 
-    # Every frame is rectified to the same SQUARE_SIZE square pinhole view the
-    # offline dataset conversion produces, so the policy loads against that
-    # fixed shape regardless of either camera's native resolution.
+    # Every frame is rectified to the same pinhole view the offline dataset
+    # conversion produces, at the policy's input resolution, so the policy loads
+    # against a fixed shape regardless of either camera's native resolution.
     overhead_undistort_map = build_undistort_map(
         intrinsics_by_camera["overhead_camera"], first_overhead.shape[1], first_overhead.shape[0], cv2
     )
@@ -239,10 +262,7 @@ def main() -> None:
     )
 
     policy, preprocessor, postprocessor = make_policy(
-        args.checkpoint,
-        wrist_hw=(SQUARE_SIZE, SQUARE_SIZE),
-        overhead_hw=(SQUARE_SIZE, SQUARE_SIZE),
-        device=device,
+        args.checkpoint, (img_h, img_w), (overhead_key, wrist_key), device
     )
     policy.reset()
 
@@ -285,15 +305,15 @@ def main() -> None:
             overhead_rgb = cv2.cvtColor(overhead_bgr, cv2.COLOR_BGR2RGB)
             wrist_rgb = cv2.cvtColor(wrist_bgr, cv2.COLOR_BGR2RGB)
             overhead_rgb = transform_frame(
-                overhead_rgb, overhead_undistort_map, SQUARE_SIZE, SQUARE_SIZE, cv2
+                overhead_rgb, overhead_undistort_map, img_w, img_h, cv2
             )
-            wrist_rgb = transform_frame(wrist_rgb, wrist_undistort_map, SQUARE_SIZE, SQUARE_SIZE, cv2)
+            wrist_rgb = transform_frame(wrist_rgb, wrist_undistort_map, img_w, img_h, cv2)
 
             state = action_to_joints(follower.get_observation(), neutral_real).astype(np.float32)
             observation = {
                 "observation.state": state,
-                WRIST_FEATURE: wrist_rgb,
-                OVERHEAD_FEATURE: overhead_rgb,
+                overhead_key: overhead_rgb,
+                wrist_key: wrist_rgb,
             }
             if wrist_writer is not None:
                 wrist_writer.append_data(wrist_rgb)
