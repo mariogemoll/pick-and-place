@@ -11,6 +11,16 @@ from pick_and_place.episodes import PlacementError
 from pick_and_place.geometry import CubePose
 
 
+def driver_metadata(driver: str) -> dict[str, str]:
+    """Episode metadata naming what produced the trajectory.
+
+    Values are open-ended so the same dataset can mix collection sources:
+    ``"teleop"`` (a human on the SO-101 leader), ``"analytic"`` (the planner in
+    ``real.py``), and later e.g. an RL or VLA policy.
+    """
+    return {"driver": driver}
+
+
 def cube_pose_metadata(source: CubePose, target: CubePose) -> dict[str, float]:
     """Return scalar source/target pose metadata for one pick-and-place episode."""
     return {
