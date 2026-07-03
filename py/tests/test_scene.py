@@ -21,10 +21,13 @@ def test_scene_contains_robot_floor_light_and_cube():
     floor = model.geom("floor").id
     assert model.geom_type[floor] == mujoco.mjtGeom.mjGEOM_PLANE
     assert tuple(model.geom_size[floor, :2]) == (0.0, 0.0)
-    assert model.mat(model.geom_matid[floor]).name == "groundplane"
-    assert model.texture("groundplane").id >= 0
-    assert model.light("scene_light").id >= 0
+    groundplane = model.mat(model.geom_matid[floor])
+    assert groundplane.name == "groundplane"
+    light_id = model.light("scene_light").id
+    assert light_id >= 0
     assert model.nlight == 1
+    assert model.light_castshadow[light_id] == 0
+    np.testing.assert_allclose(model.light_specular[light_id], (0.0, 0.0, 0.0))
     assert model.body_jntnum[model.body("pick_cube").id] == 0
     assert tuple(model.geom_size[model.geom("pick_cube").id]) == (0.015, 0.015, 0.015)
 

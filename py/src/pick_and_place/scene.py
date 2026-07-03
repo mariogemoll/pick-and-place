@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Compose the SO-101 robot with a floor, workspace overlays, light, and cube."""
+"""Compose the SO-101 robot with a floor, workspace overlays, soft light, and cube."""
 
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def build_scene(
     include_environment: bool = True,
     apriltag_cube: bool | None = None,
 ) -> mujoco.MjSpec:
-    """Return the composed robot with a floor, workspace overlays, light, and cube.
+    """Return the composed robot with a floor, workspace overlays, soft light, and cube.
 
     ``apriltag_cube`` selects the pick cube's appearance: the plain red cube for
     the simple scene, or the AprilTag-stickered cube (a perception target) for
@@ -54,12 +54,19 @@ def build_scene(
 
     spec = build_robot(wrist_camera=wrist_camera, materials=materials)
     spec.modelname = "so101_with_cube"
-    spec.worldbody.add_light(
+    spec.visual.headlight.diffuse = (0.6, 0.6, 0.6)
+    spec.visual.headlight.ambient = (0.3, 0.3, 0.3)
+    spec.visual.headlight.specular = (0.0, 0.0, 0.0)
+    scene_light = spec.worldbody.add_light(
         name="scene_light",
         pos=(0.0, 0.0, 1.0),
         dir=(0.0, 0.0, -1.0),
+        diffuse=(0.35, 0.35, 0.35),
+        ambient=(0.15, 0.15, 0.15),
+        specular=(0.0, 0.0, 0.0),
     )
-    
+    scene_light.castshadow = False
+
     base = spec.body("base")
     base.pos = (0.0, 0.0, ROBOT_BASE_Z_OFFSET)
 
@@ -109,24 +116,11 @@ def build_environment(
 
 
 def _add_groundplane(spec: mujoco.MjSpec) -> None:
-    spec.add_texture(
-        name="groundplane",
-        type=mujoco.mjtTexture.mjTEXTURE_2D,
-        builtin=mujoco.mjtBuiltin.mjBUILTIN_CHECKER,
-        mark=mujoco.mjtMark.mjMARK_EDGE,
-        rgb1=(0.2, 0.3, 0.4),
-        rgb2=(0.1, 0.2, 0.3),
-        markrgb=(0.8, 0.8, 0.8),
-        width=300,
-        height=300,
-    )
     groundplane = spec.add_material(
         name="groundplane",
-        texuniform=True,
-        texrepeat=(5.0, 5.0),
-        reflectance=0.2,
+        rgba=(0.82, 0.74, 0.6, 1.0),
+        reflectance=0.0,
     )
-    groundplane.textures[1] = "groundplane"
     spec.worldbody.add_geom(
         name="floor",
         type=mujoco.mjtGeom.mjGEOM_PLANE,
