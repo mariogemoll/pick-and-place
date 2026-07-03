@@ -1032,6 +1032,40 @@ def main() -> None:
         is_cube_recovery_target_allowed,
     )
 
+    def pan_and_track_cube(
+        viewer,
+        *,
+        tries: int,
+        free_grasp: bool = False,
+        return_out_of_zone: bool = False,
+        debug: OverheadDetectionDebug | None = None,
+    ) -> CubePose | None:
+        """Look for the cube from the current pose, panning to fresh near-neutral
+        search poses up to ``tries`` times. Returns the cube pose or ``None``."""
+        for attempt in range(tries):
+            if not viewer.is_running():
+                return None
+            if attempt > 0:
+                arm, grip = sample_hunt_pose(rng)
+                print(f"Look {attempt + 1}/{tries}: panning to a new search pose...")
+                move_to(arm, grip, viewer)
+                time.sleep(0.5)  # let the camera settle
+            else:
+                print(f"Look {attempt + 1}/{tries}: searching from current pose...")
+            source = track_cube(
+                overhead_cap,
+                args.camera_name,
+                model,
+                data,
+                CUBE_LOOK_TIMEOUT,
+                free_grasp=free_grasp,
+                return_out_of_zone=return_out_of_zone,
+                debug=debug,
+            )
+            if source is not None:
+                return source
+        return None
+
     def hunt_for_cube(
         viewer,
         *,
@@ -1046,29 +1080,13 @@ def main() -> None:
             if debug is not None:
                 debug.cube = source
             return source
-        for attempt in range(args.max_hunt_tries):
-            if not viewer.is_running():
-                return None
-            if attempt > 0:
-                arm, grip = sample_hunt_pose(rng)
-                print(f"Look {attempt + 1}/{args.max_hunt_tries}: panning to a new search pose...")
-                move_to(arm, grip, viewer)
-                time.sleep(0.5)  # let the camera settle
-            else:
-                print(f"Look {attempt + 1}/{args.max_hunt_tries}: searching from current pose...")
-            source = track_cube(
-                overhead_cap,
-                args.camera_name,
-                model,
-                data,
-                CUBE_LOOK_TIMEOUT,
-                free_grasp=free_grasp,
-                return_out_of_zone=return_out_of_zone,
-                debug=debug,
-            )
-            if source is not None:
-                return source
-        return None
+        return pan_and_track_cube(
+            viewer,
+            tries=args.max_hunt_tries,
+            free_grasp=free_grasp,
+            return_out_of_zone=return_out_of_zone,
+            debug=debug,
+        )
 
     def hunt_for_drop_zone(
         viewer,
@@ -1367,12 +1385,13 @@ def main() -> None:
                                 target=initial_overhead_debug.target,
                             )
                             try:
-                                final_cube = track_cube(
-                                    overhead_cap,
-                                    args.camera_name,
-                                    model,
-                                    data,
-                                    CUBE_LOOK_TIMEOUT,
+                                # The arm can sit between the overhead camera and
+                                # the placed cube; pan through fresh search poses
+                                # (unrecorded) until it comes into view, exactly
+                                # like the pre-episode cube hunt.
+                                final_cube = pan_and_track_cube(
+                                    viewer,
+                                    tries=args.max_hunt_tries,
                                     return_out_of_zone=True,
                                     debug=final_debug,
                                 )
