@@ -291,6 +291,11 @@ def main() -> None:
         default=8,
         help="maximum rejected candidates to save",
     )
+    parser.add_argument(
+        "--no-robot-dynamics",
+        action="store_true",
+        help="use raw upstream MuJoCo actuators instead of fitted actuator time constants",
+    )
     args = parser.parse_args()
 
     if args.speed <= 0.0:
@@ -323,6 +328,7 @@ def main() -> None:
         dummy_source,
         include_environment=args.environment,
         paper_target_marker=True,
+        robot_dynamics=not args.no_robot_dynamics,
     )
     mujoco.mj_forward(model, data)
 

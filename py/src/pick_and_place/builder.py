@@ -21,7 +21,9 @@ from pick_and_place.collision_boxes import (
     GRIP_SOLIMP,
     GRIP_SOLREF,
 )
+from pick_and_place.follower import JOINT_NAMES
 from pick_and_place.materials import MaterialConfig, apply_materials
+from pick_and_place.robot_dynamics import DEFAULT_ROBOT_DYNAMICS_PATH, load_robot_dynamics_config
 from pick_and_place.wrist_camera import add_wrist_camera
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -36,14 +38,20 @@ def build_robot(
     *,
     wrist_camera: bool = True,
     materials: MaterialConfig | None = None,
+    robot_dynamics: bool | str | Path = True,
 ) -> mujoco.MjSpec:
     """Stock SO-101 with box collisions; call ``.compile()`` on the result.
 
     The hex-nut wrist-camera mount and 32x32 UVC module are included by
     default. Pass ``wrist_camera=False`` for the unmodified stock wrist.
+
+    ``robot_dynamics`` applies fitted actuator time constants to the stock
+    position actuators when a calibration file is available. Pass ``False`` for
+    the raw upstream actuator dynamics, or a path to use a specific calibration.
     """
     spec = mujoco.MjSpec.from_file(str(STOCK_XML))
     spec.meshdir = str(STOCK_ASSETS_DIR)
+    _apply_robot_dynamics(spec, robot_dynamics)
     _strip_mesh_collisions(spec)
     _add_collision_boxes(spec)
     _exclude_base_shoulder_contact(spec)
@@ -51,6 +59,26 @@ def build_robot(
         add_wrist_camera(spec)
     apply_materials(spec, materials or MaterialConfig())
     return spec
+
+
+def _apply_robot_dynamics(spec: mujoco.MjSpec, robot_dynamics: bool | str | Path) -> None:
+    if robot_dynamics is False:
+        return
+    path = DEFAULT_ROBOT_DYNAMICS_PATH if robot_dynamics is True else Path(robot_dynamics)
+    if not path.is_file():
+        return
+
+    config = load_robot_dynamics_config(path)
+    for name in JOINT_NAMES:
+        joint_config = config["joints"].get(name)
+        if joint_config is None:
+            continue
+        time_constant = joint_config.get("time_constant_s")
+        if time_constant is None:
+            continue
+        actuator = spec.actuator(name)
+        actuator.dyntype = mujoco.mjtDyn.mjDYN_FILTEREXACT
+        actuator.dynprm[0] = float(time_constant)
 
 
 def _strip_mesh_collisions(spec: mujoco.MjSpec) -> None:

@@ -27,6 +27,7 @@ from pick_and_place import build_scene
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.kinematics import ARM_JOINT_NAMES, So101Kinematics, derive_kinematics
 from pick_and_place.paper_detection import add_paper_target_marker
+from pick_and_place.robot_dynamics import set_actuator_activation
 from pick_and_place.trajectory import (
     GRIPPER_OPEN,
     NEUTRAL_ARM_JOINTS,
@@ -307,8 +308,10 @@ def _preflight(
     for name, value in trajectory.start_joints.items():
         set_joint(model, shadow, name, value)
         shadow.ctrl[actuator_id[name]] = value
+        set_actuator_activation(model, shadow, actuator_id[name], value)
     set_joint(model, shadow, "gripper", trajectory.start_gripper)
     shadow.ctrl[actuator_id["gripper"]] = trajectory.start_gripper
+    set_actuator_activation(model, shadow, actuator_id["gripper"], trajectory.start_gripper)
 
     mujoco.mj_forward(model, shadow)
 
@@ -476,8 +479,10 @@ def _save_failed_preflight_trajectory(
     for name, value in trajectory.start_joints.items():
         set_joint(model, shadow, name, value)
         shadow.ctrl[actuator_id[name]] = value
+        set_actuator_activation(model, shadow, actuator_id[name], value)
     set_joint(model, shadow, "gripper", trajectory.start_gripper)
     shadow.ctrl[actuator_id["gripper"]] = trajectory.start_gripper
+    set_actuator_activation(model, shadow, actuator_id["gripper"], trajectory.start_gripper)
     mujoco.mj_forward(model, shadow)
 
     qpos: list[np.ndarray] = []
@@ -634,8 +639,9 @@ def _build_model(
     offwidth: int = 1280,
     offheight: int = 720,
     paper_target_marker: bool = False,
+    robot_dynamics: bool | str | Path = True,
 ) -> tuple[mujoco.MjModel, mujoco.MjData]:
-    spec = build_scene(include_environment=include_environment)
+    spec = build_scene(include_environment=include_environment, robot_dynamics=robot_dynamics)
     if paper_target_marker:
         add_paper_target_marker(spec)
     spec.visual.global_.offwidth = max(spec.visual.global_.offwidth, offwidth)
@@ -739,11 +745,13 @@ def prepare_episode(
         for name, value in ep_start_joints.items():
             set_joint(ep_model, ep_data, name, value)
             ep_data.ctrl[actuator_id[name]] = value
+            set_actuator_activation(ep_model, ep_data, actuator_id[name], value)
         # Initialise the gripper qpos too, not just its target: otherwise it
         # starts at the model default (closed) and the servo snaps it open on the
         # first step, polluting the viewer and the recorded state with a fake jerk.
         set_joint(ep_model, ep_data, "gripper", ep_start_gripper)
         ep_data.ctrl[actuator_id["gripper"]] = ep_start_gripper
+        set_actuator_activation(ep_model, ep_data, actuator_id["gripper"], ep_start_gripper)
         # Clear any residual velocity left in a reused scene from a prior episode.
         ep_data.qvel[:] = 0.0
         mujoco.mj_forward(ep_model, ep_data)

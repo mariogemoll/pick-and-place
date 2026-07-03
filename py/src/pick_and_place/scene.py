@@ -41,6 +41,7 @@ def build_scene(
     materials: MaterialConfig | None = None,
     include_environment: bool = True,
     apriltag_cube: bool | None = None,
+    robot_dynamics: bool | str | Path = True,
 ) -> mujoco.MjSpec:
     """Return the composed robot with a floor, workspace overlays, soft light, and cube.
 
@@ -52,7 +53,11 @@ def build_scene(
     if apriltag_cube is None:
         apriltag_cube = include_environment
 
-    spec = build_robot(wrist_camera=wrist_camera, materials=materials)
+    spec = build_robot(
+        wrist_camera=wrist_camera,
+        materials=materials,
+        robot_dynamics=robot_dynamics,
+    )
     spec.modelname = "so101_with_cube"
     spec.visual.headlight.diffuse = (0.6, 0.6, 0.6)
     spec.visual.headlight.ambient = (0.3, 0.3, 0.3)
@@ -116,7 +121,7 @@ def build_environment(
 
 
 def _add_groundplane(spec: mujoco.MjSpec) -> None:
-    groundplane = spec.add_material(
+    spec.add_material(
         name="groundplane",
         rgba=(0.82, 0.74, 0.6, 1.0),
         reflectance=0.0,
@@ -136,6 +141,7 @@ def export_scene(
     materials: MaterialConfig | None = None,
     include_environment: bool = True,
     apriltag_cube: bool | None = None,
+    robot_dynamics: bool | str | Path = True,
 ) -> Path:
     """Write a standalone, machine-local XML file for the composed scene."""
     spec = build_scene(
@@ -143,6 +149,7 @@ def export_scene(
         materials=materials,
         include_environment=include_environment,
         apriltag_cube=apriltag_cube,
+        robot_dynamics=robot_dynamics,
     )
     spec.meshdir = str(STOCK_ASSETS_DIR)
     spec.compile()

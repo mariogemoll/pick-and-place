@@ -51,6 +51,7 @@ from pick_and_place.paper_detection import (
     add_paper_target_marker,
     place_paper_target_marker,
 )
+from pick_and_place.robot_dynamics import set_actuator_activation
 from pick_and_place.workspace_overlays import is_cube_drop_allowed
 
 Mode = Literal["action", "state"]
@@ -238,6 +239,17 @@ def _set_ctrl(data: mujoco.MjData, actuator_ids: dict[str, int], sim_joints: np.
         data.ctrl[actuator_ids[name]] = sim_joints[i]
 
 
+def _seed_ctrl_and_activation(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    actuator_ids: dict[str, int],
+    sim_joints: np.ndarray,
+) -> None:
+    _set_ctrl(data, actuator_ids, sim_joints)
+    for i, name in enumerate(JOINT_NAMES):
+        set_actuator_activation(model, data, actuator_ids[name], sim_joints[i])
+
+
 def _get_robot_qpos(data: mujoco.MjData, qpos_addrs: dict[str, int]) -> np.ndarray:
     return np.asarray([data.qpos[qpos_addrs[name]] for name in JOINT_NAMES], dtype=float)
 
@@ -269,8 +281,9 @@ def _build_model(
     render_width: int,
     render_height: int,
     camera_calibration: bool,
+    robot_dynamics: bool,
 ) -> tuple[mujoco.MjModel, mujoco.MjData]:
-    spec = build_scene(include_environment=True)
+    spec = build_scene(include_environment=True, robot_dynamics=robot_dynamics)
     spec.visual.global_.offwidth = max(spec.visual.global_.offwidth, render_width)
     spec.visual.global_.offheight = max(spec.visual.global_.offheight, render_height)
     add_paper_target_marker(spec)
@@ -356,6 +369,7 @@ def _replay_mode(
     max_frames: int | None,
     action_initial_state: str,
     camera_calibration: bool,
+    robot_dynamics: bool,
 ) -> None:
     frame_count = episode.length if max_frames is None else min(episode.length, max_frames)
     first_camera_frames = _read_real_frames(
@@ -379,6 +393,7 @@ def _replay_mode(
         render_width=width,
         render_height=height,
         camera_calibration=camera_calibration,
+        robot_dynamics=robot_dynamics,
     )
     renderer = mujoco.Renderer(model, width=width, height=height)
     qpos_addrs = _joint_qpos_addrs(model)
@@ -393,13 +408,16 @@ def _replay_mode(
     else:
         initial_qpos = first_state
     _set_robot_qpos(data, qpos_addrs, initial_qpos)
-    _set_ctrl(data, actuator_ids, first_action)
+    _seed_ctrl_and_activation(model, data, actuator_ids, first_action)
     mujoco.mj_forward(model, data)
 
     out_size = (width * 4, height) if panel else (width, height)
+    mode_label = mode
+    if mode == "action" and robot_dynamics:
+        mode_label = f"{mode}_mjcf_dynamics"
     writers = {
         camera: _open_writer(
-            output_dir / f"episode_{episode.index:06d}_{camera}_{mode}_overlay.mp4",
+            output_dir / f"episode_{episode.index:06d}_{camera}_{mode_label}_overlay.mp4",
             episode.fps,
             out_size,
         )
@@ -495,6 +513,11 @@ def main() -> None:
         default=None,
         help="optional follower joint-offset JSON used for real-frame -> sim conversion",
     )
+    parser.add_argument(
+        "--no-robot-dynamics",
+        action="store_true",
+        help="use the raw upstream MuJoCo actuators instead of fitted MJCF actuator time constants",
+    )
     args = parser.parse_args()
 
     if not 0.0 <= args.alpha <= 1.0:
@@ -527,6 +550,7 @@ def main() -> None:
             max_frames=args.max_frames,
             action_initial_state=args.action_initial_state,
             camera_calibration=not args.no_camera_calibration,
+            robot_dynamics=not args.no_robot_dynamics,
         )
     print(f"wrote overlays to {args.output_dir}")
 

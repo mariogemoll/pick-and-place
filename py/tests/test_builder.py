@@ -7,6 +7,8 @@ import numpy as np
 from pick_and_place import add_camera_module, build_robot
 from pick_and_place.camera_module import BOARD_HALF_SIZE, LENS_HALF_LENGTH, LENS_POS, LENS_RADIUS
 from pick_and_place.collision_boxes import COLLISION_BOXES
+from pick_and_place.follower import JOINT_NAMES
+from pick_and_place.robot_dynamics import load_robot_dynamics_config
 from pick_and_place.wrist_camera import _MOUNT_VISUAL_POS
 from pick_and_place.wrist_camera_mount_collision_boxes import (
     WRIST_CAMERA_MOUNT_COLLISION_BOXES,
@@ -112,6 +114,24 @@ def test_robot_has_box_collisions_only():
         if model.geom_type[i] == mujoco.mjtGeom.mjGEOM_MESH and model.geom_contype[i] != 0
     ]
     assert colliding_meshes == []
+
+
+def test_robot_applies_fitted_actuator_time_constants_by_default():
+    model = build_robot().compile()
+    dynamics = load_robot_dynamics_config()
+
+    for name in JOINT_NAMES:
+        actuator_id = model.actuator(name).id
+        assert model.actuator_dyntype[actuator_id] == mujoco.mjtDyn.mjDYN_FILTEREXACT
+        assert model.actuator_dynprm[actuator_id, 0] == dynamics["joints"][name]["time_constant_s"]
+
+
+def test_robot_dynamics_can_be_disabled_for_stock_actuators():
+    model = build_robot(robot_dynamics=False).compile()
+
+    for name in JOINT_NAMES:
+        actuator_id = model.actuator(name).id
+        assert model.actuator_dyntype[actuator_id] == mujoco.mjtDyn.mjDYN_NONE
 
 
 def test_robot_shoulder_pan_range_has_no_self_contacts():

@@ -34,3 +34,36 @@ python -m pick_and_place.cam_align_solve \
 
 The command reports reprojection error and the delta from the nominal authored
 camera pose before saving the measured pose.
+
+## Robot Dynamics
+
+Recorded LeRobot datasets can be used to fit the follower arm's actuator
+response. The fitted file lives at:
+
+- `robot_dynamics/so101_follower.json`
+
+Generate it from a dataset root:
+
+```sh
+PYTHONPATH=py/src python3 py/scripts/calibrate_robot_dynamics.py \
+  datasets-512/combined \
+  --output config/robot_dynamics/so101_follower.json
+```
+
+The calibrator fits per-joint delayed first-order response from the recorded
+`action` and `observation.state` streams, then writes actuator time constants.
+`build_robot()` / `build_scene()` apply those time constants to the composed
+MuJoCo actuators by default, so generated MJCF exports and sim/replay tools use
+the calibrated response automatically.
+
+Use raw upstream actuator dynamics for comparison:
+
+```sh
+PYTHONPATH=py/src mjpython py/scripts/pick_and_place/sim.py --no-robot-dynamics
+```
+
+```sh
+PYTHONPATH=py/src mjpython py/scripts/replay_dataset_episode.py \
+  datasets-512/combined 0 \
+  --no-robot-dynamics
+```

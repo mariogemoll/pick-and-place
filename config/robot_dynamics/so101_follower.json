@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-03T08:36:01.508910+00:00",
+  "model": "delayed_first_order_joint_response",
+  "equation": "state[t+1] = state[t] + alpha * (action[t-delay] - state[t]) + beta",
+  "control_hz": 30.0,
+  "source_datasets": [
+    "datasets-512/combined"
+  ],
+  "train_episodes": 492,
+  "validation_episodes": 87,
+  "fit_options": {
+    "max_delay_frames": 15,
+    "min_excitation": 0.05,
+    "min_alpha": 0.001,
+    "max_alpha": 1.0,
+    "val_fraction": 0.15,
+    "seed": 0
+  },
+  "joints": {
+    "shoulder_pan": {
+      "delay_frames": 0,
+      "delay_s": 0.0,
+      "alpha_per_frame": 0.2612714101693203,
+      "time_constant_s": 0.11007468737218454,
+      "beta_per_frame": 0.007539848468989643,
+      "steady_state_bias": 0.028858298977692765,
+      "unit": "degrees",
+      "train_mae_per_frame": 0.14910774698820448,
+      "validation_mae_per_frame": 0.1473206974153666,
+      "validation_baseline_action_mae": 1.3872385219288217,
+      "train_samples": 127804,
+      "validation_samples": 22205
+    },
+    "shoulder_lift": {
+      "delay_frames": 0,
+      "delay_s": 0.0,
+      "alpha_per_frame": 0.17782240162687085,
+      "time_constant_s": 0.17024274243185933,
+      "beta_per_frame": 0.38407185609462197,
+      "steady_state_bias": 2.1598620453936364,
+      "unit": "degrees",
+      "train_mae_per_frame": 0.2689192213060545,
+      "validation_mae_per_frame": 0.25836106028611294,
+      "validation_baseline_action_mae": 2.431096975428272,
+      "train_samples": 130345,
+      "validation_samples": 22853
+    },
+    "elbow_flex": {
+      "delay_frames": 0,
+      "delay_s": 0.0,
+      "alpha_per_frame": 0.23365203215762964,
+      "time_constant_s": 0.12525727235787118,
+      "beta_per_frame": 0.3189142940494867,
+      "steady_state_bias": 1.3649112789840245,
+      "unit": "degrees",
+      "train_mae_per_frame": 0.2271569384632873,
+      "validation_mae_per_frame": 0.22384441517152281,
+      "validation_baseline_action_mae": 2.0088040650372707,
+      "train_samples": 131176,
+      "validation_samples": 22847
+    },
+    "wrist_flex": {
+      "delay_frames": 0,
+      "delay_s": 0.0,
+      "alpha_per_frame": 0.23165966947186678,
+      "time_constant_s": 0.12649141027839944,
+      "beta_per_frame": 0.09309955884914228,
+      "steady_state_bias": 0.4018807376415103,
+      "unit": "degrees",
+      "train_mae_per_frame": 0.23758106106850496,
+      "validation_mae_per_frame": 0.23231122399152834,
+      "validation_baseline_action_mae": 3.192470484047156,
+      "train_samples": 131027,
+      "validation_samples": 22757
+    },
+    "wrist_roll": {
+      "delay_frames": 0,
+      "delay_s": 0.0,
+      "alpha_per_frame": 0.0992070630895847,
+      "time_constant_s": 0.31904074646101277,
+      "beta_per_frame": -0.01429147158572213,
+      "steady_state_bias": -0.14405699695813823,
+      "unit": "degrees",
+      "train_mae_per_frame": 0.32491198159170537,
+      "validation_mae_per_frame": 0.34592700876764576,
+      "validation_baseline_action_mae": 1.9514448393896244,
+      "train_samples": 126588,
+      "validation_samples": 22079
+    },
+    "gripper": {
+      "delay_frames": 0,
+      "delay_s": 0.0,
+      "alpha_per_frame": 0.19230738960035887,
+      "time_constant_s": 0.1560741296830687,
+      "beta_per_frame": 0.018631096978898157,
+      "steady_state_bias": 0.09688185678988276,
+      "unit": "position",
+      "train_mae_per_frame": 0.1995105160722099,
+      "validation_mae_per_frame": 0.19766829112167064,
+      "validation_baseline_action_mae": 1.7171670926872538,
+      "train_samples": 126309,
+      "validation_samples": 22003
+    }
+  }
+}
