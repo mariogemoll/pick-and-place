@@ -5,7 +5,7 @@ import numpy as np
 
 from pick_and_place.episodes import prepare_episode
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
-from pick_and_place.trajectory import RECOVERY_DROP_CUBE_CENTER_Z, RECOVERY_LIFT_CUBE_Z
+from pick_and_place.trajectory import RECOVERY_LIFT_CUBE_Z, nominal_drop_center_z
 
 
 def test_free_grasp_recovery_lifts_vertically_before_carry():
@@ -42,7 +42,7 @@ def test_free_grasp_recovery_lifts_vertically_before_carry():
     grasp = episode.trajectory.grasp
     assert grasp is not None
     assert episode.trajectory.carry is not None
-    assert episode.trajectory.carry.drop_position[2] == RECOVERY_DROP_CUBE_CENTER_Z
+    assert episode.trajectory.carry.drop_position[2] == nominal_drop_center_z(target)
     release = next(phase for phase in episode.trajectory.phases if phase.name == "release")
     assert release.pre_release_delay == 0.0
     np.testing.assert_allclose(

@@ -39,6 +39,7 @@ from pick_and_place.transforms import Mat4, Vec3
 from pick_and_place.workspace_overlays import (
     CANONICAL_PICKUP_OVERLAY,
     CUBE_PLACEMENT_OVERLAY,
+    PAN_AXIS,
     is_cube_drop_allowed,
 )
 
@@ -56,8 +57,15 @@ SOURCE_HOVER_TIP_Z = 0.04
 RECOVERY_LIFT_CUBE_Z = 0.08
 # Cube-center height at release. Kept higher than the low simulated drop so
 # the physical gripper stays clear of the floor with calibration/readback error.
+# For a normal drop this is the reference height, adjusted by target radius in
+# ``nominal_drop_center_z``: close to the base the arm places accurately from low
+# down, but fully extended (far out) it can't safely reach as low, so the release
+# rises. Near the placement zone's inner radius it drops 3 cm below this (down to
+# the cube's resting height, i.e. a set-down), and at the outer radius it sits
+# 1 cm above.
 DROP_CUBE_CENTER_Z = 0.045
-RECOVERY_DROP_CUBE_CENTER_Z = 0.05
+NEAR_DROP_CUBE_CENTER_Z = DROP_CUBE_CENTER_Z - 0.03
+FAR_DROP_CUBE_CENTER_Z = DROP_CUBE_CENTER_Z + 0.01
 # Vertical lift after release, preserving the chosen drop orientation until the
 # open jaws clear the cube.
 POSTDROP_LIFT_Z = 0.04
@@ -590,6 +598,21 @@ def _drop_descent_joints(
     return branch.joints if branch is not None else _lerp_joints(cruise_joints, drop_joints, alpha)
 
 
+def nominal_drop_center_z(target: CubePose) -> float:
+    """Cube-center release height for a drop, rising with target radius.
+
+    Close to the base the arm places accurately from low down; fully extended it
+    can't safely reach as low, so the release height climbs linearly with radius
+    from ``NEAR_DROP_CUBE_CENTER_Z`` at the placement zone's inner radius to
+    ``FAR_DROP_CUBE_CENTER_Z`` at its outer radius, clamped outside that band.
+    """
+    radius = math.hypot(target.x - PAN_AXIS[0], target.y - PAN_AXIS[1])
+    r_near = CUBE_PLACEMENT_OVERLAY.inner_radius
+    r_far = CUBE_PLACEMENT_OVERLAY.outer_radius
+    frac = min(1.0, max(0.0, (radius - r_near) / (r_far - r_near)))
+    return NEAR_DROP_CUBE_CENTER_Z + frac * (FAR_DROP_CUBE_CENTER_Z - NEAR_DROP_CUBE_CENTER_Z)
+
+
 def plan_carry_candidates(
     k: So101Kinematics,
     grasp: GraspChoice,
@@ -1001,7 +1024,7 @@ def trajectory_candidates_for_grasp(
     carry_ok: CarryJointChecker | None = None,
 ) -> Iterator[Trajectory]:
     """Yield full trajectories for one selected grasp."""
-    drop_cube_center_z = RECOVERY_DROP_CUBE_CENTER_Z if free_grasp else DROP_CUBE_CENTER_Z
+    drop_cube_center_z = nominal_drop_center_z(target)
     release_delay = 0.0 if free_grasp else DROP_DWELL_DURATION
     for carry in plan_carry_candidates(
         k,
@@ -1111,7 +1134,7 @@ def replan_remaining_candidates(
         else list(free_grasp_candidates(k, source) if free_grasp else grasp_candidates(k, source))
     )
 
-    drop_cube_center_z = RECOVERY_DROP_CUBE_CENTER_Z if free_grasp else DROP_CUBE_CENTER_Z
+    drop_cube_center_z = nominal_drop_center_z(target)
     release_delay = 0.0 if free_grasp else DROP_DWELL_DURATION
     for g in grasps:
         for carry in plan_carry_candidates(
