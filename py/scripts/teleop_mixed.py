@@ -56,7 +56,6 @@ from pick_and_place.follower import (
     ARM_JOINT_NAMES,
     action_to_joints,
     joints_to_action,
-    load_follower_joint_offsets,
     make_so101_leader,
     make_so101_follower,
     real_frame_to_sim,
@@ -213,7 +212,6 @@ def main() -> None:
     parser.add_argument("--leader-id", default="liddy", help="Leader ID (default: liddy)")
     parser.add_argument("--follower-port", help="Optional serial port of the SO-101 follower to sync joints")
     parser.add_argument("--follower-id", default="folly", help="follower calibration id")
-    parser.add_argument("--offsets-path", default=None, help="JSON of per-joint sim→real degree offsets")
     parser.add_argument("--sim-tracks", choices=["leader", "follower"], default="leader", help="Whether the sim displays the leader's target pose or the follower's actual readback pose.")
     parser.add_argument("--kinematic", action="store_true", help="Teleport the simulation joints instantly rather than driving them with actuators.")
     parser.add_argument("--fps", type=float, default=50.0, help="Teleop loop rate (Hz)")
@@ -429,8 +427,7 @@ def main() -> None:
             print("Warning: tracking on a raw frame; calibrated intrinsics recommended")
 
     # 6. Connect to leader and follower
-    offsets = load_follower_joint_offsets(args.offsets_path)
-    
+
     print(f"Connecting to leader on {args.leader_port}...")
     leader = make_so101_leader(args.leader_port, args.leader_id)
     leader.connect(calibrate=True)
@@ -458,7 +455,7 @@ def main() -> None:
     # Initialize to the leader's actual pose so the sim doesn't snap abruptly
     leader_action = leader.get_action()
     real_joints = action_to_joints(leader_action, np.zeros(6, dtype=float))
-    arm_rad, gripper_rad = real_frame_to_sim(real_joints, offsets)
+    arm_rad, gripper_rad = real_frame_to_sim(real_joints)
 
     for name in ARM_JOINT_NAMES:
         jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
@@ -508,7 +505,7 @@ def main() -> None:
             else:
                 sim_target_joints = leader_joints
 
-            arm_rad, gripper_rad = real_frame_to_sim(sim_target_joints, offsets)
+            arm_rad, gripper_rad = real_frame_to_sim(sim_target_joints)
 
             is_kinematic = args.kinematic or (args.sim_tracks == "follower" and follower_read_joints is not None)
 

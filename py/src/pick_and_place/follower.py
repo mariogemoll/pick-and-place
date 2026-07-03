@@ -9,8 +9,8 @@ trajectory speaks the *sim frame* (arm joints in radians, gripper a joint angle
 in radians); the follower speaks the *real frame* (arm joints in degrees,
 gripper a 0-100 position). The conversion lives here:
 
-- arm joints: ``real_deg = sim_deg + offset`` per joint (offsets default to
-  zero, so by default the real frame is just the sim frame in degrees);
+- arm joints: a plain radians<->degrees conversion (the follower's own lerobot
+  calibration already aligns each servo's zero with the sim frame);
 - gripper: a nonlinear angle->position map calibrated on the hardware.
 
 ``make_so101_follower`` imports lerobot lazily, so importing this module never
@@ -19,9 +19,7 @@ requires lerobot or any hardware to be present.
 
 from __future__ import annotations
 
-import json
 import math
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -73,26 +71,6 @@ def clamp_joints(joints: np.ndarray, low: np.ndarray, high: np.ndarray) -> np.nd
     return np.clip(joints, low, high)
 
 
-def load_follower_joint_offsets(path: str | Path | None) -> np.ndarray:
-    """Load per-joint ``sim_deg -> real_deg`` offsets (degrees), defaulting to zero.
-
-    The stored convention is ``real_deg = sim_deg + offset``. A missing path or
-    file resolves to zero offsets so a hardware run has a stable default before
-    any calibration exists (Phase 1 measures these offsets empirically).
-    """
-    offsets = np.zeros(len(JOINT_NAMES), dtype=float)
-    if path is None:
-        return offsets
-    p = Path(path)
-    if not p.is_file():
-        return offsets
-    data = json.loads(p.read_text())
-    for i, name in enumerate(JOINT_NAMES):
-        if name in data:
-            offsets[i] = float(data[name])
-    return offsets
-
-
 def gripper_angle_to_position(angle_rad: float) -> float:
     """Map a sim gripper joint angle (radians) to a follower 0-100 position.
 
@@ -116,26 +94,23 @@ def gripper_position_to_angle(position: float) -> float:
     return math.radians(angle_deg)
 
 def sim_frame_to_real(
-    arm_joints_rad: dict[str, float], gripper_rad: float, offsets: np.ndarray
+    arm_joints_rad: dict[str, float], gripper_rad: float
 ) -> np.ndarray:
     """Convert a trajectory set point (sim frame) into a real-frame 6-vector.
 
-    Arm joints: ``real_deg = sim_deg + offset``. Gripper: nonlinear angle->position
-    map (the gripper carries no additive offset).
+    Arm joints: radians->degrees. Gripper: nonlinear angle->position map.
     """
     out = np.zeros(len(JOINT_NAMES), dtype=float)
     for i, name in enumerate(ARM_JOINT_NAMES):
-        out[i] = math.degrees(arm_joints_rad[name]) + offsets[i]
+        out[i] = math.degrees(arm_joints_rad[name])
     out[GRIPPER_INDEX] = gripper_angle_to_position(gripper_rad)
     return out
 
-def real_frame_to_sim(
-    real_joints: np.ndarray, offsets: np.ndarray
-) -> tuple[dict[str, float], float]:
+def real_frame_to_sim(real_joints: np.ndarray) -> tuple[dict[str, float], float]:
     """Convert a real-frame 6-vector back into sim-frame joints (radians)."""
     arm_joints_rad = {}
     for i, name in enumerate(ARM_JOINT_NAMES):
-        arm_joints_rad[name] = math.radians(real_joints[i] - offsets[i])
+        arm_joints_rad[name] = math.radians(real_joints[i])
     gripper_rad = gripper_position_to_angle(real_joints[GRIPPER_INDEX])
     return arm_joints_rad, gripper_rad
 

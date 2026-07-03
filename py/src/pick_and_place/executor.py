@@ -55,7 +55,6 @@ from pick_and_place.follower import (
     action_to_joints,
     clamp_joints,
     joints_to_action,
-    load_follower_joint_offsets,
     real_frame_to_sim,
     sim_frame_to_real,
 )
@@ -321,7 +320,7 @@ def _report_tracking(recorder: EpisodeRecorder) -> None:
             f"p95 {np.percentile(wall_dt, 95) * 1000:.1f} ms, "
             f"{missed} missed tick(s)"
         )
-    print("  (with zero offsets, a joint's mean err is its sim→real calibration bias)")
+    print("  (mean err is each joint's sim→real tracking bias)")
 
 
 @dataclass
@@ -476,7 +475,6 @@ def execute_episode(
     *,
     follower,
     viewer,
-    offsets_path: str | None = None,
     recording: RecordingSession | None = None,
     overhead_camera_cap=None,
     speed: float | None = None,
@@ -530,9 +528,6 @@ def execute_episode(
     if failed_trajectory_path is not None:
         failed_trajectory_path.mkdir(parents=True, exist_ok=True)
 
-    # With zero offsets the real frame is just the sim frame in degrees, so this
-    # run also measures each joint's sim→real calibration bias (Phase 2 input).
-    offsets = load_follower_joint_offsets(offsets_path)
     clamp_low, clamp_high = follower_clamp_limits(kinematics)
     clip_warned: set[str] = set()
 
@@ -814,7 +809,7 @@ def execute_episode(
         # Ramp the real arm onto the trajectory start pose so the arm and the sim
         # are visibly aligned before any playback motion begins.
         start_real = clamp_and_warn(
-            sim_frame_to_real(start_joints, start_gripper, offsets),
+            sim_frame_to_real(start_joints, start_gripper),
             clamp_low,
             clamp_high,
             clip_warned,
@@ -1014,7 +1009,7 @@ def execute_episode(
                 prev_contacts = curr_contacts
 
                 commanded = clamp_and_warn(
-                    sim_frame_to_real(frame.joints, frame.gripper, offsets),
+                    sim_frame_to_real(frame.joints, frame.gripper),
                     clamp_low,
                     clamp_high,
                     clip_warned,
@@ -1247,7 +1242,7 @@ def execute_episode(
 
             # Sense: get actual joints
             actual = action_to_joints(follower.get_observation(), commanded)
-            measured_joints, measured_gripper = real_frame_to_sim(actual, offsets)
+            measured_joints, measured_gripper = real_frame_to_sim(actual)
             measured_shadow = mujoco.MjData(model)
             for name, value in measured_joints.items():
                 set_joint(model, measured_shadow, name, value)

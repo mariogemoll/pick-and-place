@@ -39,7 +39,6 @@ from pick_and_place.follower import (
     JOINT_NAMES,
     action_to_joints,
     joints_to_action,
-    load_follower_joint_offsets,
     make_so101_follower,
     sim_frame_to_real,
 )
@@ -65,7 +64,6 @@ def move_to_real(
     target_gripper: float,
     duration: float,
     control_hz: float,
-    offsets: np.ndarray,
     clamp_low: np.ndarray,
     clamp_high: np.ndarray,
     clip_warned: set[str],
@@ -82,7 +80,7 @@ def move_to_real(
     for the caller to log as episode metadata.
     """
     target_real = clamp_and_warn(
-        sim_frame_to_real(target_joints, target_gripper, offsets), clamp_low, clamp_high, clip_warned
+        sim_frame_to_real(target_joints, target_gripper), clamp_low, clamp_high, clip_warned
     )
     start_real = action_to_joints(follower.get_observation(), target_real)
     delta_real = target_real - start_real
@@ -168,11 +166,6 @@ def main() -> None:
     )
     parser.add_argument("--follower-port", required=True, help="serial port of the SO-101 follower")
     parser.add_argument("--follower-id", default="folly", help="follower calibration id (default: folly)")
-    parser.add_argument(
-        "--offsets-path",
-        default=None,
-        help="JSON of per-joint sim->real degree offsets (default: zero offsets)",
-    )
     parser.add_argument("--no-viewer", action="store_true", help="run headless (no 3D MuJoCo viewer)")
     args = parser.parse_args()
 
@@ -186,7 +179,6 @@ def main() -> None:
         mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i): i for i in range(model.nu)
     }
     kinematics = derive_kinematics(model)
-    offsets = load_follower_joint_offsets(args.offsets_path)
     clamp_low, clamp_high = follower_clamp_limits(kinematics)
     clip_warned: set[str] = set()
 
@@ -211,7 +203,7 @@ def main() -> None:
         return move_to_real(
             follower, model, data, actuator_id, viewer,
             target_joints, target_gripper, args.move_duration, args.control_hz,
-            offsets, clamp_low, clamp_high, clip_warned, recorder,
+            clamp_low, clamp_high, clip_warned, recorder,
         )
 
     def cooldown(viewer) -> None:

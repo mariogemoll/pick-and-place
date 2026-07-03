@@ -41,7 +41,6 @@ from pick_and_place.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 from pick_and_place.follower import (
     ARM_JOINT_NAMES,
     JOINT_NAMES,
-    load_follower_joint_offsets,
     real_frame_to_sim,
     sim_frame_to_real,
 )
@@ -215,14 +214,14 @@ def _cube_freejoint_addrs(model: mujoco.MjModel) -> tuple[int, int]:
     return int(model.jnt_qposadr[joint_id]), int(model.body_dofadr[body_id])
 
 
-def _real_to_sim_vector(real_joints: np.ndarray, offsets: np.ndarray) -> np.ndarray:
-    arm_rad, gripper_rad = real_frame_to_sim(real_joints, offsets)
+def _real_to_sim_vector(real_joints: np.ndarray) -> np.ndarray:
+    arm_rad, gripper_rad = real_frame_to_sim(real_joints)
     return np.asarray([arm_rad[name] for name in ARM_JOINT_NAMES] + [gripper_rad], dtype=float)
 
 
-def _sim_to_real_vector(sim_joints: np.ndarray, offsets: np.ndarray) -> np.ndarray:
+def _sim_to_real_vector(sim_joints: np.ndarray) -> np.ndarray:
     arm_rad = {name: float(sim_joints[i]) for i, name in enumerate(ARM_JOINT_NAMES)}
-    return sim_frame_to_real(arm_rad, float(sim_joints[-1]), offsets)
+    return sim_frame_to_real(arm_rad, float(sim_joints[-1]))
 
 
 def _set_robot_qpos(
@@ -363,7 +362,6 @@ def _replay_mode(
     mode: Mode,
     cameras: list[str],
     output_dir: Path,
-    offsets: np.ndarray,
     alpha: float,
     panel: bool,
     max_frames: int | None,
@@ -401,8 +399,8 @@ def _replay_mode(
     cube_qadr, cube_dadr = _cube_freejoint_addrs(model)
     _set_cube(data, cube_qadr, cube_dadr, episode.source_xy, episode.source_z, episode.source_yaw)
 
-    first_state = _real_to_sim_vector(episode.states[0], offsets)
-    first_action = _real_to_sim_vector(episode.actions[0], offsets)
+    first_state = _real_to_sim_vector(episode.states[0])
+    first_action = _real_to_sim_vector(episode.actions[0])
     if mode == "action" and action_initial_state == "action":
         initial_qpos = first_action
     else:
@@ -428,8 +426,8 @@ def _replay_mode(
     state_errors = []
     try:
         for frame_index in range(frame_count):
-            state = _real_to_sim_vector(episode.states[frame_index], offsets)
-            action = _real_to_sim_vector(episode.actions[frame_index], offsets)
+            state = _real_to_sim_vector(episode.states[frame_index])
+            action = _real_to_sim_vector(episode.actions[frame_index])
             if mode == "state":
                 _set_robot_qpos(data, qpos_addrs, state)
                 _set_ctrl(data, actuator_ids, state)
@@ -437,7 +435,7 @@ def _replay_mode(
             else:
                 _set_ctrl(data, actuator_ids, action)
                 mujoco.mj_step(model, data, nstep=simulation_steps_per_tick)
-                sim_real = _sim_to_real_vector(_get_robot_qpos(data, qpos_addrs), offsets)
+                sim_real = _sim_to_real_vector(_get_robot_qpos(data, qpos_addrs))
                 state_errors.append(np.abs(sim_real - episode.states[frame_index]))
 
             for camera in cameras:
@@ -508,12 +506,6 @@ def main() -> None:
         help="render authored nominal cameras instead of applying local camera calibration",
     )
     parser.add_argument(
-        "--offsets",
-        type=Path,
-        default=None,
-        help="optional follower joint-offset JSON used for real-frame -> sim conversion",
-    )
-    parser.add_argument(
         "--no-robot-dynamics",
         action="store_true",
         help="use the raw upstream MuJoCo actuators instead of fitted MJCF actuator time constants",
@@ -528,7 +520,6 @@ def main() -> None:
     cameras = args.camera or ["overhead_camera", "wrist_camera"]
     modes: list[Mode] = ["action", "state"] if args.mode == "both" else [args.mode]
     episode = _load_episode(args.dataset_root, args.episode_index)
-    offsets = load_follower_joint_offsets(args.offsets)
 
     print(
         f"episode={episode.index} frames={episode.length} fps={episode.fps:g} "
@@ -544,7 +535,6 @@ def main() -> None:
             mode=mode,
             cameras=cameras,
             output_dir=args.output_dir,
-            offsets=offsets,
             alpha=args.alpha,
             panel=args.panel,
             max_frames=args.max_frames,

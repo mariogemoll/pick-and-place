@@ -38,7 +38,6 @@ from pick_and_place.follower import (
     ARM_JOINT_NAMES,
     action_to_joints,
     joints_to_action,
-    load_follower_joint_offsets,
     make_so101_leader,
     make_so101_follower,
     real_frame_to_sim,
@@ -214,7 +213,6 @@ def main() -> None:
     parser.add_argument("--leader-id", default="liddy", help="Leader ID (default: liddy)")
     parser.add_argument("--follower-port", help="Optional serial port of the SO-101 follower")
     parser.add_argument("--follower-id", default="folly", help="follower calibration id")
-    parser.add_argument("--offsets-path", default=None, help="JSON of per-joint sim->real offsets")
     parser.add_argument("--camera", required=True, help="OpenCV camera index or device path")
     parser.add_argument("--camera-name", default="wrist_camera")
     parser.add_argument("--intrinsics", type=Path, default=None)
@@ -243,8 +241,6 @@ def main() -> None:
         raise SystemExit(
             "camera extrinsic solving requires opencv-python and pupil-apriltags"
         ) from exc
-
-    offsets = load_follower_joint_offsets(args.offsets_path)
 
     print(f"Connecting to leader on {args.leader_port}...")
     leader = make_so101_leader(args.leader_port, args.leader_id)
@@ -369,7 +365,7 @@ def main() -> None:
                 # If we have a follower connected, the wrist camera is on it, so we
                 # use its highly-accurate joint readbacks to position the MuJoCo model.
                 sim_target_joints = f_joints if f_joints is not None else l_joints
-                arm_rad, gripper_rad = real_frame_to_sim(sim_target_joints, offsets)
+                arm_rad, gripper_rad = real_frame_to_sim(sim_target_joints)
 
                 for name in ARM_JOINT_NAMES:
                     jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)

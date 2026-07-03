@@ -68,7 +68,6 @@ from pick_and_place.executor import (
 )
 from pick_and_place.follower import (
     action_to_joints,
-    load_follower_joint_offsets,
     make_so101_follower,
     real_frame_to_sim,
     sim_frame_to_real,
@@ -572,11 +571,6 @@ def main() -> None:
     parser.add_argument("--follower-port", required=True, help="serial port of the SO-101 follower")
     parser.add_argument("--follower-id", default="folly", help="follower calibration id (default: folly)")
     parser.add_argument(
-        "--offsets-path",
-        default=None,
-        help="JSON of per-joint sim→real degree offsets (default: zero offsets)",
-    )
-    parser.add_argument(
         "--speed",
         type=float,
         default=1.0,
@@ -769,7 +763,6 @@ def main() -> None:
     actuator_id = {
         mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i): i for i in range(model.nu)
     }
-    offsets = load_follower_joint_offsets(args.offsets_path)
     clamp_low, clamp_high = follower_clamp_limits(kinematics)
     clip_warned: set[str] = set()
     rng = np.random.default_rng()
@@ -845,12 +838,12 @@ def main() -> None:
     def read_current_sim_pose() -> tuple[dict[str, float], float]:
         """Read the real arm and convert to the sim joint frame."""
         actual = action_to_joints(follower.get_observation(), clamp_low)
-        return real_frame_to_sim(actual, offsets)
+        return real_frame_to_sim(actual)
 
     def move_to(arm_joints: dict[str, float], gripper: float, viewer) -> None:
         """Smoothly ramp the real arm and the sim onto ``arm_joints``/``gripper``."""
         target_real = clamp_and_warn(
-            sim_frame_to_real(arm_joints, gripper, offsets), clamp_low, clamp_high, clip_warned
+            sim_frame_to_real(arm_joints, gripper), clamp_low, clamp_high, clip_warned
         )
         ramp_to_resting(
             follower, target_real, arm_joints, gripper, actuator_id, model, data, viewer
@@ -1167,7 +1160,6 @@ def main() -> None:
                     recovery,
                     follower=follower,
                     viewer=viewer,
-                    offsets_path=args.offsets_path,
                     speed=args.speed,
                     wrist_camera=args.wrist_camera,
                     wrist_intrinsics=args.wrist_intrinsics,
@@ -1420,7 +1412,6 @@ def main() -> None:
                             episode,
                             follower=follower,
                             viewer=viewer,
-                            offsets_path=args.offsets_path,
                             recording=recording,
                             overhead_camera_cap=overhead_cap,
                             speed=args.speed,

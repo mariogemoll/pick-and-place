@@ -13,7 +13,6 @@ sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 from pick_and_place.follower import (
     action_to_joints,
-    load_follower_joint_offsets,
     make_so101_follower,
     real_frame_to_sim,
 )
@@ -22,7 +21,6 @@ def main():
     parser = argparse.ArgumentParser(description="Capture the current robot pose as the rest position.")
     parser.add_argument("--port", required=True, help="Serial port of the SO-101 follower")
     parser.add_argument("--id", default="folly", help="Follower ID (default: folly)")
-    parser.add_argument("--offsets-path", default=None, help="Path to joint offsets JSON")
     parser.add_argument("--update", action="store_true", help="Automatically update py/src/pick_and_place/trajectory.py")
     args = parser.parse_args()
 
@@ -33,9 +31,8 @@ def main():
     print("Reading current pose...")
     obs = follower.get_observation()
     real_joints = action_to_joints(obs, np.zeros(6))
-    
-    offsets = load_follower_joint_offsets(args.offsets_path)
-    arm_rad, gripper_rad = real_frame_to_sim(real_joints, offsets)
+
+    arm_rad, gripper_rad = real_frame_to_sim(real_joints)
     
     print("\nCaptured Rest Pose (radians):")
     print("REST_ARM_JOINTS = {")

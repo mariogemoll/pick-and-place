@@ -40,7 +40,6 @@ from pick_and_place.executor import (
 )
 from pick_and_place.follower import (
     ARM_JOINT_NAMES,
-    JOINT_NAMES,
     sim_frame_to_real,
 )
 from pick_and_place.image_rectify import SQUARE_SIZE
@@ -119,8 +118,8 @@ def record_episode(
     advances the sim by a batch of physics substeps. The commanded set point is
     the ``action``; the joints read back from ``data`` after stepping are the
     ``observation.state``. Both are expressed in the real joint frame (degrees /
-    0-100 gripper) with zero calibration offset, so the dataset is unit-for-unit
-    comparable to a real recording. ``viewer`` (a launched passive viewer, or
+    0-100 gripper), so the dataset is unit-for-unit comparable to a real
+    recording. ``viewer`` (a launched passive viewer, or
     ``None``) is synced once per tick if given.
 
     The dataset is created lazily on the first episode once the (fixed) 512x512
@@ -141,10 +140,6 @@ def record_episode(
         raise ValueError(
             f"MuJoCo timestep {model.opt.timestep:g}s cannot produce {CONTROL_HZ:g} Hz exactly"
         )
-
-    # Zero offsets: the sim arm has no calibration bias, so the real frame is just
-    # the sim joints in degrees (gripper through the calibrated angle->position map).
-    offsets = np.zeros(len(JOINT_NAMES))
 
     if recording.dataset is None:
         recording.create_dataset((rig.size, rig.size, 3), (rig.size, rig.size, 3))
@@ -172,8 +167,8 @@ def record_episode(
 
         measured_arm = {name: get_joint(model, data, name) for name in ARM_JOINT_NAMES}
         measured_gripper = get_joint(model, data, "gripper")
-        state = sim_frame_to_real(measured_arm, measured_gripper, offsets)
-        action = sim_frame_to_real(frame.joints, frame.gripper, offsets)
+        state = sim_frame_to_real(measured_arm, measured_gripper)
+        action = sim_frame_to_real(frame.joints, frame.gripper)
 
         wrist_rgb, overhead_rgb = rig.capture(data)
         recording.dataset.add_frame(

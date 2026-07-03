@@ -61,7 +61,6 @@ from pick_and_place.follower import (
     JOINT_NAMES,
     action_to_joints,
     joints_to_action,
-    load_follower_joint_offsets,
     make_so101_follower,
     sim_frame_to_real,
 )
@@ -213,11 +212,8 @@ def main() -> None:
     kinematics = derive_kinematics(model)
     clamp_low, clamp_high = follower_clamp_limits(kinematics)
     clip_warned: set[str] = set()
-    # The policy speaks the raw follower frame, so the start pose carries no
-    # sim->real offset (zero offsets => real frame is just sim degrees).
-    offsets = load_follower_joint_offsets(None)
-    neutral_real = sim_frame_to_real(NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER, offsets)
-    rest_real = sim_frame_to_real(REST_ARM_JOINTS, REST_GRIPPER, offsets)
+    neutral_real = sim_frame_to_real(NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER)
+    rest_real = sim_frame_to_real(REST_ARM_JOINTS, REST_GRIPPER)
 
     from lerobot.utils.control_utils import predict_action
 

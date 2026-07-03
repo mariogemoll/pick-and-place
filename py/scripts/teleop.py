@@ -16,7 +16,6 @@ from pick_and_place.follower import (
     ARM_JOINT_NAMES,
     action_to_joints,
     joints_to_action,
-    load_follower_joint_offsets,
     make_so101_leader,
     make_so101_follower,
     real_frame_to_sim,
@@ -41,9 +40,6 @@ def main() -> None:
         "--follower-id", default="folly", help="Follower ID (default: folly)"
     )
     parser.add_argument(
-        "--offsets-path", default=None, help="JSON of per-joint sim→real degree offsets"
-    )
-    parser.add_argument(
         "--sim-tracks", choices=["leader", "follower"], default="leader",
         help="Whether the sim displays the leader's target pose or the follower's actual readback pose."
     )
@@ -53,8 +49,6 @@ def main() -> None:
     )
     parser.add_argument("--fps", type=float, default=50.0, help="Teleop loop rate (Hz)")
     args = parser.parse_args()
-
-    offsets = load_follower_joint_offsets(args.offsets_path)
 
     print(f"Connecting to leader on {args.leader_port}...")
     leader = make_so101_leader(args.leader_port, args.leader_id)
@@ -94,7 +88,7 @@ def main() -> None:
     # Initialize to the leader's actual pose so the sim doesn't snap abruptly
     leader_action = leader.get_action()
     real_joints = action_to_joints(leader_action, np.zeros(6, dtype=float))
-    arm_rad, gripper_rad = real_frame_to_sim(real_joints, offsets)
+    arm_rad, gripper_rad = real_frame_to_sim(real_joints)
 
     for name in ARM_JOINT_NAMES:
         jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
@@ -144,7 +138,7 @@ def main() -> None:
                 # Update real_joints for the next iteration's previous state
                 real_joints = leader_joints
 
-                arm_rad, gripper_rad = real_frame_to_sim(sim_target_joints, offsets)
+                arm_rad, gripper_rad = real_frame_to_sim(sim_target_joints)
 
                 # Use kinematic teleportation if explicitly requested, or if tracking 
                 # the actual follower readback (so physics doesn't lag the real arm).

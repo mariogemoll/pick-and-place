@@ -53,7 +53,6 @@ from pick_and_place.follower import (
     ARM_JOINT_NAMES,
     GRIPPER_INDEX,
     JOINT_NAMES,
-    load_follower_joint_offsets,
     real_frame_to_sim,
     sim_frame_to_real,
 )
@@ -132,17 +131,17 @@ def _joint_qpos_adr(model: mujoco.MjModel) -> list[int]:
     ]
 
 
-def _sim_state_to_real(qpos_rad: np.ndarray, offsets: np.ndarray) -> np.ndarray:
+def _sim_state_to_real(qpos_rad: np.ndarray) -> np.ndarray:
     """Sim joint positions (radians, ``JOINT_NAMES`` order) -> real-frame state
     vector (arm degrees + gripper 0-100), matching the dataset convention."""
     arm = {name: float(qpos_rad[i]) for i, name in enumerate(ARM_JOINT_NAMES)}
-    return sim_frame_to_real(arm, float(qpos_rad[GRIPPER_INDEX]), offsets).astype(np.float32)
+    return sim_frame_to_real(arm, float(qpos_rad[GRIPPER_INDEX])).astype(np.float32)
 
 
-def _real_action_to_ctrl(action_real: np.ndarray, offsets: np.ndarray) -> np.ndarray:
+def _real_action_to_ctrl(action_real: np.ndarray) -> np.ndarray:
     """Real-frame action vector from the policy -> sim ctrl (radians,
     ``JOINT_NAMES`` order, which the actuators follow)."""
-    arm_rad, gripper_rad = real_frame_to_sim(action_real, offsets)
+    arm_rad, gripper_rad = real_frame_to_sim(action_real)
     return np.array([arm_rad[name] for name in ARM_JOINT_NAMES] + [gripper_rad])
 
 
@@ -253,9 +252,6 @@ def main() -> None:
     cube_qadr, cube_dofadr = _cube_freejoint_addrs(model)
     ctrl_low = model.actuator_ctrlrange[:, 0].copy()
     ctrl_high = model.actuator_ctrlrange[:, 1].copy()
-    # Zero sim->real offsets: the real frame is sim degrees with no calibration
-    # bias, which is what an uncalibrated fine-tune is trained against.
-    offsets = load_follower_joint_offsets(None)
 
     hw = (args.image_size, args.image_size)
     policy, preprocessor, postprocessor = make_policy(args.checkpoint, hw, hw, device)
@@ -340,7 +336,7 @@ def main() -> None:
             wrist_frame = render("wrist_camera")
             overhead_frame = render("overhead_camera")
             observation = {
-                "observation.state": _sim_state_to_real(data.qpos[joint_adr], offsets),
+                "observation.state": _sim_state_to_real(data.qpos[joint_adr]),
                 WRIST_FEATURE: wrist_frame,
                 OVERHEAD_FEATURE: overhead_frame,
             }
@@ -366,7 +362,7 @@ def main() -> None:
                 robot_type="so101",
             )
             action_real = action.to("cpu").numpy().reshape(-1)[: len(JOINT_NAMES)]
-            ctrl = _real_action_to_ctrl(action_real, offsets)
+            ctrl = _real_action_to_ctrl(action_real)
             data.ctrl[:] = np.clip(ctrl, ctrl_low, ctrl_high)
 
             mujoco.mj_step(model, data, nstep=substeps)

@@ -369,22 +369,11 @@ def main() -> None:
 
     try:
         while True:
-            # Sync joints with real robot
+            # Sync joints with real robot. The follower reports arm joints in
+            # degrees (use_degrees=True), which the sim consumes as radians, so
+            # each arm joint is a plain deg->rad conversion.
             if follower is not None:
                 obs = follower.get_observation()
-                # follower returns joints in degrees (and gripper 0-100)
-                # action_to_joints converts it to a vector.
-                # But MuJoCo expects radians for joints.
-                # Actually, SO101Follower with use_degrees=True returns degrees.
-                # Let's check follower.py for sim_frame_to_real inversion if needed.
-                # For now, let's assume we want to just read the joints.
-                
-                # In follower.py:
-                # ARM_JOINT_NAMES are in radians in sim.
-                # real_deg = sim_deg + offset
-                # So sim_rad = (real_deg - offset) * (pi/180)
-                
-                # For simplicity, if offsets are 0: sim_rad = real_deg * (pi/180)
                 joints_real = action_to_joints(obs, np.zeros(6))
                 for i, name in enumerate(JOINT_NAMES[:-1]): # Arm joints
                     data.qpos[joint_qpos_adr[i]] = np.radians(joints_real[i])
