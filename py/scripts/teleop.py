@@ -106,16 +106,35 @@ def main() -> None:
     print("Starting simulation teleop. Press Ctrl+C to stop.")
     loop_start_time = time.perf_counter()
 
+    # Rolling per-second timing report: sum each serial op's duration and the
+    # actual tick period, then print averages/maxes once a second so we can see
+    # the achieved rate and where the time goes without spamming every tick.
+    stats = {k: 0.0 for k in ("leader", "send", "readback", "tick")}
+    stats_max = {k: 0.0 for k in ("leader", "send", "readback", "tick")}
+    stats_ticks = 0
+    stats_window_start = loop_start_time
+    prev_tick_start = None
+
     try:
         with mujoco.viewer.launch_passive(model, data) as viewer:
             while viewer.is_running():
                 step_start = time.perf_counter()
                 elapsed_total = step_start - loop_start_time
+                # Actual wall-clock period since the previous tick started (includes
+                # the sleep), i.e. the real loop rate rather than the busy time.
+                if prev_tick_start is not None:
+                    stats["tick"] += step_start - prev_tick_start
+                    stats_max["tick"] = max(stats_max["tick"], step_start - prev_tick_start)
+                prev_tick_start = step_start
 
+                t0 = time.perf_counter()
                 obs = leader.get_action()
+                leader_dt = time.perf_counter() - t0
                 leader_joints = action_to_joints(obs, real_joints)
-                
+
                 follower_read_joints = None
+                send_dt = 0.0
+                readback_dt = 0.0
                 # Mirror to follower with a smooth ramp from its starting position
                 if follower is not None:
                     if elapsed_total < ramp_duration:
@@ -123,11 +142,39 @@ def main() -> None:
                         follower_target = follower_start_joints + alpha * (leader_joints - follower_start_joints)
                     else:
                         follower_target = leader_joints
+                    t0 = time.perf_counter()
                     follower.send_action(joints_to_action(follower_target))
+                    send_dt = time.perf_counter() - t0
 
                     # Read back actual follower position
+                    t0 = time.perf_counter()
                     follower_obs = follower.get_observation()
+                    readback_dt = time.perf_counter() - t0
                     follower_read_joints = action_to_joints(follower_obs, follower_target)
+
+                stats["leader"] += leader_dt
+                stats["send"] += send_dt
+                stats["readback"] += readback_dt
+                stats_max["leader"] = max(stats_max["leader"], leader_dt)
+                stats_max["send"] = max(stats_max["send"], send_dt)
+                stats_max["readback"] = max(stats_max["readback"], readback_dt)
+                stats_ticks += 1
+                if step_start - stats_window_start >= 1.0 and stats_ticks > 0:
+                    n = stats_ticks
+                    # tick sum has one fewer sample (no period before the first tick)
+                    tick_n = max(1, n - 1) if stats["tick"] > 0 else 1
+                    achieved_hz = tick_n / stats["tick"] if stats["tick"] > 0 else float("nan")
+                    print(
+                        f"[timing] {achieved_hz:5.1f} Hz  "
+                        f"leader {stats['leader'] / n * 1e3:5.2f}ms (max {stats_max['leader'] * 1e3:5.2f}) "
+                        f"send {stats['send'] / n * 1e3:5.2f}ms (max {stats_max['send'] * 1e3:5.2f}) "
+                        f"readback {stats['readback'] / n * 1e3:5.2f}ms (max {stats_max['readback'] * 1e3:5.2f}) "
+                        f"tick {stats['tick'] / tick_n * 1e3:5.2f}ms (max {stats_max['tick'] * 1e3:5.2f})"
+                    )
+                    stats = {k: 0.0 for k in stats}
+                    stats_max = {k: 0.0 for k in stats_max}
+                    stats_ticks = 0
+                    stats_window_start = step_start
 
                 # Determine what the sim should visualize
                 if args.sim_tracks == "follower" and follower_read_joints is not None:
