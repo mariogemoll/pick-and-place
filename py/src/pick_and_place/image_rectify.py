@@ -10,8 +10,8 @@ pinhole view. ``build_undistort_map`` derives that rectified pinhole from a
 camera's calibrated intrinsics, scaled to the frame's actual resolution, using
 focal length ``fy`` on both axes with the principal point at the image center
 -- the same geometry ``SimCameraRig`` feeds MuJoCo. ``transform_frame`` then
-applies the map, center-crops to a square (keeping the full image height), and
-resizes to the policy's input size.
+applies the map, center-crops to the requested output aspect ratio, and resizes
+to the policy's input size (square for the VLA, but any width/height works).
 """
 
 from __future__ import annotations
@@ -43,16 +43,33 @@ def build_undistort_map(
 
 
 def transform_frame(
-    rgb: np.ndarray, undistort_map: tuple[np.ndarray, np.ndarray], size: int, cv2: Any
+    rgb: np.ndarray,
+    undistort_map: tuple[np.ndarray, np.ndarray],
+    out_w: int,
+    out_h: int,
+    cv2: Any,
 ) -> np.ndarray:
-    """Undistort, center-crop to a square, and resize to ``size`` x ``size``."""
+    """Undistort, center-crop to the ``out_w``:``out_h`` aspect, and resize to ``out_w`` x ``out_h``.
+
+    The crop is the largest centered rectangle of the target aspect ratio that
+    fits the rectified frame, so it never scales the axes unevenly: for a square
+    output it keeps the full height and trims the sides; for a wider-than-tall
+    output it keeps whichever axis is the binding constraint. The final resize
+    is therefore uniform, preserving the rectified pinhole's pixel geometry.
+    """
     rectified = cv2.remap(rgb, undistort_map[0], undistort_map[1], cv2.INTER_LINEAR)
     h, w = rectified.shape[:2]
-    side = min(h, w)
-    x0 = (w - side) // 2
-    y0 = (h - side) // 2
-    crop = rectified[y0 : y0 + side, x0 : x0 + side]
-    return cv2.resize(crop, (size, size), interpolation=cv2.INTER_AREA)
+    aspect = out_w / out_h
+    if w / h > aspect:
+        crop_h = h
+        crop_w = round(h * aspect)
+    else:
+        crop_w = w
+        crop_h = round(w / aspect)
+    x0 = (w - crop_w) // 2
+    y0 = (h - crop_h) // 2
+    crop = rectified[y0 : y0 + crop_h, x0 : x0 + crop_w]
+    return cv2.resize(crop, (out_w, out_h), interpolation=cv2.INTER_AREA)
 
 
 def rectified_square_camera_matrix(intrinsics: dict[str, Any], size: int) -> list[list[float]]:

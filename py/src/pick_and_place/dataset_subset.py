@@ -30,7 +30,7 @@ import pandas as pd
 # spans, per-feature stats) rather than project data. Every other column is
 # treated as project metadata (success, cube pose, pickup/placement checks,
 # ...) and carried through to the subset dataset unchanged, mirroring
-# convert_dataset_to_square.py's approach.
+# convert_dataset_resolution.py's approach.
 BOOKKEEPING_COLUMNS = {"episode_index", "tasks", "length", "dataset_from_index", "dataset_to_index"}
 BOOKKEEPING_PREFIXES = ("data/", "videos/", "stats/", "meta/episodes/")
 
@@ -186,7 +186,7 @@ def write_subset_dataset(
     episodes = episodes.copy()
     # A batch of buffered episode rows that mixes real strings with pandas'
     # float NaN infers a pyarrow type that conflicts across batches (see the
-    # same fix in convert_dataset_to_square.py); filling with "" keeps every
+    # same fix in convert_dataset_resolution.py); filling with "" keeps every
     # value a real str so the column always infers consistently.
     for col in metadata_columns:
         if pd.api.types.is_string_dtype(episodes[col]):

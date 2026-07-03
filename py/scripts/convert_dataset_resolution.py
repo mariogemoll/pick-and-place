@@ -2,23 +2,27 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Convert a recorded real LeRobotDataset to the 512x512 square image format.
+"""Convert a recorded real LeRobotDataset to a rectified fixed-resolution format.
 
 A real recording stores each camera at its native, lens-distorted resolution
-(overhead 1920x1080, wrist 1280x720). The sim recordings and the VLA input, by
-contrast, are 512x512 squares of an ideal pinhole view. This script bridges the
+(overhead 1920x1080, wrist 1280x720). Trained policies instead expect a fixed,
+rectified pinhole view: the sim recordings and the VLA input are 512x512
+squares, while an ACT policy typically wants 640x480. This script bridges the
 two: every camera frame is undistorted with its calibrated intrinsics,
-center-cropped to a square (keeping the full image height), and resized to
-512x512, so a converted real frame matches a sim frame pixel-geometry for
-pixel-geometry. State, action, task and timing are copied through unchanged,
-as is every other per-episode metadata column already present on the source
-dataset (pickup/placement checks, cube start/target pose, success, ...).
+center-cropped to the requested output aspect ratio (keeping the full image
+height when the output is no taller than it is wide), and resized to
+``--width`` x ``--height``, so a converted real frame matches the target
+pinhole geometry pixel for pixel. State, action, task and timing are copied
+through unchanged, as is every other per-episode metadata column already
+present on the source dataset (pickup/placement checks, cube start/target pose,
+success, ...).
 
 The geometry mirrors how the sim sets its camera field of view: the rectified
 pinhole uses focal length ``fy`` on both axes with the principal point at the
-image center, and a center square crop keeps the full height, giving a vertical
-(and, being square, horizontal) FOV of ``2*atan((h/2)/fy)`` -- exactly the
-angle ``SimCameraRig`` feeds MuJoCo.
+image center, so the vertical FOV is ``2*atan((h/2)/fy)`` -- exactly the angle
+``SimCameraRig`` feeds MuJoCo. A square output keeps that full vertical FOV on
+both axes; a wider output (e.g. 640x480) keeps the same vertical FOV and shows
+a proportionally wider horizontal slice.
 
 Videos are decoded sequentially with PyAV (one straight pass per file rather
 than a per-frame seek), so the run is bound by raw decode speed. The v3 dataset
@@ -26,10 +30,15 @@ stores each episode's frames as one contiguous, in-order segment of its video
 file, so decoding the files in order yields frames in lockstep with the numeric
 rows read from the data parquet.
 
-Example:
+Examples:
 
-    python py/scripts/convert_dataset_to_square.py \
-        --src datasets/20260702 --dst datasets/20260702-512
+    # 512x512 square (VLA)
+    python py/scripts/convert_dataset_resolution.py \
+        --src datasets/20260702 --width 512 --height 512
+
+    # 640x480 (ACT)
+    python py/scripts/convert_dataset_resolution.py \
+        --src datasets/20260702 --width 640 --height 480
 """
 
 from __future__ import annotations
@@ -104,14 +113,15 @@ def main() -> None:
         "--dst",
         type=Path,
         default=None,
-        help="output dataset root (default: <src>-512 alongside the source)",
+        help="output dataset root (default: <src>-<width>x<height> alongside the source)",
     )
     parser.add_argument(
         "--repo-id",
         default=None,
-        help="repo id for the output dataset (default: <src dir name>-512)",
+        help="repo id for the output dataset (default: <src dir name>-<width>x<height>)",
     )
-    parser.add_argument("--size", type=int, default=SQUARE_SIZE, help="square output side (px)")
+    parser.add_argument("--width", type=int, default=SQUARE_SIZE, help="output width (px)")
+    parser.add_argument("--height", type=int, default=SQUARE_SIZE, help="output height (px)")
     parser.add_argument(
         "--vcodec",
         default="auto",
@@ -149,12 +159,13 @@ def main() -> None:
     )
     args = parser.parse_args()
     exclude_episodes = {int(e) for e in args.exclude_episodes.split(",") if e.strip()}
+    suffix = f"{args.width}x{args.height}"
 
     import cv2
     import pandas as pd
     from tqdm import tqdm
 
-    dst_root = args.dst if args.dst is not None else args.src.with_name(f"{args.src.name}-512")
+    dst_root = args.dst if args.dst is not None else args.src.with_name(f"{args.src.name}-{suffix}")
     if dst_root.exists():
         raise SystemExit(f"output {dst_root} already exists; remove it or pick another --dst")
 
@@ -230,12 +241,12 @@ def main() -> None:
 
     exclude_note = f", excluding episode(s) {sorted(exclude_episodes)}" if exclude_episodes else ""
     print(
-        f"Converting {episodes.shape[0]} episode(s), {len(rows)} frame(s) "
+        f"Converting {episodes.shape[0]} episode(s), {len(rows)} frame(s) to {suffix} "
         f"from {args.src} -> {dst_root}{exclude_note}"
     )
 
     recording = RecordingSession(
-        repo_id=args.repo_id or f"{args.src.name}-512",
+        repo_id=args.repo_id or f"{args.src.name}-{suffix}",
         root=dst_root,
         task=task_by_index[0],
         fps=fps,
@@ -244,7 +255,8 @@ def main() -> None:
         image_writer_threads=args.image_writer_threads,
         encoder_queue_maxsize=args.encoder_queue_maxsize,
     )
-    recording.create_dataset((args.size, args.size, 3), (args.size, args.size, 3))
+    image_shape = (args.height, args.width, 3)
+    recording.create_dataset(image_shape, image_shape)
 
     # Built lazily once the first frame reveals each camera's stored resolution.
     undistort_maps: dict[str, tuple[np.ndarray, np.ndarray]] = {}
@@ -278,7 +290,9 @@ def main() -> None:
                         undistort_maps[camera] = build_undistort_map(
                             intrinsics_by_camera[camera], w, h, cv2
                         )
-                    pulled[feature] = transform_frame(rgb, undistort_maps[camera], args.size, cv2)
+                    pulled[feature] = transform_frame(
+                        rgb, undistort_maps[camera], args.width, args.height, cv2
+                    )
                 last_processed = pulled
                 last_row_index = row_index
 

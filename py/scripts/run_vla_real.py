@@ -21,7 +21,7 @@ those joint limits and the neutral start pose.
 
 The cameras do need conversion: each raw, lens-distorted frame is undistorted
 with its calibrated intrinsics, center-cropped to a square, and resized to
-512x512 every tick, via the same geometry ``convert_dataset_to_square.py``
+512x512 every tick, via the same geometry ``convert_dataset_resolution.py``
 applies to recorded datasets — so the live frames fed to the policy match the
 ones it was fine-tuned on, pixel-geometry for pixel-geometry.
 
@@ -284,8 +284,10 @@ def main() -> None:
             wrist_bgr = wrist.latest()
             overhead_rgb = cv2.cvtColor(overhead_bgr, cv2.COLOR_BGR2RGB)
             wrist_rgb = cv2.cvtColor(wrist_bgr, cv2.COLOR_BGR2RGB)
-            overhead_rgb = transform_frame(overhead_rgb, overhead_undistort_map, SQUARE_SIZE, cv2)
-            wrist_rgb = transform_frame(wrist_rgb, wrist_undistort_map, SQUARE_SIZE, cv2)
+            overhead_rgb = transform_frame(
+                overhead_rgb, overhead_undistort_map, SQUARE_SIZE, SQUARE_SIZE, cv2
+            )
+            wrist_rgb = transform_frame(wrist_rgb, wrist_undistort_map, SQUARE_SIZE, SQUARE_SIZE, cv2)
 
             state = action_to_joints(follower.get_observation(), neutral_real).astype(np.float32)
             observation = {

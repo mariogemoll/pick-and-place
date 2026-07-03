@@ -76,7 +76,7 @@ def export_camera_calibrations(square_size: int | None = None) -> dict[str, dict
     By default the intrinsics describe the raw, lens-distorted camera at its
     native resolution, matching what a recorded (unconverted) dataset's video
     pixels are. Pass ``square_size`` to instead describe the rectified,
-    center-cropped square that ``convert_dataset_to_square.py`` produces --
+    center-cropped square that ``convert_dataset_resolution.py`` produces --
     extrinsics are unaffected by that conversion, but the pinhole intrinsics
     (focal length, principal point, image size) are not the same matrix once
     the frame has been undistorted, cropped, and resized.
@@ -144,7 +144,7 @@ def main() -> None:
         type=int,
         default=None,
         help=(
-            "emit intrinsics for the rectified square crop convert_dataset_to_square.py "
+            "emit intrinsics for the rectified square crop convert_dataset_resolution.py "
             "produces (e.g. 512), instead of the raw native-resolution camera"
         ),
     )

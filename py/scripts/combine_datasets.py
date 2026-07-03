@@ -6,7 +6,7 @@
 
 This script merges several same-schema dataset roots into a single
 training-ready dataset, e.g. multiple outputs of
-``convert_dataset_to_square.py`` into one combined dataset.
+``convert_dataset_resolution.py`` into one combined dataset.
 
 Uses ``lerobot.datasets.aggregate.aggregate_datasets``, same as
 ``consolidate_datasets.py``: episode/frame reindexing, video concatenation
