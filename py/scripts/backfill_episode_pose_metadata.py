@@ -5,15 +5,14 @@
 """Backfill cube source/target pose metadata into recorded LeRobotDatasets.
 
 The script reads ``meta/episodes/chunk-*/file-*.parquet`` files in one or more
-dataset roots. It preserves existing columns, adds missing ``cube_start_*`` and
-``cube_target_*`` scalar metadata, and writes the parquet file only with
+dataset roots. It preserves existing columns, adds missing ``cube_start_x/y/yaw``
+and ``target_x/y`` scalar metadata, and writes the parquet file only with
 ``--write``.
 
-Target recovery prefers existing ``placement_target_*`` columns because those
-were captured live. Missing targets and sources are recovered from the beginning
-of each episode's overhead video using the current local camera calibration. A
-parquet file is written only if every episode can be converted to the required
-pose-column schema.
+Missing targets and sources are recovered from the beginning of each episode's
+overhead video using the current local camera calibration. A parquet file is
+written only if every episode can be converted to the required pose-column
+schema.
 """
 
 from __future__ import annotations
@@ -45,31 +44,19 @@ from pick_and_place.paper_detection import detect_paper_target
 from pick_and_place.workspace_overlays import PAN_AXIS, workspace_interior_corners_world
 
 
-POSE_COLUMNS = (
-    "cube_start_x",
-    "cube_start_y",
-    "cube_start_z",
-    "cube_start_roll",
-    "cube_start_pitch",
-    "cube_start_yaw",
-    "cube_target_x",
-    "cube_target_y",
-    "cube_target_z",
-    "cube_target_roll",
-    "cube_target_pitch",
-    "cube_target_yaw",
-)
+POSE_COLUMNS = ("cube_start_x", "cube_start_y", "cube_start_yaw", "target_x", "target_y")
 
 
-def _pose_row(prefix: str, pose: CubePose) -> dict[str, Any]:
+def _source_row(pose: CubePose) -> dict[str, Any]:
     return {
-        f"{prefix}_x": float(pose.x),
-        f"{prefix}_y": float(pose.y),
-        f"{prefix}_z": float(pose.z),
-        f"{prefix}_roll": float(pose.roll),
-        f"{prefix}_pitch": float(pose.pitch),
-        f"{prefix}_yaw": float(pose.yaw),
+        "cube_start_x": float(pose.x),
+        "cube_start_y": float(pose.y),
+        "cube_start_yaw": float(pose.yaw),
     }
+
+
+def _target_row(pose: CubePose) -> dict[str, Any]:
+    return {"target_x": float(pose.x), "target_y": float(pose.y)}
 
 
 def _build_calibrated_overhead(camera_name: str) -> tuple[Any, Any, np.ndarray, np.ndarray]:
@@ -178,16 +165,6 @@ def _detect_target(
     return None
 
 
-def _existing_target(row: pd.Series) -> CubePose | None:
-    if "placement_target_x" not in row or not pd.notna(row["placement_target_x"]):
-        return None
-    return CubePose(
-        x=float(row["placement_target_x"]),
-        y=float(row["placement_target_y"]),
-        z=float(row.get("placement_target_z", CUBE_HALF_SIZE)),
-    )
-
-
 def backfill_file(
     dataset_root: Path,
     parquet_path: Path,
@@ -204,7 +181,7 @@ def backfill_file(
     df = pd.read_parquet(parquet_path)
     for column in POSE_COLUMNS:
         if column not in df.columns:
-            df[column] = False if column.endswith("_detected") else math.nan
+            df[column] = math.nan
 
     recovered_sources = 0
     recovered_targets = 0
@@ -213,14 +190,7 @@ def backfill_file(
     try:
         for index, row in df.iterrows():
             need_source = overwrite or not pd.notna(row.get("cube_start_x", math.nan))
-            need_target = overwrite or not pd.notna(row.get("cube_target_x", math.nan))
-
-            target = _existing_target(row)
-            if target is not None and need_target:
-                for key, value in _pose_row("cube_target", target).items():
-                    df.at[index, key] = value
-                recovered_targets += 1
-                need_target = False
+            need_target = overwrite or not pd.notna(row.get("target_x", math.nan))
 
             if not need_source and not need_target:
                 continue
@@ -250,7 +220,7 @@ def backfill_file(
                     cam_rot=cam_rot,
                 )
                 if source is not None:
-                    for key, value in _pose_row("cube_start", source).items():
+                    for key, value in _source_row(source).items():
                         df.at[index, key] = value
                     recovered_sources += 1
                 else:
@@ -267,7 +237,7 @@ def backfill_file(
                     target_color=target_color,
                 )
                 if target is not None:
-                    for key, value in _pose_row("cube_target", target).items():
+                    for key, value in _target_row(target).items():
                         df.at[index, key] = value
                     recovered_targets += 1
                 else:

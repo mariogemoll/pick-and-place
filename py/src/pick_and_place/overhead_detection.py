@@ -414,25 +414,12 @@ def track_drop_zone_square(
     return None
 
 
-def final_placement_metadata(
-    cube: CubePose | None,
-    target: CubePose,
-    *,
-    check_error: str = "",
-) -> dict[str, Any]:
+def final_placement_metadata(cube: CubePose | None, target: CubePose) -> dict[str, Any]:
     """Episode metadata for the physical cube's final overhead-camera pose."""
     target_xyz = (float(target.x), float(target.y), float(CUBE_HALF_SIZE))
     if cube is None:
         print("placement error: cube not detected after release")
-        metadata = placement_error_metadata(None, detected=False, check_error=check_error)
-        metadata.update(
-            {
-                "placement_target_x": target_xyz[0],
-                "placement_target_y": target_xyz[1],
-                "placement_target_z": target_xyz[2],
-            }
-        )
-        return metadata
+        return placement_error_metadata(None, detected=False)
 
     cube_xyz = (float(cube.x), float(cube.y), float(cube.z))
     error = PlacementError(
@@ -444,4 +431,4 @@ def final_placement_metadata(
         xy=float(np.linalg.norm(np.asarray(cube_xyz[:2]) - np.asarray(target_xyz[:2]))),
     )
     print(error.summary())
-    return placement_error_metadata(error, detected=True, check_error=check_error)
+    return placement_error_metadata(error, detected=True)

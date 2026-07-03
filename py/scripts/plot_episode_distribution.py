@@ -5,7 +5,7 @@
 """Plot the spread of cube source and target poses across recorded episodes.
 
 Supports both raw ``episode_*.npz`` directories and LeRobotDataset roots whose
-episode metadata contains scalar ``cube_start_*`` and ``cube_target_*`` columns.
+episode metadata contains scalar ``cube_start_*`` and ``target_*`` columns.
 Passing a parent directory such as ``datasets/`` aggregates all LeRobotDataset
 children under it.
 The figure's top row covers initial cube poses (scatter with yaw heading arrows,
@@ -27,6 +27,7 @@ import numpy as np
 import pandas as pd
 
 from pick_and_place.episodes import sample_cube, sample_target
+from pick_and_place.geometry import CUBE_HALF_SIZE
 from pick_and_place.workspace_overlays import (
     CANONICAL_PICKUP_OVERLAY,
     CUBE_PLACEMENT_BOUNDS,
@@ -91,28 +92,23 @@ def _load_lerobot_poses(dataset_root: Path) -> tuple[np.ndarray, np.ndarray] | N
     if not files:
         return None
     df = pd.concat((pd.read_parquet(path) for path in files), ignore_index=True)
-    required = {
-        "cube_start_x",
-        "cube_start_y",
-        "cube_start_z",
-        "cube_start_yaw",
-        "cube_target_x",
-        "cube_target_y",
-        "cube_target_z",
-        "cube_target_yaw",
-    }
+    required = {"cube_start_x", "cube_start_y", "cube_start_yaw", "target_x", "target_y"}
     missing = sorted(required - set(df.columns))
     if missing:
         raise SystemExit(
             f"{dataset_root} is a LeRobotDataset but is missing pose metadata: "
             f"{', '.join(missing)}"
         )
-    sources = df[
-        ["cube_start_x", "cube_start_y", "cube_start_z", "cube_start_yaw"]
-    ].to_numpy(dtype=float)
-    targets = df[
-        ["cube_target_x", "cube_target_y", "cube_target_z", "cube_target_yaw"]
-    ].to_numpy(dtype=float)
+    n = len(df)
+    # The cube always rests flat, so z is the constant half-size and the target
+    # marker carries no yaw; fill both to keep the (x, y, z, yaw) contract.
+    z = np.full(n, CUBE_HALF_SIZE)
+    sources = np.column_stack(
+        [df["cube_start_x"], df["cube_start_y"], z, df["cube_start_yaw"]]
+    ).astype(float)
+    targets = np.column_stack(
+        [df["target_x"], df["target_y"], z, np.zeros(n)]
+    ).astype(float)
     finite = np.isfinite(sources).all(axis=1) & np.isfinite(targets).all(axis=1)
     if not finite.all():
         raise SystemExit(f"{dataset_root} contains {int((~finite).sum())} row(s) with missing poses")

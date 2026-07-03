@@ -22,57 +22,36 @@ def driver_metadata(driver: str) -> dict[str, str]:
 
 
 def cube_pose_metadata(source: CubePose, target: CubePose) -> dict[str, float]:
-    """Return scalar source/target pose metadata for one pick-and-place episode."""
+    """Return the planar pick pose and target point for one pick-and-place episode.
+
+    The cube always rests flat on the table, so its z and roll/pitch are
+    constants and only the ``(x, y, yaw)`` of the pick pose carries
+    information. The target is the centre of the black-square marker, a bare
+    ``(x, y)`` point with no meaningful orientation.
+    """
     return {
         "cube_start_x": float(source.x),
         "cube_start_y": float(source.y),
-        "cube_start_z": float(source.z),
-        "cube_start_roll": float(source.roll),
-        "cube_start_pitch": float(source.pitch),
         "cube_start_yaw": float(source.yaw),
-        "cube_target_x": float(target.x),
-        "cube_target_y": float(target.y),
-        "cube_target_z": float(target.z),
-        "cube_target_roll": float(target.roll),
-        "cube_target_pitch": float(target.pitch),
-        "cube_target_yaw": float(target.yaw),
+        "target_x": float(target.x),
+        "target_y": float(target.y),
     }
 
 
-def placement_error_metadata(
-    error: PlacementError | None,
-    *,
-    detected: bool,
-    check_error: str = "",
-) -> dict[str, Any]:
-    """Return scalar final-placement metadata using the real-run column names.
+def placement_error_metadata(error: PlacementError | None, *, detected: bool) -> dict[str, Any]:
+    """Return final-placement metadata: whether the cube was seen and where it landed.
 
-    Only the measured cube/target points are stored. The error vector
-    (dx/dy/dz/xy) is a pure function of those two points, so it isn't
-    persisted -- storing it as its own columns risked drifting out of sync
-    with the points it was computed from, and any consumer can recompute it
-    (with whatever tolerance they want) from the raw positions.
+    Only ``placement_detected`` and the measured ``(x, y)`` of the cube after
+    release are stored. The placement error is a pure function of ``cube_end``
+    and the episode's ``target``, so any consumer recomputes it (with whatever
+    tolerance it wants) rather than risk a stored copy drifting out of sync.
     """
     if error is None:
         nan = float("nan")
-        return {
-            "placement_detected": bool(detected),
-            "placement_check_error": check_error,
-            "placement_cube_x": nan,
-            "placement_cube_y": nan,
-            "placement_cube_z": nan,
-            "placement_target_x": nan,
-            "placement_target_y": nan,
-            "placement_target_z": nan,
-        }
+        return {"placement_detected": bool(detected), "cube_end_x": nan, "cube_end_y": nan}
 
     return {
         "placement_detected": bool(detected),
-        "placement_check_error": check_error,
-        "placement_cube_x": error.cube_xyz[0],
-        "placement_cube_y": error.cube_xyz[1],
-        "placement_cube_z": error.cube_xyz[2],
-        "placement_target_x": error.target_xyz[0],
-        "placement_target_y": error.target_xyz[1],
-        "placement_target_z": error.target_xyz[2],
+        "cube_end_x": error.cube_xyz[0],
+        "cube_end_y": error.cube_xyz[1],
     }

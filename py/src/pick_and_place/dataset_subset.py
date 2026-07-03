@@ -34,6 +34,31 @@ import pandas as pd
 BOOKKEEPING_COLUMNS = {"episode_index", "tasks", "length", "dataset_from_index", "dataset_to_index"}
 BOOKKEEPING_PREFIXES = ("data/", "videos/", "stats/", "meta/episodes/")
 
+# Horizontal distance (m) from the placed cube to the target centre within
+# which a detected placement counts as a success. 0.04 reproduces exactly the
+# stored ``success`` column of the pre-cleanup datasets (verified: zero
+# mismatches on every episode of 20260701/20260702).
+SUCCESS_XY_TOLERANCE_M = 0.04
+
+
+def successful_episode_mask(
+    episodes: pd.DataFrame, xy_tolerance: float = SUCCESS_XY_TOLERANCE_M
+) -> pd.Series:
+    """Boolean mask of the successful episodes.
+
+    Success is a derived notion, not a stored column: the cube was seen by the
+    overhead camera after placement (``placement_detected``) and landed within
+    ``xy_tolerance`` of the target centre. The placement error is recomputed
+    from the raw ``cube_end``/``target`` points so this depends on no stored
+    derived column; NaN ``cube_end`` (undetected placement) yields NaN distance,
+    which fails the comparison and so is never counted as a success.
+    """
+    placement_xy = np.hypot(
+        episodes["cube_end_x"] - episodes["target_x"],
+        episodes["cube_end_y"] - episodes["target_y"],
+    )
+    return episodes["placement_detected"].astype(bool) & (placement_xy <= xy_tolerance)
+
 
 def load_all_episodes(root: Path) -> pd.DataFrame:
     return pd.concat(

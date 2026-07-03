@@ -14,9 +14,9 @@ unification, and stats aggregation across dataset roots with an identical
 schema.
 
 Every episode is kept, successful or not, with its raw fields untouched
-(``placement_detected``, ``placement_cube_*``, ``placement_target_*``,
-``pickup_gripper_delta``, etc.) so any consumer can define and threshold
-"success" themselves rather than trusting a bolted-on derived column.
+(``placement_detected``, ``cube_end_*``, ``target_*``, ``pickup_gripper_delta``,
+etc.) so any consumer can define and threshold "success" themselves rather than
+trusting a bolted-on derived column.
 
 Dry run by default (prints the discovered grouping only); pass ``--write`` to
 actually merge. Source run directories are never modified or deleted.

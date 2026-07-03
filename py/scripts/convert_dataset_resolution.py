@@ -30,6 +30,12 @@ stores each episode's frames as one contiguous, in-order segment of its video
 file, so decoding the files in order yields frames in lockstep with the numeric
 rows read from the data parquet.
 
+Pass ``--episodes-file`` to convert only a subset of the source episodes
+(their output indices renumber accordingly); produce that list with
+``select_episodes.py`` to export and convert, say, only the successful
+episodes in a single pass rather than filtering into an intermediate dataset
+first.
+
 Examples:
 
     # 512x512 square (VLA)
@@ -39,6 +45,11 @@ Examples:
     # 640x480 (ACT)
     python py/scripts/convert_dataset_resolution.py \
         --src datasets/20260702 --width 640 --height 480
+
+    # Only the successful episodes, converted to 512x512
+    python py/scripts/select_episodes.py --src datasets/20260702 \
+        | python py/scripts/convert_dataset_resolution.py \
+            --src datasets/20260702 --width 512 --height 512 --episodes-file -
 """
 
 from __future__ import annotations
@@ -68,6 +79,15 @@ FEATURE_TO_CAMERA = {
 # need updating each time a new metadata column is added upstream.
 BOOKKEEPING_COLUMNS = {"episode_index", "tasks", "length", "dataset_from_index", "dataset_to_index"}
 BOOKKEEPING_PREFIXES = ("data/", "videos/", "stats/", "meta/episodes/")
+
+
+def read_episode_indices(path: Path) -> set[int]:
+    """Parse source ``episode_index`` values from ``path`` (or stdin for ``-``)."""
+    import re
+    import sys
+
+    text = sys.stdin.read() if str(path) == "-" else path.read_text()
+    return {int(tok) for tok in re.split(r"[\s,]+", text.strip()) if tok}
 
 
 def ordered_unique_files(df: Any, chunk_col: str, file_col: str) -> list[tuple[int, int]]:
@@ -150,15 +170,20 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--exclude-episodes",
-        default="",
+        "--episodes-file",
+        type=Path,
+        default=None,
         help=(
-            "comma-separated source episode_index values to drop entirely from the output "
-            "(e.g. a known-corrupt episode); output episode indices renumber accordingly"
+            "file listing the source episode_index values to keep (whitespace/comma/newline "
+            "separated, '-' for stdin); only those episodes are converted and their output "
+            "indices renumber accordingly. Default: convert every episode. Produce this list "
+            "with select_episodes.py to export only e.g. the successful episodes."
         ),
     )
     args = parser.parse_args()
-    exclude_episodes = {int(e) for e in args.exclude_episodes.split(",") if e.strip()}
+    include_episodes = (
+        read_episode_indices(args.episodes_file) if args.episodes_file is not None else None
+    )
     suffix = f"{args.width}x{args.height}"
 
     import cv2
@@ -239,10 +264,19 @@ def main() -> None:
         for feature in FEATURE_TO_CAMERA
     }
 
-    exclude_note = f", excluding episode(s) {sorted(exclude_episodes)}" if exclude_episodes else ""
+    available = {int(e) for e in episodes["episode_index"]}
+    if include_episodes is not None:
+        unknown = sorted(include_episodes - available)
+        if unknown:
+            raise SystemExit(f"--episodes-file lists episode(s) not in {args.src}: {unknown}")
+        included_count = len(include_episodes)
+        include_note = f" (keeping {included_count} of {len(available)} episode(s))"
+    else:
+        included_count = len(available)
+        include_note = ""
     print(
-        f"Converting {episodes.shape[0]} episode(s), {len(rows)} frame(s) to {suffix} "
-        f"from {args.src} -> {dst_root}{exclude_note}"
+        f"Converting {included_count} episode(s), {len(rows)} frame(s) to {suffix} "
+        f"from {args.src} -> {dst_root}{include_note}"
     )
 
     recording = RecordingSession(
@@ -296,7 +330,7 @@ def main() -> None:
                 last_processed = pulled
                 last_row_index = row_index
 
-            if episode in exclude_episodes:
+            if include_episodes is not None and episode not in include_episodes:
                 continue
 
             frame: dict[str, Any] = {

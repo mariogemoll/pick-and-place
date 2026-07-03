@@ -1013,13 +1013,7 @@ def main() -> None:
                                         show_distance=True,
                                     )
                                     print(f"Saved overhead final debug image: {path}")
-                                metadata.update(
-                                    final_placement_metadata(
-                                        None,
-                                        episode.target,
-                                        check_error=str(exc),
-                                    )
-                                )
+                                metadata.update(final_placement_metadata(None, episode.target))
                                 return metadata
                             if args.save_overhead_debug and final_debug.bgr.size:
                                 path = overhead_debug_dir / f"episode_{ep.index:05d}_final.jpg"

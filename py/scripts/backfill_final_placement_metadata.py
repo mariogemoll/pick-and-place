@@ -5,10 +5,11 @@
 """Backfill final measured cube placement metadata into LeRobotDatasets.
 
 The script reads ``meta/episodes/chunk-*/file-*.parquet`` files in one or more
-dataset roots. It preserves existing columns, adds missing ``placement_*``
-episode metadata, and writes parquet files only with ``--write``.
+dataset roots. It preserves existing columns, adds missing ``placement_detected``
+and ``cube_end_x``/``cube_end_y`` episode metadata, and writes parquet files only
+with ``--write``.
 
-Each episode must already have ``cube_target_*`` metadata. The final cube pose is
+Each episode must already have ``target_x``/``target_y`` metadata. The final cube pose is
 recovered from the end of the overhead video using the current local overhead
 camera calibration.
 """
@@ -44,13 +45,8 @@ from pick_and_place.workspace_overlays import PAN_AXIS
 
 PLACEMENT_COLUMNS = (
     "placement_detected",
-    "placement_check_error",
-    "placement_cube_x",
-    "placement_cube_y",
-    "placement_cube_z",
-    "placement_target_x",
-    "placement_target_y",
-    "placement_target_z",
+    "cube_end_x",
+    "cube_end_y",
 )
 
 
@@ -87,16 +83,9 @@ def _video_path(dataset_root: Path, row: pd.Series) -> Path | None:
 
 
 def _target_pose(row: pd.Series) -> CubePose | None:
-    if "cube_target_x" not in row or not pd.notna(row["cube_target_x"]):
+    if "target_x" not in row or not pd.notna(row["target_x"]):
         return None
-    return CubePose(
-        x=float(row["cube_target_x"]),
-        y=float(row["cube_target_y"]),
-        z=float(row.get("cube_target_z", CUBE_HALF_SIZE)),
-        roll=float(row.get("cube_target_roll", 0.0) or 0.0),
-        pitch=float(row.get("cube_target_pitch", 0.0) or 0.0),
-        yaw=float(row.get("cube_target_yaw", 0.0) or 0.0),
-    )
+    return CubePose(x=float(row["target_x"]), y=float(row["target_y"]), z=CUBE_HALF_SIZE)
 
 
 def _read_final_frames(
@@ -155,19 +144,9 @@ def _detect_final_cube(
     return last_pose
 
 
-def _placement_row(
-    cube: CubePose | None, target: CubePose, check_error: str = ""
-) -> dict[str, Any]:
+def _placement_row(cube: CubePose | None, target: CubePose) -> dict[str, Any]:
     if cube is None:
-        row = placement_error_metadata(None, detected=False, check_error=check_error)
-        row.update(
-            {
-                "placement_target_x": float(target.x),
-                "placement_target_y": float(target.y),
-                "placement_target_z": float(CUBE_HALF_SIZE),
-            }
-        )
-        return row
+        return placement_error_metadata(None, detected=False)
 
     cube_xyz = (float(cube.x), float(cube.y), float(cube.z))
     target_xyz = (float(target.x), float(target.y), float(CUBE_HALF_SIZE))
@@ -179,7 +158,7 @@ def _placement_row(
         dz=cube_xyz[2] - target_xyz[2],
         xy=math.hypot(cube_xyz[0] - target_xyz[0], cube_xyz[1] - target_xyz[1]),
     )
-    return placement_error_metadata(error, detected=True, check_error=check_error)
+    return placement_error_metadata(error, detected=True)
 
 
 def backfill_file(
@@ -198,15 +177,13 @@ def backfill_file(
     for column in PLACEMENT_COLUMNS:
         if column not in df.columns:
             df[column] = False if column == "placement_detected" else math.nan
-    if "placement_check_error" in df.columns:
-        df["placement_check_error"] = df["placement_check_error"].fillna("")
 
     recovered = 0
     missing = 0
     caps: dict[Path, Any] = {}
     try:
         for index, row in df.iterrows():
-            need_placement = overwrite or not pd.notna(row.get("placement_cube_x", math.nan))
+            need_placement = overwrite or not pd.notna(row.get("cube_end_x", math.nan))
             if not need_placement:
                 continue
 
@@ -240,7 +217,7 @@ def backfill_file(
             )
             if cube is None:
                 missing += 1
-                for key, value in _placement_row(None, target, "cube not detected").items():
+                for key, value in _placement_row(None, target).items():
                     df.at[index, key] = value
                 continue
 
@@ -251,7 +228,7 @@ def backfill_file(
         for cap in caps.values():
             cap.release()
 
-    required_missing = int(df["placement_cube_x"].isna().sum())
+    required_missing = int(df["cube_end_x"].isna().sum())
     return df, recovered, max(missing, required_missing)
 
 

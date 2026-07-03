@@ -72,21 +72,35 @@ def transform_frame(
     return cv2.resize(crop, (out_w, out_h), interpolation=cv2.INTER_AREA)
 
 
-def rectified_square_camera_matrix(intrinsics: dict[str, Any], size: int) -> list[list[float]]:
+def rectified_camera_matrix(
+    intrinsics: dict[str, Any], out_w: int, out_h: int
+) -> list[list[float]]:
     """The 3x3 camera matrix a frame processed by ``transform_frame`` obeys.
 
     Mirrors ``build_undistort_map``'s rectified pinhole (focal length ``fy`` on
     both axes, principal point at the frame center) without needing a frame or
-    ``cv2``: the center-square crop keeps that already-centered principal point
-    centered, and the final resize scales everything uniformly, so the result
-    is an analytic function of the calibration alone.
+    ``cv2``: the center crop keeps that already-centered principal point
+    centered, and the final resize scales everything uniformly (the crop shares
+    the output aspect ratio), so the result is an analytic function of the
+    calibration and the output size alone.
+
+    The crop that ``transform_frame`` takes is bound by whichever native axis
+    the output aspect ratio exhausts first, and the uniform resize then maps
+    that axis onto the matching output dimension -- that binding axis fixes the
+    scale factor applied to ``fy``.
     """
     matrix = np.array(intrinsics["camera_matrix"], dtype=float)
     width = float(intrinsics["width"])
     height = float(intrinsics["height"])
     fy = float(matrix[1, 1])
-    side = min(width, height)
-    scale = size / side
+    if width / height > out_w / out_h:
+        scale = out_h / height
+    else:
+        scale = out_w / width
     f = fy * scale
-    c = size / 2.0
-    return [[f, 0.0, c], [0.0, f, c], [0.0, 0.0, 1.0]]
+    return [[f, 0.0, out_w / 2.0], [0.0, f, out_h / 2.0], [0.0, 0.0, 1.0]]
+
+
+def rectified_square_camera_matrix(intrinsics: dict[str, Any], size: int) -> list[list[float]]:
+    """``rectified_camera_matrix`` for a square ``size`` x ``size`` output."""
+    return rectified_camera_matrix(intrinsics, size, size)

@@ -47,8 +47,8 @@ At any point up to the end of recording the operator can press ESC to back out:
 mid-scene it aborts the current scene (discarding an in-progress take) and drops
 back to the ready gate; at the ready gate it quits the whole run.
 
-Each completed episode is committed with its ``cube_start_*``/``cube_target_*``
-and ``placement_*`` metadata plus ``driver="teleop"``. To stop the run (ESC at
+Each completed episode is committed with its ``cube_start_*``/``target_*`` and
+``cube_end_*``/``placement_detected`` metadata plus ``driver="teleop"``. To stop the run (ESC at
 the ready gate, or Ctrl-C) the arm is left where it is -- not parked -- and, once
 the operator confirms, torque is released so it ends limp.
 

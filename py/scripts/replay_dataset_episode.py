@@ -152,17 +152,19 @@ def _load_episode(dataset_root: Path, episode_index: int) -> EpisodeRecord:
             f"episode {episode_index} has no cube_start_x/y metadata; "
             "run the pose backfill first or pick an episode with source metadata"
         )
-    source_z = float(row.get("cube_start_z") if _finite(row.get("cube_start_z")) else CUBE_HALF_SIZE)
+    # The cube always rests flat and the target marker carries no yaw, so these
+    # are constants rather than stored columns.
+    source_z = CUBE_HALF_SIZE
     source_yaw = float(row.get("cube_start_yaw") if _finite(row.get("cube_start_yaw")) else 0.0)
 
-    target_x = row.get("cube_target_x")
-    target_y = row.get("cube_target_y")
+    target_x = row.get("target_x")
+    target_y = row.get("target_y")
     target_xy = (
         (float(target_x), float(target_y))
         if _finite(target_x) and _finite(target_y)
         else None
     )
-    target_yaw = float(row.get("cube_target_yaw") if _finite(row.get("cube_target_yaw")) else 0.0)
+    target_yaw = 0.0
 
     video_paths = {}
     video_start_frames = {}
