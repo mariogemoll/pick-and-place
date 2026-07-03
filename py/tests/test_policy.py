@@ -47,6 +47,52 @@ def test_make_policy_dispatches_by_type_and_keys_cameras_as_asked(monkeypatch):
     assert list(config.image_features) == list(keys)
 
 
+def test_make_policy_preserves_checkpoint_image_order(monkeypatch):
+    from lerobot.policies import factory
+    from lerobot.configs.types import FeatureType, PolicyFeature
+    from lerobot.configs.policies import PreTrainedConfig
+    from lerobot.policies.act.configuration_act import ACTConfig
+    from lerobot.policies.act.modeling_act import ACTPolicy
+
+    # An ACT checkpoint whose saved config lists wrist before overhead. ACT stacks
+    # camera tokens in this order, so make_policy must not reorder it, even though
+    # the runner labels overhead first.
+    config = ACTConfig()
+    config.input_features = {
+        "observation.state": PolicyFeature(type=FeatureType.STATE, shape=(6,)),
+        "observation.images.wrist": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 480, 640)),
+        "observation.images.overhead": PolicyFeature(type=FeatureType.VISUAL, shape=(3, 480, 640)),
+    }
+
+    class DummyPolicy:
+        def to(self, device):
+            return self
+
+        def eval(self):
+            return self
+
+    monkeypatch.setattr(
+        PreTrainedConfig, "from_pretrained", classmethod(lambda cls, checkpoint: config)
+    )
+    monkeypatch.setattr(
+        ACTPolicy, "from_pretrained", classmethod(lambda cls, checkpoint, *, config: DummyPolicy())
+    )
+    monkeypatch.setattr(factory, "make_pre_post_processors", lambda **kwargs: (None, None))
+
+    # Runner passes overhead-first (name-matched); make_policy keeps trained order.
+    make_policy(
+        "checkpoint",
+        (480, 640),
+        ("observation.images.overhead", "observation.images.wrist"),
+        "cpu",
+    )
+
+    assert list(config.image_features) == [
+        "observation.images.wrist",
+        "observation.images.overhead",
+    ]
+
+
 def test_resolve_checkpoint_cameras_reads_keys_and_size_from_config(monkeypatch):
     from lerobot.configs.types import FeatureType, PolicyFeature
     from lerobot.configs.policies import PreTrainedConfig

@@ -123,15 +123,26 @@ def make_policy(
 
     n_joints = len(JOINT_NAMES)
     height, width = image_hw
-    overhead_key, wrist_key = image_keys
     config = PreTrainedConfig.from_pretrained(checkpoint)
-    config.input_features = {
-        "observation.state": PolicyFeature(type=FeatureType.STATE, shape=(n_joints,)),
-        # Camera order is part of the observation contract; overhead first,
-        # matching the order the dataset (and any fine-tune) was recorded in.
-        overhead_key: PolicyFeature(type=FeatureType.VISUAL, shape=(3, height, width)),
-        wrist_key: PolicyFeature(type=FeatureType.VISUAL, shape=(3, height, width)),
-    }
+
+    # The checkpoint's own image-feature order must be preserved: ACT stacks
+    # camera tokens in config.input_features order, so that order has to match
+    # training (an ACT config may list wrist before overhead). A fine-tune
+    # already lists its two cameras in trained order; only a base checkpoint,
+    # which pins no image features, needs the fallback keys from image_keys.
+    # Either way the runner feeds each frame under its key by name, so the
+    # stack order here and the frame-to-key mapping there stay independent.
+    existing = [
+        name
+        for name, feature in (getattr(config, "input_features", None) or {}).items()
+        if getattr(feature, "type", None) == FeatureType.VISUAL and len(feature.shape) == 3
+    ]
+    camera_keys = existing if len(existing) == 2 else list(image_keys)
+
+    input_features = {"observation.state": PolicyFeature(type=FeatureType.STATE, shape=(n_joints,))}
+    for name in camera_keys:
+        input_features[name] = PolicyFeature(type=FeatureType.VISUAL, shape=(3, height, width))
+    config.input_features = input_features
     config.output_features = {
         "action": PolicyFeature(type=FeatureType.ACTION, shape=(n_joints,)),
     }
