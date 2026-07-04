@@ -56,7 +56,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections.abc import Iterator
+from collections.abc import Generator
 from pathlib import Path
 from typing import Any
 
@@ -108,22 +108,40 @@ def episode_metadata_columns(episodes: Any) -> list[str]:
     ]
 
 
-def decode_frames(paths: list[Path]) -> Iterator[np.ndarray]:
-    """Yield every frame of ``paths`` in order as ``(H, W, 3)`` uint8 RGB arrays."""
+def video_frames(paths: list[Path]) -> Generator[Any, None, None]:
+    """Yield raw PyAV video frames from ``paths`` in order."""
     import av
 
     for path in paths:
         container = av.open(str(path))
-        stream = container.streams.video[0]
-        stream.thread_type = "AUTO"
-        for frame in container.decode(stream):
-            # LeRobot's background video encoder restores FFmpeg's default stderr
-            # callback when it starts, so re-assert the quiet level on each frame
-            # to keep libswscale's benign per-frame "no SIMD path for yuv420p->rgb24"
-            # note out of the output.
-            av.logging.set_level(av.logging.ERROR)
-            yield frame.to_ndarray(format="rgb24")
-        container.close()
+        try:
+            stream = container.streams.video[0]
+            stream.thread_type = "AUTO"
+            for frame in container.decode(stream):
+                # LeRobot's background video encoder restores FFmpeg's default stderr
+                # callback when it starts, so re-assert the quiet level on each frame
+                # to keep libswscale's benign per-frame "no SIMD path for yuv420p->rgb24"
+                # note out of the output.
+                av.logging.set_level(av.logging.ERROR)
+                yield frame
+        finally:
+            container.close()
+
+
+class VideoFrameReader:
+    """Sequential reader that can cheaply advance past frames we will drop."""
+
+    def __init__(self, paths: list[Path]) -> None:
+        self._frames = video_frames(paths)
+
+    def read_rgb(self) -> np.ndarray:
+        return next(self._frames).to_ndarray(format="rgb24")
+
+    def skip(self) -> None:
+        next(self._frames)
+
+    def close(self) -> None:
+        self._frames.close()
 
 
 def main() -> None:
@@ -248,7 +266,7 @@ def main() -> None:
     row_indices = rows["index"].to_numpy()
 
     streams = {
-        feature: decode_frames(
+        feature: VideoFrameReader(
             [
                 src_path(
                     video_path,
@@ -274,9 +292,20 @@ def main() -> None:
     else:
         included_count = len(available)
         include_note = ""
+    keep_rows = np.array(
+        [
+            include_episodes is None or int(episode) in include_episodes
+            for episode in episode_indices
+        ],
+        dtype=bool,
+    )
+    kept_frame_count = int(keep_rows.sum())
+    frame_note = (
+        "" if kept_frame_count == len(rows) else f" (scanning {len(rows)} source frame(s))"
+    )
     print(
-        f"Converting {included_count} episode(s), {len(rows)} frame(s) to {suffix} "
-        f"from {args.src} -> {dst_root}{include_note}"
+        f"Converting {included_count} episode(s), {kept_frame_count} frame(s) to {suffix} "
+        f"from {args.src} -> {dst_root}{include_note}{frame_note}"
     )
 
     recording = RecordingSession(
@@ -306,7 +335,10 @@ def main() -> None:
     last_processed: dict[str, np.ndarray] = {}
 
     try:
-        for i in tqdm(range(len(states)), desc="Converting frames", unit="frame"):
+        progress_desc = (
+            "Converting frames" if kept_frame_count == len(rows) else "Scanning frames"
+        )
+        for i in tqdm(range(len(states)), desc=progress_desc, unit="frame"):
             episode = int(episode_indices[i])
             if episode != current_episode:
                 if episode_has_frames:
@@ -315,10 +347,14 @@ def main() -> None:
                 episode_has_frames = False
 
             row_index = int(row_indices[i])
+            keep_row = bool(keep_rows[i])
             if row_index != last_row_index:
                 pulled: dict[str, np.ndarray] = {}
                 for feature, camera in FEATURE_TO_CAMERA.items():
-                    rgb = next(streams[feature])
+                    if not keep_row:
+                        streams[feature].skip()
+                        continue
+                    rgb = streams[feature].read_rgb()
                     if camera not in undistort_maps:
                         h, w = rgb.shape[:2]
                         undistort_maps[camera] = build_undistort_map(
@@ -330,7 +366,7 @@ def main() -> None:
                 last_processed = pulled
                 last_row_index = row_index
 
-            if include_episodes is not None and episode not in include_episodes:
+            if not keep_row:
                 continue
 
             frame: dict[str, Any] = {
@@ -353,6 +389,8 @@ def main() -> None:
         if episode_has_frames:
             recording.save_episode(metadata_by_episode[current_episode])
     finally:
+        for stream in streams.values():
+            stream.close()
         recording.finalize()
 
     print(f"Done. Wrote {dst_root}")
