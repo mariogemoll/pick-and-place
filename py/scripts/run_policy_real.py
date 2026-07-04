@@ -30,9 +30,32 @@ pixel-geometry. The resolution defaults to whatever the checkpoint was trained o
 un-finetuned plumbing spike (the arm moves but does not solve the task). A
 checkpoint fine-tuned on the project's dataset is the real use case.
 
-Safety: the arm ramps smoothly from wherever it is parked onto NEUTRAL before the
-policy takes over, and on exit (Ctrl-C or step budget) it parks NEUTRAL -> REST
-and releases torque. Every command is clamped to the model's joint limits.
+The run is organised as a sequence of attempts. Each attempt locates the
+drop-zone square (the success target) and the cube on the overhead camera —
+panning the arm through random search poses to clear the view if either is
+hidden, and asking the operator only if that dance comes up empty — then homes
+the arm to a fresh randomish near-neutral start and runs the policy while
+repeatedly scanning the overhead camera for the cube. A timed-out attempt returns
+the arm to neutral before the next one begins. The cube counts as placed only once it sits at
+the target both in xy (``--success-tolerance``) and near its resting height
+(``--place-height-tolerance``) — i.e. actually set down, not just carried above
+the target. From the moment it is first seen placed, two things run in parallel:
+the placement is confirmed after ``--success-dwell`` seconds, and the arm's
+slow-down is watched over the same window. The placement is the success; the
+slow-down is soft — success fires as soon as the cube has held for the dwell and
+the arm has slowed, or at ``--settle-timeout`` regardless, so the policy never
+lingers in post-placement, off-distribution territory. If the cube moves again
+the placement resets. If no placement happens within ``--attempt-timeout``, the
+attempt is abandoned and retried from a new start (the policy is strongest early
+on, especially with temporal ensembling). On success the run exits by default; with ``--loop`` it
+instead alerts the operator to reset the cube and target (audibly and via an
+Enter prompt) and continues with the next attempt. This needs the overhead
+camera plus its calibrated intrinsics and the saved overhead extrinsics.
+
+Safety: the arm ramps smoothly from wherever it is parked onto each start pose
+before the policy takes over, and on exit (success, Ctrl-C or step budget) it
+parks NEUTRAL -> REST and releases torque. Every command is clamped to the
+model's joint limits.
 """
 
 from __future__ import annotations
@@ -42,15 +65,20 @@ import os
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 # Some SmolVLM backbone ops are not implemented for Apple MPS; fall back to CPU
 # for just those ops instead of crashing. Must be set before torch is imported.
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
+import mujoco
 import numpy as np
 
 from pick_and_place import build_scene
 from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
+from pick_and_place.episodes import sample_hunt_pose, sample_near_neutral
+from pick_and_place.geometry import CUBE_HALF_SIZE
+from pick_and_place.overhead_detection import DEFAULT_ALERT_SOUND, OperatorNotifier
 from pick_and_place.executor import (
     CONTROL_HZ,
     RAMP_DURATION,
@@ -80,6 +108,11 @@ from pick_and_place.policy import (
     resolve_checkpoint_cameras,
     select_device,
 )
+
+# During the settle phase the arm's peak joint speed must stay below
+# ``--settle-speed`` continuously for this long before the placement counts as
+# finished, so a momentary pause mid-retreat does not end the attempt early.
+SETTLE_STILL_HOLD = 1.0
 
 
 def _smoothstep(t: float) -> float:
@@ -229,6 +262,90 @@ def main() -> None:
             "frames fed to the policy each tick"
         ),
     )
+    parser.add_argument(
+        "--loop",
+        action="store_true",
+        help=(
+            "on success, alert the operator to reset the scene and continue with a "
+            "new attempt instead of exiting; without it the run exits on the first "
+            "success"
+        ),
+    )
+    parser.add_argument(
+        "--attempt-timeout",
+        type=float,
+        default=20.0,
+        help="seconds before an unsuccessful attempt is abandoned and retried from a "
+        "fresh randomish start; <=0 disables the timeout (default: 20)",
+    )
+    parser.add_argument(
+        "--scan-interval",
+        type=float,
+        default=1.0,
+        help="seconds between overhead success scans during an attempt (default: 1)",
+    )
+    parser.add_argument(
+        "--success-tolerance",
+        type=float,
+        default=0.04,
+        help="cube-to-target xy distance counted as placed, in metres (default: 0.04)",
+    )
+    parser.add_argument(
+        "--place-height-tolerance",
+        type=float,
+        default=0.02,
+        help="how far the cube centre may sit above its resting height and still count "
+        "as placed (not carried), in metres (default: 0.02)",
+    )
+    parser.add_argument(
+        "--success-dwell",
+        type=float,
+        default=1.0,
+        help="seconds the cube must stay placed at the target before the placement is "
+        "confirmed (default: 1)",
+    )
+    parser.add_argument(
+        "--settle-timeout",
+        type=float,
+        default=3.0,
+        help="max seconds after the cube is first seen placed before success fires "
+        "regardless of arm motion; also caps how long the slow-down is awaited "
+        "(default: 3)",
+    )
+    parser.add_argument(
+        "--settle-speed",
+        type=float,
+        default=5.0,
+        help="arm peak joint speed (deg/s) below which it counts as slowed, letting "
+        "success fire as soon as the placement dwell is met (default: 5)",
+    )
+    parser.add_argument(
+        "--max-hunt-tries",
+        type=int,
+        default=5,
+        help="pan-around search poses to try while looking for the cube or drop zone "
+        "before asking the operator for help (default: 5)",
+    )
+    parser.add_argument(
+        "--camera-name", default="overhead_camera", help="overhead camera name in the model"
+    )
+    parser.add_argument(
+        "--drop-zone-color",
+        choices=("black", "white"),
+        default="black",
+        help="color of the drop-zone square to detect as the target (default: black)",
+    )
+    parser.add_argument(
+        "--operator-alerts",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="play a sound and speak operator alerts on macOS (default: on)",
+    )
+    parser.add_argument(
+        "--alert-sound",
+        default=DEFAULT_ALERT_SOUND,
+        help="sound file played before spoken operator alerts",
+    )
     args = parser.parse_args()
 
     override = (args.image_height, args.image_width)
@@ -313,6 +430,72 @@ def main() -> None:
         overhead_writer = imageio.get_writer(args.save_video / "overhead.mp4", fps=CONTROL_HZ)
         print(f"Saving observation frames to {args.save_video}/{{wrist,overhead}}.mp4")
 
+    # Overhead detection: the success scan reads the cube in world coordinates and
+    # the drop-zone square gives the target. Attempts (timeout + retry, and the
+    # success check) are the default run mode, so this is always built.
+    rng = np.random.default_rng()
+    from pick_and_place.camera_compare import load_intrinsics
+    from pick_and_place.camera_extrinsics import (
+        apply_camera_extrinsics_to_model,
+        load_local_camera_extrinsics,
+    )
+    from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
+    from pick_and_place.cube_detection import (
+        cube_pose_to_world,
+        estimate_cube_pose,
+        make_cube_detector,
+    )
+    from pick_and_place.overhead_detection import (
+        CUBE_LOOK_TIMEOUT,
+        track_cube,
+        track_drop_zone_square,
+    )
+    from pick_and_place.paper_detection import PaperTracker
+
+    # The success scan reads the cube pose in world coordinates, so the model's
+    # overhead camera must sit where the real one does; apply the saved extrinsics
+    # and read the resulting fixed camera frame.
+    apply_camera_extrinsics_to_model(model, load_local_camera_extrinsics())
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    cam_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, args.camera_name)
+    if cam_id < 0:
+        raise SystemExit(f"No camera named {args.camera_name!r} in the model.")
+    cam_pos = data.cam_xpos[cam_id].copy()
+    cam_rot = data.cam_xmat[cam_id].reshape(3, 3).copy()
+
+    det_intrinsics = LOCAL_CAMERA_INTRINSICS_DIR / f"{args.camera_name}.json"
+    if not det_intrinsics.exists():
+        raise SystemExit(f"Missing {args.camera_name} intrinsics at {det_intrinsics}.")
+    det_matrix, det_map = load_intrinsics(det_intrinsics, 1920, 1080, cv2)
+    detector = make_cube_detector()
+    drop_zone_tracker = PaperTracker()
+    notifier = OperatorNotifier(enabled=args.operator_alerts, sound_path=args.alert_sound)
+
+    class _ReaderCap:
+        """Adapt the overhead CameraReader's latest-frame buffer to the
+        ``cap.read()`` interface the overhead detection helpers expect."""
+
+        def read(self):
+            frame = overhead.latest()
+            return frame is not None, frame
+
+    adapter = _ReaderCap()
+
+    def scan_cube_world():
+        """Detect the cube on the latest overhead frame and return its (x, y, z)
+        world position, or None if it is not currently visible."""
+        frame = overhead.latest()
+        if frame is None:
+            return None
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        rgb = cv2.remap(rgb, *det_map, cv2.INTER_LINEAR)
+        estimate = estimate_cube_pose(rgb, detector, det_matrix)
+        if estimate is None:
+            return None
+        _, pos = cube_pose_to_world(estimate, cam_pos, cam_rot)
+        return float(pos[0]), float(pos[1]), float(pos[2])
+
     print(f"Instruction: {args.instruction!r}")
     if args.checkpoint == DEFAULT_CHECKPOINT:
         print("Running closed-loop. Actions are NOT task-calibrated (un-finetuned base).")
@@ -322,14 +505,83 @@ def main() -> None:
     period = 1.0 / CONTROL_HZ
     tick = 0
     parked = False
-    try:
-        print("Ramping real arm to the neutral start pose...")
-        _ramp_follower(
-            follower, neutral_real, clamp_low, clamp_high, clip_warned, args.max_joint_speed
-        )
 
+    def run_attempt(target_xy) -> str:
+        """Drive the policy closed-loop for one attempt.
+
+        Returns ``"steps"`` when the global ``--steps`` budget is hit, ``"timeout"``
+        when ``--attempt-timeout`` elapses without a placement, or ``"success"``
+        once the cube has been set down at the target (within ``--success-tolerance``
+        in xy and ``--place-height-tolerance`` of its resting height). Placement is
+        confirmed after ``--success-dwell`` seconds; the arm slow-down runs in
+        parallel over the same window and is soft — success fires as soon as the
+        cube has been placed for the dwell and the arm has slowed, or at
+        ``--settle-timeout`` regardless. The timeout is disabled when
+        ``--attempt-timeout`` is <= 0.
+        """
+        nonlocal tick
+        attempt_start = time.monotonic()
         next_tick = time.monotonic()
-        report_time, report_tick, infer_seconds = next_tick, 0, 0.0
+        report_time, report_tick, infer_seconds = next_tick, tick, 0.0
+
+        # Run the overhead placement scan on its own thread: the AprilTag detection
+        # on the full-resolution frame takes tens of milliseconds, which would
+        # stall the 30 Hz control loop if done inline. The heavy work (detection,
+        # remap) releases the GIL, so it overlaps the policy inference cleanly. The
+        # scan keeps a single shared timestamp — when the cube was first seen
+        # continuously placed — which the control loop reads to time out placement,
+        # confirm it, and monitor slow-down all against the same clock.
+        placement = SimpleNamespace(since=None)
+        stop_scan = threading.Event()
+
+        def scan_loop() -> None:
+            # The cube counts as placed only when it is at the target in xy *and*
+            # back near its resting height (set down, not still carried above the
+            # target) — so a fly-through during the carry never counts. Once a
+            # placement has started, a lost sighting does NOT clear it: the
+            # retreating arm routinely occludes a cube it just set down. Only a
+            # clear "visible but not placed" reading (moved away or lifted) clears
+            # it, which also lets the control loop reset if the cube moves again.
+            while not stop_scan.wait(args.scan_interval):
+                pose = scan_cube_world()
+                if pose is None:
+                    print("success scan: cube not visible")
+                    continue
+                x, y, z = pose
+                dist = float(np.hypot(x - target_xy[0], y - target_xy[1]))
+                above = z - CUBE_HALF_SIZE
+                at_target = dist <= args.success_tolerance
+                set_down = abs(above) <= args.place_height_tolerance
+                print(
+                    f"success scan: cube ({x:.3f}, {y:.3f}) {dist * 100.0:.1f} cm from "
+                    f"target, {above * 100.0:+.1f} cm above rest"
+                )
+                if at_target and set_down:
+                    if placement.since is None:
+                        placement.since = time.monotonic()
+                else:
+                    placement.since = None
+
+        scanner = threading.Thread(target=scan_loop, daemon=True)
+        scanner.start()
+        try:
+            return _control_loop(attempt_start, next_tick,
+                                 report_time, report_tick, infer_seconds, placement)
+        finally:
+            stop_scan.set()
+            scanner.join(timeout=2.0)
+
+    def _control_loop(attempt_start, next_tick,
+                      report_time, report_tick, infer_seconds, placement) -> str:
+        nonlocal tick
+        # Placement confirmation and arm slow-down run concurrently from the moment
+        # the cube is first seen placed (``placement.since``): the policy keeps
+        # driving so the arm retreats, but the placement is the success — the
+        # slow-down is soft and only trims the tail, never a hard requirement.
+        still_since = None
+        prev_arm = None
+        prev_t = None
+        announced = False
         while True:
             overhead_bgr = overhead.latest()
             wrist_bgr = wrist.latest()
@@ -383,12 +635,54 @@ def main() -> None:
                 ticks = tick - report_tick
                 rate = f"  {ticks / (now - report_time):5.1f} Hz" if ticks else ""
                 infer = f"  infer {infer_seconds / ticks * 1000.0:5.1f} ms" if ticks else ""
-                print(f"tick {tick:4d}  action={commanded}{rate}{infer}")
+                if args.attempt_timeout > 0:
+                    clock = f"  {now - attempt_start:4.1f}/{args.attempt_timeout:.0f}s"
+                else:
+                    clock = f"  {now - attempt_start:4.1f}s"
+                print(f"tick {tick:4d}  action={commanded}{rate}{infer}{clock}")
                 report_time, report_tick, infer_seconds = now, tick, 0.0
 
             tick += 1
             if args.steps and tick >= args.steps:
-                break
+                return "steps"
+
+            now = time.monotonic()
+            arm = state[:GRIPPER_INDEX]
+
+            # Track arm slow-down every tick so it is already known the moment the
+            # placement dwell completes, rather than measured only afterwards.
+            arm_settled = False
+            if prev_arm is not None and now > prev_t:
+                speed = float(np.max(np.abs(arm - prev_arm))) / (now - prev_t)
+                if speed <= args.settle_speed:
+                    if still_since is None:
+                        still_since = now
+                else:
+                    still_since = None
+                arm_settled = still_since is not None and now - still_since >= SETTLE_STILL_HOLD
+            prev_arm, prev_t = arm.copy(), now
+
+            since = placement.since
+            if since is None:
+                # Cube not (yet, or no longer) placed. Give up on the attempt once
+                # the placement timeout passes with nothing set down.
+                announced = False
+                if args.attempt_timeout > 0 and now - attempt_start >= args.attempt_timeout:
+                    return "timeout"
+            else:
+                if not announced:
+                    print("Cube placed. Confirming placement while the arm slows down...")
+                    announced = True
+                placed_for = now - since
+                # The dwell confirms the placement; the slow-down runs over the same
+                # window and only trims the tail. Finish once the cube has held for
+                # the dwell and the arm has slowed, or at --settle-timeout regardless
+                # (so the policy never lingers in post-placement, off-distribution
+                # territory). A cube that moves again clears placement.since above.
+                if placed_for >= args.success_dwell and (arm_settled or placed_for >= args.settle_timeout):
+                    reason = "arm settled" if arm_settled else "settle timeout"
+                    print(f"Cube placed for {placed_for:.1f}s ({reason}). Success.")
+                    return "success"
 
             next_tick += period
             remaining = next_tick - time.monotonic()
@@ -397,6 +691,112 @@ def main() -> None:
             elif remaining < -period:
                 # Don't issue a burst of catch-up commands after a long stall.
                 next_tick = time.monotonic()
+
+    def go_neutral() -> None:
+        _ramp_follower(
+            follower, neutral_real, clamp_low, clamp_high, clip_warned, args.max_joint_speed
+        )
+
+    def hunt(label, detect):
+        """Look for something on the overhead camera, panning the arm through fresh
+        random search poses (the 'dance') to clear the view between tries. The arm
+        can sit between the fixed overhead camera and the cube or square, so a look
+        from one pose may be blocked while another is clear. Returns the detection
+        or None after ``--max-hunt-tries`` looks."""
+        for i in range(args.max_hunt_tries):
+            if i > 0:
+                arm, grip = sample_hunt_pose(rng)
+                print(f"{label} look {i + 1}/{args.max_hunt_tries}: panning to a new search pose...")
+                _ramp_follower(
+                    follower, sim_frame_to_real(arm, grip), clamp_low, clamp_high, clip_warned,
+                    args.max_joint_speed,
+                )
+                time.sleep(0.5)  # let the camera settle
+            else:
+                print(f"{label} look 1/{args.max_hunt_tries}: searching from the current pose...")
+            result = detect()
+            if result is not None:
+                return result
+        return None
+
+    def find_or_prompt(label, detect, missing_message):
+        """Hunt for a detection; if the dance comes up empty, ask the operator to
+        make it visible and try again. Returns the detection or None on Ctrl-D."""
+        while True:
+            result = hunt(label, detect)
+            if result is not None:
+                return result
+            notifier.alert(missing_message)
+            try:
+                input(f"Make the {label} visible, then press Enter (Ctrl-D to stop)...")
+            except EOFError:
+                return None
+
+    def detect_target():
+        return track_drop_zone_square(
+            adapter, args.camera_name, model, data, drop_zone_tracker, args.drop_zone_color
+        )
+
+    def detect_cube():
+        return track_cube(adapter, args.camera_name, model, data, CUBE_LOOK_TIMEOUT)
+
+    try:
+        print("Homing to the neutral pose...")
+        go_neutral()
+        attempt = 0
+        while True:
+            attempt += 1
+            budget = f"timeout {args.attempt_timeout:.0f}s" if args.attempt_timeout > 0 else "no timeout"
+            print(f"\n=== Attempt {attempt} ({budget}) ===")
+
+            target = find_or_prompt(
+                "drop-zone square", detect_target, "Drop-zone square not visible."
+            )
+            if target is None:
+                break
+            target_xy = (float(target.x), float(target.y))
+            print(f"Target drop zone at ({target_xy[0]:.3f}, {target_xy[1]:.3f}).")
+
+            cube = find_or_prompt(
+                "cube", detect_cube, "Cube not visible in the pickup zone. Please reset it."
+            )
+            if cube is None:
+                break
+            print(f"Cube at ({cube.x:.3f}, {cube.y:.3f}).")
+
+            # Each attempt starts from a fresh randomish near-neutral pose: the
+            # policy is strongest early on, so a timed-out attempt is abandoned and
+            # simply retried from a new start rather than left to flail.
+            arm, grip = sample_near_neutral(rng)
+            print("Ramping to a randomish start pose...")
+            _ramp_follower(
+                follower, sim_frame_to_real(arm, grip), clamp_low, clamp_high, clip_warned,
+                args.max_joint_speed,
+            )
+            policy.reset()
+
+            outcome = run_attempt(target_xy)
+
+            if outcome == "steps":
+                break
+            if outcome == "timeout":
+                print(f"TIMEOUT — no success within {args.attempt_timeout:.0f}s. "
+                      "Returning to neutral and retrying.")
+                go_neutral()
+                continue
+
+            # Success. Exit by default; with --loop, hand the scene back to the
+            # operator to reset and keep going.
+            print("SUCCESS — the cube reached the target.")
+            if not args.loop:
+                break
+            notifier.alert("Success. Please reset the cube and target for the next attempt.")
+            print("Parking to the neutral pose before the next attempt...")
+            go_neutral()
+            try:
+                input("Reset the scene, then press Enter for the next attempt (Ctrl-C to stop)...")
+            except EOFError:
+                break
     except KeyboardInterrupt:
         print("\nInterrupted.")
     finally:
