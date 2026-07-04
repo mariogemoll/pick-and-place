@@ -93,6 +93,113 @@ def test_make_policy_preserves_checkpoint_image_order(monkeypatch):
     ]
 
 
+def test_make_policy_overrides_action_steps_without_changing_chunk(monkeypatch):
+    from lerobot.policies import factory
+    from lerobot.configs.policies import PreTrainedConfig
+    from lerobot.policies.act.configuration_act import ACTConfig
+    from lerobot.policies.act.modeling_act import ACTPolicy
+
+    config = ACTConfig()
+    config.chunk_size = 100
+    config.n_action_steps = 100
+
+    class DummyPolicy:
+        def __init__(self, cfg):
+            self.config = cfg
+
+        def to(self, device):
+            return self
+
+        def eval(self):
+            return self
+
+    monkeypatch.setattr(
+        PreTrainedConfig, "from_pretrained", classmethod(lambda cls, checkpoint: config)
+    )
+    monkeypatch.setattr(
+        ACTPolicy,
+        "from_pretrained",
+        classmethod(lambda cls, checkpoint, *, config: DummyPolicy(config)),
+    )
+    monkeypatch.setattr(factory, "make_pre_post_processors", lambda **kwargs: (None, None))
+
+    policy, _, _ = make_policy(
+        "checkpoint",
+        (512, 512),
+        ("observation.images.overhead", "observation.images.wrist"),
+        "cpu",
+        n_action_steps=10,
+    )
+
+    assert policy.config.chunk_size == 100
+    assert policy.config.n_action_steps == 10
+
+
+def test_make_policy_enables_temporal_ensembling(monkeypatch):
+    from lerobot.policies import factory
+    from lerobot.configs.policies import PreTrainedConfig
+    from lerobot.policies.act.configuration_act import ACTConfig
+    from lerobot.policies.act.modeling_act import ACTPolicy
+
+    config = ACTConfig()
+    config.chunk_size = 100
+    config.n_action_steps = 100
+    config.temporal_ensemble_coeff = None
+
+    class DummyPolicy:
+        def __init__(self, cfg):
+            self.config = cfg
+
+        def to(self, device):
+            return self
+
+        def eval(self):
+            return self
+
+    monkeypatch.setattr(
+        PreTrainedConfig, "from_pretrained", classmethod(lambda cls, checkpoint: config)
+    )
+    monkeypatch.setattr(
+        ACTPolicy,
+        "from_pretrained",
+        classmethod(lambda cls, checkpoint, *, config: DummyPolicy(config)),
+    )
+    monkeypatch.setattr(factory, "make_pre_post_processors", lambda **kwargs: (None, None))
+
+    policy, _, _ = make_policy(
+        "checkpoint",
+        (512, 512),
+        ("observation.images.overhead", "observation.images.wrist"),
+        "cpu",
+        temporal_ensemble_coeff=0.01,
+    )
+
+    assert policy.config.n_action_steps == 1
+    assert policy.config.temporal_ensemble_coeff == 0.01
+
+
+def test_make_policy_rejects_temporal_ensembling_with_multiple_action_steps(monkeypatch):
+    import pytest
+
+    from lerobot.configs.policies import PreTrainedConfig
+    from lerobot.policies.act.configuration_act import ACTConfig
+
+    config = ACTConfig()
+    monkeypatch.setattr(
+        PreTrainedConfig, "from_pretrained", classmethod(lambda cls, checkpoint: config)
+    )
+
+    with pytest.raises(ValueError, match="temporal ensembling requires n_action_steps=1"):
+        make_policy(
+            "checkpoint",
+            (512, 512),
+            ("observation.images.overhead", "observation.images.wrist"),
+            "cpu",
+            n_action_steps=10,
+            temporal_ensemble_coeff=0.01,
+        )
+
+
 def test_resolve_checkpoint_cameras_reads_keys_and_size_from_config(monkeypatch):
     from lerobot.configs.types import FeatureType, PolicyFeature
     from lerobot.configs.policies import PreTrainedConfig

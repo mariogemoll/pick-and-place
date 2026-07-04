@@ -193,6 +193,24 @@ def main() -> None:
         help="stop after this many control ticks (0 = run until Ctrl-C)",
     )
     parser.add_argument(
+        "--n-action-steps",
+        type=int,
+        default=100,
+        help=(
+            "queued actions to execute before re-querying a chunked policy "
+            "(default: 100; matches common ACT checkpoints; temporal ensembling uses 1)"
+        ),
+    )
+    parser.add_argument(
+        "--temporal-ensemble-coeff",
+        type=float,
+        default=None,
+        help=(
+            "enable ACT temporal ensembling with this coefficient, e.g. 0.01; "
+            "requires --n-action-steps 1"
+        ),
+    )
+    parser.add_argument(
         "--max-joint-speed",
         type=float,
         default=10.0,
@@ -262,9 +280,21 @@ def main() -> None:
     )
 
     policy, preprocessor, postprocessor = make_policy(
-        args.checkpoint, (img_h, img_w), (overhead_key, wrist_key), device
+        args.checkpoint,
+        (img_h, img_w),
+        (overhead_key, wrist_key),
+        device,
+        n_action_steps=args.n_action_steps,
+        temporal_ensemble_coeff=args.temporal_ensemble_coeff,
     )
     policy.reset()
+    if hasattr(policy.config, "chunk_size") and hasattr(policy.config, "n_action_steps"):
+        print(
+            f"Policy chunks: predicts {policy.config.chunk_size}, "
+            f"executes {policy.config.n_action_steps} before re-query."
+        )
+    if getattr(policy.config, "temporal_ensemble_coeff", None) is not None:
+        print(f"Temporal ensembling coeff: {policy.config.temporal_ensemble_coeff}")
 
     print("Connecting to follower...")
     # Keep torque on a plain disconnect so the arm holds rather than going limp;
@@ -299,6 +329,7 @@ def main() -> None:
         )
 
         next_tick = time.monotonic()
+        report_time, report_tick, infer_seconds = next_tick, 0, 0.0
         while True:
             overhead_bgr = overhead.latest()
             wrist_bgr = wrist.latest()
@@ -319,6 +350,7 @@ def main() -> None:
                 wrist_writer.append_data(wrist_rgb)
                 overhead_writer.append_data(overhead_rgb)
 
+            infer_start = time.monotonic()
             action = predict_action(
                 observation,
                 policy,
@@ -329,6 +361,7 @@ def main() -> None:
                 task=args.instruction,
                 robot_type="so101",
             )
+            infer_seconds += time.monotonic() - infer_start
             action_real = action.to("cpu").numpy().reshape(-1)[: len(JOINT_NAMES)]
             target = clamp_and_warn(action_real, clamp_low, clamp_high, clip_warned)
             # Velocity cap: never command an arm joint more than one tick's worth
@@ -346,7 +379,12 @@ def main() -> None:
 
             if tick % 10 == 0:
                 np.set_printoptions(precision=2, suppress=True)
-                print(f"tick {tick:4d}  action={commanded}")
+                now = time.monotonic()
+                ticks = tick - report_tick
+                rate = f"  {ticks / (now - report_time):5.1f} Hz" if ticks else ""
+                infer = f"  infer {infer_seconds / ticks * 1000.0:5.1f} ms" if ticks else ""
+                print(f"tick {tick:4d}  action={commanded}{rate}{infer}")
+                report_time, report_tick, infer_seconds = now, tick, 0.0
 
             tick += 1
             if args.steps and tick >= args.steps:

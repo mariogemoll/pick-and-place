@@ -103,6 +103,8 @@ def make_policy(
     image_hw: tuple[int, int],
     image_keys: tuple[str, str],
     device,
+    n_action_steps: int | None = None,
+    temporal_ensemble_coeff: float | None = None,
 ):
     """Load a LeRobot policy checkpoint with feature specs for our 6-DOF arm and
     two cameras, plus its pre/post-processors.
@@ -115,7 +117,11 @@ def make_policy(
     cameras are fed under; take both from :func:`resolve_checkpoint_cameras` so
     they match what the policy learned on. Normalization stats come from the
     checkpoint's own saved processor, which is why the dataset stays in raw
-    physical units.
+    physical units. ``n_action_steps`` optionally shortens ACT-style queued
+    action execution at inference without changing the trained prediction
+    horizon stored in the checkpoint. ``temporal_ensemble_coeff`` enables ACT's
+    overlapping-chunk action smoothing; LeRobot requires that mode to re-query
+    every tick.
     """
     from lerobot.configs.types import FeatureType, PolicyFeature
     from lerobot.configs.policies import PreTrainedConfig
@@ -147,6 +153,24 @@ def make_policy(
         "action": PolicyFeature(type=FeatureType.ACTION, shape=(n_joints,)),
     }
     config.device = str(device)
+    if temporal_ensemble_coeff is not None and hasattr(config, "temporal_ensemble_coeff"):
+        if n_action_steps is None:
+            n_action_steps = 1
+        elif n_action_steps != 1:
+            raise ValueError(
+                "temporal ensembling requires n_action_steps=1; "
+                f"got {n_action_steps}"
+            )
+        config.temporal_ensemble_coeff = temporal_ensemble_coeff
+    if n_action_steps is not None and hasattr(config, "n_action_steps"):
+        if n_action_steps < 1:
+            raise ValueError(f"n_action_steps must be >= 1, got {n_action_steps}")
+        chunk_size = getattr(config, "chunk_size", None)
+        if chunk_size is not None and n_action_steps > chunk_size:
+            raise ValueError(
+                f"n_action_steps ({n_action_steps}) must be <= chunk_size ({chunk_size})"
+            )
+        config.n_action_steps = n_action_steps
 
     policy_cls = get_policy_class(config.type)
     policy = policy_cls.from_pretrained(checkpoint, config=config)

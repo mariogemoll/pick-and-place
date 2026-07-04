@@ -22,9 +22,9 @@ written to ``data.ctrl``. Normalization stats live inside the policy's processor
 and load from the checkpoint, so the dataset is left in raw physical units.
 
 The sim is the plant: the cube is a free rigid body, the arm is driven through
-its position-servo actuators, and physics integrates live. SmolVLA predicts an
-action chunk (``n_action_steps``) and ``select_action`` serves one step per call,
-only re-running the network when the chunk drains.
+its position-servo actuators, and physics integrates live. Chunked policies
+predict a horizon of actions and ``select_action`` serves one step per call,
+only re-running the network after ``n_action_steps`` queued actions.
 """
 
 from __future__ import annotations
@@ -216,6 +216,24 @@ def main() -> None:
         default=0,
         help="stop after this many control ticks (0 = run until the viewer is closed)",
     )
+    parser.add_argument(
+        "--n-action-steps",
+        type=int,
+        default=100,
+        help=(
+            "queued actions to execute before re-querying a chunked policy "
+            "(default: 100; matches common ACT checkpoints; temporal ensembling uses 1)"
+        ),
+    )
+    parser.add_argument(
+        "--temporal-ensemble-coeff",
+        type=float,
+        default=None,
+        help=(
+            "enable ACT temporal ensembling with this coefficient, e.g. 0.01; "
+            "requires --n-action-steps 1"
+        ),
+    )
     parser.add_argument("--headless", action="store_true", help="no viewer; render only for the policy")
     parser.add_argument(
         "--save-video",
@@ -279,9 +297,21 @@ def main() -> None:
 
     hw = image_hw
     policy, preprocessor, postprocessor = make_policy(
-        args.checkpoint, hw, (overhead_key, wrist_key), device
+        args.checkpoint,
+        hw,
+        (overhead_key, wrist_key),
+        device,
+        n_action_steps=args.n_action_steps,
+        temporal_ensemble_coeff=args.temporal_ensemble_coeff,
     )
     policy.reset()
+    if hasattr(policy.config, "chunk_size") and hasattr(policy.config, "n_action_steps"):
+        print(
+            f"Policy chunks: predicts {policy.config.chunk_size}, "
+            f"executes {policy.config.n_action_steps} before re-query."
+        )
+    if getattr(policy.config, "temporal_ensemble_coeff", None) is not None:
+        print(f"Temporal ensembling coeff: {policy.config.temporal_ensemble_coeff}")
 
     renderer = mujoco.Renderer(model, height=hw[0], width=hw[1])
 
