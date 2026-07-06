@@ -10,7 +10,7 @@ import { buildWorkspaceOverlaySpecs } from '../workspace-overlay';
 import { createRobotScene } from './scene';
 import { buildUi, formatDegrees } from './ui';
 
-type RobotPoseName = 'grasp' | 'rest' | 'neutral';
+type RobotPoseName = 'grasp' | 'rest' | 'neutral' | 'extended';
 
 const ROBOT_POSES: Record<RobotPoseName, {
   label: string;
@@ -35,13 +35,22 @@ const ROBOT_POSES: Record<RobotPoseName, {
       elbow_flex: Math.PI / 2,
       wrist_flex: 1.2865569914701056,
       wrist_roll: -1.509038522493559,
-      gripper: 0.018868424345884635
+      gripper: 0
     }
   },
   neutral: {
     label: 'Neutral',
     joints: {
       ...NEUTRAL_ARM_JOINTS,
+      gripper: 0
+    }
+  },
+  extended: {
+    label: 'Extended',
+    joints: {
+      ...NEUTRAL_ARM_JOINTS,
+      shoulder_lift: Math.PI / 2,
+      elbow_flex: -Math.PI / 2,
       gripper: 0
     }
   }
@@ -79,7 +88,8 @@ function easeInOutCosine(t: number): number {
 }
 
 function isRobotPoseName(poseName: string): poseName is RobotPoseName {
-  return poseName === 'grasp' || poseName === 'rest' || poseName === 'neutral';
+  return poseName === 'grasp' || poseName === 'rest' || poseName === 'neutral' ||
+    poseName === 'extended';
 }
 
 export async function initializeRobotVisualization(
