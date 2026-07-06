@@ -215,6 +215,7 @@ export async function initializeRobotVisualization(
     updatePoseTransition(now);
     orbitControls.update();
     renderer.render(scene, camera);
+    vizScene.renderInsets(currentJointValues.get('shoulder_pan') ?? 0);
   }
   animationFrameId = window.requestAnimationFrame(animate);
 

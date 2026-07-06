@@ -15,6 +15,18 @@ import {
 } from '../workspace-overlay';
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from './ui';
 
+const INSET_WIDTH = 160;
+const INSET_HEIGHT = 120;
+const INSET_TARGET_HEIGHT = 0.15;
+const INSET_DISTANCE = 0.55;
+// Screen-down for the top camera (up = (-1, 0, 0)) is world +X; shifting the
+// look-at point that way moves the robot base toward the top of the frame,
+// making room to show the whole extent-ring annulus.
+const TOP_CENTER_SHIFT = 0.13;
+// Aim the side camera slightly off-axis (in its co-rotating frame) so the
+// robot isn't dead-center in the inset.
+const SIDE_TARGET_SHIFT = new THREE.Vector3(0.2, 0, 0);
+
 export interface RobotScene {
   scene: THREE.Scene;
   renderer: THREE.WebGLRenderer;
@@ -25,7 +37,25 @@ export interface RobotScene {
   setJoint(name: string, radians: number): void;
   setMaterialColor(materialName: string, color: THREE.Color): void;
   resize(): void;
+  renderInsets(shoulderPanRadians: number): void;
   destroy(): void;
+}
+
+function createInsetRenderer(container: HTMLElement): {
+  renderer: THREE.WebGLRenderer;
+  camera: THREE.PerspectiveCamera;
+} {
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(INSET_WIDTH, INSET_HEIGHT, false);
+  renderer.domElement.style.width = '100%';
+  renderer.domElement.style.height = '100%';
+  container.appendChild(renderer.domElement);
+
+  const camera = new THREE.PerspectiveCamera(42, INSET_WIDTH / INSET_HEIGHT, 0.001, 100);
+  camera.up.set(0, 0, 1);
+
+  return { renderer, camera };
 }
 
 export function createRobotScene(
@@ -68,6 +98,40 @@ export function createRobotScene(
 
   const builtModel = buildWebModel(model, modelBasePath);
   scene.add(builtModel.root);
+  builtModel.root.updateMatrixWorld(true);
+
+  const panAxisWorld = new THREE.Vector3();
+  builtModel.jointPivots.get('shoulder_pan')?.getWorldPosition(panAxisWorld);
+  const insetTarget = new THREE.Vector3(panAxisWorld.x, panAxisWorld.y, INSET_TARGET_HEIGHT);
+
+  const insetContainer = document.createElement('div');
+  insetContainer.className = 'robot-viz-insets';
+  viewport.appendChild(insetContainer);
+
+  const sideInsetContainer = document.createElement('div');
+  sideInsetContainer.className = 'robot-viz-inset robot-viz-inset-side';
+  const sideInsetLabel = document.createElement('span');
+  sideInsetLabel.className = 'robot-viz-inset-label';
+  sideInsetLabel.textContent = 'Side (following robot)';
+  const { renderer: sideRenderer, camera: sideCamera } = createInsetRenderer(sideInsetContainer);
+  sideInsetContainer.appendChild(sideInsetLabel);
+
+  const topInsetContainer = document.createElement('div');
+  topInsetContainer.className = 'robot-viz-inset robot-viz-inset-top';
+  const topInsetLabel = document.createElement('span');
+  topInsetLabel.className = 'robot-viz-inset-label';
+  topInsetLabel.textContent = 'Top';
+  const { renderer: topRenderer, camera: topCamera } = createInsetRenderer(topInsetContainer);
+  topInsetContainer.appendChild(topInsetLabel);
+
+  insetContainer.append(topInsetContainer, sideInsetContainer);
+
+  const topTarget = insetTarget.clone().add(new THREE.Vector3(TOP_CENTER_SHIFT, 0, 0));
+  topCamera.up.set(-1, 0, 0);
+  topCamera.position.set(topTarget.x, topTarget.y, INSET_TARGET_HEIGHT + 0.75);
+  topCamera.lookAt(topTarget);
+
+  const sideOffset = new THREE.Vector3(0, -INSET_DISTANCE, 0);
 
   function resize(): void {
     const width = viewport.clientWidth || CANVAS_WIDTH;
@@ -96,9 +160,26 @@ export function createRobotScene(
       }
     },
     resize,
+    renderInsets(shoulderPanRadians: number): void {
+      const axis = new THREE.Vector3(0, 0, 1);
+      const rotation = -shoulderPanRadians;
+      sideCamera.position
+        .copy(sideOffset)
+        .add(SIDE_TARGET_SHIFT)
+        .applyAxisAngle(axis, rotation)
+        .add(insetTarget);
+      const sideTarget = SIDE_TARGET_SHIFT.clone()
+        .applyAxisAngle(axis, rotation)
+        .add(insetTarget);
+      sideCamera.lookAt(sideTarget);
+      sideRenderer.render(scene, sideCamera);
+      topRenderer.render(scene, topCamera);
+    },
     destroy(): void {
       orbitControls.dispose();
       renderer.dispose();
+      sideRenderer.dispose();
+      topRenderer.dispose();
       disposeOverlays();
       for (const mats of builtModel.materialsByName.values()) {
         for (const mat of mats) { mat.dispose(); }
