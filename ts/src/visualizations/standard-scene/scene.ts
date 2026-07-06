@@ -9,7 +9,8 @@ import { buildWebModel, loadWebModel } from '../../web-model';
 import { buildEnvironmentModel } from '../environment-model';
 import {
   addWorkspaceOverlaysToScene,
-  buildWorkspaceOverlaySpecs
+  buildWorkspaceOverlaySpecs,
+  type WorkspaceOverlays
 } from '../workspace-overlay';
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from './ui';
 
@@ -50,7 +51,7 @@ export function createStandardScene(viewport: HTMLElement): StandardScene {
   grid.rotation.x = Math.PI / 2;
   scene.add(grid);
 
-  let disposeOverlays: (() => void) | undefined;
+  let overlays: WorkspaceOverlays | undefined;
 
   const ready = Promise.all([
     loadWebModel('/so101.json'),
@@ -66,7 +67,7 @@ export function createStandardScene(viewport: HTMLElement): StandardScene {
     // Derive kinematics from the robot model to add workspace overlays
     const kinematics = deriveSo101Kinematics(robotModel);
     const overlaySpecs = buildWorkspaceOverlaySpecs(kinematics);
-    disposeOverlays = addWorkspaceOverlaysToScene(scene, overlaySpecs);
+    overlays = addWorkspaceOverlaysToScene(scene, overlaySpecs);
 
     return Promise.all([robot.ready, environment.ready]).then(() => undefined);
   });
@@ -80,7 +81,7 @@ export function createStandardScene(viewport: HTMLElement): StandardScene {
     destroy(): void {
       orbitControls.dispose();
       renderer.dispose();
-      disposeOverlays?.();
+      overlays?.dispose();
     }
   };
 }

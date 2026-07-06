@@ -36,6 +36,9 @@ export interface RobotScene {
   ready: Promise<void>;
   setJoint(name: string, radians: number): void;
   setMaterialColor(materialName: string, color: THREE.Color): void;
+  setOverlayColor(index: number, color: THREE.Color): void;
+  setOverlayVisible(index: number, visible: boolean): void;
+  setBackgroundColor(color: THREE.Color): void;
   resize(): void;
   renderInsets(shoulderPanRadians: number): void;
   destroy(): void;
@@ -73,7 +76,7 @@ export function createRobotScene(
   viewport.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xfafafa);
+  scene.background = new THREE.Color(0xf4f8ff);
 
   const camera = new THREE.PerspectiveCamera(42, CANVAS_WIDTH / CANVAS_HEIGHT, 0.001, 100);
   camera.up.set(0, 0, 1);
@@ -94,7 +97,7 @@ export function createRobotScene(
   grid.rotation.x = Math.PI / 2;
   scene.add(grid);
 
-  const disposeOverlays = addWorkspaceOverlaysToScene(scene, workspaces);
+  const overlays = addWorkspaceOverlaysToScene(scene, workspaces);
 
   const builtModel = buildWebModel(model, modelBasePath);
   scene.add(builtModel.root);
@@ -159,6 +162,15 @@ export function createRobotScene(
         mat.color.copy(color);
       }
     },
+    setOverlayColor(index: number, color: THREE.Color): void {
+      overlays.setColor(index, color);
+    },
+    setOverlayVisible(index: number, visible: boolean): void {
+      overlays.setVisible(index, visible);
+    },
+    setBackgroundColor(color: THREE.Color): void {
+      scene.background = color;
+    },
     resize,
     renderInsets(shoulderPanRadians: number): void {
       const axis = new THREE.Vector3(0, 0, 1);
@@ -180,7 +192,7 @@ export function createRobotScene(
       renderer.dispose();
       sideRenderer.dispose();
       topRenderer.dispose();
-      disposeOverlays();
+      overlays.dispose();
       for (const mats of builtModel.materialsByName.values()) {
         for (const mat of mats) { mat.dispose(); }
       }

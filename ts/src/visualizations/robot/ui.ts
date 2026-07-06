@@ -17,6 +17,9 @@ export interface RobotVizDom {
   controls: Map<string, JointControl>;
   poseButtons: Map<string, HTMLButtonElement>;
   colorInputs: Map<string, HTMLInputElement>;
+  extentColorInput: HTMLInputElement;
+  extentVisibleInput: HTMLInputElement;
+  backgroundColorInput: HTMLInputElement;
 }
 
 export interface JointControlDefinition {
@@ -31,6 +34,28 @@ export interface MaterialColorDefinition {
   name: string;
   label: string;
   hexColor: string;
+}
+
+const PRESET_PLASTIC_COLORS = [
+  '#bac6a4', '#e5d8ca', '#b1ab96', '#7cafa3', '#a7bed1',
+  '#e97175', '#a1bcde', '#dcc4a9', '#e7ddd3', '#98bac4'
+];
+
+const DEFAULT_PLASTIC_COLOR = '#dbc4a8';
+const DEFAULT_EXTENT_COLOR = '#cccccc';
+const DEFAULT_BACKGROUND_COLOR = '#f4f8ff';
+
+function randomPlasticColor(): string {
+  const h = Math.random();
+  const s = 0.2 + Math.random() * 0.8;
+  const l = 0.25 + Math.random() * 0.55;
+  const a = s * Math.min(l, 1 - l);
+  const channel = (n: number): number => {
+    const k = (n + h * 12) % 12;
+    return l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+  };
+  const toHex = (x: number): string => Math.round(x * 255).toString(16).padStart(2, '0');
+  return `#${toHex(channel(0))}${toHex(channel(8))}${toHex(channel(4))}`;
 }
 
 export interface RobotPoseButtonDefinition {
@@ -92,15 +117,38 @@ export function buildUi(
   }
   panel.appendChild(poseButtonGroup);
 
+  const extentVisibleRow = document.createElement('label');
+  extentVisibleRow.className = 'robot-viz-extent-visible-row';
+
+  const extentVisibleInput = document.createElement('input');
+  extentVisibleInput.type = 'checkbox';
+  extentVisibleInput.checked = true;
+
+  const extentVisibleLabel = document.createElement('span');
+  extentVisibleLabel.textContent = 'Show extent area';
+
+  extentVisibleRow.append(extentVisibleInput, extentVisibleLabel);
+  panel.appendChild(extentVisibleRow);
+
+  const colorsToggleButton = document.createElement('button');
+  colorsToggleButton.type = 'button';
+  colorsToggleButton.className = 'viz-button robot-viz-colors-toggle';
+  colorsToggleButton.textContent = 'Colors';
+  colorsToggleButton.setAttribute('aria-expanded', 'false');
+  panel.appendChild(colorsToggleButton);
+
   const colorInputs = new Map<string, HTMLInputElement>();
+  const colorSection = document.createElement('div');
+  colorSection.className = 'robot-viz-color-section';
+  colorSection.hidden = true;
+
+  colorsToggleButton.addEventListener('click', () => {
+    colorSection.hidden = false;
+    colorsToggleButton.setAttribute('aria-expanded', 'true');
+    colorsToggleButton.hidden = true;
+  });
+
   if (materialColors.length > 0) {
-    const colorSection = document.createElement('div');
-    colorSection.className = 'robot-viz-color-section';
-
-    const colorTitle = document.createElement('strong');
-    colorTitle.textContent = 'Colors';
-    colorSection.appendChild(colorTitle);
-
     for (const mat of materialColors) {
       const wrapper = document.createElement('div');
       wrapper.className = 'robot-viz-color-entry';
@@ -111,32 +159,116 @@ export function buildUi(
       const label = document.createElement('span');
       label.textContent = mat.label;
 
-      const input = document.createElement('input');
-      input.type = 'color';
-      input.value = mat.hexColor;
-
-      row.append(label, input);
+      const initialHex = mat.name === 'plastic' ? DEFAULT_PLASTIC_COLOR : mat.hexColor;
 
       const readout = document.createElement('output');
       readout.className = 'robot-viz-color-readout';
-      readout.textContent = hexToRgbText(mat.hexColor);
+      readout.textContent = hexToRgbText(initialHex);
+
+      const input = document.createElement('input');
+      input.type = 'color';
+      input.value = initialHex;
       input.addEventListener('input', () => {
         readout.textContent = hexToRgbText(input.value);
       });
 
-      wrapper.append(row, readout);
+      row.append(label, readout, input);
+
+      wrapper.append(row);
+
+      if (mat.name === 'plastic') {
+        const presetRow = document.createElement('div');
+        presetRow.className = 'robot-viz-color-presets';
+        for (const preset of PRESET_PLASTIC_COLORS) {
+          const swatch = document.createElement('button');
+          swatch.type = 'button';
+          swatch.className = 'robot-viz-color-preset';
+          swatch.style.backgroundColor = preset;
+          swatch.title = preset;
+          swatch.addEventListener('click', () => {
+            input.value = preset;
+            input.dispatchEvent(new Event('input'));
+          });
+          presetRow.appendChild(swatch);
+        }
+        wrapper.appendChild(presetRow);
+
+        const randomizeButton = document.createElement('button');
+        randomizeButton.type = 'button';
+        randomizeButton.className = 'viz-button robot-viz-color-randomize';
+        randomizeButton.textContent = 'Random';
+        randomizeButton.addEventListener('click', () => {
+          input.value = randomPlasticColor();
+          input.dispatchEvent(new Event('input'));
+        });
+        wrapper.appendChild(randomizeButton);
+      }
+
       colorSection.appendChild(wrapper);
       colorInputs.set(mat.name, input);
     }
-
-    panel.appendChild(colorSection);
   }
+
+  const extentWrapper = document.createElement('div');
+  extentWrapper.className = 'robot-viz-color-entry';
+
+  const extentRow = document.createElement('label');
+  extentRow.className = 'robot-viz-color-row';
+
+  const extentLabel = document.createElement('span');
+  extentLabel.textContent = 'Extent area';
+
+  const extentReadout = document.createElement('output');
+  extentReadout.className = 'robot-viz-color-readout';
+  extentReadout.textContent = hexToRgbText(DEFAULT_EXTENT_COLOR);
+
+  const extentColorInput = document.createElement('input');
+  extentColorInput.type = 'color';
+  extentColorInput.value = DEFAULT_EXTENT_COLOR;
+  extentColorInput.addEventListener('input', () => {
+    extentReadout.textContent = hexToRgbText(extentColorInput.value);
+  });
+
+  extentRow.append(extentLabel, extentReadout, extentColorInput);
+
+  extentWrapper.append(extentRow);
+  colorSection.appendChild(extentWrapper);
+
+  const backgroundWrapper = document.createElement('div');
+  backgroundWrapper.className = 'robot-viz-color-entry';
+
+  const backgroundRow = document.createElement('label');
+  backgroundRow.className = 'robot-viz-color-row';
+
+  const backgroundLabel = document.createElement('span');
+  backgroundLabel.textContent = 'Background';
+
+  const backgroundReadout = document.createElement('output');
+  backgroundReadout.className = 'robot-viz-color-readout';
+  backgroundReadout.textContent = hexToRgbText(DEFAULT_BACKGROUND_COLOR);
+
+  const backgroundColorInput = document.createElement('input');
+  backgroundColorInput.type = 'color';
+  backgroundColorInput.value = DEFAULT_BACKGROUND_COLOR;
+  backgroundColorInput.addEventListener('input', () => {
+    backgroundReadout.textContent = hexToRgbText(backgroundColorInput.value);
+  });
+
+  backgroundRow.append(backgroundLabel, backgroundReadout, backgroundColorInput);
+
+  backgroundWrapper.append(backgroundRow);
+  colorSection.appendChild(backgroundWrapper);
+
+  panel.appendChild(colorSection);
 
   root.appendChild(panel);
 
   replacePlaceholder(parent, root);
 
-  return { root, viewport, controls, poseButtons: poseButtonElements, colorInputs };
+  return {
+    root, viewport, controls, poseButtons: poseButtonElements, colorInputs, extentColorInput,
+    extentVisibleInput, backgroundColorInput
+  };
 }
 
 export function formatDegrees(radians: number): string {

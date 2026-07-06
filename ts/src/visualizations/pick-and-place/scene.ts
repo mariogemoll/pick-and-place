@@ -76,7 +76,7 @@ export function createPickAndPlaceScene(
   grid.position.x = 0.2;
   scene.add(grid);
   scene.add(new THREE.AxesHelper(0.05));
-  const disposeOverlays = addWorkspaceOverlaysToScene(
+  const overlays = addWorkspaceOverlaysToScene(
     scene,
     workspace ? [{ ...workspace, color: 0x22c55e, opacity: 0.18 }] : []
   );
@@ -157,7 +157,7 @@ export function createPickAndPlaceScene(
       targetPart.destroy();
       targetMaterials.destroy();
       for (const material of targetFaceMaterials) { material.dispose(); }
-      disposeOverlays();
+      overlays.dispose();
     }
   };
 }

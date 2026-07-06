@@ -77,7 +77,7 @@ export function createSimpleGraspIkScene(
   scene.add(grid);
   scene.add(new THREE.AxesHelper(0.05));
 
-  const disposeOverlays = addWorkspaceOverlaysToScene(scene, workspaces ?? []);
+  const overlays = addWorkspaceOverlaysToScene(scene, workspaces ?? []);
 
   const builtModel = buildWebModel(model, modelBasePath);
   scene.add(builtModel.root);
@@ -119,7 +119,7 @@ export function createSimpleGraspIkScene(
       }
       cubePart.destroy();
       materials.destroy();
-      disposeOverlays();
+      overlays.dispose();
     }
   };
 }

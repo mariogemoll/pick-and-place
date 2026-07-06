@@ -70,13 +70,20 @@ export function buildWorkspaceOverlaySpecs(k: So101Kinematics): WorkspaceOverlay
   ];
 }
 
-// Add overlay meshes to `scene` and return a disposer that removes and frees them.
+export interface WorkspaceOverlays {
+  setColor(index: number, color: THREE.Color): void;
+  setVisible(index: number, visible: boolean): void;
+  dispose(): void;
+}
+
+// Add overlay meshes to `scene` and return a handle to recolor, hide, or remove them.
 export function addWorkspaceOverlaysToScene(
   scene: THREE.Scene,
   specs: WorkspaceOverlaySpec[]
-): () => void {
+): WorkspaceOverlays {
   const geometries: THREE.RingGeometry[] = [];
   const materials: THREE.MeshBasicMaterial[] = [];
+  const meshes: THREE.Mesh[] = [];
 
   for (const [i, ws] of specs.entries()) {
     const geo = new THREE.RingGeometry(
@@ -96,10 +103,19 @@ export function addWorkspaceOverlaysToScene(
     scene.add(mesh);
     geometries.push(geo);
     materials.push(mat);
+    meshes.push(mesh);
   }
 
-  return () => {
-    for (const geo of geometries) { geo.dispose(); }
-    for (const mat of materials) { mat.dispose(); }
+  return {
+    setColor(index: number, color: THREE.Color): void {
+      materials[index]?.color.copy(color);
+    },
+    setVisible(index: number, visible: boolean): void {
+      meshes[index].visible = visible;
+    },
+    dispose(): void {
+      for (const geo of geometries) { geo.dispose(); }
+      for (const mat of materials) { mat.dispose(); }
+    }
   };
 }

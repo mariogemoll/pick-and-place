@@ -78,7 +78,7 @@ export async function createCanonicalGraspScene(
   scene.add(grid);
   scene.add(new THREE.AxesHelper(0.05));
 
-  const disposeOverlays = addWorkspaceOverlaysToScene(scene, workspaces ?? []);
+  const overlays = addWorkspaceOverlaysToScene(scene, workspaces ?? []);
 
   // The arm stays in its neutral rest pose: this visualization is about the
   // cube's placement, not the grasp solution.
@@ -164,7 +164,7 @@ export async function createCanonicalGraspScene(
       ghostGripperPart.destroy();
       for (const material of ghostMaterials) { material.dispose(); }
       materials.destroy();
-      disposeOverlays();
+      overlays.dispose();
     }
   };
 }

@@ -92,6 +92,10 @@ button:active,
   background: #eee;
 }
 
+.viz-button[hidden] {
+  display: none;
+}
+
 .viz-button-primary {
   color: #fff;
   font-weight: 600;
@@ -675,7 +679,7 @@ input[type="range"]:active::-moz-range-thumb {
 
 .robot-viz-root {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 260px;
+  grid-template-columns: minmax(0, 1fr) 290px;
   max-width: 1100px;
   min-height: 520px;
   margin: 0 auto;
@@ -881,13 +885,14 @@ input[type="range"]:active::-moz-range-thumb {
 
 .robot-viz-pose-buttons {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: 0.35rem;
   margin-top: 0.75rem;
 }
 
 .robot-viz-controls .robot-viz-pose-button {
-  padding: 3px 10px;
+  padding: 3px 6px;
   min-width: 0;
   white-space: nowrap;
 }
@@ -906,6 +911,20 @@ input[type="range"]:active::-moz-range-thumb {
   text-align: right;
 }
 
+.robot-viz-extent-visible-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+  color: var(--viz-control);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.robot-viz-colors-toggle {
+  margin-top: 0.5rem;
+}
+
 .robot-viz-color-section {
   margin-top: 1.25rem;
   padding-top: 1rem;
@@ -913,6 +932,10 @@ input[type="range"]:active::-moz-range-thumb {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
+}
+
+.robot-viz-color-section[hidden] {
+  display: none;
 }
 
 .robot-viz-color-section strong {
@@ -929,7 +952,7 @@ input[type="range"]:active::-moz-range-thumb {
 .robot-viz-color-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 0.5rem;
   color: var(--viz-control);
   font-size: 12px;
   cursor: pointer;
@@ -950,6 +973,31 @@ input[type="range"]:active::-moz-range-thumb {
   font-family: var(--viz-font-mono);
   font-size: 12px;
   user-select: all;
+}
+
+.robot-viz-color-row .robot-viz-color-readout {
+  margin-left: auto;
+}
+
+.robot-viz-color-presets {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.robot-viz-color-preset {
+  width: 1rem;
+  height: 1rem;
+  padding: 0;
+  border: 1px solid var(--viz-control);
+  border-radius: 0.15rem;
+  cursor: pointer;
+}
+
+.robot-viz-color-randomize {
+  align-self: flex-start;
+  margin-top: 0.35rem;
+  font-size: 11px;
+  padding: 0.15rem 0.5rem;
 }
 
 @media (width <= 800px) {

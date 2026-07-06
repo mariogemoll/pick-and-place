@@ -30,7 +30,7 @@ const ROBOT_POSES: Record<RobotPoseName, {
   rest: {
     label: 'Rest',
     joints: {
-      shoulder_pan: 0.08669107932982824,
+      shoulder_pan: 0,
       shoulder_lift: -100 * (Math.PI / 180),
       elbow_flex: Math.PI / 2,
       wrist_flex: 1.2865569914701056,
@@ -87,6 +87,10 @@ function easeInOutCosine(t: number): number {
   return (1 - Math.cos(Math.PI * t)) / 2;
 }
 
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 function isRobotPoseName(poseName: string): poseName is RobotPoseName {
   return poseName === 'grasp' || poseName === 'rest' || poseName === 'neutral' ||
     poseName === 'extended';
@@ -102,7 +106,7 @@ export async function initializeRobotVisualization(
     if (joint.type !== 'hinge' || joint.range === undefined) { return []; }
     return [{
       name: joint.name,
-      label: joint.name.replaceAll('_', ' '),
+      label: capitalize(joint.name.replaceAll('_', ' ')),
       lower: joint.range[0],
       upper: joint.range[1],
       value: initialJointValues[joint.name] ?? 0
@@ -118,7 +122,7 @@ export async function initializeRobotVisualization(
     .filter(([name]) => visualMaterialNames.has(name))
     .map(([name, [r, g, b]]) => ({
       name,
-      label: name.charAt(0).toUpperCase() + name.slice(1),
+      label: capitalize(name),
       hexColor: rgbToHex(r, g, b)
     }));
 
@@ -161,7 +165,33 @@ export async function initializeRobotVisualization(
     };
     colorInput.addEventListener('input', update);
     listeners.push(() => { colorInput.removeEventListener('input', update); });
+    update();
   }
+
+  const updateExtentColor = (): void => {
+    vizScene.setOverlayColor(0, new THREE.Color(ui.extentColorInput.value));
+  };
+  ui.extentColorInput.addEventListener('input', updateExtentColor);
+  listeners.push(() => { ui.extentColorInput.removeEventListener('input', updateExtentColor); });
+  updateExtentColor();
+
+  const updateExtentVisible = (): void => {
+    vizScene.setOverlayVisible(0, ui.extentVisibleInput.checked);
+  };
+  ui.extentVisibleInput.addEventListener('change', updateExtentVisible);
+  listeners.push(() => {
+    ui.extentVisibleInput.removeEventListener('change', updateExtentVisible);
+  });
+  updateExtentVisible();
+
+  const updateBackgroundColor = (): void => {
+    vizScene.setBackgroundColor(new THREE.Color(ui.backgroundColorInput.value));
+  };
+  ui.backgroundColorInput.addEventListener('input', updateBackgroundColor);
+  listeners.push(() => {
+    ui.backgroundColorInput.removeEventListener('input', updateBackgroundColor);
+  });
+  updateBackgroundColor();
 
   const applyPoseImmediately = (poseName: RobotPoseName): void => {
     const pose = ROBOT_POSES[poseName];
