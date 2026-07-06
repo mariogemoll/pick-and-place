@@ -20,6 +20,8 @@ export interface RobotScene {
   renderer: THREE.WebGLRenderer;
   camera: THREE.PerspectiveCamera;
   orbitControls: OrbitControls;
+  robotRoot: THREE.Group;
+  ready: Promise<void>;
   setJoint(name: string, radians: number): void;
   setMaterialColor(materialName: string, color: THREE.Color): void;
   resize(): void;
@@ -34,7 +36,9 @@ export function createRobotScene(
 ): RobotScene {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
-  renderer.setSize(CANVAS_WIDTH, CANVAS_HEIGHT);
+  renderer.setSize(CANVAS_WIDTH, CANVAS_HEIGHT, false);
+  renderer.domElement.style.width = '100%';
+  renderer.domElement.style.height = '100%';
   renderer.shadowMap.enabled = true;
   viewport.appendChild(renderer.domElement);
 
@@ -69,6 +73,8 @@ export function createRobotScene(
     const width = viewport.clientWidth || CANVAS_WIDTH;
     const height = viewport.clientHeight || CANVAS_HEIGHT;
     renderer.setSize(width, height, false);
+    renderer.domElement.style.width = '100%';
+    renderer.domElement.style.height = '100%';
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
   }
@@ -79,6 +85,8 @@ export function createRobotScene(
     renderer,
     camera,
     orbitControls,
+    robotRoot: builtModel.root,
+    ready: builtModel.ready,
     setJoint(name: string, radians: number): void {
       setJointAngle(model, builtModel.jointPivots, name, radians);
     },

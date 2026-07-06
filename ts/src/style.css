@@ -230,6 +230,91 @@ input[type="range"]:active::-moz-range-thumb {
   height: 100%;
 }
 
+.robot-grid-viz-root {
+  width: min(100%, 860px);
+  margin: 1rem auto;
+}
+
+.robot-grid-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.robot-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 200px);
+  gap: 8px;
+  justify-content: center;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.robot-grid-tile {
+  min-width: 0;
+  justify-self: center;
+}
+
+.robot-grid-viewport {
+  position: relative;
+  width: 200px;
+  aspect-ratio: 1 / 1;
+  background: #fff;
+  border: 1px solid var(--viz-border);
+}
+
+.robot-grid-readout {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  left: 5px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-height: 20px;
+  box-sizing: border-box;
+  padding: 3px 5px;
+  font-family: var(--viz-font-mono);
+  font-size: 10px;
+  line-height: 1.25;
+  color: var(--viz-control);
+  white-space: nowrap;
+  background: rgb(255 255 255 / 86%);
+  border: 1px solid rgb(226 226 231 / 72%);
+  border-radius: 4px;
+  backdrop-filter: blur(3px);
+}
+
+.robot-grid-swatch {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--viz-border);
+  border-radius: 50%;
+}
+
+.robot-grid-hex,
+.robot-grid-rgb {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.robot-grid-hex {
+  color: var(--viz-text);
+  font-weight: 700;
+}
+
+@media (width <= 760px) {
+  .robot-grid {
+    grid-template-columns: repeat(2, min(200px, calc((100vw - 4rem - 8px) / 2)));
+  }
+
+  .robot-grid-viewport {
+    width: min(200px, calc((100vw - 4rem - 8px) / 2));
+  }
+}
+
 .viz-top-controls,
 .viz-side-controls {
   font-size: 12px;

@@ -30,6 +30,10 @@ import {
   type RobotVisualization
 } from './visualizations/robot';
 import {
+  initializeRobotGridVisualization,
+  type RobotGridVisualization
+} from './visualizations/robot-grid';
+import {
   initSimpleGraspIkVisualization,
   type SimpleGraspIkVisualization
 } from './visualizations/simple-grasp-ik';
@@ -46,6 +50,7 @@ let graspPoseVisualization: GraspPoseVisualization | null = null;
 let graspPoseBreakdownVisualization: GraspPoseBreakdownVisualization | null = null;
 let gripperVisualization: GripperVisualization | null = null;
 let robotVisualization: RobotVisualization | null = null;
+let robotGridVisualization: RobotGridVisualization | null = null;
 let bodyTreeVisualization: BodyTreeVisualization | null = null;
 let simpleGraspPoseVisualization: SimpleGraspPoseVisualization | null = null;
 let simpleGraspIkVisualization: SimpleGraspIkVisualization | null = null;
@@ -146,6 +151,16 @@ function initialize(): void {
 
     void initRobotVisualization(robotPanel).then(viz => {
       robotVisualization = viz;
+    });
+  }
+
+  const robotGridPanel = document.getElementById('robot-grid-visualization');
+  if (robotGridPanel) {
+    robotGridVisualization?.destroy();
+    robotGridVisualization = null;
+
+    void initializeRobotGridVisualization(robotGridPanel).then(viz => {
+      robotGridVisualization = viz;
     });
   }
 
