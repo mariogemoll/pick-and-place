@@ -12,10 +12,6 @@ import {
   initCanonicalGraspVisualization
 } from './visualizations/canonical-grasp';
 import {
-  type DummyVisualization,
-  initDummyVisualization
-} from './visualizations/dummy';
-import {
   type GraspPoseVisualization,
   initGraspPoseVisualization } from './visualizations/grasp-pose';
 import {
@@ -45,7 +41,6 @@ import {
   initStandardSceneVisualization,
   type StandardSceneVisualization } from './visualizations/standard-scene';
 
-let dummyVisualization: DummyVisualization | null = null;
 let standardSceneVisualization: StandardSceneVisualization | null = null;
 let graspPoseVisualization: GraspPoseVisualization | null = null;
 let graspPoseBreakdownVisualization: GraspPoseBreakdownVisualization | null = null;
@@ -58,16 +53,6 @@ let canonicalGraspVisualization: CanonicalGraspVisualization | null = null;
 let pickAndPlaceVisualization: PickAndPlaceVisualization | null = null;
 
 function initialize(): void {
-  const dummyPanel = document.getElementById('dummy-visualization');
-  if (dummyPanel) {
-    dummyVisualization?.destroy();
-    dummyVisualization = null;
-
-    void initDummyVisualization(dummyPanel).then(viz => {
-      dummyVisualization = viz;
-    });
-  }
-
   const standardScenePanel = document.getElementById('standard-scene-visualization');
   if (standardScenePanel) {
     standardSceneVisualization?.destroy();
