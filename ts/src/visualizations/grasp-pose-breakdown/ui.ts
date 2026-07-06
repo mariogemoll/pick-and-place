@@ -11,7 +11,8 @@ import {
   createPane,
   FLOOR_FACES,
   formatTranslation,
-  type GraspPosePane
+  type GraspPosePane,
+  replacePlaceholder
 } from '../grasp-pose-shared/ui';
 
 export type { GraspPosePane as GraspPoseBreakdownPane } from '../grasp-pose-shared/ui';
@@ -39,10 +40,10 @@ export interface GraspPoseBreakdownDom {
 
 export function buildUi(parent: HTMLElement): GraspPoseBreakdownDom {
   const root = document.createElement('div');
-  root.className = 'visualization grasp-pose-breakdown-viz-root';
+  root.className = 'visualization viz-shell grasp-pose-breakdown-viz-root';
 
   const controls = document.createElement('div');
-  controls.className = 'grasp-pose-breakdown-viz-controls';
+  controls.className = 'viz-top-controls grasp-pose-breakdown-viz-controls';
 
   const floorModeInput = appendFloorModeInput(controls);
   const faceInputs = appendFaceInputs(
@@ -78,12 +79,7 @@ export function buildUi(parent: HTMLElement): GraspPoseBreakdownDom {
   finalRow.append(...panes.slice(8).map(pane => pane.element));
   root.appendChild(finalRow);
 
-  const placeholder = parent.querySelector('.placeholder');
-  if (placeholder) {
-    placeholder.replaceWith(root);
-  } else {
-    parent.appendChild(root);
-  }
+  replacePlaceholder(parent, root);
 
   return {
     root, panes, faceInputs, floorModeInput,

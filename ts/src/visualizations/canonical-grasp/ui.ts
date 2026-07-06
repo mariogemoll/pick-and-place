@@ -2,8 +2,13 @@
 // SPDX-License-Identifier: 0BSD
 
 import {
+  appendCheckbox,
   appendDegreeSliderGroup,
-  appendSliderGroup
+  appendRadioGroup,
+  appendResetButton,
+  appendSliderGroup,
+  appendStatus,
+  replacePlaceholder
 } from '../grasp-pose-shared/ui';
 
 export type CoordinateMode = 'cartesian' | 'radial';
@@ -60,37 +65,6 @@ export interface CanonicalGraspUiOptions {
   azimuthDefault?: number;
 }
 
-function appendRadioGroup(
-  parent: HTMLElement,
-  name: string,
-  groupLabel: string,
-  modes: { value: string; label: string }[]
-): HTMLInputElement[] {
-  const group = document.createElement('div');
-  group.className = 'grasp-pose-breakdown-viz-controls-group';
-  const label = document.createElement('span');
-  label.textContent = groupLabel;
-  const options = document.createElement('div');
-  options.className = 'grasp-pose-breakdown-viz-face-options';
-  const inputs = modes.map((mode, index) => {
-    const wrapper = document.createElement('label');
-    wrapper.className = 'grasp-pose-breakdown-viz-face-option';
-    const input = document.createElement('input');
-    input.type = 'radio';
-    input.name = name;
-    input.value = mode.value;
-    input.checked = index === 0;
-    const optionLabel = document.createElement('span');
-    optionLabel.textContent = mode.label;
-    wrapper.append(input, optionLabel);
-    options.appendChild(wrapper);
-    return input;
-  });
-  group.append(label, options);
-  parent.appendChild(group);
-  return inputs;
-}
-
 export function buildUi(
   parent: HTMLElement,
   options: CanonicalGraspUiOptions = {}
@@ -103,13 +77,13 @@ export function buildUi(
   const azimuthDefault = options.azimuthDefault ?? 0;
 
   const root = document.createElement('div');
-  root.className = 'visualization canonical-grasp-viz-root';
+  root.className = 'visualization viz-shell canonical-grasp-viz-root';
 
   const viewport = document.createElement('div');
-  viewport.className = 'canonical-grasp-viz-viewport';
+  viewport.className = 'viz-viewport canonical-grasp-viz-viewport';
 
   const controls = document.createElement('div');
-  controls.className = 'canonical-grasp-viz-controls';
+  controls.className = 'viz-side-controls canonical-grasp-viz-controls';
 
   const coordModeInputs = appendRadioGroup(
     controls, 'canonical-grasp-coord-mode', 'Coordinates',
@@ -143,33 +117,20 @@ export function buildUi(
     controls, 'Yaw (from radius)', YAW_MIN_DEG, YAW_MAX_DEG, 0
   );
 
-  const pregraspLabel = document.createElement('label');
-  pregraspLabel.className = 'canonical-grasp-viz-checkbox';
-  const showPregraspInput = document.createElement('input');
-  showPregraspInput.type = 'checkbox';
-  const pregraspText = document.createElement('span');
-  pregraspText.textContent = 'Show pregrasp pose';
-  pregraspLabel.append(showPregraspInput, pregraspText);
-  controls.appendChild(pregraspLabel);
+  const showPregraspInput = appendCheckbox(
+    controls, 'Show pregrasp pose', 'canonical-grasp-viz-checkbox'
+  );
+  const dropModeInput = appendCheckbox(
+    controls,
+    `Drop mode (ignore orientation, z = ${DROP_POSE_Z_MM} mm)`,
+    'canonical-grasp-viz-checkbox'
+  );
 
-  const dropModeLabel = document.createElement('label');
-  dropModeLabel.className = 'canonical-grasp-viz-checkbox';
-  const dropModeInput = document.createElement('input');
-  dropModeInput.type = 'checkbox';
-  const dropModeText = document.createElement('span');
-  dropModeText.textContent = `Drop mode (ignore orientation, z = ${DROP_POSE_Z_MM} mm)`;
-  dropModeLabel.append(dropModeInput, dropModeText);
-  controls.appendChild(dropModeLabel);
+  const resetButton = appendResetButton(controls);
+  resetButton.classList.add('canonical-grasp-viz-reset');
 
-  const resetButton = document.createElement('button');
-  resetButton.className = 'canonical-grasp-viz-reset';
-  resetButton.type = 'button';
-  resetButton.textContent = 'Reset';
-  controls.appendChild(resetButton);
-
-  const status = document.createElement('output');
-  status.className = 'canonical-grasp-viz-status';
-  controls.appendChild(status);
+  const status = appendStatus(controls);
+  status.classList.add('canonical-grasp-viz-status');
 
   const branchContainer = document.createElement('div');
   branchContainer.className = 'canonical-grasp-viz-branches';
@@ -180,12 +141,7 @@ export function buildUi(
   layout.append(viewport, controls);
   root.appendChild(layout);
 
-  const placeholder = parent.querySelector('.placeholder');
-  if (placeholder) {
-    placeholder.replaceWith(root);
-  } else {
-    parent.appendChild(root);
-  }
+  replacePlaceholder(parent, root);
 
   return {
     root, viewport, coordModeInputs, cartesianGroup, radialGroup, xInput,

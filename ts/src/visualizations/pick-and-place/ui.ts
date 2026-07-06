@@ -3,7 +3,9 @@
 
 import {
   appendDegreeSliderGroup,
-  appendSliderGroup
+  appendResetButton,
+  appendSliderGroup,
+  replacePlaceholder
 } from '../grasp-pose-shared/ui';
 
 export interface PickAndPlaceCubeInputs {
@@ -69,11 +71,12 @@ export function buildUi(
   options: PickAndPlaceUiOptions
 ): PickAndPlaceDom {
   const root = document.createElement('div');
-  root.className = 'visualization simple-grasp-ik-viz-root pick-and-place-viz-root';
+  root.className =
+    'visualization viz-shell simple-grasp-ik-viz-root pick-and-place-viz-root';
 
   const viewport = document.createElement('div');
   viewport.className =
-    'simple-grasp-ik-viz-viewport pick-and-place-viz-viewport';
+    'viz-viewport simple-grasp-ik-viz-viewport pick-and-place-viz-viewport';
 
   const controls = document.createElement('aside');
   controls.className = 'pick-and-place-viz-controls';
@@ -90,18 +93,16 @@ export function buildUi(
     targetControls, 'target', 'Target cube', options, options.target
   );
 
-  const resetButton = document.createElement('button');
-  resetButton.className = 'simple-grasp-ik-viz-reset';
-  resetButton.type = 'button';
-  resetButton.textContent = 'Reset';
+  const resetButton = appendResetButton(setupControls);
+  resetButton.classList.add('simple-grasp-ik-viz-reset');
   const runButton = document.createElement('button');
-  runButton.className = 'pick-and-place-viz-run-button';
+  runButton.className = 'viz-button viz-button-primary pick-and-place-viz-run-button';
   runButton.type = 'button';
   runButton.textContent = 'Run';
   const setupActions = document.createElement('div');
   setupActions.className = 'pick-and-place-viz-setup-actions';
   setupActions.appendChild(runButton);
-  setupControls.append(sourceControls, targetControls, resetButton);
+  setupControls.prepend(sourceControls, targetControls);
 
   const runControls = document.createElement('div');
   runControls.className = 'pick-and-place-viz-run-controls';
@@ -114,7 +115,7 @@ export function buildUi(
   const playbackRow = document.createElement('div');
   playbackRow.className = 'pick-and-place-viz-playback-row';
   const playPauseButton = document.createElement('button');
-  playPauseButton.className = 'pick-and-place-viz-play-button';
+  playPauseButton.className = 'viz-button viz-button-primary pick-and-place-viz-play-button';
   playPauseButton.type = 'button';
   playPauseButton.textContent = 'Play';
   playPauseButton.setAttribute('aria-label', 'Play trajectory');
@@ -139,12 +140,7 @@ export function buildUi(
   layout.appendChild(viewport);
   root.appendChild(layout);
 
-  const placeholder = parent.querySelector('.placeholder');
-  if (placeholder) {
-    placeholder.replaceWith(root);
-  } else {
-    parent.appendChild(root);
-  }
+  replacePlaceholder(parent, root);
 
   return {
     root,

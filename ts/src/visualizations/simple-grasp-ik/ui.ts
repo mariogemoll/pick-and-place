@@ -4,8 +4,12 @@
 import {
   appendDegreeSliderGroup,
   appendFaceInputs,
+  appendRadioGroup,
+  appendResetButton,
   appendSliderGroup,
+  appendStatus,
   type CubePoseInputs,
+  replacePlaceholder,
   SIDE_FACES
 } from '../grasp-pose-shared/ui';
 
@@ -47,33 +51,15 @@ export interface SimpleGraspIkUiOptions {
 }
 
 function appendCoordinateModeInputs(parent: HTMLElement): HTMLInputElement[] {
-  const group = document.createElement('div');
-  group.className = 'grasp-pose-breakdown-viz-controls-group';
-  const groupLabel = document.createElement('span');
-  groupLabel.textContent = 'Coordinates';
-  const options = document.createElement('div');
-  options.className = 'grasp-pose-breakdown-viz-face-options';
-  const modes: { value: CoordinateMode; label: string }[] = [
-    { value: 'cartesian', label: 'X / Y' },
-    { value: 'radial', label: 'Radial' }
-  ];
-  const inputs = modes.map((mode, index) => {
-    const wrapper = document.createElement('label');
-    wrapper.className = 'grasp-pose-breakdown-viz-face-option';
-    const input = document.createElement('input');
-    input.type = 'radio';
-    input.name = 'simple-grasp-ik-coord-mode';
-    input.value = mode.value;
-    input.checked = index === 0;
-    const label = document.createElement('span');
-    label.textContent = mode.label;
-    wrapper.append(input, label);
-    options.appendChild(wrapper);
-    return input;
-  });
-  group.append(groupLabel, options);
-  parent.appendChild(group);
-  return inputs;
+  return appendRadioGroup(
+    parent,
+    'simple-grasp-ik-coord-mode',
+    'Coordinates',
+    [
+      { value: 'cartesian', label: 'X / Y' },
+      { value: 'radial', label: 'Radial' }
+    ]
+  );
 }
 
 export function buildUi(
@@ -87,13 +73,13 @@ export function buildUi(
   const radiusDefault = options.radiusDefault ?? DEFAULT_IK_CUBE_X * 1000;
   const azimuthDefault = options.azimuthDefault ?? 0;
   const root = document.createElement('div');
-  root.className = 'visualization simple-grasp-ik-viz-root';
+  root.className = 'visualization viz-shell simple-grasp-ik-viz-root';
 
   const viewport = document.createElement('div');
-  viewport.className = 'simple-grasp-ik-viz-viewport';
+  viewport.className = 'viz-viewport simple-grasp-ik-viz-viewport';
 
   const controls = document.createElement('div');
-  controls.className = 'simple-grasp-ik-viz-controls';
+  controls.className = 'viz-side-controls simple-grasp-ik-viz-controls';
 
   const faceInputs = appendFaceInputs(
     controls, 'simple-grasp-ik-cube-face', SIDE_FACES
@@ -133,15 +119,11 @@ export function buildUi(
   const pitchInput = appendDegreeSliderGroup(controls, 'Pitch', -180, 180, 0);
   const rollInput = appendDegreeSliderGroup(controls, 'Roll', -180, 180, 0);
 
-  const resetButton = document.createElement('button');
-  resetButton.className = 'simple-grasp-ik-viz-reset';
-  resetButton.type = 'button';
-  resetButton.textContent = 'Reset';
-  controls.appendChild(resetButton);
+  const resetButton = appendResetButton(controls);
+  resetButton.classList.add('simple-grasp-ik-viz-reset');
 
-  const status = document.createElement('output');
-  status.className = 'simple-grasp-ik-viz-status';
-  controls.appendChild(status);
+  const status = appendStatus(controls);
+  status.classList.add('simple-grasp-ik-viz-status');
 
   const branchContainer = document.createElement('div');
   branchContainer.className = 'simple-grasp-ik-viz-branches';
@@ -152,12 +134,7 @@ export function buildUi(
   layout.append(viewport, controls);
   root.appendChild(layout);
 
-  const placeholder = parent.querySelector('.placeholder');
-  if (placeholder) {
-    placeholder.replaceWith(root);
-  } else {
-    parent.appendChild(root);
-  }
+  replacePlaceholder(parent, root);
 
   return {
     root, viewport, faceInputs, resetButton, status, branchContainer,

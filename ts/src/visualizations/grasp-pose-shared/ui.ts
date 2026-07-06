@@ -40,6 +40,80 @@ export interface GraspPosePane {
   viewport: HTMLDivElement;
 }
 
+export function replacePlaceholder(parent: HTMLElement, root: HTMLElement): void {
+  const placeholder = parent.querySelector('.placeholder');
+  if (placeholder) {
+    placeholder.replaceWith(root);
+  } else {
+    parent.appendChild(root);
+  }
+}
+
+export function appendResetButton(parent: HTMLElement, label = 'Reset'): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.className = 'viz-button viz-reset-button';
+  button.type = 'button';
+  button.textContent = label;
+  parent.appendChild(button);
+  return button;
+}
+
+export function appendStatus(parent: HTMLElement): HTMLOutputElement {
+  const status = document.createElement('output');
+  status.className = 'viz-status';
+  parent.appendChild(status);
+  return status;
+}
+
+export function appendCheckbox(
+  parent: HTMLElement,
+  labelText: string,
+  className = ''
+): HTMLInputElement {
+  const label = document.createElement('label');
+  label.className = `viz-checkbox ${className}`.trim();
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  const text = document.createElement('span');
+  text.textContent = labelText;
+  label.append(input, text);
+  parent.appendChild(label);
+  return input;
+}
+
+export function appendRadioGroup(
+  parent: HTMLElement,
+  name: string,
+  groupLabel: string,
+  modes: { value: string; label: string; disabled?: boolean }[]
+): HTMLInputElement[] {
+  const group = document.createElement('div');
+  group.className = 'viz-control-group grasp-pose-breakdown-viz-controls-group';
+  const label = document.createElement('span');
+  label.className = 'viz-control-label';
+  label.textContent = groupLabel;
+  const options = document.createElement('div');
+  options.className = 'viz-segmented grasp-pose-breakdown-viz-face-options';
+  const inputs = modes.map((mode, index) => {
+    const wrapper = document.createElement('label');
+    wrapper.className = 'viz-segmented-option grasp-pose-breakdown-viz-face-option';
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = name;
+    input.value = mode.value;
+    input.checked = index === 0;
+    input.disabled = mode.disabled === true;
+    const optionLabel = document.createElement('span');
+    optionLabel.textContent = mode.label;
+    wrapper.append(input, optionLabel);
+    options.appendChild(wrapper);
+    return input;
+  });
+  group.append(label, options);
+  parent.appendChild(group);
+  return inputs;
+}
+
 export function appendSliderGroup(
   parent: HTMLElement,
   label: string,
@@ -50,8 +124,9 @@ export function appendSliderGroup(
   unit = ' mm'
 ): HTMLInputElement {
   const group = document.createElement('div');
-  group.className = 'grasp-pose-breakdown-viz-controls-group';
+  group.className = 'viz-slider grasp-pose-breakdown-viz-controls-group';
   const labelEl = document.createElement('span');
+  labelEl.className = 'viz-slider-label';
   labelEl.textContent = label;
   const input = document.createElement('input');
   input.type = 'range';
@@ -61,7 +136,7 @@ export function appendSliderGroup(
   input.value = String(value);
   input.step = String(step);
   const outputEl = document.createElement('output');
-  outputEl.className = 'grasp-pose-breakdown-viz-control-output';
+  outputEl.className = 'viz-slider-value grasp-pose-breakdown-viz-control-output';
   outputEl.textContent = `${value}${unit}`;
   input.addEventListener('input', () => {
     outputEl.textContent = `${input.value}${unit}`;
@@ -95,16 +170,9 @@ export function setDegreeSliderRange(
 
 export function appendFloorModeInput(parent: HTMLElement): HTMLInputElement {
   const group = document.createElement('div');
-  group.className = 'grasp-pose-breakdown-viz-controls-group';
-  const label = document.createElement('label');
-  label.className = 'grasp-pose-breakdown-viz-floor-label';
-  const input = document.createElement('input');
-  input.type = 'checkbox';
+  group.className = 'viz-control-group grasp-pose-breakdown-viz-controls-group';
+  const input = appendCheckbox(group, 'On floor', 'grasp-pose-breakdown-viz-floor-label');
   input.checked = true;
-  const text = document.createElement('span');
-  text.textContent = 'On floor';
-  label.append(input, text);
-  group.appendChild(label);
   parent.appendChild(group);
   return input;
 }
@@ -117,30 +185,16 @@ export function appendFaceInputs(
   ],
   enabledFaces?: ReadonlySet<string>
 ): HTMLInputElement[] {
-  const group = document.createElement('div');
-  group.className = 'grasp-pose-breakdown-viz-controls-group';
-  const groupLabel = document.createElement('span');
-  groupLabel.textContent = 'Face';
-  const options = document.createElement('div');
-  options.className = 'grasp-pose-breakdown-viz-face-options';
-  const inputs = faces.map((face, index) => {
-    const wrapper = document.createElement('label');
-    wrapper.className = 'grasp-pose-breakdown-viz-face-option';
-    const input = document.createElement('input');
-    input.type = 'radio';
-    input.name = name;
-    input.value = face;
-    input.checked = index === 0;
-    input.disabled = enabledFaces !== undefined && !enabledFaces.has(face);
-    const label = document.createElement('span');
-    label.textContent = FACE_LABELS[face];
-    wrapper.append(input, label);
-    options.appendChild(wrapper);
-    return input;
-  });
-  group.append(groupLabel, options);
-  parent.appendChild(group);
-  return inputs;
+  return appendRadioGroup(
+    parent,
+    name,
+    'Face',
+    faces.map(face => ({
+      value: face,
+      label: FACE_LABELS[face],
+      disabled: enabledFaces !== undefined && !enabledFaces.has(face)
+    }))
+  );
 }
 
 export function appendCubePoseInputs(
@@ -167,7 +221,7 @@ export function createPane(
   withHingeInput = false
 ): GraspPosePane {
   const pane = document.createElement('section');
-  pane.className = 'grasp-pose-breakdown-viz-pane';
+  pane.className = 'viz-pane grasp-pose-breakdown-viz-pane';
 
   const header = document.createElement('header');
   const heading = document.createElement('h3');
@@ -192,7 +246,7 @@ export function createPane(
   pane.appendChild(header);
 
   const viewport = document.createElement('div');
-  viewport.className = 'grasp-pose-breakdown-viz-viewport';
+  viewport.className = 'viz-viewport grasp-pose-breakdown-viz-viewport';
   viewport.style.height = `${CANVAS_HEIGHT}px`;
   pane.appendChild(viewport);
 

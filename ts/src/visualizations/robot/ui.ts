@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mario Gemoll
 // SPDX-License-Identifier: 0BSD
 
+import { appendResetButton, replacePlaceholder } from '../grasp-pose-shared/ui';
+
 export const CANVAS_WIDTH = 800;
 export const CANVAS_HEIGHT = 520;
 
@@ -37,31 +39,30 @@ export function buildUi(
   materialColors: MaterialColorDefinition[]
 ): RobotVizDom {
   const root = document.createElement('div');
-  root.className = 'visualization robot-viz-root';
+  root.className = 'visualization viz-shell robot-viz-root';
 
   const viewport = document.createElement('div');
-  viewport.className = 'robot-viz-viewport';
+  viewport.className = 'viz-viewport robot-viz-viewport';
   root.appendChild(viewport);
 
   const panel = document.createElement('div');
-  panel.className = 'robot-viz-controls';
+  panel.className = 'viz-side-controls robot-viz-controls';
 
   const header = document.createElement('div');
   header.className = 'robot-viz-controls-header';
   const title = document.createElement('strong');
   title.textContent = 'Joint angles';
-  const resetButton = document.createElement('button');
-  resetButton.type = 'button';
-  resetButton.textContent = 'Reset pose';
+  const resetButton = appendResetButton(header, 'Reset pose');
   header.append(title, resetButton);
   panel.appendChild(header);
 
   const controls = new Map<string, JointControl>();
   for (const joint of joints) {
     const row = document.createElement('label');
-    row.className = 'robot-viz-joint';
+    row.className = 'viz-slider robot-viz-joint';
 
     const label = document.createElement('span');
+    label.className = 'viz-slider-label';
     label.textContent = joint.label;
 
     const input = document.createElement('input');
@@ -72,6 +73,7 @@ export function buildUi(
     input.value = String(joint.value);
 
     const value = document.createElement('output');
+    value.className = 'viz-slider-value';
     value.textContent = formatDegrees(joint.value);
 
     row.append(label, input, value);
@@ -121,12 +123,7 @@ export function buildUi(
 
   root.appendChild(panel);
 
-  const placeholder = parent.querySelector('.placeholder');
-  if (placeholder) {
-    placeholder.replaceWith(root);
-  } else {
-    parent.appendChild(root);
-  }
+  replacePlaceholder(parent, root);
 
   return { root, viewport, controls, resetButton, colorInputs };
 }
