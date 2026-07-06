@@ -699,7 +699,7 @@ input[type="range"]:active::-moz-range-thumb {
 .robot-viz-insets {
   position: absolute;
   top: 0.75rem;
-  right: 0.75rem;
+  left: 0.75rem;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
