@@ -13,9 +13,10 @@ const ROBOT_COUNT = 4;
 const ROBOT_VIEW_TARGET = new THREE.Vector3(0, 0, 0.1);
 const ROBOT_VIEW_CAMERA = new THREE.Vector3(0.4, 0.4, 0.22);
 // Static display pose generated from the canonical grasp for cube pose
-// x=0.2, y=0, yaw=0. The color grid does not need runtime IK.
+// x=0.2, y=0, yaw=0, with shoulder_pan zeroed for a straight-ahead display.
+// The color grid does not need runtime IK.
 const ROBOT_GRID_JOINT_POSE: Record<ArmJointName, number> = {
-  shoulder_pan: -0.10582991602672699,
+  shoulder_pan: 0,
   shoulder_lift: -0.1829202616552561,
   elbow_flex: 0.6162301587559451,
   wrist_flex: 1.1374864296942075,

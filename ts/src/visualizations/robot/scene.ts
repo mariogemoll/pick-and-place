@@ -47,11 +47,11 @@ export function createRobotScene(
 
   const camera = new THREE.PerspectiveCamera(42, CANVAS_WIDTH / CANVAS_HEIGHT, 0.001, 100);
   camera.up.set(0, 0, 1);
-  camera.position.set(0.48, 0.48, 0.38);
+  camera.position.set(0.58, 0.48, 0.38);
 
   const orbitControls = new OrbitControls(camera, renderer.domElement);
   orbitControls.enableDamping = true;
-  orbitControls.target.set(0, 0, 0.1);
+  orbitControls.target.set(0.2, 0, 0.1);
   orbitControls.update();
 
   scene.add(new THREE.HemisphereLight(0xddeeff, 0xffffff, 2.2));

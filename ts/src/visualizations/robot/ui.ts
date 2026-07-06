@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mario Gemoll
 // SPDX-License-Identifier: 0BSD
 
-import { appendResetButton, replacePlaceholder } from '../grasp-pose-shared/ui';
+import { replacePlaceholder } from '../grasp-pose-shared/ui';
 
 export const CANVAS_WIDTH = 800;
 export const CANVAS_HEIGHT = 520;
@@ -15,7 +15,7 @@ export interface RobotVizDom {
   root: HTMLDivElement;
   viewport: HTMLDivElement;
   controls: Map<string, JointControl>;
-  resetButton: HTMLButtonElement;
+  poseButtons: Map<string, HTMLButtonElement>;
   colorInputs: Map<string, HTMLInputElement>;
 }
 
@@ -33,10 +33,16 @@ export interface MaterialColorDefinition {
   hexColor: string;
 }
 
+export interface RobotPoseButtonDefinition {
+  name: string;
+  label: string;
+}
+
 export function buildUi(
   parent: HTMLElement,
   joints: JointControlDefinition[],
-  materialColors: MaterialColorDefinition[]
+  materialColors: MaterialColorDefinition[],
+  poseButtons: RobotPoseButtonDefinition[]
 ): RobotVizDom {
   const root = document.createElement('div');
   root.className = 'visualization viz-shell robot-viz-root';
@@ -48,13 +54,17 @@ export function buildUi(
   const panel = document.createElement('div');
   panel.className = 'viz-side-controls robot-viz-controls';
 
-  const header = document.createElement('div');
-  header.className = 'robot-viz-controls-header';
-  const title = document.createElement('strong');
-  title.textContent = 'Joint angles';
-  const resetButton = appendResetButton(header, 'Reset pose');
-  header.append(title, resetButton);
-  panel.appendChild(header);
+  const poseButtonGroup = document.createElement('div');
+  poseButtonGroup.className = 'robot-viz-pose-buttons';
+  const poseButtonElements = new Map<string, HTMLButtonElement>();
+  for (const pose of poseButtons) {
+    const button = document.createElement('button');
+    button.className = 'viz-button robot-viz-pose-button';
+    button.type = 'button';
+    button.textContent = pose.label;
+    poseButtonGroup.appendChild(button);
+    poseButtonElements.set(pose.name, button);
+  }
 
   const controls = new Map<string, JointControl>();
   for (const joint of joints) {
@@ -80,6 +90,7 @@ export function buildUi(
     panel.appendChild(row);
     controls.set(joint.name, { input, value });
   }
+  panel.appendChild(poseButtonGroup);
 
   const colorInputs = new Map<string, HTMLInputElement>();
   if (materialColors.length > 0) {
@@ -125,7 +136,7 @@ export function buildUi(
 
   replacePlaceholder(parent, root);
 
-  return { root, viewport, controls, resetButton, colorInputs };
+  return { root, viewport, controls, poseButtons: poseButtonElements, colorInputs };
 }
 
 export function formatDegrees(radians: number): string {
