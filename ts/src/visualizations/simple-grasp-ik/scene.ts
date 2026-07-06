@@ -45,16 +45,18 @@ export function createSimpleGraspIkScene(
   modelBasePath = '/so101_assets',
   workspaces?: WorkspaceOverlaySpec[]
 ): SimpleGraspIkScene {
+  const initialWidth = viewport.clientWidth || CANVAS_WIDTH;
+  const initialHeight = viewport.clientHeight || CANVAS_HEIGHT;
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
-  renderer.setSize(CANVAS_WIDTH, CANVAS_HEIGHT);
+  renderer.setSize(initialWidth, initialHeight, false);
   viewport.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xf4f8ff);
 
   const camera = new THREE.PerspectiveCamera(
-    42, CANVAS_WIDTH / CANVAS_HEIGHT, 0.001, 100
+    42, initialWidth / initialHeight, 0.001, 100
   );
   camera.up.set(0, 0, 1);
   camera.position.set(0.55, 0.45, 0.42);
