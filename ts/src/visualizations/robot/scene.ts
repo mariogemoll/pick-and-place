@@ -43,7 +43,7 @@ export function createRobotScene(
   viewport.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xf4f8ff);
+  scene.background = new THREE.Color(0xfafafa);
 
   const camera = new THREE.PerspectiveCamera(42, CANVAS_WIDTH / CANVAS_HEIGHT, 0.001, 100);
   camera.up.set(0, 0, 1);

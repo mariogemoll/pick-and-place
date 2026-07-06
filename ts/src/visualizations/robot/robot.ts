@@ -118,7 +118,7 @@ export async function initializeRobotVisualization(
   ));
   const vizScene = createRobotScene(
     ui.viewport, model, options.modelBasePath,
-    buildWorkspaceOverlaySpecs(kinematics)
+    buildWorkspaceOverlaySpecs(kinematics).slice(0, 1)
   );
   const { renderer, camera, scene, orbitControls } = vizScene;
   const listeners: (() => void)[] = [];
