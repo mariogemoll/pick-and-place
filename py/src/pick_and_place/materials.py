@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 
 import mujoco
 
-PLASTIC_RGBA: tuple[float, float, float, float] = (0.6, 0.7, 0.7, 1.0)
+PLASTIC_RGBA: tuple[float, float, float, float] = (0.8, 0.8, 0.8, 1.0)
 MOTOR_RGBA: tuple[float, float, float, float] = (0.15, 0.15, 0.15, 1.0)
 CAMERA_RGBA: tuple[float, float, float, float] = (0.05, 0.05, 0.05, 1.0)
 MDF_RGBA: tuple[float, float, float, float] = (0.4, 0.3, 0.2, 1.0)

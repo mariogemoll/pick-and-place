@@ -19,6 +19,15 @@ export interface RobotVisualizationOptions {
   modelUrl?: string;
 }
 
+function rgbToHex(r: number, g: number, b: number): string {
+  const hex = [r, g, b].map(component =>
+    Math.round(Math.min(1, Math.max(0, component)) * 255)
+      .toString(16)
+      .padStart(2, '0')
+  ).join('');
+  return `#${hex}`;
+}
+
 export async function initializeRobotVisualization(
   parent: HTMLElement,
   options: RobotVisualizationOptions = {}
@@ -46,7 +55,7 @@ export async function initializeRobotVisualization(
     .map(([name, [r, g, b]]) => ({
       name,
       label: name.charAt(0).toUpperCase() + name.slice(1),
-      hexColor: `#${new THREE.Color(r, g, b).getHexString()}`
+      hexColor: rgbToHex(r, g, b)
     }));
 
   const kinematics = deriveSo101Kinematics(model);

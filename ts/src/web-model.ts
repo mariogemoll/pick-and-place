@@ -85,7 +85,7 @@ export function materialFor(
 
   // User request: workspace borders should not be transparent.
   return new THREE.MeshStandardMaterial({
-    color: new THREE.Color(r, g, b),
+    color: new THREE.Color().setRGB(r, g, b, THREE.SRGBColorSpace),
     opacity: a,
     roughness: 0.6,
     transparent: a < 1
