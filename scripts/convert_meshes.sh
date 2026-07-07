@@ -85,7 +85,4 @@ fi
 cp -r public/so101_assets/* "$DST_DIR/"
 cp public/so101.json public/environment.json "$DST_DIR/"
 
-# 5. Copy CSS
-cp src/style.css "$DST_DIR/pick-and-place.css"
-
 echo "Successfully converted and optimized meshes in $DST_DIR"
