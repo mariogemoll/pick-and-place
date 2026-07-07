@@ -12,6 +12,9 @@ import {
   initCanonicalGraspVisualization
 } from './visualizations/canonical-grasp';
 import {
+  type GraspAndLiftVisualization,
+  initGraspAndLiftVisualization } from './visualizations/grasp-and-lift';
+import {
   type GraspPoseVisualization,
   initGraspPoseVisualization } from './visualizations/grasp-pose';
 import {
@@ -48,6 +51,7 @@ import {
 let standardSceneVisualization: StandardSceneVisualization | null = null;
 let graspPoseVisualization: GraspPoseVisualization | null = null;
 let graspPoseBreakdownVisualization: GraspPoseBreakdownVisualization | null = null;
+let graspAndLiftVisualization: GraspAndLiftVisualization | null = null;
 let gripperVisualization: GripperVisualization | null = null;
 let robotVisualization: RobotVisualization | null = null;
 let robotGridVisualization: RobotGridVisualization | null = null;
@@ -120,6 +124,16 @@ function initialize(): void {
       startFromAndReturnToRestPose: true
     }).then(viz => {
       pickAndPlaceVisualization = viz;
+    });
+  }
+
+  const graspAndLiftPanel = document.getElementById('grasp-and-lift-visualization');
+  if (graspAndLiftPanel) {
+    graspAndLiftVisualization?.destroy();
+    graspAndLiftVisualization = null;
+
+    void initGraspAndLiftVisualization(graspAndLiftPanel).then(viz => {
+      graspAndLiftVisualization = viz;
     });
   }
 

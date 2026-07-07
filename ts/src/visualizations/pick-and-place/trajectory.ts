@@ -40,7 +40,7 @@ export const GRIPPER_CLOSED = 10.5 * (Math.PI / 180);
 // The true geometric contact is a bit later (~14°), but starting the slide
 // sooner reads better: the cube eases over rather than snapping flush at the
 // very end of the close.
-const GRIPPER_CONTACT = 20 * (Math.PI / 180);
+export const GRIPPER_CONTACT = 20 * (Math.PI / 180);
 
 export type JointAngles = Record<ArmJointName, number>;
 
