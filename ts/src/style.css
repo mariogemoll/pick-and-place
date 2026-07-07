@@ -897,6 +897,16 @@ input[type="range"]:active::-moz-range-thumb {
   white-space: nowrap;
 }
 
+.robot-viz-geometry-mode {
+  width: 100%;
+  margin-top: 0.75rem;
+}
+
+.robot-viz-geometry-mode > label {
+  justify-content: center;
+  flex: 1 1 0;
+}
+
 .robot-viz-joint {
   margin-bottom: 0;
   font-size: 12px;

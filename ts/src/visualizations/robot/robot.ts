@@ -184,6 +184,17 @@ export async function initializeRobotVisualization(
   });
   updateExtentVisible();
 
+  const updateGeometryMode = (): void => {
+    const mode = [...ui.geometryModeInputs.entries()]
+      .find(([, input]) => input.checked)?.[0] ?? 'visual';
+    vizScene.setGeometryMode(mode);
+  };
+  for (const input of ui.geometryModeInputs.values()) {
+    input.addEventListener('change', updateGeometryMode);
+    listeners.push(() => { input.removeEventListener('change', updateGeometryMode); });
+  }
+  updateGeometryMode();
+
   const updateBackgroundColor = (): void => {
     vizScene.setBackgroundColor(new THREE.Color(ui.backgroundColorInput.value));
   };

@@ -132,6 +132,7 @@ function addVisual(
 ): void {
   const mesh = new THREE.Mesh(bufferGeometry, material);
   mesh.name = geometry.name;
+  mesh.userData.role = geometry.role;
   mesh.position.set(...geometry.position);
   setQuaternion(mesh, geometry.quaternion);
   mesh.castShadow = true;

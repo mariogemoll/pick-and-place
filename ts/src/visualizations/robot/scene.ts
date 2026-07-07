@@ -13,6 +13,7 @@ import {
   addWorkspaceOverlaysToScene,
   type WorkspaceOverlaySpec
 } from '../workspace-overlay';
+import { type CollisionBoxDefinition, SO101_COLLISION_BOXES } from './collision-boxes';
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from './ui';
 
 const INSET_WIDTH = 160;
@@ -27,6 +28,8 @@ const TOP_CENTER_SHIFT = 0.13;
 // robot isn't dead-center in the inset.
 const SIDE_TARGET_SHIFT = new THREE.Vector3(0.2, 0, 0);
 
+export type RobotGeometryMode = 'visual' | 'collision' | 'both';
+
 export interface RobotScene {
   scene: THREE.Scene;
   renderer: THREE.WebGLRenderer;
@@ -38,10 +41,108 @@ export interface RobotScene {
   setMaterialColor(materialName: string, color: THREE.Color): void;
   setOverlayColor(index: number, color: THREE.Color): void;
   setOverlayVisible(index: number, visible: boolean): void;
+  setGeometryMode(mode: RobotGeometryMode): void;
   setBackgroundColor(color: THREE.Color): void;
   resize(): void;
   renderInsets(shoulderPanRadians: number): void;
   destroy(): void;
+}
+
+function setQuaternion(
+  object: THREE.Object3D,
+  [w, x, y, z]: [number, number, number, number]
+): void {
+  object.quaternion.set(x, y, z, w);
+}
+
+function createCollisionBox(
+  box: CollisionBoxDefinition,
+  material: THREE.Material
+): THREE.Mesh {
+  const geometry = new THREE.BoxGeometry(
+    box.size[0] * 2,
+    box.size[1] * 2,
+    box.size[2] * 2
+  );
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = box.name;
+  mesh.position.set(...box.position);
+  setQuaternion(mesh, box.quaternion);
+  mesh.userData.role = 'collision';
+  return mesh;
+}
+
+function createCollisionOutline(
+  box: CollisionBoxDefinition,
+  material: THREE.Material
+): THREE.LineSegments {
+  const boxGeometry = new THREE.BoxGeometry(
+    box.size[0] * 2,
+    box.size[1] * 2,
+    box.size[2] * 2
+  );
+  const geometry = new THREE.EdgesGeometry(boxGeometry);
+  boxGeometry.dispose();
+  const line = new THREE.LineSegments(geometry, material);
+  line.name = `${box.name}_outline`;
+  line.position.set(...box.position);
+  setQuaternion(line, box.quaternion);
+  line.userData.role = 'collision';
+  return line;
+}
+
+function addCollisionBoxes(
+  builtBodies: Map<string, THREE.Group>,
+  material: THREE.Material
+): {
+  meshes: THREE.Mesh[];
+  geometries: THREE.BufferGeometry[];
+} {
+  const meshes: THREE.Mesh[] = [];
+  const geometries: THREE.BufferGeometry[] = [];
+
+  for (const [bodyName, boxes] of Object.entries(SO101_COLLISION_BOXES)) {
+    const body = builtBodies.get(bodyName);
+    if (body === undefined) { continue; }
+    const group = new THREE.Group();
+    group.name = `${bodyName}_collision_boxes`;
+    for (const box of boxes) {
+      const mesh = createCollisionBox(box, material);
+      meshes.push(mesh);
+      geometries.push(mesh.geometry);
+      group.add(mesh);
+    }
+    body.add(group);
+  }
+
+  return { meshes, geometries };
+}
+
+function addCollisionOutlines(
+  builtBodies: Map<string, THREE.Group>,
+  material: THREE.Material
+): {
+  lines: THREE.LineSegments[];
+  geometries: THREE.BufferGeometry[];
+} {
+  const lines: THREE.LineSegments[] = [];
+  const geometries: THREE.BufferGeometry[] = [];
+
+  for (const [bodyName, boxes] of Object.entries(SO101_COLLISION_BOXES)) {
+    const body = builtBodies.get(bodyName);
+    if (body === undefined) { continue; }
+    const group = new THREE.Group();
+    group.name = `${bodyName}_collision_outlines`;
+    for (const box of boxes) {
+      const line = createCollisionOutline(box, material);
+      lines.push(line);
+      geometries.push(line.geometry);
+      group.add(line);
+    }
+    body.add(group);
+  }
+
+  return { lines, geometries };
 }
 
 function createInsetRenderer(container: HTMLElement): {
@@ -101,6 +202,20 @@ export function createRobotScene(
 
   const builtModel = buildWebModel(model, modelBasePath);
   scene.add(builtModel.root);
+  const collisionMaterial = new THREE.MeshStandardMaterial({
+    color: 0x0f7f8c,
+    opacity: 0.34,
+    roughness: 0.45,
+    transparent: true,
+    depthWrite: false
+  });
+  const collisionOutlineMaterial = new THREE.LineBasicMaterial({
+    color: 0x064f59,
+    transparent: true,
+    opacity: 0.74
+  });
+  const collisionBoxes = addCollisionBoxes(builtModel.bodies, collisionMaterial);
+  const collisionOutlines = addCollisionOutlines(builtModel.bodies, collisionOutlineMaterial);
   builtModel.root.updateMatrixWorld(true);
 
   const panAxisWorld = new THREE.Vector3();
@@ -168,6 +283,21 @@ export function createRobotScene(
     setOverlayVisible(index: number, visible: boolean): void {
       overlays.setVisible(index, visible);
     },
+    setGeometryMode(mode: RobotGeometryMode): void {
+      const visualVisible = mode === 'visual' || mode === 'both';
+      const collisionVisible = mode === 'collision' || mode === 'both';
+      builtModel.root.traverse(object => {
+        if (object.userData.role === 'visual') {
+          object.visible = visualVisible;
+        }
+      });
+      for (const mesh of collisionBoxes.meshes) {
+        mesh.visible = collisionVisible;
+      }
+      for (const line of collisionOutlines.lines) {
+        line.visible = collisionVisible;
+      }
+    },
     setBackgroundColor(color: THREE.Color): void {
       scene.background = color;
     },
@@ -193,6 +323,10 @@ export function createRobotScene(
       sideRenderer.dispose();
       topRenderer.dispose();
       overlays.dispose();
+      collisionMaterial.dispose();
+      collisionOutlineMaterial.dispose();
+      for (const geometry of collisionBoxes.geometries) { geometry.dispose(); }
+      for (const geometry of collisionOutlines.geometries) { geometry.dispose(); }
       for (const mats of builtModel.materialsByName.values()) {
         for (const mat of mats) { mat.dispose(); }
       }

@@ -16,6 +16,7 @@ export interface RobotVizDom {
   viewport: HTMLDivElement;
   controls: Map<string, JointControl>;
   poseButtons: Map<string, HTMLButtonElement>;
+  geometryModeInputs: Map<RobotGeometryMode, HTMLInputElement>;
   colorInputs: Map<string, HTMLInputElement>;
   extentColorInput: HTMLInputElement;
   extentVisibleInput: HTMLInputElement;
@@ -62,6 +63,8 @@ export interface RobotPoseButtonDefinition {
   name: string;
   label: string;
 }
+
+export type RobotGeometryMode = 'visual' | 'collision' | 'both';
 
 export function buildUi(
   parent: HTMLElement,
@@ -116,6 +119,30 @@ export function buildUi(
     controls.set(joint.name, { input, value });
   }
   panel.appendChild(poseButtonGroup);
+
+  const geometryModeGroup = document.createElement('div');
+  geometryModeGroup.className = 'viz-segmented robot-viz-geometry-mode';
+  const geometryModeInputs = new Map<RobotGeometryMode, HTMLInputElement>();
+  const geometryModes: { mode: RobotGeometryMode; label: string }[] = [
+    { mode: 'visual', label: 'Visual' },
+    { mode: 'collision', label: 'Collision' },
+    { mode: 'both', label: 'Both' }
+  ];
+  for (const { mode, label } of geometryModes) {
+    const option = document.createElement('label');
+    option.className = 'viz-segmented-option';
+
+    const input = document.createElement('input');
+    input.type = 'radio';
+    input.name = 'robot-geometry-mode';
+    input.value = mode;
+    input.checked = mode === 'visual';
+
+    option.append(input, label);
+    geometryModeGroup.appendChild(option);
+    geometryModeInputs.set(mode, input);
+  }
+  panel.appendChild(geometryModeGroup);
 
   const extentVisibleRow = document.createElement('label');
   extentVisibleRow.className = 'robot-viz-extent-visible-row';
@@ -266,8 +293,8 @@ export function buildUi(
   replacePlaceholder(parent, root);
 
   return {
-    root, viewport, controls, poseButtons: poseButtonElements, colorInputs, extentColorInput,
-    extentVisibleInput, backgroundColorInput
+    root, viewport, controls, poseButtons: poseButtonElements, geometryModeInputs, colorInputs,
+    extentColorInput, extentVisibleInput, backgroundColorInput
   };
 }
 
