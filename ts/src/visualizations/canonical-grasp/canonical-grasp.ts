@@ -28,7 +28,6 @@ import {
 import { robotModelWithBaseOnFloor } from '../robot-model';
 import { buildWorkspaceOverlaySpecs } from '../workspace-overlay';
 import { createXyDragControls } from '../xy-drag-controls';
-import { PREGRASP_DISTANCE } from './pose';
 import { createCanonicalGraspScene } from './scene';
 import {
   buildUi,
@@ -36,8 +35,6 @@ import {
   DEFAULT_CUBE_Y,
   DROP_POSE_Z_MM
 } from './ui';
-
-type Elbow = SimpleIkBranch['elbow'];
 
 // Conservative floor-pick band for the canonical pick-lift motion.
 const MIN_GRASP_RADIUS = 0.110;
@@ -172,16 +169,6 @@ export async function initializeCanonicalGraspVisualization(
     }
   }
 
-  function renderSelectedBranch(elbow: Elbow): void {
-    ui.branchContainer.replaceChildren();
-    const label = document.createElement('label');
-    label.className = 'canonical-grasp-viz-branch';
-    const span = document.createElement('span');
-    span.textContent = elbow === 'up' ? 'Elbow up' : 'Elbow down';
-    label.append(span);
-    ui.branchContainer.appendChild(label);
-  }
-
   function selectedBranch(choice: CanonicalGraspChoice): SimpleIkBranch {
     return {
       elbow: choice.elbow,
@@ -195,7 +182,6 @@ export async function initializeCanonicalGraspVisualization(
     currentPose = { ...currentPose, yaw: yawFromRadius + azimuth };
     vizScene.updateCubePose(currentPose);
 
-    const radius = Math.hypot(currentPose.x - panX, currentPose.y - panY);
     // In drop mode, orientation is a don't-care (the cube is held rigidly once
     // grasped), so only x/y are swept; z/yaw are pinned to the drop height and 0.
     const searchPose: CubePose = dropMode
@@ -204,42 +190,16 @@ export async function initializeCanonicalGraspVisualization(
     const solution = selectCanonicalGrasp(kinematics, searchPose);
     if (solution === null) {
       vizScene.updateGhostGraspPose(null);
-      ui.status.textContent = radius < minGraspRadius
-        ? `Too close to the base: keep the cube ≥ ${Math.round(minGraspRadius * 1000)} mm out.`
-        : dropMode
-          ? 'Unreachable: no drop pose reaches here.'
-          : 'Unreachable: the cube is outside the arm’s reach.';
-      ui.status.classList.add('is-invalid');
-      ui.branchContainer.replaceChildren();
       restToNeutral();
       return;
     }
 
-    let pregraspNote = '';
     if (showPregrasp && !dropMode) {
       vizScene.updateGhostGraspPose(solution.graspMatrix);
-      pregraspNote = ` Showing pregrasp ${Math.round(PREGRASP_DISTANCE * 1000)} mm back.`;
     } else {
       vizScene.updateGhostGraspPose(null);
     }
 
-    const tiltDeg = Math.round(Math.abs(90 - (solution.pitch * 180) / Math.PI));
-    const rollDeg = Math.round((solution.rollOffset * 180) / Math.PI);
-    const rollNote = rollDeg === 0 ? '' : ` Wrist roll offset ${rollDeg}°.`;
-    if (dropMode) {
-      const base = tiltDeg === 0
-        ? 'Reachable: square top-down drop pose.'
-        : `Reachable: drop approach tilted ${tiltDeg}° (not top-down).`;
-      ui.status.textContent = `${base} Elbow ${solution.elbow}.${rollNote}`;
-    } else {
-      const base = tiltDeg === 0
-        ? 'Reachable: square top-down grasp.'
-        : `Reachable: approach tilted ${tiltDeg}° (not a square grasp).`;
-      ui.status.textContent =
-        `${base} Oracle face ${solution.face}, elbow ${solution.elbow}.${rollNote}${pregraspNote}`;
-    }
-    ui.status.classList.remove('is-invalid');
-    renderSelectedBranch(solution.elbow);
     applyBranch(selectedBranch(solution));
   }
 
@@ -340,9 +300,8 @@ export async function initializeCanonicalGraspVisualization(
     dropMode = false;
     ui.dropModeInput.checked = false;
     ui.yawInput.disabled = false;
-    // Back to Cartesian mode on reset.
     for (const input of ui.coordModeInputs) {
-      input.checked = input.value === 'cartesian';
+      input.checked = input.value === 'radial';
       input.dispatchEvent(new Event('change'));
     }
     // Setting X/Y drives the radius/azimuth sliders via applyCartesian.

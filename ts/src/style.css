@@ -1145,34 +1145,6 @@ input[type="range"]:active::-moz-range-thumb {
   background: #f8f8f8;
 }
 
-.canonical-grasp-viz-status {
-  padding: 6px 8px;
-  color: var(--viz-success-text);
-  font-size: 12px;
-  background: var(--viz-success-surface);
-  border: 0;
-  border-radius: 4px;
-}
-
-.canonical-grasp-viz-status.is-invalid {
-  color: var(--viz-danger-text);
-  background: var(--viz-danger-surface);
-  border-color: var(--viz-danger-border);
-}
-
-.canonical-grasp-viz-branches {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.canonical-grasp-viz-branch {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  color: #475569;
-}
-
 .canonical-grasp-viz-checkbox {
   display: inline-flex;
   align-items: center;

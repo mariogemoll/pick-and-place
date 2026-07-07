@@ -7,7 +7,6 @@ import {
   appendRadioGroup,
   appendResetButton,
   appendSliderGroup,
-  appendStatus,
   replacePlaceholder
 } from '../grasp-pose-shared/ui';
 
@@ -29,8 +28,6 @@ export interface CanonicalGraspDom {
   showPregraspInput: HTMLInputElement;
   dropModeInput: HTMLInputElement;
   resetButton: HTMLButtonElement;
-  status: HTMLOutputElement;
-  branchContainer: HTMLDivElement;
 }
 
 // The default cube X/Y (metres) used on reset; comfortably reachable in front
@@ -65,6 +62,18 @@ export interface CanonicalGraspUiOptions {
   azimuthDefault?: number;
 }
 
+function formatDegreeSlider(input: HTMLInputElement): void {
+  input.step = '0.1';
+  const output = input.parentElement?.querySelector('output');
+  const update = (): void => {
+    if (output) {
+      output.textContent = `${Number(input.value).toFixed(1)}°`;
+    }
+  };
+  input.addEventListener('input', update);
+  update();
+}
+
 export function buildUi(
   parent: HTMLElement,
   options: CanonicalGraspUiOptions = {}
@@ -87,7 +96,7 @@ export function buildUi(
 
   const coordModeInputs = appendRadioGroup(
     controls, 'canonical-grasp-coord-mode', 'Coordinates',
-    [{ value: 'cartesian', label: 'X / Y' }, { value: 'radial', label: 'Radial' }]
+    [{ value: 'radial', label: 'Radial' }, { value: 'cartesian', label: 'X / Y' }]
   );
 
   // X/Y and radial groups both drive the cube center; only one is shown at a
@@ -99,6 +108,7 @@ export function buildUi(
   const yInput = appendSliderGroup(
     cartesianGroup, 'Y', yRange.min, yRange.max, DEFAULT_CUBE_Y * 1000, 1
   );
+  cartesianGroup.style.display = 'none';
   controls.appendChild(cartesianGroup);
 
   const radialGroup = document.createElement('div');
@@ -108,7 +118,7 @@ export function buildUi(
   const azimuthInput = appendDegreeSliderGroup(
     radialGroup, 'Azimuth', azimuthRange.min, azimuthRange.max, azimuthDefault
   );
-  radialGroup.style.display = 'none';
+  formatDegreeSlider(azimuthInput);
   controls.appendChild(radialGroup);
 
   // Yaw relative to the radial direction; (-45°, 45°] covers all distinct
@@ -116,6 +126,7 @@ export function buildUi(
   const yawInput = appendDegreeSliderGroup(
     controls, 'Yaw (from radius)', YAW_MIN_DEG, YAW_MAX_DEG, 0
   );
+  formatDegreeSlider(yawInput);
 
   const showPregraspInput = appendCheckbox(
     controls, 'Show pregrasp pose', 'canonical-grasp-viz-checkbox'
@@ -129,13 +140,6 @@ export function buildUi(
   const resetButton = appendResetButton(controls);
   resetButton.classList.add('canonical-grasp-viz-reset');
 
-  const status = appendStatus(controls);
-  status.classList.add('canonical-grasp-viz-status');
-
-  const branchContainer = document.createElement('div');
-  branchContainer.className = 'canonical-grasp-viz-branches';
-  controls.appendChild(branchContainer);
-
   const layout = document.createElement('div');
   layout.className = 'canonical-grasp-viz-layout';
   layout.append(viewport, controls);
@@ -146,6 +150,6 @@ export function buildUi(
   return {
     root, viewport, coordModeInputs, cartesianGroup, radialGroup, xInput,
     yInput, radiusInput, azimuthInput, yawInput, showPregraspInput,
-    dropModeInput, resetButton, status, branchContainer
+    dropModeInput, resetButton
   };
 }
