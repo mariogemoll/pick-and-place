@@ -12,6 +12,10 @@ import {
   initCanonicalGraspVisualization
 } from './visualizations/canonical-grasp';
 import {
+  type EpisodeReplayVisualization,
+  initEpisodeReplayVisualization
+} from './visualizations/episode-replay';
+import {
   type GraspAndLiftVisualization,
   initGraspAndLiftVisualization } from './visualizations/grasp-and-lift';
 import {
@@ -60,6 +64,7 @@ let simpleGraspPoseVisualization: SimpleGraspPoseVisualization | null = null;
 let simpleGraspIkVisualization: SimpleGraspIkVisualization | null = null;
 let canonicalGraspVisualization: CanonicalGraspVisualization | null = null;
 let pickAndPlaceVisualization: PickAndPlaceVisualization | null = null;
+let episodeReplayVisualization: EpisodeReplayVisualization | null = null;
 
 function initialize(): void {
   const standardScenePanel = document.getElementById('standard-scene-visualization');
@@ -124,6 +129,16 @@ function initialize(): void {
       startFromAndReturnToRestPose: true
     }).then(viz => {
       pickAndPlaceVisualization = viz;
+    });
+  }
+
+  const episodeReplayPanel = document.getElementById('episode-replay-visualization');
+  if (episodeReplayPanel) {
+    episodeReplayVisualization?.destroy();
+    episodeReplayVisualization = null;
+
+    void initEpisodeReplayVisualization(episodeReplayPanel).then(viz => {
+      episodeReplayVisualization = viz;
     });
   }
 

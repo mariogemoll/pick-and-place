@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: 0BSD
 
 import {
+  buildPlaybackControls
+} from '../grasp-pose-shared/playback-controls';
+import {
   appendDegreeSliderGroup,
   appendResetButton,
   appendSliderGroup,
@@ -105,33 +108,16 @@ export function buildUi(
   setupControls.prepend(sourceControls, targetControls);
 
   const runControls = document.createElement('div');
-  runControls.className = 'pick-and-place-viz-run-controls';
+  runControls.className = 'viz-playback-overlay';
   runControls.hidden = true;
   const cancelButton = document.createElement('button');
   cancelButton.className = 'pick-and-place-viz-cancel-button';
   cancelButton.type = 'button';
   cancelButton.textContent = 'X';
   cancelButton.setAttribute('aria-label', 'Cancel trajectory playback');
-  const playbackRow = document.createElement('div');
-  playbackRow.className = 'pick-and-place-viz-playback-row';
-  const playPauseButton = document.createElement('button');
-  playPauseButton.className = 'viz-button viz-button-primary pick-and-place-viz-play-button';
-  playPauseButton.type = 'button';
-  playPauseButton.textContent = 'Play';
-  playPauseButton.setAttribute('aria-label', 'Play trajectory');
-  const playbackTime = document.createElement('output');
-  playbackTime.className = 'pick-and-place-viz-playback-time';
-  playbackTime.textContent = '0:00.0 / 0:03.0';
-  const seekInput = document.createElement('input');
-  seekInput.className = 'pick-and-place-viz-seek';
-  seekInput.type = 'range';
-  seekInput.min = '0';
-  seekInput.max = '3';
-  seekInput.step = '0.01';
-  seekInput.value = '0';
-  seekInput.setAttribute('aria-label', 'Trajectory playback position');
-  playbackRow.append(playPauseButton, playbackTime, cancelButton);
-  runControls.append(seekInput, playbackRow);
+  const { row: playbackRow, playPauseButton, seekInput, playbackTime } =
+    buildPlaybackControls(runControls, 'trajectory');
+  playbackRow.appendChild(cancelButton);
   controls.appendChild(setupControls);
   viewport.append(controls, setupActions, runControls);
 

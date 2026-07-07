@@ -14,6 +14,7 @@ import {
   CUBE_HALF_SIZE,
   type CubePose
 } from '../grasp-pose-shared/body-factories';
+import { renderPlaybackControls } from '../grasp-pose-shared/playback-controls';
 import { createXyMultiDragControls } from '../xy-drag-controls';
 import { createCarryProfilePlot } from './carry-profile-plot';
 import { createPickAndPlaceScene } from './scene';
@@ -50,12 +51,6 @@ const DEFAULT_SOURCE = { x: 0.2, y: -0.08, yaw: 0 };
 const DEFAULT_TARGET = { x: 0.2, y: 0.08, yaw: 0 };
 
 type PickAndPlaceStage = 'setup' | 'run';
-
-function formatPlaybackTime(seconds: number): string {
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = (seconds % 60).toFixed(1).padStart(4, '0');
-  return `${minutes}:${remainingSeconds}`;
-}
 
 function fixedCubePose(position: Readonly<{
   x: number;
@@ -278,14 +273,7 @@ export async function PickAndPlace(
   };
 
   const renderPlayback = (): void => {
-    ui.seekInput.value = String(playbackSeconds);
-    ui.playbackTime.textContent =
-      `${formatPlaybackTime(playbackSeconds)} / ` +
-      formatPlaybackTime(trajectory?.duration ?? 0);
-    ui.playPauseButton.textContent = playing ? 'Pause' : 'Play';
-    ui.playPauseButton.setAttribute(
-      'aria-label', playing ? 'Pause trajectory' : 'Play trajectory'
-    );
+    renderPlaybackControls(ui, playbackSeconds, trajectory?.duration ?? 0, playing, 'trajectory');
   };
   const setPlaying = (nextPlaying: boolean): void => {
     playing = nextPlaying;
