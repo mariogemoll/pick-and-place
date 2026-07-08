@@ -50,11 +50,6 @@ python scripts/simplify_meshes.py "${SIMPLIFY_ARGS[@]}"
 
 # 2. Optimize GLBs
 cd "$PICK_AND_PLACE_DIR/ts"
-if [[ "$OMIT_WRIST_CAMERA_MOUNT" == true ]]; then
-    rm -f \
-        public/so101_assets/SO-ARM101_camera_wrist_mount.glb \
-        public/so101_assets/uvc_camera_module_32x32.glb
-fi
 pnpm run optimize-meshes
 
 # 3. Generate the web model manifests from the same composed robot used by MuJoCo
@@ -77,11 +72,6 @@ rm -f "$PICK_AND_PLACE_DIR/ts/public/so101.xml" "$PICK_AND_PLACE_DIR/ts/public/e
 
 # 4. Copy optimized GLBs and web models to destination
 cd "$PICK_AND_PLACE_DIR/ts"
-if [[ "$OMIT_WRIST_CAMERA_MOUNT" == true ]]; then
-    rm -f \
-        "$DST_DIR/SO-ARM101_camera_wrist_mount.glb" \
-        "$DST_DIR/uvc_camera_module_32x32.glb"
-fi
 cp -r public/so101_assets/* "$DST_DIR/"
 cp public/so101.json public/environment.json "$DST_DIR/"
 

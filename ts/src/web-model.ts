@@ -30,6 +30,13 @@ export interface WebGeometry {
   material?: string;
   rgba?: [number, number, number, number];
   mesh?: string;
+  /**
+   * The packed GLB (relative to the model's base path) containing `mesh` as a
+   * named node, fetched on demand; when set, `mesh` is a node name inside it
+   * rather than a standalone file. Absent for models that still ship one GLB
+   * per mesh.
+   */
+  meshFile?: string;
   size?: [number, number, number];
 }
 
@@ -47,13 +54,6 @@ export interface WebModel {
   version: 2;
   materials: Record<string, [number, number, number, number]>;
   bodies: WebBody[];
-  /**
-   * A single GLB (relative to the model's base path) containing every mesh
-   * as a named node; when set, `geometry.mesh` is a node name inside it
-   * rather than a standalone file. Absent for models that still ship one
-   * GLB per mesh.
-   */
-  meshFile?: string;
 }
 
 export interface BuiltWebModel {
@@ -168,9 +168,6 @@ export function buildWebModel(
   const materialsByName = new Map<string, THREE.MeshStandardMaterial[]>();
   const meshLoads: Promise<void>[] = [];
   const basePath = modelBasePath.replace(/\/$/, '');
-  const meshSet = model.meshFile !== undefined
-    ? loadMeshSet(`${basePath}/${model.meshFile}`)
-    : undefined;
   const included = new Set<string>();
 
   if (subtreeRoot !== undefined) {
@@ -228,11 +225,12 @@ export function buildWebModel(
       }
       if (geometry.type === 'mesh' && geometry.mesh !== undefined) {
         const meshName = geometry.mesh;
-        const geometryLoad: Promise<THREE.BufferGeometry> = meshSet !== undefined
-          ? meshSet.then(({ geometries }) => {
+        const meshFile = geometry.meshFile;
+        const geometryLoad: Promise<THREE.BufferGeometry> = meshFile !== undefined
+          ? loadMeshSet(`${basePath}/${meshFile}`).then(({ geometries }) => {
             const bufferGeometry = geometries.get(meshName);
             if (bufferGeometry === undefined) {
-              throw new Error(`Mesh node "${meshName}" not found in ${model.meshFile ?? ''}`);
+              throw new Error(`Mesh node "${meshName}" not found in ${meshFile}`);
             }
             return bufferGeometry;
           })

@@ -32,14 +32,15 @@ def test_export_robot_writes_matching_xml_and_web_manifest(tmp_path):
     all_geometries = [
         geometry for body in manifest["bodies"] for geometry in body["geometries"]
     ]
-    assert any(geometry["mesh"] == "base_so101_v2.glb" for geometry in all_geometries)
+    assert any(geometry["mesh"] == "base_so101_v2" for geometry in all_geometries)
     base_motor_holder = next(
         geometry
         for geometry in all_geometries
-        if geometry.get("mesh") == "base_motor_holder_so101_v1.glb"
+        if geometry.get("mesh") == "base_motor_holder_so101_v1"
     )
     assert base_motor_holder["position"] == [-0.00636471, -9.94414e-05, -0.0024]
     assert base_motor_holder["quaternion"] == [0.5, 0.5, 0.5, 0.5]
+    assert base_motor_holder["meshFile"] == "arm.glb"
     assert "scale" not in base_motor_holder
     assert any(geometry["name"] == "base_col0" for geometry in all_geometries)
     assert any(geometry["name"] == "wrist_camera_board_visual" for geometry in all_geometries)
@@ -47,9 +48,10 @@ def test_export_robot_writes_matching_xml_and_web_manifest(tmp_path):
     wrist_camera_mount = next(
         geometry
         for geometry in all_geometries
-        if geometry.get("mesh") == "SO-ARM101_camera_wrist_mount.glb"
+        if geometry.get("mesh") == "SO-ARM101_camera_wrist_mount"
     )
     assert wrist_camera_mount["quaternion"] == [1.0, 0.0, 0.0, 0.0]
+    assert wrist_camera_mount["meshFile"] == "gripper.glb"
     assert all("scale" not in geometry for geometry in all_geometries)
     assert manifest["cameras"][0]["name"] == "wrist_camera"
     assert manifest["cameras"][0]["fovy"] == 47.0

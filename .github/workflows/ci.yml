@@ -62,6 +62,21 @@ jobs:
       - name: "Optimize meshes"
         working-directory: ts
         run: pnpm run optimize-meshes
+      - name: "Generate generic robot meshes (UR5e + Robotiq 2F-85, Panda)"
+        working-directory: mesh_optimization
+        run: |
+          python scripts/simplify_generic_meshes.py ur5e_mj_description --gripper robotiq_2f85_mj_description
+          python scripts/simplify_generic_meshes.py panda_mj_description
+      - name: "Optimize generic robot meshes"
+        working-directory: ts
+        run: |
+          pnpm exec bash scripts/optimize-glbs.sh ../intermediary-glb-generic/ur5e_mj_description public/ur5e_assets
+          pnpm exec bash scripts/optimize-glbs.sh ../intermediary-glb-generic/panda_mj_description public/panda_assets
+      - name: "Generate generic robot web models"
+        working-directory: py
+        run: |
+          python scripts/export_generic_robot.py ur5e_mj_description --gripper robotiq_2f85_mj_description -o ../ts/public/ur5e.json
+          python scripts/export_generic_robot.py panda_mj_description -o ../ts/public/panda.json
       - name: "ESLint the ESLint config"
         working-directory: ts
         run: pnpm eslint -c basic.eslint.config.js basic.eslint.config.js eslint.config.js

@@ -49,9 +49,55 @@ _JOINT_TYPES = {
     mujoco.mjtJoint.mjJNT_HINGE: "hinge",
 }
 
+# The mesh pipeline (mesh_optimization/scripts/simplify_meshes.py) packs meshes
+# into three named-node GLBs along these same body-subtree boundaries.
+GRIPPER_ROOT_BODY = "gripper"
+ROBOT_ROOT_BODY = "base"
+
 
 def _values(values: Any) -> list[float]:
     return [float(value) for value in values]
+
+
+def _body_descendants(model: mujoco.MjModel, root_name: str) -> set[int]:
+    try:
+        root_id = model.body(root_name).id
+    except KeyError:
+        return set()
+    descendants = {root_id}
+    frontier = [root_id]
+    while frontier:
+        parent = frontier.pop()
+        children = [
+            body_id for body_id in range(model.nbody)
+            if int(model.body_parentid[body_id]) == parent and body_id not in descendants
+        ]
+        descendants.update(children)
+        frontier.extend(children)
+    return descendants
+
+
+def _assign_mesh_files(manifest: dict[str, Any], model: mujoco.MjModel) -> None:
+    """Tag each mesh geometry with the packed GLB (see module comment above) that contains it.
+
+    Bodies under ``gripper`` go to ``gripper.glb``, the rest of the robot
+    (rooted at ``base``) to ``arm.glb``, and anything else (workspace frame,
+    overhead mount) to ``environment.glb``.
+    """
+    gripper_ids = _body_descendants(model, GRIPPER_ROOT_BODY)
+    robot_ids = _body_descendants(model, ROBOT_ROOT_BODY)
+    body_ids_by_name = {model.body(body_id).name: body_id for body_id in range(model.nbody)}
+    for body in manifest["bodies"]:
+        body_id = body_ids_by_name.get(body["name"])
+        for geom in body["geometries"]:
+            if geom.get("mesh") is None:
+                continue
+            if body_id in gripper_ids:
+                geom["meshFile"] = "gripper.glb"
+            elif body_id in robot_ids:
+                geom["meshFile"] = "arm.glb"
+            else:
+                geom["meshFile"] = "environment.glb"
 
 
 def web_manifest(
@@ -104,7 +150,7 @@ def web_manifest(
             geom["material"] = model.mat(mat_id).name
         if geom_type == mujoco.mjtGeom.mjGEOM_MESH:
             mesh_id = int(model.geom_dataid[geom_id])
-            geom["mesh"] = f"{model.mesh(mesh_id).name}.glb"
+            geom["mesh"] = model.mesh(mesh_id).name
         else:
             geom["size"] = _values(model.geom_size[geom_id])
         geoms_by_body.setdefault(int(model.geom_bodyid[geom_id]), []).append(geom)
@@ -169,18 +215,14 @@ def _write_outputs(
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(spec.to_xml())
     manifest_output = output.with_suffix(".json")
-    manifest_output.write_text(
-        json.dumps(
-            web_manifest(
-                spec,
-                model,
-                materials,
-                camera_intrinsics_by_name=camera_intrinsics_by_name,
-            ),
-            indent=2,
-        )
-        + "\n"
+    manifest = web_manifest(
+        spec,
+        model,
+        materials,
+        camera_intrinsics_by_name=camera_intrinsics_by_name,
     )
+    _assign_mesh_files(manifest, model)
+    manifest_output.write_text(json.dumps(manifest, indent=2) + "\n")
     return output, manifest_output
 
 
