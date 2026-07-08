@@ -178,6 +178,16 @@ def main() -> None:
     model = spec.compile()
 
     manifest = web_manifest(spec, model)
+    # The mesh pipeline packs all of this robot's meshes into one GLB as named
+    # nodes; point the manifest at it and turn geometry mesh filenames into
+    # the bare node names the loader resolves within it.
+    manifest["meshFile"] = f"{args.robot.removesuffix('_mj_description')}.glb"
+    for body in manifest["bodies"]:
+        for geom in body["geometries"]:
+            mesh = geom.get("mesh")
+            if mesh is not None:
+                geom["mesh"] = mesh.removesuffix(".glb")
+
     mimics = derive_joint_mimics(model)
     for body in manifest["bodies"]:
         for joint in body["joints"]:

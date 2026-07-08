@@ -93,7 +93,7 @@ def mjcf_path_for(robot: str) -> Path:
 
 
 def simplify_meshes(
-    robot: str, glb_dir: Path, target_mm: float, *, name_prefix: str = ""
+    robot: str, scene: trimesh.Scene, target_mm: float, *, name_prefix: str = ""
 ) -> int:
     mjcf_path = mjcf_path_for(robot)
     spec = mujoco.MjSpec.from_file(str(mjcf_path))
@@ -111,7 +111,7 @@ def simplify_meshes(
         mesh.apply_scale(mesh_spec.scale)
 
         ratio, reduced, error = simplify(mesh, target_mm)
-        reduced.export(glb_dir / f"{name}.glb")
+        scene.add_geometry(reduced, node_name=name, geom_name=name)
         tqdm.write(
             f"{name:42} {len(mesh.faces):7d} {ratio:6.3f} {len(reduced.faces):6d} {error:5.2f}mm"
         )
@@ -139,15 +139,19 @@ def main() -> int:
 
     glb_dir = GLB_ROOT / args.robot
     glb_dir.mkdir(parents=True, exist_ok=True)
+    name = args.robot.removesuffix("_mj_description")
 
     np.random.seed(0)
-    count = simplify_meshes(args.robot, glb_dir, args.target_mm)
+    scene = trimesh.Scene()
+    count = simplify_meshes(args.robot, scene, args.target_mm)
     if args.gripper:
         count += simplify_meshes(
-            args.gripper, glb_dir, args.target_mm, name_prefix=GRIPPER_PREFIX
+            args.gripper, scene, args.target_mm, name_prefix=GRIPPER_PREFIX
         )
 
-    print(f"Wrote {count} GLBs to {glb_dir}")
+    out_path = glb_dir / f"{name}.glb"
+    scene.export(out_path)
+    print(f"Wrote {count} meshes as named nodes to {out_path}")
     return 0
 
 

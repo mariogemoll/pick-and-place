@@ -3,7 +3,7 @@
 
 import * as THREE from 'three';
 
-import { loadMesh } from './mesh-loader';
+import { loadMesh, loadMeshSet } from './mesh-loader';
 
 export interface WebJointMimic {
   joint: string;
@@ -47,6 +47,13 @@ export interface WebModel {
   version: 2;
   materials: Record<string, [number, number, number, number]>;
   bodies: WebBody[];
+  /**
+   * A single GLB (relative to the model's base path) containing every mesh
+   * as a named node; when set, `geometry.mesh` is a node name inside it
+   * rather than a standalone file. Absent for models that still ship one
+   * GLB per mesh.
+   */
+  meshFile?: string;
 }
 
 export interface BuiltWebModel {
@@ -161,6 +168,9 @@ export function buildWebModel(
   const materialsByName = new Map<string, THREE.MeshStandardMaterial[]>();
   const meshLoads: Promise<void>[] = [];
   const basePath = modelBasePath.replace(/\/$/, '');
+  const meshSet = model.meshFile !== undefined
+    ? loadMeshSet(`${basePath}/${model.meshFile}`)
+    : undefined;
   const included = new Set<string>();
 
   if (subtreeRoot !== undefined) {
@@ -217,12 +227,21 @@ export function buildWebModel(
         materialsByName.set(geometry.material, slot);
       }
       if (geometry.type === 'mesh' && geometry.mesh !== undefined) {
-        const meshLoad = loadMesh(`${basePath}/${geometry.mesh}`).then(
-          ({ geometry: bufferGeometry }) => {
-            addVisual(bodyGroup, geometry, bufferGeometry, material);
-          }
-        ).catch((err: unknown) => {
-          console.warn(`Failed to load mesh ${geometry.mesh}:`, err);
+        const meshName = geometry.mesh;
+        const geometryLoad: Promise<THREE.BufferGeometry> = meshSet !== undefined
+          ? meshSet.then(({ geometries }) => {
+            const bufferGeometry = geometries.get(meshName);
+            if (bufferGeometry === undefined) {
+              throw new Error(`Mesh node "${meshName}" not found in ${model.meshFile ?? ''}`);
+            }
+            return bufferGeometry;
+          })
+          : loadMesh(`${basePath}/${meshName}`)
+            .then(({ geometry: bufferGeometry }) => bufferGeometry);
+        const meshLoad = geometryLoad.then(bufferGeometry => {
+          addVisual(bodyGroup, geometry, bufferGeometry, material);
+        }).catch((err: unknown) => {
+          console.warn(`Failed to load mesh ${meshName}:`, err);
         });
         meshLoads.push(meshLoad);
       } else {

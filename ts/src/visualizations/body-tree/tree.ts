@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
-import { loadMesh } from '../../mesh-loader';
+import { loadMesh, loadMeshSet } from '../../mesh-loader';
 import {
   loadWebModel,
   materialFor,
@@ -111,6 +111,9 @@ export async function initializeBodyTreeVisualization(
     color: 0x38bdf8, emissive: 0x075985, roughness: 0.35
   });
   const basePath = modelBasePath.replace(/\/$/, '');
+  const meshSet = model.meshFile !== undefined
+    ? loadMeshSet(`${basePath}/${model.meshFile}`)
+    : undefined;
   const bodies = new Map<string, THREE.Group>();
   const meshes = new Map<string, THREE.Mesh>();
   const meshMetrics = new Map<string, MeshMetrics>();
@@ -235,7 +238,19 @@ export async function initializeBodyTreeVisualization(
         }
       };
       if (visual.type === 'mesh' && visual.mesh !== undefined) {
-        loadMesh(`${basePath}/${visual.mesh}`).then(({ bytes, geometry }) => {
+        const meshName = visual.mesh;
+        // Meshes packed into a shared robot GLB have no individual file size;
+        // attribute each an even share of the whole file as an approximation.
+        const geometryLoad = meshSet !== undefined
+          ? meshSet.then(({ bytes, geometries }) => {
+            const geometry = geometries.get(meshName);
+            if (geometry === undefined) {
+              throw new Error(`Mesh node "${meshName}" not found in ${model.meshFile ?? ''}`);
+            }
+            return { bytes: bytes / geometries.size, geometry };
+          })
+          : loadMesh(`${basePath}/${meshName}`);
+        geometryLoad.then(({ bytes, geometry }) => {
           addGeometry(geometry, bytes);
         }).catch((error: unknown) => {
           requiredElement(row, 'small').textContent = 'load error';
