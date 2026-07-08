@@ -213,6 +213,7 @@ function initialize(): void {
         label: 'Panda',
         modelUrl: '/panda.json',
         modelBasePath: '/panda_assets',
+        mirrorCameraY: true,
         defaultJointDegrees: {
           joint1: 22,
           joint2: 64,

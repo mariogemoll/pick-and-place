@@ -19,6 +19,9 @@ export interface RobotViewerConfig {
   modelBasePath: string;
   defaultJointDegrees?: Record<string, number>;
   defaultJointMillimeters?: Record<string, number>;
+  // Mirrors the default camera's starting side across the robot's Y axis;
+  // defaults to false (the original UR5e-derived viewing angle).
+  mirrorCameraY?: boolean;
 }
 
 export interface RobotViewerVisualization {
@@ -48,7 +51,7 @@ function jointsFromModel(
         : Math.min(Math.max(0, lower), upper);
     return [{
       name: joint.name,
-      label: capitalize(joint.name.replaceAll('_', ' ')),
+      label: jointLabel(joint.name),
       type: joint.type,
       lower,
       upper,
@@ -87,6 +90,22 @@ function capitalize(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+// Turns a MuJoCo joint name into a display label, dropping the "joint" noise
+// word (e.g. "shoulder_pan_joint" -> "Shoulder pan") and special-casing each
+// robot's primary gripper joint, whose slider is the only gripper control
+// shown (the rest of the gripper linkage is mimic joints filtered out of the
+// panel).
+const GRIPPER_JOINT_NAMES = new Set(['finger_joint1', 'gripper_right_driver_joint']);
+
+function jointLabel(name: string): string {
+  if (GRIPPER_JOINT_NAMES.has(name)) { return 'Gripper'; }
+  const words = name
+    .split('_')
+    .filter(word => word !== 'joint')
+    .map(word => word.replace(/(\D)(\d+)$/, '$1 $2'));
+  return capitalize(words.join(' '));
+}
+
 export async function initRobotViewerVisualization(
   parent: HTMLElement,
   config: RobotViewerConfig
@@ -102,7 +121,8 @@ export async function initRobotViewerVisualization(
   const mimicsByPrimary = mimicsByPrimaryJoint(model);
 
   const scene = createRobotViewerScene(
-    panel.viewport, model, config.modelBasePath, CANVAS_WIDTH, CANVAS_HEIGHT
+    panel.viewport, model, config.modelBasePath, CANVAS_WIDTH, CANVAS_HEIGHT,
+    config.mirrorCameraY ?? false
   );
 
   const setPrimaryAndMimics = (name: string, value: number): void => {

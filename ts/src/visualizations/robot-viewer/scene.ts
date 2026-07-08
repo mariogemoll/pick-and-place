@@ -37,7 +37,7 @@ function findBaseBody(model: WebModel): string | undefined {
   return model.bodies.find(body => body.parent === 'world' && body.name !== 'world')?.name;
 }
 
-function fitCameraToRobot(scene: RobotViewerScene): void {
+function fitCameraToRobot(scene: RobotViewerScene, mirrorCameraY: boolean): void {
   const bounds = new THREE.Box3().setFromObject(scene.robotRoot);
   if (bounds.isEmpty()) { return; }
   const center = new THREE.Vector3();
@@ -49,7 +49,7 @@ function fitCameraToRobot(scene: RobotViewerScene): void {
   scene.orbitControls.target.copy(center);
   scene.camera.position.set(
     center.x + radius,
-    center.y - radius,
+    center.y + (mirrorCameraY ? radius : -radius),
     center.z + radius * 0.4
   );
   scene.camera.near = radius / 100;
@@ -73,7 +73,8 @@ export function createRobotViewerScene(
   model: WebModel,
   modelBasePath: string,
   canvasWidth: number,
-  canvasHeight: number
+  canvasHeight: number,
+  mirrorCameraY: boolean
 ): RobotViewerScene {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
@@ -146,7 +147,7 @@ export function createRobotViewerScene(
 
   void builtModel.ready.then(() => {
     builtModel.root.updateMatrixWorld(true);
-    fitCameraToRobot(viewerScene);
+    fitCameraToRobot(viewerScene, mirrorCameraY);
   });
 
   return viewerScene;
