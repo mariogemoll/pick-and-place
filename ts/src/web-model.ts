@@ -5,6 +5,12 @@ import * as THREE from 'three';
 
 import { loadMesh } from './mesh-loader';
 
+export interface WebJointMimic {
+  joint: string;
+  multiplier: number;
+  offset: number;
+}
+
 export interface WebJoint {
   name: string;
   type: 'free' | 'ball' | 'slide' | 'hinge';
@@ -12,6 +18,7 @@ export interface WebJoint {
   axis: [number, number, number];
   limited: boolean;
   range?: [number, number];
+  mimic?: WebJointMimic;
 }
 
 export interface WebGeometry {
@@ -67,7 +74,10 @@ function setQuaternion(
   object: THREE.Object3D,
   [w, x, y, z]: [number, number, number, number]
 ): void {
-  object.quaternion.set(x, y, z, w);
+  // Manifest quaternions come straight from the MJCF spec and may be
+  // unnormalized (e.g. "1 0 1 0"); three.js assumes unit quaternions and
+  // would otherwise distort the transform.
+  object.quaternion.set(x, y, z, w).normalize();
 }
 
 export function materialFor(
@@ -180,7 +190,9 @@ export function buildWebModel(
     setQuaternion(origin, body.quaternion);
     origin.add(bodyGroup);
 
-    const joint = body.joints.find(candidate => candidate.type === 'hinge');
+    const joint = body.joints.find(
+      candidate => candidate.type === 'hinge' || candidate.type === 'slide'
+    );
     if (joint) {
       const pivot = new THREE.Group();
       pivot.add(bodyGroup);
@@ -235,12 +247,16 @@ export function setJointAngle(
   model: WebModel,
   jointPivots: Map<string, THREE.Group>,
   name: string,
-  radians: number
+  value: number
 ): void {
   const joint = model.bodies.flatMap(body => body.joints)
     .find(candidate => candidate.name === name);
   const pivot = jointPivots.get(name);
-  if (joint && pivot) {
-    pivot.setRotationFromAxisAngle(new THREE.Vector3(...joint.axis).normalize(), radians);
+  if (!joint || !pivot) { return; }
+  const axis = new THREE.Vector3(...joint.axis).normalize();
+  if (joint.type === 'slide') {
+    pivot.position.copy(axis.multiplyScalar(value));
+  } else {
+    pivot.setRotationFromAxisAngle(axis, value);
   }
 }

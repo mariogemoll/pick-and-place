@@ -6,8 +6,10 @@ build-backend = "setuptools.build_meta"
 name = "mesh-optimization"
 version = "0.0.0"
 dependencies = [
+    "mujoco",
     "numpy>=2.0",
     "pymeshlab>=2023.12",
+    "robot_descriptions",
     "tqdm>=4.67",
     "trimesh[easy]>=4.0",
 ]

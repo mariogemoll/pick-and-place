@@ -26,6 +26,11 @@ dist-ssr
 package-lock.json
 
 /public/environment.json
+/public/panda_assets
+/public/panda.json
 /public/so101_assets
 /public/so101.json
+/public/ur5e_assets
+/public/ur5e.json
 /public/episodes
+

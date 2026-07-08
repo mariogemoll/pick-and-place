@@ -12,6 +12,7 @@ pnpm-lock.yaml
 /datasets
 /dist_assets
 /intermediary-glb
+/intermediary-glb-generic
 /config/camera_intrinsics/*.json
 /config/camera_extrinsics/*.json
 *.bak

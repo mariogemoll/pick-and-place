@@ -1465,6 +1465,48 @@ input[type="range"]:active::-moz-range-thumb {
   height: 130px;
 }
 
+.robot-viewers {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 1.5rem;
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.robot-viewer-panel {
+  display: flex;
+  flex: 1 1 320px;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 280px;
+  max-width: 440px;
+}
+
+.robot-viewer-title {
+  margin: 0;
+  color: var(--viz-text);
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+.robot-viewer-viewport {
+  position: relative;
+  width: 100%;
+  height: 320px;
+}
+
+.robot-viewer-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 11px;
+
+  --viz-slider-label-width: 6rem;
+  --viz-slider-width: 100%;
+}
+
 @media (width <= 600px) {
   .pick-and-place-viz-controls {
     top: 0.5rem;

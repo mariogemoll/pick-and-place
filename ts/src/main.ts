@@ -41,6 +41,11 @@ import {
   type RobotGridVisualization
 } from './visualizations/robot-grid';
 import {
+  initRobotViewerVisualization,
+  type RobotViewerConfig,
+  type RobotViewerVisualization
+} from './visualizations/robot-viewer';
+import {
   initSimpleGraspIkVisualization,
   type SimpleGraspIkVisualization
 } from './visualizations/simple-grasp-ik';
@@ -63,6 +68,7 @@ let bodyTreeVisualization: BodyTreeVisualization | null = null;
 let simpleGraspPoseVisualization: SimpleGraspPoseVisualization | null = null;
 let simpleGraspIkVisualization: SimpleGraspIkVisualization | null = null;
 let canonicalGraspVisualization: CanonicalGraspVisualization | null = null;
+let robotViewerVisualizations: RobotViewerVisualization[] = [];
 let pickAndPlaceVisualization: PickAndPlaceVisualization | null = null;
 let episodeReplayVisualization: EpisodeReplayVisualization | null = null;
 
@@ -181,6 +187,51 @@ function initialize(): void {
     void initRobotVisualization(robotPanel).then(viz => {
       robotVisualization = viz;
     });
+  }
+
+  const robotViewersPanel = document.getElementById('robot-viewers-visualization');
+  if (robotViewersPanel) {
+    for (const viz of robotViewerVisualizations) { viz.destroy(); }
+    robotViewerVisualizations = [];
+
+    const robots: RobotViewerConfig[] = [
+      {
+        label: 'UR5e',
+        modelUrl: '/ur5e.json',
+        modelBasePath: '/ur5e_assets',
+        defaultJointDegrees: {
+          shoulder_pan_joint: 70,
+          shoulder_lift_joint: -40,
+          elbow_joint: 70,
+          wrist_1_joint: 68,
+          wrist_2_joint: 26,
+          wrist_3_joint: 70,
+          gripper_right_driver_joint: 10
+        }
+      },
+      {
+        label: 'Panda',
+        modelUrl: '/panda.json',
+        modelBasePath: '/panda_assets',
+        defaultJointDegrees: {
+          joint1: 22,
+          joint2: 64,
+          joint3: -72,
+          joint4: -92,
+          joint5: 60,
+          joint6: 67,
+          joint7: 38
+        },
+        defaultJointMillimeters: {
+          finger_joint1: 20
+        }
+      }
+    ];
+    for (const robot of robots) {
+      void initRobotViewerVisualization(robotViewersPanel, robot).then(viz => {
+        robotViewerVisualizations.push(viz);
+      });
+    }
   }
 
   const robotGridPanel = document.getElementById('robot-grid-visualization');

@@ -62,9 +62,13 @@ def web_manifest(
 ) -> dict[str, Any]:
     """Return a web representation of a composed and compiled MuJoCo model.
 
-    Body and geom poses come from ``spec`` because compiled mesh geom poses
-    include MuJoCo's internal mesh recentering and principal-axis rotation.
-    Web GLBs retain the source mesh coordinate frames.
+    Geom poses come from ``spec`` because compiled mesh geom poses include
+    MuJoCo's internal mesh recentering and principal-axis rotation; web GLBs
+    retain the source mesh coordinate frames. Body poses come from the
+    compiled ``model`` instead, since ``spec`` body poses don't fold in the
+    transform of any ``<frame>`` inserted by ``MjSpec.attach`` (e.g. for an
+    attached end effector), while the compiled model's are already resolved
+    relative to the body's actual parent.
     """
     bodies: list[dict[str, Any]] = []
     joints_by_body: dict[int, list[dict[str, Any]]] = {}
@@ -106,12 +110,11 @@ def web_manifest(
         geoms_by_body.setdefault(int(model.geom_bodyid[geom_id]), []).append(geom)
 
     for body_id in range(model.nbody):
-        spec_body = spec.bodies[body_id]
         body: dict[str, Any] = {
             "name": model.body(body_id).name,
             "parent": model.body(int(model.body_parentid[body_id])).name if body_id > 0 else "world",
-            "position": _values(spec_body.pos),
-            "quaternion": _values(spec_body.quat),
+            "position": _values(model.body_pos[body_id]),
+            "quaternion": _values(model.body_quat[body_id]),
             "joints": joints_by_body.get(body_id, []),
             "geometries": geoms_by_body.get(body_id, []),
         }
