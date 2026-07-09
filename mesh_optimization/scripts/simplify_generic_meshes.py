@@ -45,7 +45,7 @@ from simplification import (
     print_selection,
 )
 
-DEFAULT_TARGET_KB = 200.0
+DEFAULT_TARGET_KB = 300.0
 GRIPPER_PREFIX = "gripper_"
 
 ROOT = Path(__file__).resolve().parents[2]
