@@ -20,10 +20,10 @@ span the pickup sector's radius (from near the base to its outer edge) at
 alternating azimuths, with the last one deliberately the hardest combination
 reachable — near-max radius *and* near-max azimuth for that radius.
 
-Pass ``--continuous-chain`` to make each episode start from the previous
-episode's final cube pose while still sampling new random targets. Add
-``--closed-loop`` to make the last episode place the cube back at the first
-source.
+Pass ``--continuous-chain`` to make each episode's robot start pose continue
+from the previous episode's final robot pose while still sampling a fresh cube
+source and target. Add ``--closed-loop`` to make the last episode's robot end
+pose return to the first sampled robot start.
 
 Binary layout ("PPRL" format, little-endian)::
 
@@ -64,6 +64,7 @@ from pick_and_place.episodes import (
     prepare_episode,
     sample_cube,
     sample_near_neutral,
+    sample_target,
     scan_contacts,
 )
 from pick_and_place.follower import ARM_JOINT_NAMES
@@ -73,6 +74,7 @@ from pick_and_place.workspace_overlays import (
     PAN_AXIS,
     is_cube_drop_allowed,
     is_cube_pickup_allowed,
+    is_target_plate_position_allowed,
 )
 
 from scripts.record_episodes import SUCCESS_XY_TOLERANCE, SUCCESS_Z_TOLERANCE
@@ -131,6 +133,30 @@ def sample_chain_pose(rng: np.random.Generator) -> CubePose:
             return pose
 
 
+def target_pose_for_xy(x: float, y: float) -> CubePose:
+    """Return a target pose at a pinned center if some plate yaw can fit there."""
+    if is_target_plate_position_allowed(x, y):
+        return CubePose(x=x, y=y, z=CUBE_HALF_SIZE)
+    raise EpisodeSamplingError(
+        f"target plate at ({x:.4f}, {y:.4f}) cannot clear the workspace frame and AprilTags"
+    )
+
+
+def sample_chain_source_and_target(rng: np.random.Generator) -> tuple[CubePose, CubePose]:
+    """Sample a pickup source that can also be used as a plate-safe target."""
+    while True:
+        source = sample_chain_pose(rng)
+        try:
+            return source, target_pose_for_xy(source.x, source.y)
+        except EpisodeSamplingError:
+            continue
+
+
+def sample_rollout_source(rng: np.random.Generator) -> CubePose:
+    """Sample a fresh source for continuous robot-chain web rollouts."""
+    return sample_chain_pose(rng)
+
+
 def robot_pose_from_qpos(
     model: mujoco.MjModel,
     qpos: np.ndarray,
@@ -155,7 +181,7 @@ def run_and_sample(
     start_gripper: float | None = None,
     end_joints: dict[str, float] | None = None,
     end_gripper: float | None = None,
-) -> tuple[np.ndarray, float, float, bool, CubePose, CubePose, dict[str, float], float]:
+) -> tuple[np.ndarray, CubePose, bool, CubePose, CubePose, dict[str, float], float]:
     """Prepare one episode and sample its physics rollout's ``qpos`` at ``fps``.
 
     Returns the sampled frames, the episode's drop target (x, y), and whether
@@ -227,8 +253,7 @@ def run_and_sample(
 
     return (
         qpos,
-        float(episode.target.x),
-        float(episode.target.y),
+        episode.target,
         success,
         cube_start_pose,
         cube_final_pose,
@@ -237,15 +262,13 @@ def run_and_sample(
     )
 
 
-def write_episode(
-    qpos: np.ndarray, fps: float, target_x: float, target_y: float, out_path: Path
-) -> None:
+def write_episode(qpos: np.ndarray, fps: float, target: CubePose, out_path: Path) -> None:
     nframes, nq = qpos.shape
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("wb") as file:
         file.write(MAGIC)
         file.write(struct.pack("<IIII", VERSION, round(fps), nframes, nq))
-        file.write(struct.pack("<ff", target_x, target_y))
+        file.write(struct.pack("<ff", target.x, target.y))
         file.write(qpos.tobytes())
 
 
@@ -382,20 +405,32 @@ def main() -> None:
     parser.add_argument(
         "--continuous-chain",
         action="store_true",
-        help="sample random targets while starting each episode from the previous "
-        "episode's final cube pose",
+        help="keep robot start/end poses continuous while sampling fresh cube "
+        "sources and targets",
+    )
+    parser.add_argument(
+        "--chain-cube-source",
+        action="store_true",
+        help="with --continuous-chain, restore the legacy behavior where each "
+        "episode's source cube pose is the previous episode's final cube pose",
     )
     parser.add_argument(
         "--closed-loop",
         action="store_true",
-        help="with --continuous-chain, set the last episode target to the first "
-        "sampled source so the replay loops continuously",
+        help="with --continuous-chain, set the last robot end pose to the first "
+        "sampled robot start pose so the replay loops continuously",
     )
     parser.add_argument(
         "--out-dir",
         type=Path,
         default=Path(__file__).resolve().parents[2] / "ts" / "public" / "episodes",
         help="directory to write episode_NN.bin files (default: ts/public/episodes)",
+    )
+    parser.add_argument(
+        "--prefix",
+        default="",
+        help="filename prefix for generated files, e.g. 'fresh_' writes "
+        "fresh_episode_00.bin and fresh_episode_layout.png",
     )
     parser.add_argument(
         "--layout-png",
@@ -416,6 +451,10 @@ def main() -> None:
         parser.error("--end-settle-seconds must be non-negative")
     if args.closed_loop and not args.continuous_chain:
         parser.error("--closed-loop requires --continuous-chain")
+    if args.chain_cube_source and not args.continuous_chain:
+        parser.error("--chain-cube-source requires --continuous-chain")
+    if "/" in args.prefix or "\\" in args.prefix:
+        parser.error("--prefix must be a filename prefix, not a path")
     if not args.random_grip and not args.continuous_chain and args.num_episodes > len(DEFAULT_GRIP_PRESETS):
         parser.error(
             f"--num-episodes {args.num_episodes} exceeds the {len(DEFAULT_GRIP_PRESETS)} "
@@ -425,32 +464,31 @@ def main() -> None:
     written = 0
     seed = args.seed
     layout_episodes: list[tuple[CubePose, CubePose, CubePose]] = []
-    first_source: CubePose | None = None
     first_start_joints: dict[str, float] | None = None
     first_start_gripper: float | None = None
+    first_source: CubePose | None = None
+    first_source_target: CubePose | None = None
     next_source: CubePose | None = None
     next_start_joints: dict[str, float] | None = None
     next_start_gripper: float | None = None
     if args.continuous_chain:
-        first_source = sample_chain_pose(
-            np.random.default_rng(np.random.SeedSequence([args.seed, 0x5150]))
-        )
-        next_source = first_source
         first_start_joints, first_start_gripper = sample_near_neutral(
             np.random.default_rng(np.random.SeedSequence([args.seed, 0xC0FFEE]))
         )
         next_start_joints = dict(first_start_joints)
         next_start_gripper = first_start_gripper
+        if args.chain_cube_source:
+            first_source, first_source_target = sample_chain_source_and_target(
+                np.random.default_rng(np.random.SeedSequence([args.seed, 0x5150]))
+            )
+            next_source = first_source
 
     while written < args.num_episodes:
         source = (
-            next_source
-            if args.continuous_chain
-            else (None if args.random_grip else chain_pose(written))
+            None
+            if args.continuous_chain or args.random_grip
+            else chain_pose(written)
         )
-        target = None
-        if args.continuous_chain:
-            target = first_source if args.closed_loop and written == args.num_episodes - 1 else None
         end_joints = (
             first_start_joints
             if args.continuous_chain and args.closed_loop and written == args.num_episodes - 1
@@ -465,16 +503,28 @@ def main() -> None:
         episode_result = None
         for _ in range(args.max_seed_retries):
             rng = np.random.default_rng(seed)
-            episode_target = target
-            if args.continuous_chain and episode_target is None:
-                episode_target = sample_chain_pose(rng)
+            episode_source = (
+                next_source
+                if args.chain_cube_source
+                else (sample_rollout_source(rng) if args.continuous_chain else source)
+            )
+            episode_target = (
+                first_source_target
+                if args.chain_cube_source
+                and args.closed_loop
+                and written == args.num_episodes - 1
+                else
+                sample_target(rng)
+                if args.continuous_chain
+                else None
+            )
             try:
                 result = run_and_sample(
                     rng,
                     args.fps,
                     args.max_attempts,
                     args.end_settle_seconds,
-                    source,
+                    episode_source,
                     episode_target,
                     next_start_joints,
                     next_start_gripper,
@@ -486,7 +536,7 @@ def main() -> None:
                 seed += 1
                 continue
             seed += 1
-            if result[3]:
+            if result[2]:
                 episode_result = result
                 break
             print(f"seed {seed - 1}: skipped (cube missed target or collided)")
@@ -499,31 +549,35 @@ def main() -> None:
 
         (
             qpos,
-            target_x,
-            target_y,
+            target_pose,
             _,
             cube_start_pose,
             cube_final_pose,
             next_end_joints,
             next_end_gripper,
         ) = episode_result
-        out_path = args.out_dir / f"episode_{written:02d}.bin"
-        write_episode(qpos, args.fps, target_x, target_y, out_path)
+        out_path = args.out_dir / f"{args.prefix}episode_{written:02d}.bin"
+        write_episode(qpos, args.fps, target_pose, out_path)
         layout_episodes.append((
             cube_start_pose,
-            CubePose(x=target_x, y=target_y, z=CUBE_HALF_SIZE),
+            target_pose,
             cube_final_pose,
         ))
-        chain_note = "" if not args.continuous_chain else f" target=({target_x:.3f}, {target_y:.3f})"
+        chain_note = (
+            ""
+            if not args.continuous_chain
+            else f" target=({target_pose.x:.3f}, {target_pose.y:.3f})"
+        )
         print(f"{qpos.shape[0]} frames -> {out_path}{chain_note}")
         if args.continuous_chain:
-            next_source = cube_final_pose
+            if args.chain_cube_source:
+                next_source = cube_final_pose
             next_start_joints = next_end_joints
             next_start_gripper = next_end_gripper
         written += 1
 
     if not args.no_layout_png:
-        layout_path = args.layout_png or (args.out_dir / "episode_layout.png")
+        layout_path = args.layout_png or (args.out_dir / f"{args.prefix}episode_layout.png")
         write_layout_png(layout_episodes, layout_path)
         print(f"Wrote layout plot -> {layout_path}")
 

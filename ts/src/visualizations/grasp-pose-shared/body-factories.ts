@@ -3,6 +3,7 @@
 
 import * as THREE from 'three';
 
+import { createAprilTagCellGeometry } from '../../apriltag/tag-mesh';
 import {
   buildWebModel,
   setJointAngle,
@@ -30,6 +31,11 @@ const FIXED_JAW_COLLISION_BOXES = [
 const TIP_BOX = FIXED_JAW_COLLISION_BOXES[5];
 export const CUBE_HALF_SIZE = 0.015;
 const MARKER_SURFACE_OFFSET = 0.00001;
+const TAG_SURFACE_OFFSET = 0.0001;
+// Face order matches THREE.BoxGeometry material groups: +x, -x, +y, -y, +z, -z.
+const CUBE_APRILTAG_IDS = [0, 1, 2, 3, 4, 5] as const;
+// The 30 mm sticker covers the whole cube face; the tag graphic is 20 mm.
+const CUBE_TAG_SIZE = 0.02;
 
 export type CubeFace = '+x' | '-x' | '+y' | '-y' | '+z' | '-z';
 
@@ -99,6 +105,53 @@ export function createGripperFromContactMatrix(): THREE.Matrix4 {
     new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI / 2, 0)),
     new THREE.Vector3(1, 1, 1)
   );
+}
+
+// The six cube faces, in THREE.BoxGeometry material-group order, as the rotation
+// that carries the tag geometry's local +Z normal onto the outward face normal
+// and the outward position of the face center.
+const CUBE_FACE_PLACEMENTS: readonly (readonly [THREE.Euler, THREE.Vector3])[] = [
+  [new THREE.Euler(0, Math.PI / 2, 0), new THREE.Vector3(1, 0, 0)],
+  [new THREE.Euler(0, -Math.PI / 2, 0), new THREE.Vector3(-1, 0, 0)],
+  [new THREE.Euler(-Math.PI / 2, 0, 0), new THREE.Vector3(0, 1, 0)],
+  [new THREE.Euler(Math.PI / 2, 0, 0), new THREE.Vector3(0, -1, 0)],
+  [new THREE.Euler(0, 0, 0), new THREE.Vector3(0, 0, 1)],
+  [new THREE.Euler(Math.PI, 0, 0), new THREE.Vector3(0, 0, -1)]
+];
+
+// A cube whose six faces carry crisp, geometry-based AprilTags on a white
+// surface (rather than textures), so they stay sharp at any zoom level.
+export function createCubeAprilTagBody(materials: BodyMaterials): BodyPart {
+  const faceMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.72 });
+  const tagMaterial = new THREE.MeshStandardMaterial({ color: 0x000000, roughness: 0.72 });
+  const cubePart = createCubeBody(
+    materials, Array.from({ length: 6 }, () => faceMaterial), false
+  );
+
+  const tags = new THREE.Group();
+  tags.name = 'cube_apriltags';
+  const offset = CUBE_HALF_SIZE + TAG_SURFACE_OFFSET;
+  const geometries: THREE.BufferGeometry[] = [];
+  for (const [index, [euler, direction]] of CUBE_FACE_PLACEMENTS.entries()) {
+    const geometry = createAprilTagCellGeometry(CUBE_APRILTAG_IDS[index], CUBE_TAG_SIZE);
+    geometries.push(geometry);
+    const mesh = new THREE.Mesh(geometry, tagMaterial);
+    mesh.name = `cube_apriltag_${CUBE_APRILTAG_IDS[index]}`;
+    mesh.setRotationFromEuler(euler);
+    mesh.position.copy(direction).multiplyScalar(offset);
+    tags.add(mesh);
+  }
+  cubePart.body.add(tags);
+
+  return {
+    body: cubePart.body,
+    destroy(): void {
+      cubePart.destroy();
+      for (const geometry of geometries) { geometry.dispose(); }
+      faceMaterial.dispose();
+      tagMaterial.dispose();
+    }
+  };
 }
 
 export function createWorldFromCubeContactMatrix(
@@ -182,7 +235,8 @@ export async function createGripperBody(
 // material as before.
 export function createCubeBody(
   materials: BodyMaterials,
-  faceMaterials?: readonly THREE.Material[]
+  faceMaterials?: readonly THREE.Material[],
+  showFaceCenterMarkers = true
 ): BodyPart {
   const body = new THREE.Group();
   body.name = 'cube_body';
@@ -204,7 +258,9 @@ export function createCubeBody(
   cubeVisual.name = 'cube_visual';
   body.add(cubeVisual);
 
-  const markerGeometry = new THREE.CircleGeometry(0.002, 24);
+  const markerGeometry = showFaceCenterMarkers
+    ? new THREE.CircleGeometry(0.002, 24)
+    : undefined;
   const markerPoses = [
     [CUBE_HALF_SIZE + MARKER_SURFACE_OFFSET, 0, 0, 0, Math.PI / 2, 0],
     [-CUBE_HALF_SIZE - MARKER_SURFACE_OFFSET, 0, 0, 0, Math.PI / 2, 0],
@@ -213,20 +269,22 @@ export function createCubeBody(
     [0, 0, CUBE_HALF_SIZE + MARKER_SURFACE_OFFSET, 0, 0, 0],
     [0, 0, -CUBE_HALF_SIZE - MARKER_SURFACE_OFFSET, Math.PI, 0, 0]
   ] as const;
-  for (const [index, [x, y, z, rotationX, rotationY, rotationZ]]
-    of markerPoses.entries()) {
-    const marker = new THREE.Mesh(markerGeometry, materials.marker);
-    marker.name = `cube_horizontal_face_center_${index}`;
-    marker.position.set(x, y, z);
-    marker.rotation.set(rotationX, rotationY, rotationZ);
-    body.add(marker);
+  if (markerGeometry !== undefined) {
+    for (const [index, [x, y, z, rotationX, rotationY, rotationZ]]
+      of markerPoses.entries()) {
+      const marker = new THREE.Mesh(markerGeometry, materials.marker);
+      marker.name = `cube_horizontal_face_center_${index}`;
+      marker.position.set(x, y, z);
+      marker.rotation.set(rotationX, rotationY, rotationZ);
+      body.add(marker);
+    }
   }
 
   return {
     body,
     destroy(): void {
       cubeGeometry.dispose();
-      markerGeometry.dispose();
+      markerGeometry?.dispose();
     }
   };
 }

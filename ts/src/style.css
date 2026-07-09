@@ -700,6 +700,44 @@ input[type="range"]:active::-moz-range-thumb {
   height: 100%;
 }
 
+.standard-scene-viz-root {
+  display: grid;
+  grid-template-columns: minmax(0, 640px) 220px;
+  gap: 16px;
+  align-items: start;
+  max-width: 900px;
+}
+
+.standard-scene-viz-root-no-controls {
+  grid-template-columns: minmax(0, 640px);
+  max-width: 640px;
+}
+
+.standard-scene-viz-controls {
+  min-width: 0;
+}
+
+.standard-scene-viz-viewport {
+  position: relative;
+}
+
+.standard-scene-viz-episode-label {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 1;
+  padding: 0.25rem 0.6rem;
+  color: #fff;
+  font-size: 0.8rem;
+  background: rgb(0 0 0 / 45%);
+  border-radius: var(--viz-radius-sm, 4px);
+  pointer-events: none;
+}
+
+.standard-scene-viz-episode-label[hidden] {
+  display: none;
+}
+
 .robot-viz-insets {
   position: absolute;
   top: 0.75rem;
@@ -1034,6 +1072,7 @@ input[type="range"]:active::-moz-range-thumb {
 }
 
 @media (width <= 800px) {
+  .standard-scene-viz-root,
   .robot-viz-root {
     grid-template-columns: 1fr;
   }

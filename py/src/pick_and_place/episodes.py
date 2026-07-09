@@ -46,6 +46,7 @@ from pick_and_place.workspace_overlays import (
     is_cube_drop_allowed,
     is_cube_placement_allowed,
     is_cube_recovery_target_allowed,
+    is_target_plate_position_allowed,
 )
 
 # ±radians of random joint perturbation applied to the neutral start/end pose.
@@ -148,7 +149,7 @@ def sample_recovery_cube(rng: np.random.Generator) -> CubePose:
 
 
 def sample_target(rng: np.random.Generator) -> CubePose:
-    """Sample a target in the broader position-only drop sector."""
+    """Sample a target in the broader drop sector with room for the plate."""
     r_inner = CUBE_PLACEMENT_OVERLAY.inner_radius
     r_outer = CUBE_PLACEMENT_OVERLAY.outer_radius
     while True:
@@ -156,7 +157,7 @@ def sample_target(rng: np.random.Generator) -> CubePose:
         theta = rng.uniform(AZIMUTH_MIN, AZIMUTH_MAX)
         x = PAN_AXIS[0] + r * math.cos(theta)
         y = PAN_AXIS[1] + r * math.sin(theta)
-        if is_cube_drop_allowed(x, y):
+        if is_cube_drop_allowed(x, y) and is_target_plate_position_allowed(x, y):
             return CubePose(x=x, y=y, z=CUBE_HALF_SIZE)
 
 

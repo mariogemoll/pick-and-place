@@ -50,7 +50,7 @@ from pick_and_place.paper_detection import (
     DROP_ZONE_HALF_SIZE,
     place_paper_target_marker,
 )
-from pick_and_place.workspace_overlays import PAN_AXIS, is_cube_drop_allowed
+from pick_and_place.workspace_overlays import PAN_AXIS, is_cube_drop_allowed, is_target_plate_allowed
 
 # How long the final pose is held after a trajectory finishes, before the next
 # episode is planned, so the placed cube is visible for a beat.
@@ -69,12 +69,8 @@ def _watch_for_skip(skip_event: threading.Event) -> None:
 
 def _plate_corners_allowed(cx: float, cy: float, yaw: float, half_size: float) -> bool:
     """Whether every corner of a ``yaw``-rotated square plate centered at
-    ``(cx, cy)`` still lands inside the allowed drop zone."""
-    c, s = math.cos(yaw), math.sin(yaw)
-    for lx, ly in ((half_size, half_size), (half_size, -half_size), (-half_size, half_size), (-half_size, -half_size)):
-        if not is_cube_drop_allowed(cx + lx * c - ly * s, cy + lx * s + ly * c):
-            return False
-    return True
+    ``(cx, cy)`` still clears the frame rails and calibration AprilTags."""
+    return is_target_plate_allowed(cx, cy, yaw, half_size=half_size)
 
 
 def _sample_marker_yaw(rng: np.random.Generator, cx: float, cy: float) -> float:
@@ -100,10 +96,11 @@ def _sample_target_plate(rng: np.random.Generator, max_attempts: int = 200) -> t
     """
     for _ in range(max_attempts):
         candidate = sample_target(rng)
-        yaw = rng.uniform(0.0, math.pi / 2.0)
+        yaw = _sample_marker_yaw(rng, candidate.x, candidate.y)
         if _plate_corners_allowed(candidate.x, candidate.y, yaw, DROP_ZONE_HALF_SIZE):
             return candidate, yaw
-    return sample_target(rng), 0.0
+    candidate = sample_target(rng)
+    return candidate, _sample_marker_yaw(rng, candidate.x, candidate.y)
 
 
 class _MarkerTargetSampler:

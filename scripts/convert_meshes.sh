@@ -82,5 +82,9 @@ rm -f "$PICK_AND_PLACE_DIR/ts/public/so101.xml" "$PICK_AND_PLACE_DIR/ts/public/e
 cd "$PICK_AND_PLACE_DIR/ts"
 cp -r public/so101_assets/* "$DST_DIR/"
 cp public/so101.json public/environment.json "$DST_DIR/"
+if [[ -d public/episodes ]]; then
+    cp public/episodes/episode_*.bin "$DST_DIR/"
+    cp public/episodes/loop_episode_*.bin "$DST_DIR/"
+fi
 
 echo "Successfully converted and optimized meshes in $DST_DIR"

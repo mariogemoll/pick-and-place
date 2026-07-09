@@ -3,6 +3,7 @@
 
 import * as THREE from 'three';
 
+import { createAprilTagCellGeometry } from './apriltag/tag-mesh';
 import { loadMesh, loadMeshSet } from './mesh-loader';
 
 export interface WebJointMimic {
@@ -65,6 +66,20 @@ export interface BuiltWebModel {
 }
 
 const cache = new Map<string, Promise<WebModel>>();
+// The 60 mm frame plates carry a 40 mm tag graphic, centered on the +Z face.
+const WORKSPACE_FRAME_TAG_SIZE = 0.04;
+const TAG_SURFACE_OFFSET = 0.0002;
+const workspaceFrameAprilTagIds = new Map<string, number>([
+  ['workspace_frame_apriltag_12_material', 12],
+  ['workspace_frame_apriltag_13_material', 13],
+  ['workspace_frame_apriltag_14_material', 14],
+  ['workspace_frame_apriltag_15_material', 15]
+]);
+// Shared, module-scoped so all frame tags reuse one black material.
+const workspaceFrameTagMaterial = new THREE.MeshStandardMaterial({
+  color: 0x000000,
+  roughness: 0.78
+});
 
 export function loadWebModel(url = '/so101.json'): Promise<WebModel> {
   const cached = cache.get(url);
@@ -100,13 +115,28 @@ export function materialFor(
   const [r, g, b, initialAlpha] = sourceRgba;
   const a = isOverlay ? 1.0 : initialAlpha;
 
-  // User request: workspace borders should not be transparent.
-  return new THREE.MeshStandardMaterial({
+  const material = new THREE.MeshStandardMaterial({
     color: new THREE.Color().setRGB(r, g, b, THREE.SRGBColorSpace),
     opacity: a,
     roughness: 0.6,
     transparent: a < 1
   });
+  // User request: workspace borders should not be transparent.
+  return material;
+}
+
+// When `mesh` is a white workspace-frame AprilTag plate, attach the tag's black
+// cells as crisp geometry centered on its (upward) +Z face. The white margin is
+// simply the plate surface showing through.
+function addWorkspaceFrameTag(mesh: THREE.Mesh, geometry: WebGeometry): void {
+  if (geometry.type !== 'box' || geometry.material === undefined) { return; }
+  const tagId = workspaceFrameAprilTagIds.get(geometry.material);
+  if (tagId === undefined || geometry.size === undefined) { return; }
+  const cellGeometry = createAprilTagCellGeometry(tagId, WORKSPACE_FRAME_TAG_SIZE);
+  const tag = new THREE.Mesh(cellGeometry, workspaceFrameTagMaterial);
+  tag.name = `${geometry.name}_tag`;
+  tag.position.set(0, 0, geometry.size[2] + TAG_SURFACE_OFFSET);
+  mesh.add(tag);
 }
 
 export function primitiveGeometry(geometry: WebGeometry): THREE.BufferGeometry | undefined {
@@ -145,15 +175,14 @@ function addVisual(
   bodyGroup: THREE.Group,
   geometry: WebGeometry,
   bufferGeometry: THREE.BufferGeometry,
-  material: THREE.Material
+  material: THREE.Material | THREE.Material[]
 ): void {
   const mesh = new THREE.Mesh(bufferGeometry, material);
   mesh.name = geometry.name;
   mesh.userData.role = geometry.role;
   mesh.position.set(...geometry.position);
   setQuaternion(mesh, geometry.quaternion);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
+  addWorkspaceFrameTag(mesh, geometry);
   bodyGroup.add(mesh);
 }
 

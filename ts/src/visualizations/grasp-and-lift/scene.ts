@@ -43,7 +43,6 @@ export function createGraspAndLiftScene(
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(initialWidth, initialHeight, false);
-  renderer.shadowMap.enabled = true;
   viewport.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
@@ -65,28 +64,11 @@ export function createGraspAndLiftScene(
   scene.add(new THREE.HemisphereLight(0xddeeff, 0xffffff, 2.2));
   const directionalLight = new THREE.DirectionalLight(0xfff2d6, 3);
   directionalLight.position.set(0.25, 0.25, 0.6);
-  directionalLight.castShadow = true;
-  directionalLight.shadow.mapSize.set(1024, 1024);
-  directionalLight.shadow.camera.near = 0.05;
-  directionalLight.shadow.camera.far = 1.2;
-  directionalLight.shadow.camera.left = -0.15;
-  directionalLight.shadow.camera.right = 0.15;
-  directionalLight.shadow.camera.top = 0.2;
-  directionalLight.shadow.camera.bottom = -0.05;
-  directionalLight.shadow.bias = -0.0008;
   scene.add(directionalLight);
 
   const grid = new THREE.GridHelper(0.3, 12, 0x9aa9bc, 0xd5dde8);
   grid.rotation.x = Math.PI / 2;
   scene.add(grid);
-
-  // Invisible shadow catcher so the gripper and cube cast a real contact
-  // shadow onto the z = 0 floor – the side view needs it for depth.
-  const groundGeometry = new THREE.PlaneGeometry(1, 1);
-  const groundMaterial = new THREE.ShadowMaterial({ opacity: 0.22 });
-  const ground = new THREE.Mesh(groundGeometry, groundMaterial);
-  ground.receiveShadow = true;
-  scene.add(ground);
 
   const builtModel = buildWebModel(model, modelBasePath, 'gripper');
   void builtModel.ready.catch(console.error);
@@ -99,12 +81,6 @@ export function createGraspAndLiftScene(
     roughness: 0.6
   }));
   const cubePart = createCubeBody(materials, faceMaterials);
-  cubePart.body.traverse(child => {
-    if (child instanceof THREE.Mesh) {
-      child.castShadow = true;
-      child.receiveShadow = true;
-    }
-  });
   scene.add(cubePart.body);
 
   function resize(): void {
@@ -138,8 +114,6 @@ export function createGraspAndLiftScene(
     destroy(): void {
       orbitControls.dispose();
       renderer.dispose();
-      groundGeometry.dispose();
-      groundMaterial.dispose();
       cubePart.destroy();
       materials.destroy();
       for (const material of faceMaterials) { material.dispose(); }

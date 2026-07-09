@@ -96,6 +96,52 @@ def test_environment_contains_textured_workspace_frame_apriltags():
         assert model.mat_texid[material][1] == texture
 
 
+def test_workspace_frame_board_visuals_are_primitive_boxes():
+    model = build_environment().compile()
+    frame_id = model.body("workspace_frame_frame").id
+    board_names = (
+        "north_01",
+        "north_02",
+        "north_04",
+        "north_05",
+        "east_01",
+        "east_02",
+        "east_03",
+        "east_04",
+        "east_05",
+        "south_01",
+        "south_02",
+        "south_04",
+        "south_05",
+        "west_01",
+        "west_02",
+        "west_03",
+        "west_04",
+        "west_05",
+    )
+
+    for name in board_names:
+        visual = model.geom(f"workspace_frame_{name}_visual").id
+        collision = model.geom(f"workspace_frame_{name}_collision").id
+
+        assert model.geom_type[visual] == mujoco.mjtGeom.mjGEOM_BOX
+        assert model.geom_group[visual] == 2
+        assert model.geom_bodyid[visual] == frame_id
+        assert model.geom_contype[visual] == 0
+        assert model.geom_conaffinity[visual] == 0
+        assert model.geom_type[collision] == mujoco.mjtGeom.mjGEOM_BOX
+        assert model.geom_group[collision] == 3
+
+    north_02_visual = model.geom("workspace_frame_north_02_visual").id
+    north_02_collision = model.geom("workspace_frame_north_02_collision").id
+    np.testing.assert_allclose(model.geom_pos[north_02_visual], (-0.1325, 0.2813, 0.0036))
+    np.testing.assert_allclose(model.geom_size[north_02_visual], (0.063, 0.0187, 0.0036))
+    np.testing.assert_allclose(model.geom_pos[north_02_collision], (-0.1325, 0.2813, 0.0036))
+    np.testing.assert_allclose(model.geom_size[north_02_collision], (0.053, 0.0187, 0.0036))
+    assert model.geom_type[model.geom("workspace_frame_north_03_visual").id] == mujoco.mjtGeom.mjGEOM_MESH
+    assert model.geom_type[model.geom("overhead_mount_bottom_visual").id] == mujoco.mjtGeom.mjGEOM_MESH
+
+
 def test_export_scene_writes_compilable_xml(tmp_path):
     output = export_scene(tmp_path / "scene.xml")
 

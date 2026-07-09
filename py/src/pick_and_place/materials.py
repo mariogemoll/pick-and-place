@@ -4,7 +4,8 @@
 """Named material system for the robot generator.
 
 Two canonical materials cover the whole robot:
-  - ``plastic``   — 3-D-printed parts, default amber
+  - ``plastic``   — 3-D-printed robot parts, default grey
+  - ``environment_plastic`` — 3-D-printed workspace/camera-mount parts
   - ``motor``     — STS-3215 servo bodies, default near-black
 
 A fixed ``collision`` material (debug green, semi-transparent) is always
@@ -12,7 +13,8 @@ created for group-3 geoms and is not user-configurable.
 
 Global colours are set via :class:`MaterialConfig`.  Per-mesh overrides map a
 mesh name (without extension, e.g. ``"upper_arm_so101_v1"``) to a material
-name (``"plastic"``, ``"motor"``, or a key in ``MaterialConfig.custom``).
+name (``"plastic"``, ``"motor"``, ``"environment_plastic"``, or a key in
+``MaterialConfig.custom``).
 """
 
 from __future__ import annotations
@@ -22,9 +24,10 @@ from dataclasses import dataclass, field
 import mujoco
 
 PLASTIC_RGBA: tuple[float, float, float, float] = (0.8, 0.8, 0.8, 1.0)
+ENVIRONMENT_PLASTIC_RGBA: tuple[float, float, float, float] = (0.62, 0.62, 0.62, 1.0)
 MOTOR_RGBA: tuple[float, float, float, float] = (0.15, 0.15, 0.15, 1.0)
 CAMERA_RGBA: tuple[float, float, float, float] = (0.05, 0.05, 0.05, 1.0)
-MDF_RGBA: tuple[float, float, float, float] = (0.4, 0.3, 0.2, 1.0)
+MDF_RGBA: tuple[float, float, float, float] = (0.62, 0.62, 0.62, 1.0)
 _COLLISION_RGBA: tuple[float, float, float, float] = (0.2, 0.8, 0.2, 0.5)
 
 _MOTOR_THRESHOLD = 0.3  # all RGB channels below this → classify as motor
@@ -33,16 +36,20 @@ _MOTOR_THRESHOLD = 0.3  # all RGB channels below this → classify as motor
 @dataclass
 class MaterialConfig:
     plastic: tuple[float, float, float, float] = PLASTIC_RGBA
+    environment_plastic: tuple[float, float, float, float] = ENVIRONMENT_PLASTIC_RGBA
     motor: tuple[float, float, float, float] = MOTOR_RGBA
     camera: tuple[float, float, float, float] = CAMERA_RGBA
     mdf: tuple[float, float, float, float] = MDF_RGBA
     custom: dict[str, tuple[float, float, float, float]] = field(default_factory=dict)
-    # mesh name (no extension) → material name ('plastic', 'motor', 'mdf', 'camera', or key in custom)
+    # mesh name (no extension) → material name ('plastic', 'environment_plastic',
+    # 'motor', 'mdf', 'camera', or key in custom)
     mesh_overrides: dict[str, str] = field(default_factory=dict)
 
     def rgba_for(self, name: str) -> tuple[float, float, float, float]:
         if name == "plastic":
             return self.plastic
+        if name == "environment_plastic":
+            return self.environment_plastic
         if name == "motor":
             return self.motor
         if name == "camera":
@@ -93,7 +100,13 @@ def apply_materials(spec: mujoco.MjSpec, config: MaterialConfig) -> None:
         if mesh_name in config.mesh_overrides:
             mat_name = config.mesh_overrides[mesh_name]
             explicit_material = True
-        elif geom.material and geom.material in ("plastic", "motor", "mdf", "camera"):
+        elif geom.material and geom.material in (
+            "plastic",
+            "environment_plastic",
+            "motor",
+            "mdf",
+            "camera",
+        ):
             # Respect explicit assignments already in the spec.
             mat_name = geom.material
             explicit_material = True
@@ -120,7 +133,7 @@ def apply_materials(spec: mujoco.MjSpec, config: MaterialConfig) -> None:
         spec.delete(mat)
 
     # Create only the materials that are actually referenced, in stable order.
-    for name in ("plastic", "motor", "camera", "mdf", "collision"):
+    for name in ("plastic", "environment_plastic", "motor", "camera", "mdf", "collision"):
         if name in needed:
             mat = spec.add_material()
             mat.name = name

@@ -12,6 +12,5 @@ export function createInfiniteFloor(color: THREE.ColorRepresentation): THREE.Mes
   const geometry = new THREE.PlaneGeometry(PLANE_SIZE, PLANE_SIZE);
   const material = new THREE.MeshStandardMaterial({ color, roughness: 0.95 });
   const mesh = new THREE.Mesh(geometry, material);
-  mesh.receiveShadow = true;
   return mesh;
 }

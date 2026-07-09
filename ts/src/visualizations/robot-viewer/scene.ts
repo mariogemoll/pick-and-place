@@ -81,7 +81,6 @@ export function createRobotViewerScene(
   renderer.setSize(canvasWidth, canvasHeight, false);
   renderer.domElement.style.width = '100%';
   renderer.domElement.style.height = '100%';
-  renderer.shadowMap.enabled = true;
   viewport.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
@@ -99,7 +98,6 @@ export function createRobotViewerScene(
   scene.add(new THREE.HemisphereLight(0xddeeff, 0xffffff, 2.2));
   const directionalLight = new THREE.DirectionalLight(0xfff2d6, 3);
   directionalLight.position.set(2, 2, 5);
-  directionalLight.castShadow = true;
   scene.add(directionalLight);
 
   const floor = createInfiniteFloor(FLOOR_COLOR);

@@ -101,7 +101,6 @@ async function loadBodyTree(
   const search = requiredElement(root, '.body-tree-search') as HTMLInputElement;
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
-  renderer.shadowMap.enabled = true;
   viewport.appendChild(renderer.domElement);
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xf4f8ff);

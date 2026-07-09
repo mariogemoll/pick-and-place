@@ -12,6 +12,8 @@ import mujoco
 from pick_and_place.camera_module import add_camera_module
 from pick_and_place.camera_intrinsics import OVERHEAD_CAMERA_INTRINSICS
 
+ENVIRONMENT_PLASTIC_MATERIAL = "environment_plastic"
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 APRILTAG_TEXTURE_DIR = REPO_ROOT / "assets" / "apriltags" / "textures"
 WORKSPACE_FRAME_STL_DIR = REPO_ROOT / "stl" / "workspace_frame"
@@ -43,6 +45,13 @@ WORKSPACE_FRAME_APRILTAG_PLATES: tuple[tuple[int, str, tuple[float, float, float
     (15, "se", (0.230, -0.230, 0.0025)),
 )
 
+WORKSPACE_FRAME_VISUAL_BOXES: dict[str, tuple[tuple[float, float, float], tuple[float, float, float]]] = {
+    "part_01_box_10p45_flat.stl": ((0.005, 0.0, 0.0036), (0.05725, 0.0187, 0.0036)),
+    "part_02_box_11p6.stl": ((0.005, 0.0, 0.0036), (0.063, 0.0187, 0.0036)),
+    "part_03_box_15p9.stl": ((0.0, 0.0, 0.0036), (0.0795, 0.0187, 0.0036)),
+    "part_04_box_7p3.stl": ((0.0, 0.0, 0.0036), (0.0465, 0.0187, 0.0036)),
+}
+
 
 def add_workspace_frame(
     spec: mujoco.MjSpec,
@@ -62,7 +71,7 @@ def add_workspace_frame(
     )
     _add_workspace_frame_part(
         spec, frame, "north_02", WORKSPACE_FRAME_STL_DIR / "part_02_box_11p6.stl",
-        pos=(-0.1375, 0.2813, 0), rgba=WORKSPACE_FRAME_GRAY, material="plastic",
+        pos=(-0.1375, 0.2813, 0), rgba=WORKSPACE_FRAME_GRAY, material=ENVIRONMENT_PLASTIC_MATERIAL,
         col_size=(0.053, 0.0187, 0.0036), col_pos=(-0.1325, 0.2813, 0.0036), collision_default=collision_default
     )
     # North 03 is the arm base for the overhead camera (Yellow plastic).
@@ -78,7 +87,7 @@ def add_workspace_frame(
         pos=(-0.0534305, 0.206079, 0.005),
         quat=(-0.5, -0.5, 0.5, 0.5),
         rgba=WORKSPACE_FRAME_YELLOW,
-        material="plastic",
+        material=ENVIRONMENT_PLASTIC_MATERIAL,
         contype=0,
         conaffinity=0,
         group=2,
@@ -95,7 +104,7 @@ def add_workspace_frame(
 
     _add_workspace_frame_part(
         spec, frame, "north_04", WORKSPACE_FRAME_STL_DIR / "part_02_box_11p6.stl",
-        pos=(0.1375, 0.2813, 0), quat=(0, 0, 0, 1), rgba=WORKSPACE_FRAME_GRAY, material="plastic",
+        pos=(0.1375, 0.2813, 0), quat=(0, 0, 0, 1), rgba=WORKSPACE_FRAME_GRAY, material=ENVIRONMENT_PLASTIC_MATERIAL,
         col_size=(0.053, 0.0187, 0.0036), col_pos=(0.1325, 0.2813, 0.0036), collision_default=collision_default
     )
     _add_workspace_frame_part(
@@ -226,16 +235,21 @@ def _add_workspace_frame_part(
     col_pos: tuple[float, float, float] | None = None,
     collision_default: mujoco.MjsDefault | None = None,
 ) -> None:
-    mesh_name = f"workspace_frame_{mesh_path.stem}"
-    if not any(m.name == mesh_name for m in spec.meshes):
-        spec.add_mesh(name=mesh_name, file=str(mesh_path))
+    if col_size is None:
+        raise ValueError(f"workspace frame part {name!r} needs a box size")
+    visual_offset, visual_size = WORKSPACE_FRAME_VISUAL_BOXES[mesh_path.name]
+    rotated_offset = _rotate_vector(quat, visual_offset)
 
     parent.add_geom(
         name=f"workspace_frame_{name}_visual",
-        type=mujoco.mjtGeom.mjGEOM_MESH,
-        meshname=mesh_name,
-        pos=pos,
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        pos=(
+            pos[0] + rotated_offset[0],
+            pos[1] + rotated_offset[1],
+            pos[2] + rotated_offset[2],
+        ),
         quat=quat,
+        size=visual_size,
         rgba=rgba,
         material=material,
         contype=0,
@@ -243,16 +257,32 @@ def _add_workspace_frame_part(
         group=2,
     )
 
-    if col_size:
-        parent.add_geom(
-            default=collision_default,
-            name=f"workspace_frame_{name}_collision",
-            type=mujoco.mjtGeom.mjGEOM_BOX,
-            pos=col_pos or (pos[0], pos[1], 0.0036),
-            size=col_size,
-            material="collision",
-            group=3,
-        )
+    parent.add_geom(
+        default=collision_default,
+        name=f"workspace_frame_{name}_collision",
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        pos=col_pos or (pos[0], pos[1], 0.0036),
+        size=col_size,
+        material="collision",
+        group=3,
+    )
+
+
+def _rotate_vector(
+    quat: tuple[float, float, float, float],
+    vector: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    """Rotate a vector by a MuJoCo-order quaternion (w, x, y, z)."""
+    w, x, y, z = quat
+    vx, vy, vz = vector
+    tx = 2.0 * (y * vz - z * vy)
+    ty = 2.0 * (z * vx - x * vz)
+    tz = 2.0 * (x * vy - y * vx)
+    return (
+        vx + w * tx + y * tz - z * ty,
+        vy + w * ty + z * tx - x * tz,
+        vz + w * tz + x * ty - y * tx,
+    )
 
 
 def add_overhead_camera_mount(
@@ -294,7 +324,7 @@ def add_overhead_camera_mount(
         pos=(0.0365125, -0.2626, 0),
         quat=(0.5, 0.5, 0.5, 0.5),
         rgba=MOUNT_BRIGHT_GRAY,
-        material="plastic",
+        material=ENVIRONMENT_PLASTIC_MATERIAL,
         contype=0,
         conaffinity=0,
         group=2,
@@ -306,7 +336,7 @@ def add_overhead_camera_mount(
         pos=(0.0730125, -0.2439, 0.188),
         quat=(0.5, 0.5, 0.5, 0.5),
         rgba=MOUNT_BRIGHT_GRAY,
-        material="plastic",
+        material=ENVIRONMENT_PLASTIC_MATERIAL,
         contype=0,
         conaffinity=0,
         group=2,
@@ -318,7 +348,7 @@ def add_overhead_camera_mount(
         pos=(0.0730125, -0.2439, 0.188),
         quat=(0.5, 0.5, 0.5, 0.5),
         rgba=MOUNT_BRIGHT_GRAY,
-        material="plastic",
+        material=ENVIRONMENT_PLASTIC_MATERIAL,
         contype=0,
         conaffinity=0,
         group=2,

@@ -14,7 +14,7 @@ const JOINT_NAMES = [...ARM_JOINT_NAMES, 'gripper'] as const;
 const NUM_JOINTS = JOINT_NAMES.length;
 
 const DEFAULT_EPISODE_URLS = Array.from(
-  { length: 5 }, (_, index) => `/episodes/episode_${String(index).padStart(2, '0')}.bin`
+  { length: 5 }, (_, index) => `/episodes/loop_episode_${String(index).padStart(2, '0')}.bin`
 );
 
 export interface EpisodeReplayVisualization {

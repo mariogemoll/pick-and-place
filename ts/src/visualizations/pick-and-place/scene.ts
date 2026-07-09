@@ -48,7 +48,6 @@ export function createPickAndPlaceScene(
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(initialWidth, initialHeight, false);
-  renderer.shadowMap.enabled = true;
   viewport.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
@@ -68,7 +67,6 @@ export function createPickAndPlaceScene(
   scene.add(new THREE.HemisphereLight(0xddeeff, 0xffffff, 2.2));
   const directionalLight = new THREE.DirectionalLight(0xfff2d6, 3);
   directionalLight.position.set(2, 2, 5);
-  directionalLight.castShadow = true;
   scene.add(directionalLight);
 
   const grid = new THREE.GridHelper(0.8, 16, 0x9aa9bc, 0xd5dde8);

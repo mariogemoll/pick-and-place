@@ -75,6 +75,8 @@ _CUBE_FRAME_MARGIN = math.sqrt(2.0) * CUBE_HALF_SIZE
 RECOVERY_TARGET_FRAME_BORDER_MARGIN = 0.06
 _CUBE_FRAME_HALF_EXTENT = WORKSPACE_FRAME_INNER_HALF_EXTENT - _CUBE_FRAME_MARGIN
 _APRILTAG_PLATE_HALF_SIZE = 0.03
+TARGET_PLATE_HALF_SIZE = 0.05
+TARGET_PLATE_CLEARANCE = 0.002
 CUBE_APRILTAG_EXCLUSION_HALF_EXTENT = _APRILTAG_PLATE_HALF_SIZE + _CUBE_FRAME_MARGIN
 CUBE_PLACEMENT_BOUNDS = (
     WORKSPACE_FRAME_POS[0] - _CUBE_FRAME_HALF_EXTENT,
@@ -136,6 +138,83 @@ def is_vertical_grip_allowed(x: float, y: float) -> bool:
 def is_cube_drop_allowed(x: float, y: float) -> bool:
     """Return whether a cube-center drop target is in the broad arm workspace."""
     return _is_cube_center_allowed(x, y, CUBE_PLACEMENT_OVERLAY)
+
+
+def _project_polygon(points: tuple[tuple[float, float], ...], axis: tuple[float, float]) -> tuple[float, float]:
+    values = [px * axis[0] + py * axis[1] for px, py in points]
+    return min(values), max(values)
+
+
+def _polygons_overlap(
+    a: tuple[tuple[float, float], ...],
+    b: tuple[tuple[float, float], ...],
+) -> bool:
+    for polygon in (a, b):
+        for index, p0 in enumerate(polygon):
+            p1 = polygon[(index + 1) % len(polygon)]
+            edge_x = p1[0] - p0[0]
+            edge_y = p1[1] - p0[1]
+            length = math.hypot(edge_x, edge_y)
+            axis = (-edge_y / length, edge_x / length)
+            a_min, a_max = _project_polygon(a, axis)
+            b_min, b_max = _project_polygon(b, axis)
+            if a_max <= b_min or b_max <= a_min:
+                return False
+    return True
+
+
+def target_plate_corners_frame(
+    x: float,
+    y: float,
+    yaw: float,
+    half_size: float = TARGET_PLATE_HALF_SIZE,
+) -> tuple[tuple[float, float], ...]:
+    """Return the target plate's four corners in workspace-frame coordinates."""
+    c = math.cos(yaw)
+    s = math.sin(yaw)
+    corners = []
+    for sx, sy in ((-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)):
+        wx = x + (sx * c - sy * s) * half_size
+        wy = y + (sx * s + sy * c) * half_size
+        corners.append(_world_to_frame_xy(wx, wy))
+    return tuple(corners)
+
+
+def is_target_plate_allowed(
+    x: float,
+    y: float,
+    yaw: float,
+    *,
+    half_size: float = TARGET_PLATE_HALF_SIZE,
+    clearance: float = TARGET_PLATE_CLEARANCE,
+) -> bool:
+    """Return whether a black target plate clears frame rails and AprilTags."""
+    corners = target_plate_corners_frame(x, y, yaw, half_size)
+    frame_limit = WORKSPACE_FRAME_INNER_HALF_EXTENT - clearance
+    if any(abs(cx) > frame_limit or abs(cy) > frame_limit for cx, cy in corners):
+        return False
+
+    tag_half = _APRILTAG_PLATE_HALF_SIZE + clearance
+    for _, _, tag_pos in WORKSPACE_FRAME_APRILTAG_PLATES:
+        tag_x, tag_y = tag_pos[:2]
+        tag_corners = (
+            (tag_x - tag_half, tag_y - tag_half),
+            (tag_x + tag_half, tag_y - tag_half),
+            (tag_x + tag_half, tag_y + tag_half),
+            (tag_x - tag_half, tag_y + tag_half),
+        )
+        if _polygons_overlap(corners, tag_corners):
+            return False
+    return True
+
+
+def is_target_plate_position_allowed(x: float, y: float) -> bool:
+    """Return whether any square-plate yaw can fit at the target center."""
+    for step in range(90):
+        yaw = step * (math.pi / 2.0) / 90.0
+        if is_target_plate_allowed(x, y, yaw):
+            return True
+    return False
 
 
 def is_cube_recovery_target_allowed(x: float, y: float) -> bool:
