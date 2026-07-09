@@ -55,7 +55,7 @@ export async function EpisodeReplay(
   const model = await loadWebModel(options.modelUrl);
   const episodeUrls = options.episodeUrls ?? DEFAULT_EPISODE_URLS;
   const episodes = await loadEpisodes(episodeUrls);
-  const durations = episodes.map(episode => episode.nframes / episode.fps);
+  const durations = episodes.map(episode => (episode.nframes - 1) / episode.fps);
 
   const ui = buildUi(parent);
   const vizScene = createEpisodeReplayScene(ui.viewport, model, options.modelBasePath);

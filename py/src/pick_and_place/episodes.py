@@ -198,6 +198,22 @@ def get_joint(model: mujoco.MjModel, data: mujoco.MjData, name: str) -> float:
     return float(data.qpos[model.jnt_qposadr[jid]])
 
 
+def cube_quat_from_pose(pose: CubePose) -> tuple[float, float, float, float]:
+    """MuJoCo ``w, x, y, z`` quaternion for ``pose``'s intrinsic ZYX rotation."""
+    half_roll = pose.roll / 2.0
+    half_pitch = pose.pitch / 2.0
+    half_yaw = pose.yaw / 2.0
+    cr, sr = math.cos(half_roll), math.sin(half_roll)
+    cp, sp = math.cos(half_pitch), math.sin(half_pitch)
+    cy, sy = math.cos(half_yaw), math.sin(half_yaw)
+    return (
+        cr * cp * cy + sr * sp * sy,
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+    )
+
+
 def set_cube_pose(model: mujoco.MjModel, data: mujoco.MjData, source: CubePose) -> None:
     """Move the freejoint ``pick_cube`` to ``source`` in an existing model's data.
 
@@ -208,8 +224,7 @@ def set_cube_pose(model: mujoco.MjModel, data: mujoco.MjData, source: CubePose) 
     qpos_adr = model.jnt_qposadr[jnt_adr]
     qvel_adr = model.jnt_dofadr[jnt_adr]
     data.qpos[qpos_adr:qpos_adr + 3] = (source.x, source.y, source.z)
-    half_yaw = source.yaw / 2.0
-    data.qpos[qpos_adr + 3:qpos_adr + 7] = (math.cos(half_yaw), 0.0, 0.0, math.sin(half_yaw))
+    data.qpos[qpos_adr + 3:qpos_adr + 7] = cube_quat_from_pose(source)
     data.qvel[qvel_adr:qvel_adr + 6] = 0.0
 
 
@@ -648,8 +663,7 @@ def _build_model(
     spec.visual.global_.offheight = max(spec.visual.global_.offheight, offheight)
     cube = spec.body("pick_cube")
     cube.pos = (source.x, source.y, source.z)
-    half_yaw = source.yaw / 2.0
-    cube.quat = (math.cos(half_yaw), 0.0, 0.0, math.sin(half_yaw))
+    cube.quat = cube_quat_from_pose(source)
     cube.add_freejoint()  # make the cube a real dynamic body
     model = spec.compile()
     return model, mujoco.MjData(model)
@@ -662,6 +676,8 @@ def prepare_episode(
     *,
     start_joints: dict[str, float] | None = None,
     start_gripper: float | None = None,
+    end_joints: dict[str, float] | None = None,
+    end_gripper: float | None = None,
     model: mujoco.MjModel | None = None,
     data: mujoco.MjData | None = None,
     max_attempts: int | None = None,
@@ -680,12 +696,12 @@ def prepare_episode(
 
     ``source``/``target`` pin those cube poses (otherwise they are resampled
     each attempt). ``target_sampler`` can override target sampling when no
-    target is pinned. The start arm pose is sampled fresh each attempt unless
-    ``start_joints``/``start_gripper`` pin it (e.g. to the real arm's current
-    pose); the end pose is always sampled fresh. Pass ``model``/``data`` to reuse
-    a single persistent scene (its ``pick_cube`` freejoint is moved to ``source``)
-    instead of compiling a fresh model each attempt — required so a live viewer can
-    stay bound across episodes. With the cube and start poses all pinned and no
+    target is pinned. The start and end arm poses are sampled fresh each attempt
+    unless their joint/gripper pairs are pinned (e.g. to continue a replay from
+    a previous episode's final pose). Pass ``model``/``data`` to reuse a single
+    persistent scene (its ``pick_cube`` freejoint is moved to ``source``) instead
+    of compiling a fresh model each attempt — required so a live viewer can stay
+    bound across episodes. With the cube and start poses all pinned and no
     feasible trajectory, raises immediately. Otherwise keeps resampling until
     success or, if ``max_attempts`` is set, that many attempts fail — then raises
     :class:`EpisodeSamplingError`.
@@ -696,8 +712,13 @@ def prepare_episode(
     fixed_source = source is not None
     fixed_target = target is not None
     fixed_start = start_joints is not None
+    fixed_end = end_joints is not None
     reuse_model = model is not None
 
+    if (start_joints is None) != (start_gripper is None):
+        raise ValueError("start_joints and start_gripper must be provided together")
+    if (end_joints is None) != (end_gripper is None):
+        raise ValueError("end_joints and end_gripper must be provided together")
     if fixed_target and target_sampler is not None:
         raise ValueError("target and target_sampler are mutually exclusive")
 
@@ -726,7 +747,10 @@ def prepare_episode(
             ep_start_joints, ep_start_gripper = dict(start_joints), float(start_gripper)
         else:
             ep_start_joints, ep_start_gripper = sample_near_neutral(rng)
-        end_joints, end_gripper = sample_near_neutral(rng)
+        if fixed_end:
+            ep_end_joints, ep_end_gripper = dict(end_joints), float(end_gripper)
+        else:
+            ep_end_joints, ep_end_gripper = sample_near_neutral(rng)
 
         if reuse_model:
             ep_model, ep_data = model, data
@@ -786,8 +810,8 @@ def prepare_episode(
                 ep_target,
                 ep_start_joints,
                 ep_start_gripper,
-                end_joints,
-                end_gripper,
+                ep_end_joints,
+                ep_end_gripper,
                 candidate_grasp,
                 free_grasp=free_grasp,
                 carry_ok=carry_ok,
@@ -870,8 +894,8 @@ def prepare_episode(
                 target=ep_target,
                 start_joints=ep_start_joints,
                 start_gripper=ep_start_gripper,
-                end_joints=end_joints,
-                end_gripper=end_gripper,
+                end_joints=ep_end_joints,
+                end_gripper=ep_end_gripper,
                 model=ep_model,
                 data=ep_data,
                 kinematics=kinematics,
