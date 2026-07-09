@@ -4,10 +4,10 @@
 
 """Generate simplified SO101 intermediary GLBs.
 
-Decimates every source STL to RATIO of its faces (MeshLab quadric edge
-collapse). If the result deviates from the original by more than TARGET_MM
-(98th percentile of sampled two-way surface distance), the smallest ratio
-that meets the budget is found by bisection instead.
+Meshes are simplified to the finest shared error tolerance whose packed,
+meshopt-compressed GLBs together fit --target-kb (see ``simplification``).
+Individual parts can be held to a tighter tolerance than the rest with
+``--detail GLOB=FACTOR``.
 
 Meshes are packed into three named-node GLBs matching the web viewer's three
 independently-loadable scopes: ``arm.glb`` (everything but the gripper),
@@ -20,16 +20,23 @@ gripper, so it is packed into both files.
 from __future__ import annotations
 
 import argparse
-import math
+import tempfile
 from pathlib import Path
 
 import numpy as np
-import pymeshlab
 import trimesh
-from tqdm import tqdm
 
-RATIO = 0.04
-TARGET_MM = 0.5
+from simplification import (
+    MeshCurve,
+    build_curves,
+    compressed_kb,
+    detail_factor_for,
+    find_tolerance,
+    parse_detail,
+    print_selection,
+)
+
+DEFAULT_TARGET_KB = 200.0
 MM_TO_M = 0.001
 WRIST_CAMERA_MOUNT_SOURCE_TRANSFORM = np.array(
     (
@@ -132,43 +139,33 @@ def load_source_mesh(path: Path):
     return mesh
 
 
-def decimate(mesh, ratio: float):
-    reduced = []
-    for component in mesh.split(only_watertight=False):
-        target = max(4, math.ceil(len(component.faces) * ratio))
-        if target >= len(component.faces):
-            reduced.append(component.copy())
-            continue
-        ms = pymeshlab.MeshSet()
-        ms.add_mesh(pymeshlab.Mesh(component.vertices, component.faces))
-        ms.meshing_decimation_quadric_edge_collapse(
-            targetfacenum=target,
-            preserveboundary=True,
-            boundaryweight=2.0,
-            preservenormal=True,
-            preservetopology=True,
-        )
-        result = ms.current_mesh()
-        reduced.append(trimesh.Trimesh(result.vertex_matrix(), result.face_matrix()))
-    return trimesh.util.concatenate(reduced)
-
-
-def deviation_mm(original, reduced, samples: int = 1500) -> float:
-    to_reduced = trimesh.proximity.ProximityQuery(reduced).on_surface(original.sample(samples))[1]
-    to_original = trimesh.proximity.ProximityQuery(original).on_surface(reduced.sample(samples))[1]
-    return float(np.percentile(np.concatenate([to_reduced, to_original]), 98)) * 1000
-
-
-def destination_scenes(
-    name: str, arm: trimesh.Scene, gripper: trimesh.Scene, environment: trimesh.Scene
-) -> list[trimesh.Scene]:
+def scene_keys_for(name: str) -> list[str]:
     if name in ENVIRONMENT_MESH_NAMES:
-        return [environment]
+        return ["environment"]
     if name in SHARED_ARM_GRIPPER_MESH_NAMES:
-        return [arm, gripper]
+        return ["arm", "gripper"]
     if name in GRIPPER_MESH_NAMES:
-        return [gripper]
-    return [arm]
+        return ["gripper"]
+    return ["arm"]
+
+
+def pack_scenes(
+    curves: list[MeshCurve],
+    tolerance_mm: float,
+    camera_module: trimesh.Trimesh | None,
+) -> dict[str, trimesh.Scene]:
+    scenes = {key: trimesh.Scene() for key in ("arm", "gripper", "environment")}
+    if camera_module is not None:
+        scenes["gripper"].add_geometry(
+            camera_module,
+            node_name=CAMERA_MODULE_MESH_NAME,
+            geom_name=CAMERA_MODULE_MESH_NAME,
+        )
+    for curve in curves:
+        mesh = curve.select(tolerance_mm).mesh
+        for key in scene_keys_for(curve.name):
+            scenes[key].add_geometry(mesh, node_name=curve.name, geom_name=curve.name)
+    return scenes
 
 
 def parse_args() -> argparse.Namespace:
@@ -183,27 +180,39 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="omit the optional SO-101 overhead-camera mount",
     )
+    parser.add_argument(
+        "--target-kb",
+        type=float,
+        default=DEFAULT_TARGET_KB,
+        help="size budget for the three meshopt-compressed GLBs together (default %(default)s)",
+    )
+    parser.add_argument(
+        "--detail",
+        type=parse_detail,
+        action="append",
+        default=[],
+        metavar="GLOB=FACTOR",
+        help="hold meshes matching GLOB (fnmatch on the mesh name) to a FACTOR-times "
+        "tighter tolerance; repeatable",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    np.random.seed(0)
     GLB_DIR.mkdir(parents=True, exist_ok=True)
     paths = sorted(INPUT_DIR.glob("*.stl"))
     if not paths:
         raise SystemExit(f"no STL meshes found in: {INPUT_DIR}")
 
-    gripper_scene = trimesh.Scene()
+    # The camera module is generated at minimal face count and carries face
+    # colors, which decimation would discard; it bypasses simplification.
+    camera_module: trimesh.Trimesh | None = None
     if not args.no_wrist_camera_mount:
         if not WRIST_CAMERA_MOUNT_STL.is_file():
             raise SystemExit(f"wrist-camera mount STL not found: {WRIST_CAMERA_MOUNT_STL}")
         paths.append(WRIST_CAMERA_MOUNT_STL)
-        gripper_scene.add_geometry(
-            generate_camera_module_mesh(),
-            node_name=CAMERA_MODULE_MESH_NAME,
-            geom_name=CAMERA_MODULE_MESH_NAME,
-        )
+        camera_module = generate_camera_module_mesh()
 
     if not args.no_overhead_camera_mount:
         for path in OVERHEAD_MOUNT_STLS:
@@ -214,36 +223,27 @@ def main() -> int:
     for path in WORKSPACE_FRAME_STLS:
         paths.append(path)
 
-    arm_scene = trimesh.Scene()
-    environment_scene = trimesh.Scene()
     name_map = {**OVERHEAD_MOUNT_NAMES, **WORKSPACE_FRAME_NAMES}
+    names = [name_map.get(path.name, path.stem) for path in paths]
+    curves = build_curves([
+        (load_source_mesh(path), name, detail_factor_for(name, args.detail))
+        for path, name in zip(paths, names)
+    ])
 
-    print(f"{'mesh':42} {'orig':>7} {'ratio':>6} {'faces':>6} {'p98':>7}")
-    for path in tqdm(paths, unit="mesh"):
-        mesh = load_source_mesh(path)
-        ratio = RATIO
-        reduced = decimate(mesh, ratio)
-        error = deviation_mm(mesh, reduced)
-        if error > TARGET_MM:
-            low, high = RATIO, 1.0
-            for _ in range(8):
-                mid = math.sqrt(low * high)
-                candidate = decimate(mesh, mid)
-                candidate_error = deviation_mm(mesh, candidate)
-                if candidate_error <= TARGET_MM:
-                    ratio, reduced, error, high = mid, candidate, candidate_error, mid
-                else:
-                    low = mid
+    with tempfile.TemporaryDirectory() as workdir:
+        tolerance = find_tolerance(
+            lambda tol: list(pack_scenes(curves, tol, camera_module).values()),
+            args.target_kb,
+            Path(workdir),
+        )
+        scenes = pack_scenes(curves, tolerance, camera_module)
+        size = compressed_kb(list(scenes.values()), Path(workdir))
 
-        name = name_map.get(path.name, path.stem)
-        for scene in destination_scenes(name, arm_scene, gripper_scene, environment_scene):
-            scene.add_geometry(reduced, node_name=name, geom_name=name)
-        tqdm.write(f"{path.name:42} {len(mesh.faces):7d} {ratio:6.3f} {len(reduced.faces):6d} "
-                   f"{error:5.2f}mm")
+    print(f"\ntolerance {tolerance:.3f}mm -> {size:.1f}KB compressed (all files)")
+    print_selection(curves, tolerance)
 
-    arm_scene.export(GLB_DIR / "arm.glb")
-    gripper_scene.export(GLB_DIR / "gripper.glb")
-    environment_scene.export(GLB_DIR / "environment.glb")
+    for key, scene in scenes.items():
+        scene.export(GLB_DIR / f"{key}.glb")
     print(f"Wrote arm.glb, gripper.glb, environment.glb to {GLB_DIR}")
     return 0
 

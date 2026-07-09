@@ -23,8 +23,16 @@ while [[ $# -gt 0 ]]; do
             OMIT_WRIST_CAMERA_MOUNT=true
             shift
             ;;
+        --target-kb)
+            SIMPLIFY_ARGS+=(--target-kb "$2")
+            shift 2
+            ;;
+        --detail)
+            SIMPLIFY_ARGS+=(--detail "$2")
+            shift 2
+            ;;
         -h|--help)
-            echo "Usage: $0 [--no-wrist-camera-mount] [dst_dir]"
+            echo "Usage: $0 [--no-wrist-camera-mount] [--target-kb KB] [--detail GLOB=FACTOR]... [dst_dir]"
             exit 0
             ;;
         -*)

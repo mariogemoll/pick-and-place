@@ -8,12 +8,14 @@
 # loads the robot's stock MJCF directly, so it works for any
 # `*_mj_description` package.
 #
-# Usage: convert_meshes_generic.sh ROBOT [--gripper GRIPPER] [--target-mm MM] [dst_dir]
+# Usage: convert_meshes_generic.sh ROBOT [--gripper GRIPPER] [--target-kb KB]
+#          [--detail GLOB=FACTOR]... [dst_dir]
 #   ROBOT: robot_descriptions module name, e.g. ur5e_mj_description
 #   GRIPPER: robot_descriptions module name for an end effector to attach at
 #     the robot's "attachment_site", e.g. robotiq_2f85_mj_description
-#   MM: mesh simplification deviation budget in millimeters (default 0.5);
-#     scale it with the robot's physical size
+#   KB: size budget for the meshopt-compressed GLB (default 200)
+#   GLOB=FACTOR: hold meshes matching GLOB to a FACTOR-times tighter
+#     tolerance than the rest of the robot, e.g. --detail 'link6_*=4'
 
 set -e
 set -x
@@ -23,7 +25,7 @@ PICK_AND_PLACE_DIR=$( dirname "$SCRIPT_DIR" )
 
 ROBOT="$1"
 if [[ -z "$ROBOT" ]]; then
-    echo "Usage: $0 ROBOT [--gripper GRIPPER] [--target-mm MM] [dst_dir]" >&2
+    echo "Usage: $0 ROBOT [--gripper GRIPPER] [--target-kb KB] [--detail GLOB=FACTOR]... [dst_dir]" >&2
     exit 2
 fi
 shift
@@ -36,8 +38,12 @@ while [[ "$1" == --* ]]; do
             GRIPPER="$2"
             shift 2
             ;;
-        --target-mm)
-            SIMPLIFY_ARGS+=(--target-mm "$2")
+        --target-kb)
+            SIMPLIFY_ARGS+=(--target-kb "$2")
+            shift 2
+            ;;
+        --detail)
+            SIMPLIFY_ARGS+=(--detail "$2")
             shift 2
             ;;
         *)
