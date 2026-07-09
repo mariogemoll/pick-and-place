@@ -15,6 +15,18 @@ export interface BodyTreeVisualization {
   destroy(): void;
 }
 
+export interface BodyTreeRobotOption {
+  label: string;
+  modelUrl: string;
+  modelBasePath: string;
+}
+
+const DEFAULT_ROBOTS: BodyTreeRobotOption[] = [
+  { label: 'SO-101', modelUrl: '/so101.json', modelBasePath: '/so101_assets' },
+  { label: 'UR5e', modelUrl: '/ur5e.json', modelBasePath: '/ur5e_assets' },
+  { label: 'Panda', modelUrl: '/panda.json', modelBasePath: '/panda_assets' }
+];
+
 interface MeshMetrics {
   bytes: number;
   triangles: number;
@@ -49,10 +61,10 @@ function setQuaternion(
   object.quaternion.set(x, y, z, w);
 }
 
-export async function initializeBodyTreeVisualization(
+async function loadBodyTree(
   parent: HTMLElement,
-  modelBasePath = '/so101_assets',
-  modelUrl = '/so101.json'
+  modelBasePath: string,
+  modelUrl: string
 ): Promise<BodyTreeVisualization> {
   const model = await loadWebModel(modelUrl);
   const bodiesWithVisuals = model.bodies.map(body => ({
@@ -329,4 +341,51 @@ export async function initializeBodyTreeVisualization(
     selected.dispose();
     root.remove();
   } });
+}
+
+export async function initializeBodyTreeVisualization(
+  parent: HTMLElement,
+  robots: BodyTreeRobotOption[] = DEFAULT_ROBOTS
+): Promise<BodyTreeVisualization> {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'body-tree-outer';
+  wrapper.innerHTML = `
+    <label class="body-tree-robot-select-label">
+      Robot
+      <select class="body-tree-robot-select"></select>
+    </label>
+    <div class="body-tree-container"><div class="placeholder"></div></div>`;
+  parent.querySelector('.placeholder')?.replaceWith(wrapper);
+  if (!wrapper.parentElement) { parent.appendChild(wrapper); }
+
+  const selector = requiredElement(wrapper, '.body-tree-robot-select') as HTMLSelectElement;
+  const container = requiredElement(wrapper, '.body-tree-container');
+  for (const [index, robot] of robots.entries()) {
+    const option = document.createElement('option');
+    option.value = String(index);
+    option.textContent = robot.label;
+    selector.appendChild(option);
+  }
+
+  let current: BodyTreeVisualization | null = null;
+  let destroyed = false;
+  const load = async(index: number): Promise<void> => {
+    current?.destroy();
+    current = null;
+    container.innerHTML = '<div class="placeholder"></div>';
+    const robot = robots[index];
+    const tree = await loadBodyTree(container, robot.modelBasePath, robot.modelUrl);
+    if (destroyed) { tree.destroy(); return; }
+    current = tree;
+  };
+  selector.addEventListener('change', () => { void load(Number(selector.value)); });
+  await load(0);
+
+  return {
+    destroy(): void {
+      destroyed = true;
+      current?.destroy();
+      wrapper.remove();
+    }
+  };
 }
