@@ -40,7 +40,7 @@ def test_pick_cube_apriltags_survive_into_compiled_models():
         assert any(tex_id != -1 for tex_id in model.mat_texid[mat_id])
 
 
-def test_apriltag_cube_defaults_to_scene_type():
+def test_apriltags_default_to_scene_type():
     # Simple scene -> plain cube; standard scene -> tagged cube.
     simple = build_scene(include_environment=False)
     assert simple.geom("pick_cube").material == ""
@@ -48,10 +48,18 @@ def test_apriltag_cube_defaults_to_scene_type():
     assert standard.geom("pick_cube").material == "pick_cube_apriltags"
 
 
-def test_apriltag_cube_flag_overrides_default():
-    tagged_simple = build_scene(include_environment=False, apriltag_cube=True)
+def test_apriltags_flag_overrides_default():
+    tagged_simple = build_scene(include_environment=False, apriltags=True)
     assert tagged_simple.geom("pick_cube").material == "pick_cube_apriltags"
-    plain_standard = build_scene(include_environment=True, apriltag_cube=False)
+    plain_standard = build_scene(include_environment=True, apriltags=False)
     assert plain_standard.geom("pick_cube").material == ""
-    # A plain cube must not leave a dangling apriltag texture/material behind.
-    assert not any(mat.name == "pick_cube_apriltags" for mat in plain_standard.materials)
+    # An untagged scene must not reference any apriltag texture files.
+    assert not any("apriltag" in mat.name for mat in plain_standard.materials)
+    assert not any("apriltag" in tex.name for tex in plain_standard.textures)
+
+
+def test_untagged_environment_scene_compiles_without_texture_assets():
+    # The RL env builds this variant; it must not need assets/apriltags/textures.
+    spec = build_scene(include_environment=True, apriltags=False)
+    model = spec.compile()
+    assert model.geom("pick_cube").id >= 0

@@ -462,7 +462,9 @@ def _build_model() -> tuple[mujoco.MjModel, mujoco.MjData, int]:
     the target is a mocap marker repositioned per reset, so a single model/data
     serves the whole pool without recompiling.
     """
-    spec = build_scene(include_environment=True)
+    # AprilTag textures are perception targets only; skipping them keeps the
+    # generated texture assets out of the training loop's requirements.
+    spec = build_scene(include_environment=True, apriltags=False)
     marker = spec.worldbody.add_body(name="reset_target_marker")
     marker.mocap = True
     marker.add_geom(

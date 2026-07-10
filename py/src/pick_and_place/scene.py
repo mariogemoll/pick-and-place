@@ -40,17 +40,19 @@ def build_scene(
     wrist_camera: bool = True,
     materials: MaterialConfig | None = None,
     include_environment: bool = True,
-    apriltag_cube: bool | None = None,
+    apriltags: bool | None = None,
 ) -> mujoco.MjSpec:
     """Return the composed robot with a floor, workspace overlays, light, and cube.
 
-    ``apriltag_cube`` selects the pick cube's appearance: the plain red cube for
-    the simple scene, or the AprilTag-stickered cube (a perception target) for
-    the standard scene. When left ``None`` it follows ``include_environment``, so
-    the simple scene gets the red cube and the standard scene the tagged one.
+    ``apriltags`` selects the perception targets: the AprilTag-stickered pick
+    cube and the workspace frame's calibration tag plates. Both are purely
+    visual (texture files rendered by scripts/render_apriltag_textures.py), so
+    scenes that never render camera images can drop them. When left ``None`` it
+    follows ``include_environment``, so the simple scene gets the plain red cube
+    and the standard scene the tagged one.
     """
-    if apriltag_cube is None:
-        apriltag_cube = include_environment
+    if apriltags is None:
+        apriltags = include_environment
 
     spec = build_robot(wrist_camera=wrist_camera, materials=materials)
     spec.modelname = "so101_with_cube"
@@ -65,7 +67,7 @@ def build_scene(
 
     # Attach overlays to worldbody so they stay on the floor.
     add_workspace_overlays(spec, spec.worldbody)
-    _add_pick_cube(spec, apriltag=apriltag_cube)
+    _add_pick_cube(spec, apriltag=apriltags)
 
     if include_environment:
         collision_default = spec.find_default("collision")
@@ -73,10 +75,10 @@ def build_scene(
         add_overhead_camera_mount(spec, collision_default=collision_default)
 
     apply_materials(spec, materials or MaterialConfig())
-    if apriltag_cube:
+    if apriltags:
         _add_pick_cube_apriltags(spec)
-    if include_environment:
-        add_workspace_frame_apriltags(spec)
+        if include_environment:
+            add_workspace_frame_apriltags(spec)
     _add_groundplane(spec)
 
     return spec
@@ -85,7 +87,7 @@ def build_scene(
 def build_environment(
     *,
     materials: MaterialConfig | None = None,
-    apriltag_cube: bool = True,
+    apriltags: bool = True,
 ) -> mujoco.MjSpec:
     """Return only the environment, with no robot.
 
@@ -97,13 +99,13 @@ def build_environment(
     """
     spec = mujoco.MjSpec()
     spec.modelname = "pick_and_place_environment"
-    _add_pick_cube(spec, apriltag=apriltag_cube)
+    _add_pick_cube(spec, apriltag=apriltags)
     add_workspace_frame(spec)
     add_overhead_camera_mount(spec)
     apply_materials(spec, materials or MaterialConfig())
-    if apriltag_cube:
+    if apriltags:
         _add_pick_cube_apriltags(spec)
-    add_workspace_frame_apriltags(spec)
+        add_workspace_frame_apriltags(spec)
     _add_groundplane(spec)
     return spec
 
@@ -141,14 +143,14 @@ def export_scene(
     wrist_camera: bool = True,
     materials: MaterialConfig | None = None,
     include_environment: bool = True,
-    apriltag_cube: bool | None = None,
+    apriltags: bool | None = None,
 ) -> Path:
     """Write a standalone, machine-local XML file for the composed scene."""
     spec = build_scene(
         wrist_camera=wrist_camera,
         materials=materials,
         include_environment=include_environment,
-        apriltag_cube=apriltag_cube,
+        apriltags=apriltags,
     )
     spec.meshdir = str(STOCK_ASSETS_DIR)
     spec.compile()
