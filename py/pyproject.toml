@@ -17,6 +17,7 @@ dependencies = [
     "pupil-apriltags",
     "scipy",
     "stable-baselines3",
+    "tensorboard",
     "tqdm",
 ]
 
