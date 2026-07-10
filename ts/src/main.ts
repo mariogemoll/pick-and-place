@@ -215,16 +215,16 @@ function initialize(): void {
         modelBasePath: '/panda_assets',
         mirrorCameraY: true,
         defaultJointDegrees: {
-          joint1: 22,
-          joint2: 64,
-          joint3: -72,
+          joint1: 60,
+          joint2: 20,
+          joint3: -110,
           joint4: -92,
-          joint5: 60,
-          joint6: 67,
-          joint7: 38
+          joint5: 35,
+          joint6: 68,
+          joint7: 62
         },
         defaultJointMillimeters: {
-          finger_joint1: 20
+          finger_joint1: 30
         }
       }
     ];
