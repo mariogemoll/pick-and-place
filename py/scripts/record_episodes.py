@@ -41,9 +41,9 @@ from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.recorder import EpisodeRecorder
 
 # Default rate at which the trajectory is sampled into the dataset (Hz). The sim
-# steps far faster; frames are emitted on this slower clock — the same cadence a
-# real follower would be commanded at.
-DEFAULT_CONTROL_HZ = 50.0
+# steps far faster; frames are emitted on this slower clock — the same cadence
+# the real follower is commanded at (executor.CONTROL_HZ).
+DEFAULT_CONTROL_HZ = 30.0
 # A grasp is counted successful if the released cube settles within this far (m)
 # of the target in the floor plane and stays on the floor. Yaw is only required
 # when the episode was planned with target-oriented drops.

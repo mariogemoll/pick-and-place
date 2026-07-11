@@ -214,8 +214,11 @@ def main() -> None:
     parser.add_argument(
         "--pool",
         type=Path,
-        default=Path(__file__).resolve().parents[1] / "out" / "episodes",
-        help="directory of recorded episode_*.npz (default: py/out/episodes)",
+        default=Path(__file__).resolve().parents[1] / "out" / "episode_pools" / "train",
+        help=(
+            "directory of recorded episode_*.npz to reset from "
+            "(default: py/out/episode_pools/train; see split_episode_pool.py)"
+        ),
     )
     parser.add_argument(
         "--out-dir",

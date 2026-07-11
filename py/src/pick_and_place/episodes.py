@@ -549,6 +549,9 @@ def _save_failed_preflight_trajectory(
         t=np.asarray(t_values),
         phase=np.asarray(phase_names),
         phase_t=np.asarray(phase_times),
+        # One frame is logged per physics step, so this rollout's frame rate is
+        # the simulation step rate (unlike recorded episodes, which sample the
+        # sim on a slower control clock).
         control_hz=np.array(1.0 / model.opt.timestep),
         cube_start=_cube_start_array(trajectory.source),
         source=_trajectory_pose_array(trajectory.source),

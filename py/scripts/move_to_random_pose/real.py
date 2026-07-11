@@ -151,8 +151,8 @@ def main() -> None:
     parser.add_argument(
         "--control-hz",
         type=float,
-        default=50.0,
-        help="rate set points are streamed to the follower and read back (default: 50.0)",
+        default=30.0,
+        help="rate set points are streamed to the follower and read back (default: 30.0)",
     )
     parser.add_argument(
         "--rest-every",

@@ -50,15 +50,16 @@ from pick_and_place.follower import (
 from pick_and_place.trajectory import replan_remaining_candidates
 from pick_and_place.kinematics import So101Kinematics
 from pick_and_place.recorder import EpisodeRecorder
+from pick_and_place.scene import SIMULATION_HZ
 
 
 # Wall-clock rate shared by physical control, motor readback, camera indexing,
 # and dataset rows. MuJoCo takes multiple internal steps per control tick.
 CONTROL_HZ = 30.0
-# Simulation rate used by the hardware runner. This is an integer multiple of
-# CONTROL_HZ, so sampling cannot drift onto the next MuJoCo step as it did with
-# the stock 500 Hz timestep.
-HARDWARE_SIMULATION_HZ = 600.0
+# Simulation rate used by the hardware runner: the scene's own physics rate, an
+# integer multiple of CONTROL_HZ, so sampling cannot drift onto the next MuJoCo
+# step as it did with the stock 500 Hz timestep.
+HARDWARE_SIMULATION_HZ = SIMULATION_HZ
 # Seconds spent smoothly ramping the real arm onto the trajectory's start pose
 # before playback begins, so there is no jump from wherever it was parked.
 RAMP_DURATION = 2.0

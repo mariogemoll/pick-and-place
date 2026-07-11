@@ -34,6 +34,12 @@ PICK_CUBE_RGBA = (0.82, 0.12, 0.08, 1.0)
 # frame's thickness. The floor and cube remain at world Z=0.
 ROBOT_BASE_Z_OFFSET = 0.0072
 
+# Physics rate of the compiled scene. 600 Hz is an exact integer multiple of the
+# 30 Hz control rate shared by the hardware runner and the RL env, so one control
+# period is always a whole number of physics steps; the stock 500 Hz MuJoCo
+# default is not.
+SIMULATION_HZ = 600.0
+
 
 def build_scene(
     *,
@@ -56,6 +62,7 @@ def build_scene(
 
     spec = build_robot(wrist_camera=wrist_camera, materials=materials)
     spec.modelname = "so101_with_cube"
+    spec.option.timestep = 1.0 / SIMULATION_HZ
     spec.worldbody.add_light(
         name="scene_light",
         pos=(0.0, 0.0, 1.0),

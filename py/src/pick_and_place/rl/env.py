@@ -89,9 +89,9 @@ _MAX_CUBE_RADIUS = 0.8
 _MAX_CUBE_HEIGHT = 0.6
 _MIN_CUBE_HEIGHT = -0.05
 
-# Per-episode step budget = remaining scripted frames from the reset point times
-# this slack, floored at a small minimum so a reset near the very end still has
-# room to act.
+# Per-episode step budget = the simulated time remaining in the source episode
+# from the reset point, converted to env steps at control_hz, times this slack —
+# floored at a small minimum so a reset near the very end still has room to act.
 _BUDGET_SLACK = 1.5
 _MIN_BUDGET_STEPS = 20
 
@@ -118,12 +118,13 @@ HELD_CARRY_TIME_PENALTY = 0.001
 class ReverseCurriculumEnv(gym.Env):
     """Pick-and-place env whose reset distribution is a recorded-episode pool."""
 
-    metadata = {"render_modes": ["rgb_array", "human"], "render_fps": 50}
+    metadata = {"render_modes": ["rgb_array", "human"], "render_fps": 30}
 
     def __init__(
         self,
         pool: EpisodePool | Path | str,
         *,
+        control_hz: float = 30.0,
         stage: int = 0,
         phase_fraction: float = 0.0,
         phase_end_fraction: float | None = None,
@@ -182,8 +183,25 @@ class ReverseCurriculumEnv(gym.Env):
             low=-np.inf, high=np.inf, shape=(29,), dtype=np.float32
         )
 
-        control_hz = self.pool.control_hz or 50.0
-        self._sim_steps = max(1, round((1.0 / control_hz) / float(self.model.opt.timestep)))
+        # The env acts at control_hz (matching the real executor's rate), which
+        # need not equal the rate the pool's episodes were recorded at.
+        self.control_hz = float(control_hz)
+        self.metadata = {**self.metadata, "render_fps": self.control_hz}
+        control_period = 1.0 / self.control_hz
+        timestep = float(self.model.opt.timestep)
+        sim_steps = round(control_period / timestep)
+        if sim_steps < 1 or not math.isclose(sim_steps * timestep, control_period):
+            raise ValueError(
+                f"MuJoCo timestep {timestep:g}s cannot produce "
+                f"{self.control_hz:g} Hz exactly"
+            )
+        self._sim_steps = sim_steps
+        # Recorded frame counts are on the pool's clock; the step budget is in env
+        # actions, so convert through the time ratio to keep the same simulated-
+        # time slack.
+        pool_hz = self.pool.control_hz
+        assert pool_hz is not None  # set while the pool indexes its episodes
+        self._steps_per_pool_frame = self.control_hz / float(pool_hz)
 
         self._target_xy = np.zeros(2)
         self._held_carry_prev_distance = math.inf
@@ -223,7 +241,7 @@ class ReverseCurriculumEnv(gym.Env):
         self._held_carry_prev_distance = self._held_carry_distance()
         self._drop_prev_distance = self._drop_distance()
         self._drop_release_bonus_paid = False
-        remaining = snapshot.total_frames - snapshot.frame
+        remaining = (snapshot.total_frames - snapshot.frame) * self._steps_per_pool_frame
         self._max_steps = max(_MIN_BUDGET_STEPS, math.ceil(remaining * _BUDGET_SLACK))
         self._step_count = 0
         return self._observation(), self._info(snapshot)
