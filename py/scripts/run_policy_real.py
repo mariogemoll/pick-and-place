@@ -30,13 +30,22 @@ pixel-geometry. The resolution defaults to whatever the checkpoint was trained o
 un-finetuned plumbing spike (the arm moves but does not solve the task). A
 checkpoint fine-tuned on the project's dataset is the real use case.
 
+Two recording modes exist. ``--save-video`` writes the exact per-tick frames fed
+to the policy (cropped and resized). ``--record-video`` instead records the whole
+run continuously at each camera's native rate and resolution — undistorted but
+never cropped — on one shared clock, optionally including a third
+``--workspace-camera`` view and, with ``--record-audio``, the audio input muxed
+into every video. That is the mode for watchable footage of the policy performing.
+
 The run is organised as a sequence of attempts. Each attempt locates the
 drop-zone square (the success target) and the cube on the overhead camera —
 panning the arm through random search poses to clear the view if either is
 hidden, and asking the operator only if that dance comes up empty — then homes
 the arm to a fresh randomish near-neutral start and runs the policy while
-repeatedly scanning the overhead camera for the cube. A timed-out attempt returns
-the arm to neutral before the next one begins. The cube counts as placed only once it sits at
+repeatedly scanning the overhead camera for the cube. During an attempt the
+operator can press Enter to declare it failed and skip straight to the next one.
+A timed-out or abandoned attempt returns the arm to neutral before the next one
+begins. The cube counts as placed only once it sits at
 the target both in xy (``--success-tolerance``) and near its resting height
 (``--place-height-tolerance``) — i.e. actually set down, not just carried above
 the target. From the moment it is first seen placed, two things run in parallel:
@@ -66,6 +75,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import select
+import sys
 import threading
 import time
 from pathlib import Path
@@ -79,7 +90,11 @@ import mujoco
 import numpy as np
 
 from pick_and_place import build_scene
-from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
+from pick_and_place.camera_intrinsics import (
+    LOCAL_CAMERA_INTRINSICS_DIR,
+    load_camera_intrinsics,
+    load_local_camera_intrinsics,
+)
 from pick_and_place.episodes import sample_hunt_pose, sample_near_neutral
 from pick_and_place.geometry import CUBE_HALF_SIZE
 from pick_and_place.overhead_detection import DEFAULT_ALERT_SOUND, OperatorNotifier
@@ -119,6 +134,18 @@ from pick_and_place.policy import (
 SETTLE_STILL_HOLD = 1.0
 
 
+def _drain_stdin_lines() -> bool:
+    """Return True if the operator has typed a line on stdin, consuming all
+    pending lines. Non-blocking, so it can be polled from the control loop
+    without stalling a tick."""
+    typed = False
+    while select.select([sys.stdin], [], [], 0)[0]:
+        if not sys.stdin.readline():
+            break  # EOF
+        typed = True
+    return typed
+
+
 def _smoothstep(t: float) -> float:
     c = min(1.0, max(0.0, t))
     return c * c * (3.0 - 2.0 * c)
@@ -130,6 +157,10 @@ class CameraReader:
     The control loop snapshots ``frame`` once per tick rather than calling
     ``read()`` inline, so a slow capture never stalls the policy loop and the
     arm always acts on the most recent image rather than a buffered backlog.
+
+    ``on_frame`` may be set to a callable taking ``(bgr, monotonic_time)``; it
+    is invoked from the reader thread for every captured frame, so a recorder
+    sees the camera's full native rate rather than the control loop's snapshots.
     """
 
     def __init__(self, source: str, width: int, height: int, label: str) -> None:
@@ -146,6 +177,7 @@ class CameraReader:
         self._lock = threading.Lock()
         self._frame = None
         self._running = True
+        self.on_frame = None
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
 
@@ -153,8 +185,12 @@ class CameraReader:
         while self._running:
             ok, frame = self._cap.read()
             if ok:
+                captured_at = time.monotonic()
                 with self._lock:
                     self._frame = frame
+                on_frame = self.on_frame
+                if on_frame is not None:
+                    on_frame(frame, captured_at)
 
     def latest(self):
         with self._lock:
@@ -265,6 +301,32 @@ def main() -> None:
             "directory to write <dir>/wrist.mp4 and <dir>/overhead.mp4 with the exact "
             "frames fed to the policy each tick"
         ),
+    )
+    parser.add_argument(
+        "--record-video",
+        type=Path,
+        default=None,
+        help=(
+            "root directory for continuous native-rate MP4s of the whole run; each run "
+            "writes into <dir>/<timestamp>/: undistorted full-resolution wrist_live.mp4 "
+            "and overhead_live.mp4 (plus workspace_live.mp4 with --workspace-camera) on "
+            "a shared clock — unlike --save-video's cropped per-tick policy-input frames"
+        ),
+    )
+    parser.add_argument(
+        "--workspace-camera",
+        default=None,
+        help="optional OpenCV index/path of a workspace camera to include in --record-video",
+    )
+    parser.add_argument(
+        "--record-audio",
+        action="store_true",
+        help="capture the audio input and mux it into every --record-video MP4",
+    )
+    parser.add_argument(
+        "--audio-device",
+        default=None,
+        help="sounddevice input name or index (default: system input device)",
     )
     parser.add_argument(
         "--loop",
@@ -397,6 +459,10 @@ def main() -> None:
         help="sound file played before spoken operator alerts",
     )
     args = parser.parse_args()
+    if args.workspace_camera is not None and args.record_video is None:
+        parser.error("--workspace-camera requires --record-video")
+    if args.record_audio and args.record_video is None:
+        parser.error("--record-audio requires --record-video")
 
     override = (args.image_height, args.image_width)
     if any(override) and not all(override):
@@ -429,12 +495,24 @@ def main() -> None:
     missing = [cam for cam in ("overhead_camera", "wrist_camera") if cam not in intrinsics_by_camera]
     if missing:
         raise SystemExit(f"no calibrated intrinsics for {missing}; cannot undistort")
+    workspace_intrinsics = None
+    if args.workspace_camera is not None:
+        workspace_intrinsics_path = LOCAL_CAMERA_INTRINSICS_DIR / "workspace_camera.json"
+        if not workspace_intrinsics_path.exists():
+            raise SystemExit(
+                f"no calibrated intrinsics at {workspace_intrinsics_path}; cannot undistort"
+            )
+        workspace_intrinsics = load_camera_intrinsics(workspace_intrinsics_path)
 
     print("Opening cameras...")
     overhead = CameraReader(args.camera, 1920, 1080, "overhead")
     wrist = CameraReader(args.wrist_camera, 1280, 720, "wrist")
     first_overhead = overhead.wait_for_first()
     first_wrist = wrist.wait_for_first()
+    workspace = first_workspace = None
+    if args.workspace_camera is not None:
+        workspace = CameraReader(args.workspace_camera, 1920, 1080, "workspace")
+        first_workspace = workspace.wait_for_first()
 
     # Every frame is rectified to the same pinhole view the offline dataset
     # conversion produces, at the policy's input resolution, so the policy loads
@@ -480,6 +558,41 @@ def main() -> None:
         overhead_writer = imageio.get_writer(args.save_video / "overhead.mp4", fps=CONTROL_HZ)
         print(f"Saving observation frames to {args.save_video}/{{wrist,overhead}}.mp4")
 
+    # Continuous run recording: every camera's full native-rate, undistorted
+    # stream (no cropping/resizing) on a shared clock, with optional audio.
+    # Frames are submitted from the reader threads, so the recording sees every
+    # captured frame, not just the ones the control loop happened to snapshot.
+    recorder = None
+    record_dir = None
+    if args.record_video is not None:
+        import datetime
+
+        from pick_and_place.episode_video import LiveVideoRecorder
+
+        record_dir = args.record_video / datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        record_maps = {"overhead": overhead_undistort_map, "wrist": wrist_undistort_map}
+        if workspace is not None:
+            record_maps["workspace"] = build_undistort_map(
+                workspace_intrinsics, first_workspace.shape[1], first_workspace.shape[0], cv2
+            )
+        recorder = LiveVideoRecorder(
+            record_dir,
+            record_maps,
+            audio=args.record_audio,
+            audio_device=(
+                int(args.audio_device)
+                if args.audio_device is not None and args.audio_device.isdecimal()
+                else args.audio_device
+            ),
+        )
+        overhead.on_frame = lambda bgr, t: recorder.submit("overhead", bgr, t)
+        wrist.on_frame = lambda bgr, t: recorder.submit("wrist", bgr, t)
+        if workspace is not None:
+            workspace.on_frame = lambda bgr, t: recorder.submit("workspace", bgr, t)
+        cams = "/".join(record_maps)
+        audio_note = " with audio" if args.record_audio else ""
+        print(f"Recording the {cams} cameras{audio_note} to {record_dir}")
+
     # Overhead detection: the success scan reads the cube in world coordinates and
     # the drop-zone square gives the target. Attempts (timeout + retry, and the
     # success check) are the default run mode, so this is always built.
@@ -496,7 +609,6 @@ def main() -> None:
         apply_camera_extrinsics_to_model,
         load_local_camera_extrinsics,
     )
-    from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
     from pick_and_place.cube_detection import (
         cube_pose_to_world,
         estimate_cube_pose,
@@ -571,7 +683,8 @@ def main() -> None:
         """Drive the policy closed-loop for one attempt.
 
         Returns ``"steps"`` when the global ``--steps`` budget is hit, ``"timeout"``
-        when ``--attempt-timeout`` elapses without a placement, or ``"success"``
+        when ``--attempt-timeout`` elapses without a placement, ``"abandoned"``
+        when the operator presses Enter to declare the attempt failed, or ``"success"``
         once the cube has been set down at the target (within ``--success-tolerance``
         in xy and ``--place-height-tolerance`` of its resting height). Placement is
         confirmed after ``--success-dwell`` seconds; the arm slow-down runs in
@@ -581,6 +694,10 @@ def main() -> None:
         ``--attempt-timeout`` is <= 0.
         """
         nonlocal tick
+        # Discard any stale lines typed during the ramp/hunt so an old Enter
+        # press cannot instantly abandon the attempt that is just starting.
+        _drain_stdin_lines()
+        print("Press Enter at any time to abandon this attempt and retry from neutral.")
         attempt_start = time.monotonic()
         next_tick = time.monotonic()
         report_time, report_tick, infer_seconds = next_tick, tick, 0.0
@@ -644,6 +761,8 @@ def main() -> None:
         prev_t = None
         announced = False
         while True:
+            if _drain_stdin_lines():
+                return "abandoned"
             overhead_bgr = overhead.latest()
             wrist_bgr = wrist.latest()
             overhead_rgb = cv2.cvtColor(overhead_bgr, cv2.COLOR_BGR2RGB)
@@ -942,6 +1061,11 @@ def main() -> None:
                       "Returning to neutral and retrying.")
                 go_neutral()
                 continue
+            if outcome == "abandoned":
+                print("ABANDONED — operator declared the attempt failed. "
+                      "Returning to neutral and retrying.")
+                go_neutral()
+                continue
 
             # Success. Exit by default; with --loop, hand the scene back to the
             # operator to reset and keep going.
@@ -960,6 +1084,11 @@ def main() -> None:
     finally:
         overhead.close()
         wrist.close()
+        if workspace is not None:
+            workspace.close()
+        if recorder is not None:
+            print(f"Finalizing the run recording at {record_dir}...")
+            recorder.close()
         if wrist_writer is not None:
             wrist_writer.close()
             overhead_writer.close()
