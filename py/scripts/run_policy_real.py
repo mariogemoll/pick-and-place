@@ -50,7 +50,11 @@ attempt is abandoned and retried from a new start (the policy is strongest early
 on, especially with temporal ensembling). On success the run exits by default; with ``--loop`` it
 instead alerts the operator to reset the cube and target (audibly and via an
 Enter prompt) and continues with the next attempt. This needs the overhead
-camera plus its calibrated intrinsics and the saved overhead extrinsics.
+camera plus its calibrated intrinsics. By default the overhead extrinsics are
+solved live from the workspace-frame AprilTags at startup (so the success scan
+reads the cube against where the camera actually is) and re-checked periodically
+between attempts, stopping the run if the camera has drifted; ``--no-recalibrate``
+uses the saved sidecar extrinsics instead.
 
 Safety: the arm ramps smoothly from wherever it is parked onto each start pose
 before the policy takes over, and on exit (success, Ctrl-C or step budget) it
@@ -330,6 +334,52 @@ def main() -> None:
         "--camera-name", default="overhead_camera", help="overhead camera name in the model"
     )
     parser.add_argument(
+        "--recalibrate",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="solve the overhead camera extrinsics live from the workspace-frame AprilTags at "
+        "startup and refuse to start if the solve is implausible; the success scan then reads "
+        "the cube against where the camera actually is (--no-recalibrate uses the saved sidecar "
+        "extrinsics instead)",
+    )
+    parser.add_argument(
+        "--recalibrate-samples",
+        type=int,
+        default=10,
+        help="overhead frames to average per extrinsics solve (default: 10)",
+    )
+    parser.add_argument(
+        "--recalibrate-max-seconds",
+        type=float,
+        default=15.0,
+        help="time budget to gather the solve frames before giving up (default: 15)",
+    )
+    parser.add_argument(
+        "--overhead-intrinsics",
+        default=None,
+        help="overhead camera intrinsics JSON for the solve (default: local sidecar)",
+    )
+    parser.add_argument(
+        "--recalibrate-check-interval",
+        type=float,
+        default=120.0,
+        help="minimum seconds between periodic overhead drift checks, run at attempt boundaries "
+        "while the arm is at neutral; the run stops if the camera has drifted past the limits "
+        "below. <=0 disables (default: 120)",
+    )
+    parser.add_argument(
+        "--recalibrate-drift-mm",
+        type=float,
+        default=10.0,
+        help="translation drift from the startup solve that stops the run (default: 10 mm)",
+    )
+    parser.add_argument(
+        "--recalibrate-drift-deg",
+        type=float,
+        default=2.0,
+        help="rotation drift from the startup solve that stops the run (default: 2 deg)",
+    )
+    parser.add_argument(
         "--drop-zone-color",
         choices=("black", "white"),
         default="black",
@@ -435,6 +485,13 @@ def main() -> None:
     # success check) are the default run mode, so this is always built.
     rng = np.random.default_rng()
     from pick_and_place.camera_compare import load_intrinsics
+    from pick_and_place.cam_align_solve import (
+        ExtrinsicsSolveError,
+        apply_solve_result,
+        check_solve_plausible,
+        pose_delta_mm_deg,
+        solve_overhead_extrinsics,
+    )
     from pick_and_place.camera_extrinsics import (
         apply_camera_extrinsics_to_model,
         load_local_camera_extrinsics,
@@ -453,8 +510,9 @@ def main() -> None:
     from pick_and_place.paper_detection import PaperTracker
 
     # The success scan reads the cube pose in world coordinates, so the model's
-    # overhead camera must sit where the real one does; apply the saved extrinsics
-    # and read the resulting fixed camera frame.
+    # overhead camera must sit where the real one does. Start from the saved
+    # extrinsics; unless --no-recalibrate, they are re-solved live from the
+    # workspace-frame tags at startup (see solve_startup_extrinsics below).
     apply_camera_extrinsics_to_model(model, load_local_camera_extrinsics())
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
@@ -463,6 +521,9 @@ def main() -> None:
         raise SystemExit(f"No camera named {args.camera_name!r} in the model.")
     cam_pos = data.cam_xpos[cam_id].copy()
     cam_rot = data.cam_xmat[cam_id].reshape(3, 3).copy()
+    # Set by the startup overhead solve; the periodic drift check compares against it.
+    startup_extrinsics: tuple[np.ndarray, np.ndarray] | None = None
+    last_drift_check = 0.0  # monotonic time of the last drift solve
 
     det_intrinsics = LOCAL_CAMERA_INTRINSICS_DIR / f"{args.camera_name}.json"
     if not det_intrinsics.exists():
@@ -740,14 +801,111 @@ def main() -> None:
     def detect_cube():
         return track_cube(adapter, args.camera_name, model, data, CUBE_LOOK_TIMEOUT)
 
+    def solve_startup_extrinsics() -> None:
+        """Solve the overhead extrinsics live from the workspace-frame tags, validate
+        them, and apply them to the model so the success scan back-projects the cube
+        against where the camera actually is. Refuses to start on a failed or
+        implausible solve."""
+        nonlocal startup_extrinsics, last_drift_check, cam_pos, cam_rot
+        print("Solving overhead camera extrinsics from the workspace-frame tags...")
+        result = solve_overhead_extrinsics(
+            model,
+            data,
+            adapter,
+            camera_name=args.camera_name,
+            intrinsics_path=args.overhead_intrinsics,
+            samples=args.recalibrate_samples,
+            max_seconds=args.recalibrate_max_seconds,
+            cv2_module=cv2,
+        )
+        if result is None:
+            raise SystemExit(
+                "Overhead calibration failed: never saw all four workspace-frame tags "
+                "in one frame. Clear the camera view and check the tags."
+            )
+        try:
+            check_solve_plausible(result)
+        except ExtrinsicsSolveError as exc:
+            raise SystemExit(f"Overhead calibration rejected: {exc}") from exc
+        apply_solve_result(model, data, args.camera_name, result)
+        startup_extrinsics = (
+            np.array(result.pos, dtype=float),
+            np.array(result.quat, dtype=float),
+        )
+        # The success scan back-projects the cube through this pose, so refresh the
+        # cached camera frame it reads to match the freshly solved extrinsics.
+        cam_pos = data.cam_xpos[cam_id].copy()
+        cam_rot = data.cam_xmat[cam_id].reshape(3, 3).copy()
+        last_drift_check = time.monotonic()
+        print(
+            f"Overhead extrinsics solved: {result.reprojection_error_px:.2f}px, "
+            f"{result.nominal_delta.translation_m * 1000.0:.1f}mm / "
+            f"{result.nominal_delta.rotation_deg:.2f}deg from nominal."
+        )
+
+    def check_overhead_drift() -> None:
+        """Re-solve the overhead extrinsics from the current (near-neutral) pose and
+        stop the run if the camera has drifted from the startup calibration. Skips
+        quietly if the tags are occluded, and is rate-limited to
+        --recalibrate-check-interval so it only runs occasionally between attempts."""
+        nonlocal last_drift_check
+        if (
+            not args.recalibrate
+            or startup_extrinsics is None
+            or args.recalibrate_check_interval <= 0
+            or time.monotonic() - last_drift_check < args.recalibrate_check_interval
+        ):
+            return
+        print("Drift check: re-solving overhead extrinsics...")
+        saved_pos = model.cam_pos[cam_id].copy()
+        saved_quat = model.cam_quat[cam_id].copy()
+        check = solve_overhead_extrinsics(
+            model,
+            data,
+            adapter,
+            camera_name=args.camera_name,
+            intrinsics_path=args.overhead_intrinsics,
+            samples=args.recalibrate_samples,
+            max_seconds=args.recalibrate_max_seconds,
+            cv2_module=cv2,
+        )
+        # The re-solve only decides whether to stop; the startup calibration stays
+        # live and is never re-applied mid-run.
+        model.cam_pos[cam_id] = saved_pos
+        model.cam_quat[cam_id] = saved_quat
+        mujoco.mj_forward(model, data)
+        last_drift_check = time.monotonic()
+        if check is None:
+            print("Drift check skipped: could not see all four tags (occluded). Continuing.")
+            return
+        drift_mm, drift_deg = pose_delta_mm_deg(
+            startup_extrinsics[0],
+            startup_extrinsics[1],
+            np.array(check.pos, dtype=float),
+            np.array(check.quat, dtype=float),
+        )
+        print(f"Overhead drift vs startup: {drift_mm:.1f}mm / {drift_deg:.2f}deg.")
+        if drift_mm > args.recalibrate_drift_mm or drift_deg > args.recalibrate_drift_deg:
+            raise SystemExit(
+                f"Overhead camera drifted {drift_mm:.1f}mm / {drift_deg:.2f}deg since startup "
+                f"(limits {args.recalibrate_drift_mm:.0f}mm / {args.recalibrate_drift_deg:.1f}deg). "
+                "Stopping so the operator can check the mount and recalibrate."
+            )
+
     try:
         print("Homing to the neutral pose...")
         go_neutral()
+        if args.recalibrate:
+            solve_startup_extrinsics()
         attempt = 0
         while True:
             attempt += 1
             budget = f"timeout {args.attempt_timeout:.0f}s" if args.attempt_timeout > 0 else "no timeout"
             print(f"\n=== Attempt {attempt} ({budget}) ===")
+
+            # The arm is at neutral here (homed on entry and after every attempt), so
+            # the tags are unoccluded — a good moment for the periodic drift check.
+            check_overhead_drift()
 
             target = find_or_prompt(
                 "drop-zone square", detect_target, "Drop-zone square not visible."
