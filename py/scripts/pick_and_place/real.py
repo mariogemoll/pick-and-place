@@ -24,11 +24,12 @@ The runner owns the follower, the viewer and the cameras and keeps them alive
 across the whole loop; ``execute_episode`` runs a single pass against them. For
 sim-only playback (no arm) use ``sim.py``.
 
-Every run records straight into a LeRobotDataset (``datasets/<timestamp>/`` by
-default): each successful episode is committed with one frame per control tick
-(measured joints as state, commanded joints as action, plus the wrist and
-overhead camera frames); aborted/restarted episodes are discarded. See
-``execute_episode``'s docstring.
+By default every run writes synchronized episode videos into
+``episodes/<timestamp>/``. Each successful episode has one frame per control
+tick from the wrist, overhead, and optional workspace cameras, plus a matching
+state/action/simulation timeline for replay. ``--recording-format dataset``
+retains the LeRobotDataset output for collection work. Aborted/restarted
+episodes are discarded. See ``execute_episode``'s docstring.
 """
 
 from __future__ import annotations
@@ -56,12 +57,13 @@ from pick_and_place.episodes import (
 from pick_and_place.executor import (
     CONTROL_HZ,
     HARDWARE_SIMULATION_HZ,
-    RecordingSession,
     clamp_and_warn,
     execute_episode,
     follower_clamp_limits,
     ramp_to_resting,
 )
+from pick_and_place.recording import RecordingSession
+from pick_and_place.episode_video import EpisodeVideoSession
 from pick_and_place.follower import (
     action_to_joints,
     make_so101_follower,
@@ -242,6 +244,33 @@ def main() -> None:
     )
     parser.add_argument("--wrist-camera", default="1", help="OpenCV index/path of the wrist camera (default: 1)")
     parser.add_argument("--wrist-intrinsics", default=None, help="path to wrist camera intrinsics JSON")
+    parser.add_argument(
+        "--workspace-camera",
+        default=None,
+        help="optional OpenCV index/path of a workspace camera to record",
+    )
+    parser.add_argument(
+        "--workspace-intrinsics",
+        type=Path,
+        default=None,
+        help="workspace camera intrinsics JSON (default: local workspace_camera sidecar)",
+    )
+    parser.add_argument(
+        "--workspace-audio",
+        action="store_true",
+        help="capture the workspace audio input and mux it into workspace.mp4",
+    )
+    parser.add_argument(
+        "--workspace-audio-device",
+        default=None,
+        help="sounddevice input name or index (default: system input device)",
+    )
+    parser.add_argument(
+        "--live-videos",
+        action="store_true",
+        help="also record native-rate wrist, overhead, and workspace MP4s on a shared "
+        "monotonic clock; the regular videos remain control-tick aligned",
+    )
     parser.add_argument("--show-wrist-cam", action="store_true", help="show the live wrist camera feed")
     parser.add_argument("--show-wrist-mixed", action="store_true", help="overlay the sim render on the wrist feed")
     parser.add_argument(
@@ -291,7 +320,19 @@ def main() -> None:
         "--dataset-root",
         type=Path,
         default=None,
-        help="output dir for the LeRobotDataset (default: datasets/<timestamp>)",
+        help="output directory (default: episodes/<timestamp> for videos or datasets/<timestamp>)",
+    )
+    parser.add_argument(
+        "--recording-format",
+        choices=("videos", "dataset"),
+        default="videos",
+        help="write synced annotated episode MP4s or a LeRobotDataset (default: videos)",
+    )
+    parser.add_argument(
+        "--video-rest-to-rest",
+        action="store_true",
+        help="for website videos, finish preflight detection before recording, then record "
+        "each episode from REST back to REST without a post-run placement scan",
     )
     parser.add_argument(
         "--repo-id",
@@ -323,6 +364,16 @@ def main() -> None:
         help="background image-writer threads LeRobot uses for PNG-then-encode mode",
     )
     args = parser.parse_args()
+    if args.workspace_audio and args.workspace_camera is None:
+        parser.error("--workspace-audio requires --workspace-camera")
+    if args.workspace_audio and args.recording_format != "videos":
+        parser.error("--workspace-audio is available only with --recording-format videos")
+    if args.live_videos and args.recording_format != "videos":
+        parser.error("--live-videos requires --recording-format videos")
+    if args.live_videos and args.workspace_camera is None:
+        parser.error("--live-videos requires --workspace-camera")
+    if args.video_rest_to_rest and args.recording_format != "videos":
+        parser.error("--video-rest-to-rest requires --recording-format videos")
     if args.target_change_min_distance < 0:
         parser.error("--target-change-min-distance must be non-negative")
     if args.target_change_alert_min_seconds <= 0:
@@ -382,13 +433,19 @@ def main() -> None:
     # episode by the executor, so it is only probed here.
     from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
 
-    def require_intrinsics(camera_name: str, override) -> None:
+    def intrinsics_path(camera_name: str, override) -> Path:
         path = Path(override) if override is not None else LOCAL_CAMERA_INTRINSICS_DIR / f"{camera_name}.json"
         if not path.exists():
             raise SystemExit(f"Missing {camera_name} intrinsics at {path}. Calibrate the camera first.")
+        return path
 
-    require_intrinsics(args.camera_name, args.overhead_intrinsics)
-    require_intrinsics("wrist_camera", args.wrist_intrinsics)
+    overhead_intrinsics = intrinsics_path(args.camera_name, args.overhead_intrinsics)
+    wrist_intrinsics = intrinsics_path("wrist_camera", args.wrist_intrinsics)
+    workspace_intrinsics = (
+        intrinsics_path("workspace_camera", args.workspace_intrinsics)
+        if args.workspace_camera is not None
+        else None
+    )
 
     backend = cv2.CAP_AVFOUNDATION if hasattr(cv2, "CAP_AVFOUNDATION") else cv2.CAP_ANY
     print("Opening overhead camera...")
@@ -399,12 +456,25 @@ def main() -> None:
         overhead_cap.release()
         raise SystemExit(f"Could not open the overhead camera {args.camera!r}.")
 
+    workspace_cap = None
+    if args.workspace_camera is not None:
+        print("Opening workspace camera...")
+        workspace_cap = cv2.VideoCapture(parse_index_or_path(args.workspace_camera), backend)
+        workspace_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
+        workspace_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+        if not workspace_cap.isOpened():
+            workspace_cap.release()
+            overhead_cap.release()
+            raise SystemExit(f"Could not open the workspace camera {args.workspace_camera!r}.")
+
     print("Checking wrist camera...")
     wrist_probe = cv2.VideoCapture(parse_index_or_path(args.wrist_camera), backend)
     wrist_open = wrist_probe.isOpened()
     wrist_probe.release()
     if not wrist_open:
         overhead_cap.release()
+        if workspace_cap is not None:
+            workspace_cap.release()
         raise SystemExit(f"Could not open the wrist camera {args.wrist_camera!r}.")
 
     print("Connecting to follower...")
@@ -419,23 +489,46 @@ def main() -> None:
     dataset_root = (
         args.dataset_root
         if args.dataset_root is not None
-        else Path(__file__).resolve().parents[2] / "datasets" / timestamp
+        else Path(__file__).resolve().parents[2]
+        / ("episodes" if args.recording_format == "videos" else "datasets")
+        / timestamp
     )
     overhead_debug_dir = (
         args.overhead_debug_dir
         if args.overhead_debug_dir is not None
         else dataset_root / "overhead_debug"
     )
-    recording = RecordingSession(
-        repo_id=args.repo_id,
-        root=dataset_root,
-        task=args.task,
-        fps=CONTROL_HZ,
-        vcodec=args.vcodec,
-        streaming_encoding=args.streaming_encoding,
-        image_writer_threads=args.image_writer_threads,
-    )
-    print(f"Recording into LeRobotDataset at: {dataset_root}")
+    if args.recording_format == "videos":
+        recording = EpisodeVideoSession(
+            root=dataset_root,
+            task=args.task,
+            fps=CONTROL_HZ,
+            camera_intrinsics={
+                "wrist": wrist_intrinsics,
+                "overhead": overhead_intrinsics,
+                **({"workspace": workspace_intrinsics} if workspace_intrinsics is not None else {}),
+            },
+            workspace_audio=args.workspace_audio,
+            workspace_audio_device=(
+                int(args.workspace_audio_device)
+                if args.workspace_audio_device is not None
+                and args.workspace_audio_device.isdecimal()
+                else args.workspace_audio_device
+            ),
+            live_videos=args.live_videos,
+        )
+        print(f"Recording synchronized episode videos at: {dataset_root}")
+    else:
+        recording = RecordingSession(
+            repo_id=args.repo_id,
+            root=dataset_root,
+            task=args.task,
+            fps=CONTROL_HZ,
+            vcodec=args.vcodec,
+            streaming_encoding=args.streaming_encoding,
+            image_writer_threads=args.image_writer_threads,
+        )
+        print(f"Recording into LeRobotDataset at: {dataset_root}")
 
     drop_zone_tracker = PaperTracker()
 
@@ -963,6 +1056,21 @@ def main() -> None:
                         initial_overhead_debug = overhead_debug
                         preflight_debug_written = False
 
+                        if args.video_rest_to_rest:
+                            # Detection and collision-checked planning are complete. Move
+                            # to REST before the recorder begins; the executor records the
+                            # REST-to-start and final-pose-to-REST transitions separately.
+                            print("Preflight complete. Moving to REST before recording...")
+                            move_to(REST_ARM_JOINTS, REST_GRIPPER, viewer)
+
+                        if args.video_rest_to_rest and (
+                            args.save_overhead_debug and initial_overhead_debug.bgr.size
+                        ):
+                            path = overhead_debug_dir / f"episode_{ep.index:05d}_preflight.jpg"
+                            write_overhead_debug_image(path, initial_overhead_debug)
+                            print(f"Saved overhead preflight debug image: {path}")
+                            preflight_debug_written = True
+
                         def check_final_placement() -> dict[str, object]:
                             nonlocal preflight_debug_written
                             metadata = cube_pose_metadata(episode.source, episode.target)
@@ -1032,6 +1140,7 @@ def main() -> None:
                             viewer=viewer,
                             recording=recording,
                             overhead_camera_cap=overhead_cap,
+                            workspace_camera_cap=workspace_cap,
                             speed=args.speed,
                             wrist_camera=args.wrist_camera,
                             wrist_intrinsics=args.wrist_intrinsics,
@@ -1040,7 +1149,16 @@ def main() -> None:
                             failed_trajectory_dir=args.save_failed_trajectories,
                             pickup_empty_gripper_position=args.pickup_empty_gripper_position,
                             pickup_gripper_margin=args.pickup_gripper_margin,
-                            success_metadata=check_final_placement,
+                            success_metadata=(
+                                (lambda: {
+                                    **cube_pose_metadata(episode.source, episode.target),
+                                    **driver_metadata("analytic"),
+                                    **final_placement_metadata(None, episode.target),
+                                })
+                                if args.video_rest_to_rest
+                                else check_final_placement
+                            ),
+                            record_rest_to_rest=args.video_rest_to_rest,
                         )
 
                         if status == "restart":
@@ -1063,7 +1181,7 @@ def main() -> None:
                     move_to(REST_ARM_JOINTS, REST_GRIPPER, viewer)
                     ended_at_rest = True
     finally:
-        if recording.dataset is not None:
+        if recording.initialized:
             print("Finalizing dataset...")
             recording.finalize()
             print(f"Dataset written to {dataset_root}")
@@ -1077,6 +1195,8 @@ def main() -> None:
         follower.disconnect()
         if overhead_cap is not None:
             overhead_cap.release()
+        if workspace_cap is not None:
+            workspace_cap.release()
 
 
 if __name__ == "__main__":

@@ -28,7 +28,7 @@ import math
 import queue
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -59,9 +59,23 @@ from pick_and_place.follower import (
     sim_frame_to_real,
 )
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
-from pick_and_place.trajectory import replan_remaining_candidates
+from pick_and_place.trajectory import (
+    REST_ARM_JOINTS,
+    REST_GRIPPER,
+    replan_remaining_candidates,
+)
 from pick_and_place.kinematics import So101Kinematics
 from pick_and_place.recorder import EpisodeRecorder
+from pick_and_place.recording import RecordingSession
+from pick_and_place.visual_servo import (
+    DESCENT_SERVO_MAX_DURATION,
+    DESCENT_SERVO_STABLE_FRAMES,
+    DescentServoConvergence,
+    DescentServoRetryState,
+    WristServoEstimate,
+    WristServoPreview,
+    smoothstep,
+)
 
 
 # Wall-clock rate shared by physical control, motor readback, camera indexing,
@@ -81,107 +95,6 @@ REAL_ARM_DEFAULT_SPEED = 1.0
 # Logging-only pickup heuristic. A held cube should keep the physical gripper
 # encoder noticeably more open than an empty close.
 PICKUP_GRIPPER_MARGIN = 5.0
-# Descent PBVS completion gate. The planned descent duration is still the
-# minimum time needed to physically move from hover to grasp; these values decide
-# whether to wait beyond that for the camera target to settle.
-DESCENT_SERVO_MAX_DURATION = 4.5
-DESCENT_SERVO_STABLE_FRAMES = 10
-DESCENT_SERVO_POSITION_TOLERANCE_M = 0.0015
-DESCENT_SERVO_YAW_TOLERANCE_RAD = math.radians(1.5)
-DESCENT_SERVO_MAX_NO_DETECTION_RETRIES = 2
-DESCENT_SERVO_BACKUP_DURATION = 0.9
-
-
-def _smoothstep(t: float) -> float:
-    c = min(1.0, max(0.0, t))
-    return c * c * (3.0 - 2.0 * c)
-
-
-@dataclass
-class DescentServoConvergence:
-    """Track whether the wrist-camera servo target has stopped moving."""
-
-    stable_frames: int = 0
-    last_x: float | None = None
-    last_y: float | None = None
-    last_yaw: float | None = None
-
-    def observe(self, source) -> None:
-        if self.last_x is None or self.last_y is None or self.last_yaw is None:
-            self.stable_frames = 1
-        else:
-            xy_delta = math.hypot(source.x - self.last_x, source.y - self.last_y)
-            yaw_delta = abs(_shortest_angle_delta(self.last_yaw, source.yaw))
-            if (
-                xy_delta <= DESCENT_SERVO_POSITION_TOLERANCE_M
-                and yaw_delta <= DESCENT_SERVO_YAW_TOLERANCE_RAD
-            ):
-                self.stable_frames += 1
-            else:
-                self.stable_frames = 1
-        self.last_x = source.x
-        self.last_y = source.y
-        self.last_yaw = source.yaw
-
-    def is_stable(self) -> bool:
-        return self.stable_frames >= DESCENT_SERVO_STABLE_FRAMES
-
-
-@dataclass
-class DescentServoRetryState:
-    """Reverse to pregrasp and retry when the jaws hide every cube tag."""
-
-    max_retries: int = DESCENT_SERVO_MAX_NO_DETECTION_RETRIES
-    backup_duration: float = DESCENT_SERVO_BACKUP_DURATION
-    retries_started: int = 0
-    backup_start_t: float | None = None
-
-    def is_backing_up(self) -> bool:
-        return self.backup_start_t is not None
-
-    def can_retry(self) -> bool:
-        return self.retries_started < self.max_retries
-
-    def start_backup(self, phase_t: float) -> None:
-        if not self.can_retry():
-            raise RuntimeError("descent servo retry budget exhausted")
-        self.retries_started += 1
-        self.backup_start_t = phase_t
-
-    def command_phase_t(self, phase_t: float, descent_duration: float) -> float:
-        if self.backup_start_t is None:
-            return phase_t
-        alpha = (phase_t - self.backup_start_t) / self.backup_duration
-        return descent_duration * (1.0 - _smoothstep(alpha))
-
-    def backup_complete(self, phase_t: float) -> bool:
-        return (
-            self.backup_start_t is not None
-            and phase_t - self.backup_start_t >= self.backup_duration - 1e-9
-        )
-
-    def finish_backup(self) -> None:
-        self.backup_start_t = None
-
-
-@dataclass(frozen=True)
-class WristServoEstimate:
-    """Latest wrist-camera cube estimate published by the servo worker."""
-
-    frame_id: int
-    source: CubePose
-
-
-@dataclass(frozen=True)
-class WristServoPreview:
-    """Annotated wrist frame for optional live display."""
-
-    frame_id: int
-    bgr: np.ndarray
-
-
-def _shortest_angle_delta(start: float, end: float) -> float:
-    return (end - start + math.pi) % (2.0 * math.pi) - math.pi
 
 
 def follower_clamp_limits(kinematics: So101Kinematics) -> tuple[np.ndarray, np.ndarray]:
@@ -239,7 +152,7 @@ def ramp_to_start(
         if not viewer.is_running():
             return
         step_start = time.time()
-        interp = current + _smoothstep(i / steps) * delta
+        interp = current + smoothstep(i / steps) * delta
         follower.send_action(joints_to_action(interp))
         mujoco.mj_step(model, data)
         viewer.sync()
@@ -257,6 +170,7 @@ def ramp_to_resting(
     model: mujoco.MjModel,
     data: mujoco.MjData,
     viewer,
+    on_tick: Callable[[np.ndarray], None] | None = None,
 ) -> None:
     """Smoothstep the real arm and the sim onto the resting pose."""
     current_real = action_to_joints(follower.get_observation(), target_real)
@@ -271,7 +185,7 @@ def ramp_to_resting(
         if not viewer.is_running():
             return
         step_start = time.time()
-        alpha = _smoothstep(i / steps)
+        alpha = smoothstep(i / steps)
 
         # Interpolate real arm
         interp_real = current_real + alpha * delta_real
@@ -287,6 +201,8 @@ def ramp_to_resting(
         )
 
         mujoco.mj_step(model, data)
+        if on_tick is not None:
+            on_tick(interp_real)
         viewer.sync()
         remaining = period - (time.time() - step_start)
         if remaining > 0:
@@ -323,130 +239,19 @@ def _report_tracking(recorder: EpisodeRecorder) -> None:
     print("  (mean err is each joint's sim→real tracking bias)")
 
 
-@dataclass
-class RecordingSession:
-    """Holds the ``LeRobotDataset`` written across one collection run.
+@dataclass(frozen=True)
+class _TickRecord:
+    """One control tick's recording payload, queued for the writer thread."""
 
-    The dataset is created lazily on the first recorded episode, once the camera
-    frame shapes are known, and reused for every later episode. The runner owns
-    it and calls :meth:`finalize` when the run ends. Episodes are added straight
-    into the dataset during execution (one frame per control tick), so there are
-    no intermediate video/motor files and no separate export step.
-    """
-
-    repo_id: str
-    root: Path
-    task: str
-    fps: float
-    vcodec: str = "auto"
-    streaming_encoding: bool = True
-    image_writer_threads: int = 4
-    # Frames the streaming encoder may buffer per camera. The default of 30 (one
-    # second at 30 Hz) overflows during the descent's visual-servo tick, when
-    # AprilTag detection on the control thread briefly starves the encoder and
-    # frames get dropped. A deeper buffer rides through that spike.
-    encoder_queue_maxsize: int = 300
-    dataset: Any = field(default=None, init=False)
-
-    def create_dataset(self, wrist_shape: tuple, overhead_shape: tuple) -> None:
-        from lerobot.datasets.lerobot_dataset import LeRobotDataset
-
-        joint_names = list(JOINT_NAMES)
-        features = {
-            "observation.state": {
-                "dtype": "float32",
-                "shape": (len(joint_names),),
-                "names": joint_names,
-            },
-            "action": {
-                "dtype": "float32",
-                "shape": (len(joint_names),),
-                "names": joint_names,
-            },
-            "observation.images.wrist": {
-                "dtype": "video",
-                "shape": (wrist_shape[0], wrist_shape[1], 3),
-                "names": ["height", "width", "channels"],
-            },
-            "observation.images.overhead": {
-                "dtype": "video",
-                "shape": (overhead_shape[0], overhead_shape[1], 3),
-                "names": ["height", "width", "channels"],
-            },
-        }
-        self.dataset = LeRobotDataset.create(
-            repo_id=self.repo_id,
-            fps=int(round(self.fps)),
-            features=features,
-            root=self.root,
-            robot_type="so101",
-            use_videos=True,
-            image_writer_threads=self.image_writer_threads,
-            vcodec=self.vcodec,
-            streaming_encoding=self.streaming_encoding,
-            encoder_queue_maxsize=self.encoder_queue_maxsize,
-            video_backend="pyav",
-        )
-
-    def dropped_frame_count(self) -> int:
-        """Frames the streaming video encoder dropped in the current episode.
-
-        The encoder silently drops a frame when its queue backs up (it can't keep
-        pace with capture), which leaves the video shorter than the recorded rows
-        and corrupts the episode. Returns 0 in PNG mode (no such queue) or before
-        the dataset exists.
-        """
-        if self.dataset is None:
-            return 0
-        encoder = getattr(self.dataset.writer, "_streaming_encoder", None)
-        if encoder is None:
-            return 0
-        return sum(encoder._dropped_frames.values())
-
-    def save_episode(self, episode_metadata: dict[str, Any] | None = None) -> None:
-        """Commit the pending LeRobot episode, optionally adding episode metadata.
-
-        LeRobot stores frame features and episode metadata through separate paths:
-        arbitrary metadata cannot be added to the per-frame buffer because it is
-        validated against the dataset feature schema. LeRobot's dataset metadata
-        object does accept extra episode metadata internally, so temporarily
-        wrap that call and merge our run-specific fields into the episode row.
-        """
-        if self.dataset is None:
-            raise RuntimeError("cannot save episode before the dataset exists")
-        if not episode_metadata:
-            self.dataset.save_episode()
-            return
-
-        meta = self.dataset.meta
-        original_save_episode = meta.save_episode
-
-        def save_episode_with_metadata(
-            episode_index,
-            episode_length,
-            episode_tasks,
-            episode_stats,
-            base_metadata,
-        ):
-            merged = dict(base_metadata)
-            merged.update(episode_metadata)
-            return original_save_episode(
-                episode_index,
-                episode_length,
-                episode_tasks,
-                episode_stats,
-                merged,
-            )
-
-        meta.save_episode = save_episode_with_metadata
-        try:
-            self.dataset.save_episode()
-        finally:
-            meta.save_episode = original_save_episode
-
-    def finalize(self) -> None:
-        if self.dataset is not None:
-            self.dataset.finalize()
+    state: np.ndarray
+    action: np.ndarray
+    wrist_bgr: np.ndarray
+    overhead_bgr: np.ndarray
+    workspace_bgr: np.ndarray | None
+    sim_qpos: np.ndarray
+    wall_t: float
+    servo_active: bool
+    servo_source: np.ndarray | None
 
 
 def _request_camera_fps(cap, label: str) -> None:
@@ -477,6 +282,7 @@ def execute_episode(
     viewer,
     recording: RecordingSession | None = None,
     overhead_camera_cap=None,
+    workspace_camera_cap=None,
     speed: float | None = None,
     wrist_camera: str | None = None,
     wrist_intrinsics: str | None = None,
@@ -487,6 +293,7 @@ def execute_episode(
     pickup_empty_gripper_position: float = GRIPPER_READBACK_CLOSED,
     pickup_gripper_margin: float = PICKUP_GRIPPER_MARGIN,
     success_metadata: Callable[[], dict[str, Any]] | None = None,
+    record_rest_to_rest: bool = False,
 ) -> str:
     """Run one pass of a prepared episode on an already-connected follower.
 
@@ -499,19 +306,24 @@ def execute_episode(
     If ``recording`` is given, the episode is written straight into its
     ``LeRobotDataset`` and both the wrist camera (opened here when
     ``wrist_camera`` is set) and ``overhead_camera_cap`` (owned by the caller)
-    are required. Each camera runs a reader thread keeping a single-slot
-    "latest frame" buffer fresh; once per control tick the loop snapshots both
-    buffers and queues one frame for a dataset writer thread, which converts to
-    RGB and calls ``add_frame``. Capture is therefore in lockstep with the
-    ``CONTROL_HZ`` loop — exactly one dataset frame per camera per tick. With
-    the session's streaming encoder, LeRobot encodes frames as they arrive. A
-    completed episode is committed with ``save_episode``; a ``restart``/
-    interrupted one is discarded with ``clear_episode_buffer``.
+    are required. ``workspace_camera_cap`` is an optional third recording
+    camera, also owned by the caller. Each camera runs a reader thread keeping a
+    single-slot "latest frame" buffer fresh; once per control tick the loop
+    snapshots the active buffers and queues one ``_TickRecord`` for a writer
+    thread, which converts to RGB and calls the session's ``record_frame``.
+    Capture is therefore in lockstep with the ``CONTROL_HZ`` loop — exactly one
+    recorded frame per camera per tick. With the session's streaming encoder,
+    LeRobot encodes frames as they arrive. A completed episode is committed
+    with ``save_episode``; a ``restart``/interrupted one is discarded with
+    ``discard_episode``.
 
     Returns ``"success"`` when the trajectory ran to completion, or ``"restart"``
     when a checkpoint replan failed and the caller should abort and re-home. A
     ``KeyboardInterrupt`` propagates (after camera cleanup) so the caller can park.
-    Does not connect/disconnect the follower or move to REST — the caller does.
+    When ``record_rest_to_rest`` is set, the recording includes the motion from
+    REST to the episode's start pose and the final return to REST. The caller
+    must have already parked the physical arm at REST before calling. Does not
+    connect/disconnect the follower or otherwise move it to REST.
     """
     model = episode.model
     data = episode.data
@@ -537,6 +349,8 @@ def execute_episode(
     speed = speed if speed is not None else REAL_ARM_DEFAULT_SPEED
     if speed <= 0.0:
         raise ValueError("speed must be positive")
+    if record_rest_to_rest and recording is None:
+        raise ValueError("record_rest_to_rest requires recording")
     print(f"Playback speed: {speed:g}× nominal  (run ≈ {trajectory.duration / speed:.1f}s)")
 
     # Per-tick log of (trajectory time, commanded real joints, motor readback).
@@ -556,6 +370,7 @@ def execute_episode(
     cam_lock = threading.Lock()
     cam_frame = None
     cam_frame_id = 0
+    cam_frame_captured_at: float | None = None
     cam_running = False
     cam_thread = None
     wrist_renderer = None
@@ -568,15 +383,19 @@ def execute_episode(
     servo_camera_rot: np.ndarray | None = None
     servo_estimate: WristServoEstimate | None = None
     servo_preview: WristServoPreview | None = None
-
     # Per-camera reader threads keep these single-slot "latest frame" buffers
-    # fresh; the control loop snapshots both once per tick and queues one
-    # (state, action, wrist_bgr, overhead_bgr) tuple onto record_queue, so the
-    # dataset gets exactly one frame per camera per control tick.
+    # fresh; the control loop snapshots them once per tick and queues one
+    # ``_TickRecord`` onto record_queue, so the recording gets exactly one
+    # frame per camera per control tick.
     overhead_lock = threading.Lock()
     overhead_frame = None
     overhead_cam_running = False
     overhead_cam_thread = None
+
+    workspace_lock = threading.Lock()
+    workspace_frame = None
+    workspace_cam_running = False
+    workspace_cam_thread = None
 
     record_queue: queue.Queue = queue.Queue()
     record_writer_thread = None
@@ -586,8 +405,20 @@ def execute_episode(
         while overhead_cam_running:
             ok, frame = overhead_camera_cap.read()
             if ok:
+                captured_at = time.monotonic()
                 with overhead_lock:
                     overhead_frame = frame
+                recording.record_live_frame("overhead", frame, captured_at)
+
+    def workspace_reader():
+        nonlocal workspace_frame
+        while workspace_cam_running:
+            ok, frame = workspace_camera_cap.read()
+            if ok:
+                captured_at = time.monotonic()
+                with workspace_lock:
+                    workspace_frame = frame
+                recording.record_live_frame("workspace", frame, captured_at)
 
     def record_writer():
         """Drain queued frames into the dataset until the ``None`` sentinel.
@@ -598,18 +429,28 @@ def execute_episode(
         import cv2
 
         while True:
-            item = record_queue.get()
-            if item is None:
+            record = record_queue.get()
+            if record is None:
                 return
-            state, action, wrist_bgr, overhead_bgr = item
-            recording.dataset.add_frame(
-                {
-                    "observation.state": state,
-                    "action": action,
-                    "observation.images.wrist": cv2.cvtColor(wrist_bgr, cv2.COLOR_BGR2RGB),
-                    "observation.images.overhead": cv2.cvtColor(overhead_bgr, cv2.COLOR_BGR2RGB),
-                    "task": recording.task,
-                }
+            frame = {
+                "observation.state": record.state,
+                "action": record.action,
+                "observation.images.wrist": cv2.cvtColor(record.wrist_bgr, cv2.COLOR_BGR2RGB),
+                "observation.images.overhead": cv2.cvtColor(
+                    record.overhead_bgr, cv2.COLOR_BGR2RGB
+                ),
+                "task": recording.task,
+            }
+            if record.workspace_bgr is not None:
+                frame["observation.images.workspace"] = cv2.cvtColor(
+                    record.workspace_bgr, cv2.COLOR_BGR2RGB
+                )
+            recording.record_frame(
+                frame,
+                sim_qpos=record.sim_qpos,
+                wall_t=record.wall_t,
+                servo_active=record.servo_active,
+                servo_source=record.servo_source,
             )
 
     def wrist_servo_worker():
@@ -634,9 +475,11 @@ def execute_episode(
             with cam_lock:
                 if cam_frame is None or cam_frame_id == last_frame_id:
                     frame = None
+                    captured_at = None
                 else:
                     last_frame_id = cam_frame_id
                     frame = cam_frame.copy()
+                    captured_at = cam_frame_captured_at
 
             if frame is None:
                 time.sleep(0.001)
@@ -648,8 +491,8 @@ def execute_episode(
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
             detections = detect_cube_faces(rgb, wrist_tracker.detector)
 
-            show_wrist = show_wrist_cam or show_wrist_mixed
-            if show_wrist:
+            annotate_wrist = show_wrist_cam or show_wrist_mixed
+            if annotate_wrist:
                 for det in detections:
                     corners = np.array(det.corners, dtype=np.int32)
                     cv2.polylines(bgr, [corners], True, (0, 255, 0), 2, cv2.LINE_AA)
@@ -680,7 +523,7 @@ def execute_episode(
                 with servo_lock:
                     servo_estimate = WristServoEstimate(last_frame_id, source)
 
-                if show_wrist:
+                if annotate_wrist:
                     cv_to_mj = np.diag([1.0, -1.0, -1.0])
                     pos_mj_cam = cam_rot.T @ (estimate.position - cam_pos)
                     rot_mj_cam = cam_rot.T @ estimate.rotation
@@ -732,7 +575,35 @@ def execute_episode(
                             cv2.LINE_AA,
                         )
 
-            if show_wrist:
+                    if captured_at is not None and recording is not None:
+                        axis_points, _ = cv2.projectPoints(
+                            np.float32([[0, 0, 0], [0.03, 0, 0], [0, 0.03, 0], [0, 0, 0.03]]),
+                            rvec,
+                            tvec,
+                            wrist_camera_matrix,
+                            np.zeros(5),
+                        )
+                        axis_points = axis_points.reshape(-1, 2).tolist()
+                        recording.record_visual_servo_overlay(
+                            captured_at,
+                            {
+                                "tags": [np.asarray(det.corners).tolist() for det in detections],
+                                "cube_edges": [[pts_img[i].tolist(), pts_img[j].tolist()] for i, j in edges],
+                                "axes": [
+                                    [axis_points[0], axis_points[1], "red"],
+                                    [axis_points[0], axis_points[2], "green"],
+                                    [axis_points[0], axis_points[3], "blue"],
+                                ],
+                            },
+                        )
+
+            if estimate is None and captured_at is not None and recording is not None:
+                recording.record_visual_servo_overlay(
+                    captured_at,
+                    {"tags": [np.asarray(det.corners).tolist() for det in detections]},
+                )
+
+            if annotate_wrist:
                 with servo_lock:
                     servo_preview = WristServoPreview(last_frame_id, bgr)
 
@@ -784,13 +655,17 @@ def execute_episode(
             cam_running = True
 
             def cam_reader():
-                nonlocal cam_frame, cam_frame_id
+                nonlocal cam_frame, cam_frame_id, cam_frame_captured_at
                 while cam_running:
                     ok, frame = wrist_cam.read()
                     if ok:
+                        captured_at = time.monotonic()
                         with cam_lock:
                             cam_frame = frame
                             cam_frame_id += 1
+                            cam_frame_captured_at = captured_at
+                        if recording is not None:
+                            recording.record_live_frame("wrist", frame, captured_at)
 
             cam_thread = threading.Thread(target=cam_reader, daemon=True)
             cam_thread.start()
@@ -806,20 +681,11 @@ def execute_episode(
     episode_metadata: dict[str, Any] | None = None
     pickup_metadata: dict[str, Any] | None = None
     try:
-        # Ramp the real arm onto the trajectory start pose so the arm and the sim
-        # are visibly aligned before any playback motion begins.
-        start_real = clamp_and_warn(
-            sim_frame_to_real(start_joints, start_gripper),
-            clamp_low,
-            clamp_high,
-            clip_warned,
-        )
-        print("Ramping real arm to the trajectory start pose...")
-        ramp_to_start(follower, start_real, model, data, viewer)
+        execution_wall_start = time.monotonic()
 
-        # Recording starts only after the unrecorded ramp reaches the start pose.
         # The wrist reader is already running from the open block above; the
-        # overhead reader is started here. Recording needs both cameras.
+        # overhead and optional workspace readers start here. Recording always
+        # needs the wrist and overhead cameras.
         if recording is not None:
             if wrist_cam is None or overhead_camera_cap is None or not overhead_camera_cap.isOpened():
                 raise RuntimeError(
@@ -829,6 +695,13 @@ def execute_episode(
             overhead_cam_running = True
             overhead_cam_thread = threading.Thread(target=overhead_reader, daemon=True)
             overhead_cam_thread.start()
+            if workspace_camera_cap is not None:
+                if not workspace_camera_cap.isOpened():
+                    raise RuntimeError("Workspace camera is not open")
+                _request_camera_fps(workspace_camera_cap, "workspace")
+                workspace_cam_running = True
+                workspace_cam_thread = threading.Thread(target=workspace_reader, daemon=True)
+                workspace_cam_thread.start()
 
             # Wait for both latest-frame buffers to fill so the first tick has a
             # real frame to log and the dataset features get true frame shapes.
@@ -838,17 +711,102 @@ def execute_episode(
                     first_wrist = cam_frame
                 with overhead_lock:
                     first_overhead = overhead_frame
-                if first_wrist is not None and first_overhead is not None:
+                with workspace_lock:
+                    first_workspace = workspace_frame
+                if (
+                    first_wrist is not None
+                    and first_overhead is not None
+                    and (workspace_camera_cap is None or first_workspace is not None)
+                ):
                     break
                 time.sleep(0.001)
             else:
                 raise RuntimeError("Timed out waiting for the episode camera streams to start")
 
-            if recording.dataset is None:
-                recording.create_dataset(first_wrist.shape, first_overhead.shape)
+            if not recording.initialized:
+                recording.create_dataset(
+                    first_wrist.shape,
+                    first_overhead.shape,
+                    None if workspace_camera_cap is None else first_workspace.shape,
+                )
+            recording.start_live_capture(time.monotonic() - execution_wall_start)
             record_writer_thread = threading.Thread(target=record_writer, daemon=True)
             record_writer_thread.start()
-        execution_wall_start = time.monotonic()
+
+        def record_tick(
+            commanded: np.ndarray,
+            actual: np.ndarray,
+            *,
+            servo_active: bool = False,
+            servo_source: np.ndarray | None = None,
+        ) -> None:
+            if record_writer_thread is None:
+                return
+            with cam_lock:
+                wrist_snapshot = cam_frame
+            with overhead_lock:
+                overhead_snapshot = overhead_frame
+            with workspace_lock:
+                workspace_snapshot = workspace_frame
+            if (
+                wrist_snapshot is None
+                or overhead_snapshot is None
+                or (workspace_camera_cap is not None and workspace_snapshot is None)
+            ):
+                return
+            # Start optional audio capture here, alongside the first captured
+            # tick, instead of in the asynchronous encoder thread so its clock
+            # has the same origin as the MP4 frames.
+            recording.start_audio_capture()
+            record_queue.put(
+                _TickRecord(
+                    state=actual.astype(np.float32),
+                    action=commanded.astype(np.float32),
+                    wrist_bgr=wrist_snapshot,
+                    overhead_bgr=overhead_snapshot,
+                    workspace_bgr=workspace_snapshot,
+                    sim_qpos=data.qpos.copy(),
+                    wall_t=time.monotonic() - execution_wall_start,
+                    servo_active=servo_active,
+                    servo_source=servo_source,
+                )
+            )
+
+        # In rest-to-rest mode the physical arm is already at REST. Start the
+        # cameras there, then include the transition to the planned start pose.
+        start_real = clamp_and_warn(
+            sim_frame_to_real(start_joints, start_gripper),
+            clamp_low,
+            clamp_high,
+            clip_warned,
+        )
+        if record_rest_to_rest:
+            rest_real = clamp_and_warn(
+                sim_frame_to_real(REST_ARM_JOINTS, REST_GRIPPER),
+                clamp_low,
+                clamp_high,
+                clip_warned,
+            )
+            record_tick(rest_real, action_to_joints(follower.get_observation(), rest_real))
+        print("Ramping real arm to the trajectory start pose...")
+        ramp_to_resting(
+            follower,
+            start_real,
+            start_joints,
+            start_gripper,
+            actuator_id,
+            model,
+            data,
+            viewer,
+            on_tick=(
+                (lambda commanded: record_tick(
+                    commanded,
+                    action_to_joints(follower.get_observation(), commanded),
+                ))
+                if record_rest_to_rest
+                else None
+            ),
+        )
 
         # State for tracking progress
         current_traj = trajectory
@@ -1023,23 +981,19 @@ def execute_episode(
                     wall_t=time.monotonic() - execution_wall_start,
                 )
 
-                # Queue exactly one dataset frame for this tick: the measured
-                # joints as state, the commanded joints as action, and a snapshot
-                # of each camera's latest frame.
-                if record_writer_thread is not None:
-                    with cam_lock:
-                        wrist_snapshot = cam_frame
-                    with overhead_lock:
-                        overhead_snapshot = overhead_frame
-                    if wrist_snapshot is not None and overhead_snapshot is not None:
-                        record_queue.put(
-                            (
-                                actual.astype(np.float32),
-                                commanded.astype(np.float32),
-                                wrist_snapshot,
-                                overhead_snapshot,
-                            )
-                        )
+                record_tick(
+                    commanded,
+                    actual,
+                    servo_active=is_descent,
+                    servo_source=np.array(
+                        [
+                            dynamic_source.x,
+                            dynamic_source.y,
+                            dynamic_source.z,
+                            dynamic_source.yaw,
+                        ]
+                    ) if is_descent else None,
+                )
 
                 viewer.sync()
 
@@ -1345,11 +1299,38 @@ def execute_episode(
             current_traj = candidate_traj
             # Loop on to execute the replanned remaining phases.
 
+        if episode_status == "success" and record_rest_to_rest and viewer.is_running():
+            print("Returning real arm to REST...")
+            rest_real = clamp_and_warn(
+                sim_frame_to_real(REST_ARM_JOINTS, REST_GRIPPER),
+                clamp_low,
+                clamp_high,
+                clip_warned,
+            )
+            ramp_to_resting(
+                follower,
+                rest_real,
+                REST_ARM_JOINTS,
+                REST_GRIPPER,
+                actuator_id,
+                model,
+                data,
+                viewer,
+                on_tick=lambda commanded: record_tick(
+                    commanded,
+                    action_to_joints(follower.get_observation(), commanded),
+                ),
+            )
+
     except KeyboardInterrupt:
         # Let the caller park the arm; clean up cameras on the way out.
         print("\nInterrupted during episode.")
         raise
     finally:
+        # Stop optional audio before draining the asynchronous video writer.  The
+        # muxer pads/trims it to the frame-derived MP4 duration.
+        if recording is not None:
+            recording.stop_audio_capture()
         # Stop the readers first so no new frames are produced, then drain the
         # record queue with a sentinel so every queued tick is added before the
         # episode is committed or discarded.
@@ -1366,6 +1347,11 @@ def execute_episode(
         if overhead_cam_thread is not None:
             overhead_cam_running = False
             overhead_cam_thread.join(timeout=1.0)
+        if workspace_cam_thread is not None:
+            workspace_cam_running = False
+            workspace_cam_thread.join(timeout=1.0)
+        if recording is not None:
+            recording.stop_live_capture()
         if record_writer_thread is not None:
             record_queue.put(None)
             record_writer_thread.join(timeout=30.0)
@@ -1378,7 +1364,7 @@ def execute_episode(
             if not episode_metadata:
                 episode_metadata = None
         _report_tracking(recorder)
-        if recording is not None and recording.dataset is not None and record_writer_thread is not None:
+        if recording is not None and recording.initialized and record_writer_thread is not None:
             # The writer thread has drained, so the drop count now covers the whole
             # episode. A dropped frame would desync the video from the recorded rows,
             # so fail before committing rather than save a corrupt episode.
@@ -1393,8 +1379,8 @@ def execute_episode(
             if episode_status == "success":
                 recording.save_episode(episode_metadata)
                 print(f"Saved episode to dataset ({len(recorder)} frames).")
-            elif recording.dataset.has_pending_frames():
-                recording.dataset.clear_episode_buffer()
+            elif recording.has_pending_frames():
+                recording.discard_episode()
                 print(f"Discarded {episode_status} episode (not added to dataset).")
         if show_wrist_cam or show_wrist_mixed:
             import cv2

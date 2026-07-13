@@ -84,10 +84,10 @@ from pick_and_place.episodes import _build_model
 from pick_and_place.executor import (
     CONTROL_HZ,
     RAMP_DURATION,
-    RecordingSession,
     clamp_and_warn,
     follower_clamp_limits,
 )
+from pick_and_place.recording import RecordingSession
 from pick_and_place.follower import (
     GRIPPER_INDEX,
     GRIPPER_READBACK_CLOSED,

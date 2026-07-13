@@ -36,8 +36,8 @@ from pick_and_place.episodes import (
 from pick_and_place.executor import (
     CONTROL_HZ,
     HARDWARE_SIMULATION_HZ,
-    RecordingSession,
 )
+from pick_and_place.recording import RecordingSession
 from pick_and_place.follower import (
     ARM_JOINT_NAMES,
     sim_frame_to_real,

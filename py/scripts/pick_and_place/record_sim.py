@@ -46,7 +46,8 @@ from pick_and_place.episodes import (
     placement_error,
     prepare_episode,
 )
-from pick_and_place.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ, RecordingSession
+from pick_and_place.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
+from pick_and_place.recording import RecordingSession
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.paper_detection import DROP_ZONE_HALF_SIZE, place_paper_target_marker
 from pick_and_place.sim_recorder import SimCameraRig, record_episode

@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "pick-and-place"
 version = "0.0.0"
 dependencies = [
+    "av",
     "fpdf",
     "gymnasium",
     "imageio[ffmpeg]",
@@ -19,6 +20,7 @@ dependencies = [
     "reportlab",
     "robot_descriptions",
     "scipy",
+    "sounddevice",
     "stable-baselines3",
     "tqdm",
 ]

@@ -63,7 +63,7 @@ from typing import Any
 import numpy as np
 
 from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
-from pick_and_place.executor import RecordingSession
+from pick_and_place.recording import RecordingSession
 from pick_and_place.image_rectify import SQUARE_SIZE, build_undistort_map, transform_frame
 
 # Which calibrated camera each dataset image feature was captured with.

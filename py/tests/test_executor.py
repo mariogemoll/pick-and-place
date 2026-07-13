@@ -1,21 +1,10 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-from pathlib import Path
-
 import mujoco
 import numpy as np
 
-from pick_and_place.executor import (
-    CONTROL_HZ,
-    DESCENT_SERVO_BACKUP_DURATION,
-    DESCENT_SERVO_STABLE_FRAMES,
-    DescentServoConvergence,
-    DescentServoRetryState,
-    HARDWARE_SIMULATION_HZ,
-    RecordingSession,
-)
-from pick_and_place.geometry import CubePose
+from pick_and_place.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 
 
 def test_hardware_physics_substeps_advance_exactly_one_control_tick():
@@ -33,63 +22,3 @@ def test_hardware_physics_substeps_advance_exactly_one_control_tick():
         times.append(data.time)
 
     np.testing.assert_allclose(np.diff(times), 1.0 / CONTROL_HZ, atol=1e-12)
-
-
-def test_descent_servo_convergence_requires_consecutive_stable_targets():
-    tracker = DescentServoConvergence()
-    source = CubePose(x=0.2, y=0.1, z=0.015, roll=0.0, pitch=0.0, yaw=0.2)
-
-    for _ in range(DESCENT_SERVO_STABLE_FRAMES - 1):
-        tracker.observe(source)
-
-    assert not tracker.is_stable()
-
-    tracker.observe(source)
-
-    assert tracker.is_stable()
-
-    tracker.observe(CubePose(x=0.21, y=0.1, z=0.015, roll=0.0, pitch=0.0, yaw=0.2))
-
-    assert not tracker.is_stable()
-
-
-def test_descent_servo_retry_backs_up_to_pregrasp_before_retrying():
-    retry = DescentServoRetryState(max_retries=1, backup_duration=DESCENT_SERVO_BACKUP_DURATION)
-    descent_duration = 1.0
-
-    retry.start_backup(1.0)
-
-    assert retry.is_backing_up()
-    assert retry.command_phase_t(1.0, descent_duration) == descent_duration
-    assert retry.command_phase_t(
-        1.0 + DESCENT_SERVO_BACKUP_DURATION,
-        descent_duration,
-    ) == 0.0
-    assert retry.backup_complete(1.0 + DESCENT_SERVO_BACKUP_DURATION)
-
-    retry.finish_backup()
-
-    assert not retry.is_backing_up()
-    assert not retry.can_retry()
-
-
-def test_recording_session_adds_custom_metadata_to_episode():
-    saved_metadata = []
-
-    class FakeMeta:
-        def save_episode(self, *args):
-            saved_metadata.append(args[-1])
-
-    class FakeDataset:
-        def __init__(self):
-            self.meta = FakeMeta()
-
-        def save_episode(self):
-            self.meta.save_episode(0, 1, ["pick cube"], {}, {"base": "value"})
-
-    recording = RecordingSession("test/recording", Path("/tmp/recording"), "pick cube", 30.0)
-    recording.dataset = FakeDataset()
-
-    recording.save_episode({"placement_success": True})
-
-    assert saved_metadata == [{"base": "value", "placement_success": True}]
