@@ -47,6 +47,10 @@ TAG_GEOMS: dict[int, tuple[str, tuple[int, int] | None]] = {
     15: ("workspace_frame_tag_se", (2, +1)),
 }
 
+# The printed workspace tags have a 40 mm graphic on a 60 mm sticker.  AprilTag
+# detects the black border, which is 5/9 of the graphic edge for this family.
+WORKSPACE_TAG_DETECTED_EDGE_M = 0.040 * (5.0 / 9.0)
+
 # Startup-solve plausibility gate. A good solve reprojects to a couple of px and
 # sits ~1 cm / ~2 deg from the model's nominal camera pose; swapped or rotated
 # tags (or wrong intrinsics) push the reprojection error and/or the nominal delta
@@ -174,6 +178,31 @@ def tag_world_points(model: mujoco.MjModel, data: mujoco.MjData) -> dict[int, np
     return points
 
 
+def tag_world_corners(model: mujoco.MjModel, data: mujoco.MjData) -> dict[int, np.ndarray]:
+    """Return AprilTag-detected corners in pupil-apriltags corner order.
+
+    Each tag supplies four known PnP points, allowing a usable pose estimate
+    when just one workspace tag is visible.
+    """
+    half_edge = WORKSPACE_TAG_DETECTED_EDGE_M / 2.0
+    local_corners = half_edge * np.array(
+        ((-1.0, -1.0, 0.0), (1.0, -1.0, 0.0), (1.0, 1.0, 0.0), (-1.0, 1.0, 0.0))
+    )
+    corners: dict[int, np.ndarray] = {}
+    mujoco.mj_forward(model, data)
+    for tag_id, (geom_name, axis) in TAG_GEOMS.items():
+        geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
+        if geom_id < 0:
+            continue
+        center = data.geom_xpos[geom_id].copy()
+        rotation = data.geom_xmat[geom_id].reshape(3, 3)
+        if axis is not None:
+            axis_index, sign = axis
+            center += sign * rotation[:, axis_index] * model.geom_size[geom_id][axis_index]
+        corners[tag_id] = center + local_corners @ rotation.T
+    return corners
+
+
 def camera_matrix_from_intrinsics(path: Path, width: int, height: int) -> tuple[np.ndarray, np.ndarray]:
     """Load and scale calibrated camera intrinsics for the solve resolution."""
     data = json.loads(path.read_text())
@@ -232,25 +261,53 @@ def solve_camera_pose(
     matrix: np.ndarray,
     dist: np.ndarray,
     detector: Any,
+    detections: list[Any] | None = None,
+    min_workspace_tags: int = 4,
     cv2_module: Any,
     nominal_pos: np.ndarray,
     nominal_quat: np.ndarray,
 ) -> SolveResult | None:
-    """Detect reference tags in ``frame_rgb`` and solve/apply the camera pose."""
+    """Solve/apply the camera pose from detected workspace-frame tags.
+
+    When ``detections`` is omitted, tags are detected from ``frame_rgb``.  A
+    caller that also draws or otherwise consumes detections can supply them to
+    avoid running the detector twice. ``min_workspace_tags=1`` uses each
+    detected tag's four corners to provide a live estimate from a partial view;
+    the default four-tag solve retains the established tag-center method.
+    """
     camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
     if camera_id < 0:
         raise ValueError(f"unknown camera {camera_name!r}")
 
-    gray = cv2_module.cvtColor(frame_rgb, cv2_module.COLOR_RGB2GRAY)
-    detections = detector.detect(gray)
-    points = tag_world_points(model, data)
-    matched = [(det.tag_id, points[det.tag_id], det.center) for det in detections if det.tag_id in points]
-    if len(matched) < 4:
-        return None
+    if detections is None:
+        gray = cv2_module.cvtColor(frame_rgb, cv2_module.COLOR_RGB2GRAY)
+        detections = detector.detect(gray)
+    if not 1 <= min_workspace_tags <= len(TAG_GEOMS):
+        raise ValueError(f"min_workspace_tags must be between 1 and {len(TAG_GEOMS)}")
 
-    object_points = np.array([item[1] for item in matched], dtype=float)
-    image_points = np.array([item[2] for item in matched], dtype=float)
-    flags = cv2_module.SOLVEPNP_IPPE if np.ptp(object_points[:, 2]) < 1e-3 else cv2_module.SOLVEPNP_ITERATIVE
+    if min_workspace_tags == len(TAG_GEOMS):
+        points = tag_world_points(model, data)
+        matched = [det for det in detections if det.tag_id in points]
+        if len(matched) < min_workspace_tags:
+            return None
+        object_points = np.array([points[det.tag_id] for det in matched], dtype=float)
+        image_points = np.array([det.center for det in matched], dtype=float)
+        flags = (
+            cv2_module.SOLVEPNP_IPPE
+            if np.ptp(object_points[:, 2]) < 1e-3
+            else cv2_module.SOLVEPNP_ITERATIVE
+        )
+    else:
+        corners = tag_world_corners(model, data)
+        matched = [det for det in detections if det.tag_id in corners]
+        if len(matched) < min_workspace_tags:
+            return None
+        object_points = np.concatenate([corners[det.tag_id] for det in matched]).astype(float)
+        image_points = np.concatenate([det.corners for det in matched]).astype(float)
+        flags = cv2_module.SOLVEPNP_IPPE if len(matched) == 1 else cv2_module.SOLVEPNP_SQPNP
+
+    if not matched:
+        return None
     ok, rvec, tvec = cv2_module.solvePnP(object_points, image_points, matrix, dist, flags=flags)
     if not ok:
         return None
@@ -280,7 +337,7 @@ def solve_camera_pose(
         rotation_deg=quat_angle_deg(quat, nominal_quat),
     )
     return SolveResult(
-        used_tags=tuple(sorted(item[0] for item in matched)),
+        used_tags=tuple(sorted(det.tag_id for det in matched)),
         reprojection_error_px=reprojection_error,
         pos=tuple(float(v) for v in pos),
         quat=tuple(float(v) for v in quat),
