@@ -14,6 +14,49 @@ after the MuJoCo camera:
 These JSON files are ignored by git. When present, `python -m pick_and_place.export`
 loads them automatically and uses them instead of the nominal camera defaults.
 
+## Camera intrinsics calibration
+
+Generate the project's standard OpenCV ChArUco board as a vector A4 PDF. Print
+it at 100% scale (with no printer scaling), and verify a square with a ruler:
+
+```sh
+cd py
+python scripts/generate_charuco_board.py
+```
+
+Then run the interactive Python calibrator. It automatically captures stable,
+distinct views and writes the requested JSON file:
+
+```sh
+cd py
+python scripts/calibrate_camera_intrinsics.py \
+  --camera 0 \
+  --output ../config/camera_intrinsics/overhead_camera.json
+```
+
+Move the board through the whole image at several distances and moderate tilts.
+Press `u` to undo a view, `x` to remove the worst-reprojection-error view, `d`
+to reset, and `s` to save. Capture 20--30 views where possible.
+
+The calibration command is independent of the scene's camera names. For
+example, an iPhone overview camera can be stored separately:
+
+```sh
+cd py
+python scripts/calibrate_camera_intrinsics.py \
+  --camera 0 \
+  --output ../config/camera_intrinsics/iphone_overview.json
+```
+
+The file becomes part of a scene or replay workflow only when that workflow is
+configured to use it.
+
+The iPhone may rotate its webcam stream while being moved. By default the
+calibrator accepts only landscape frames and visibly ignores portrait frames
+or any different resolution after capture starts. Use `--orientation portrait`
+for a portrait-only calibration, or `--orientation any` only when the camera
+stream's dimensions are known to remain fixed.
+
 Camera extrinsics solved from the workspace-frame AprilTags can be placed in
 `camera_extrinsics/` as JSON files named after the MuJoCo camera:
 
