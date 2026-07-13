@@ -9,7 +9,8 @@ dependencies = [
     "fpdf",
     "gymnasium",
     "imageio[ffmpeg]",
-    "lerobot[feetech,smolvla]",
+    # 0.5.1 pins transformers==5.3.0; newer transformers break lerobot imports.
+    "lerobot[feetech,smolvla]==0.5.1",
     "matplotlib",
     "mujoco",
     "numpy",

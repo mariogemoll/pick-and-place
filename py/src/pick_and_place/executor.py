@@ -408,9 +408,9 @@ class RecordingSession:
 
         LeRobot stores frame features and episode metadata through separate paths:
         arbitrary metadata cannot be added to the per-frame buffer because it is
-        validated against the dataset feature schema. The writer does accept
-        extra episode metadata internally, so temporarily wrap that call and
-        merge our run-specific fields into the episode row.
+        validated against the dataset feature schema. LeRobot's dataset metadata
+        object does accept extra episode metadata internally, so temporarily
+        wrap that call and merge our run-specific fields into the episode row.
         """
         if self.dataset is None:
             raise RuntimeError("cannot save episode before the dataset exists")
@@ -418,7 +418,7 @@ class RecordingSession:
             self.dataset.save_episode()
             return
 
-        meta = self.dataset.writer._meta
+        meta = self.dataset.meta
         original_save_episode = meta.save_episode
 
         def save_episode_with_metadata(

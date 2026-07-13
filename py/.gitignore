@@ -4,5 +4,6 @@ __pycache__
 .venv/
 uv.lock
 datasets/
+episodes/
 out/
 records/
