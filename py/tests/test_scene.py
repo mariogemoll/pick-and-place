@@ -5,6 +5,18 @@ import mujoco
 import numpy as np
 
 from pick_and_place import build_environment, build_scene, export_scene
+from pick_and_place.scene import (
+    BACKDROP_WALL_DISTANCE,
+    BACKDROP_WALL_THICKNESS,
+    TABLE_BACKGROUND_RGBA,
+    TABLE_EAST_EDGE_Y,
+    TABLE_HEIGHT,
+    TABLE_LENGTH,
+    TABLE_NORTH_EDGE_X,
+    TABLE_THICKNESS,
+    TABLE_WEST_EDGE_Y,
+    TABLE_WIDTH,
+)
 from pick_and_place.environment import WORKSPACE_FRAME_APRILTAG_PLATES
 from pick_and_place.episodes import _build_model
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
@@ -25,11 +37,62 @@ def test_scene_contains_robot_floor_light_and_cube():
     assert groundplane.name == "groundplane"
     light_id = model.light("scene_light").id
     assert light_id >= 0
-    assert model.nlight == 1
+    warm_spotlight_id = model.light("warm_spotlight").id
+    assert warm_spotlight_id >= 0
+    assert model.nlight == 2
     assert model.light_castshadow[light_id] == 0
+    assert model.light_castshadow[warm_spotlight_id] == 0
     np.testing.assert_allclose(model.light_specular[light_id], (0.0, 0.0, 0.0))
+    np.testing.assert_allclose(
+        model.light_diffuse[warm_spotlight_id], (0.4, 0.28, 0.17)
+    )
     assert model.body_jntnum[model.body("pick_cube").id] == 0
     assert tuple(model.geom_size[model.geom("pick_cube").id]) == (0.015, 0.015, 0.015)
+
+
+def test_tabletop_starts_at_the_north_frame_edge_and_extends_east():
+    model = build_scene(tabletop=True).compile()
+
+    table = model.geom("tabletop").id
+    background = model.geom("table_background").id
+    backdrop_wall = model.geom("backdrop_wall").id
+    assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "floor") == -1
+    np.testing.assert_allclose(
+        model.geom_pos[table],
+        (
+            TABLE_NORTH_EDGE_X + TABLE_LENGTH / 2,
+            (TABLE_WEST_EDGE_Y + TABLE_EAST_EDGE_Y) / 2,
+            -TABLE_THICKNESS / 2,
+        ),
+    )
+    np.testing.assert_allclose(
+        model.geom_size[table],
+        (TABLE_LENGTH / 2, TABLE_WIDTH / 2, TABLE_THICKNESS / 2),
+    )
+    np.testing.assert_allclose(model.geom_pos[table][1] - model.geom_size[table][1], TABLE_WEST_EDGE_Y)
+    np.testing.assert_allclose(model.geom_pos[table][1] + model.geom_size[table][1], TABLE_EAST_EDGE_Y)
+    assert model.geom_type[background] == mujoco.mjtGeom.mjGEOM_PLANE
+    np.testing.assert_allclose(model.geom_pos[background][2], -TABLE_HEIGHT)
+    np.testing.assert_allclose(model.geom_rgba[background], TABLE_BACKGROUND_RGBA)
+    np.testing.assert_allclose(
+        model.geom_pos[backdrop_wall][0] + model.geom_size[backdrop_wall][0],
+        TABLE_NORTH_EDGE_X - BACKDROP_WALL_DISTANCE,
+    )
+    np.testing.assert_allclose(model.geom_size[backdrop_wall][0], BACKDROP_WALL_THICKNESS / 2)
+    np.testing.assert_allclose(model.geom_rgba[backdrop_wall], TABLE_BACKGROUND_RGBA)
+
+
+def test_environment_tabletop_uses_the_replay_lighting():
+    model = build_environment(tabletop=True).compile()
+
+    assert model.geom("tabletop").id >= 0
+    assert model.geom("table_background").id >= 0
+    assert mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "floor") == -1
+    light_id = model.light("scene_light").id
+    np.testing.assert_allclose(model.vis.headlight.diffuse, (0.6, 0.6, 0.6))
+    np.testing.assert_allclose(model.vis.headlight.ambient, (0.3, 0.3, 0.3))
+    np.testing.assert_allclose(model.light_diffuse[light_id], (0.35, 0.35, 0.35))
+    np.testing.assert_allclose(model.light_ambient[light_id], (0.15, 0.15, 0.15))
 
 
 def test_robot_visual_geoms_are_visible():

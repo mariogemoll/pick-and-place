@@ -4,8 +4,9 @@
 
 """Combine the live camera views recorded by ``pick_and_place/real.py``.
 
-The input is one ``episodes/<timestamp>`` run directory.  Its successful
-``episode_####`` directories are played in order, with each episode's native-rate
+The inputs are one or more ``episodes/<timestamp>`` run directories or individual
+``episode_####`` directories. Their episodes are played in input order (and run
+episodes in recorded order), with each episode's native-rate
 ``*_live.mp4`` camera views tiled into a single video.  ``--cameras`` sets the
 row-major tile order and may include ``3d``: a sim replay rendered from the
 workspace camera's own pose (solved by PnP from its recorded AprilTags) that
@@ -14,12 +15,13 @@ mirrors the real workspace view.  The default places it beneath that view
 or pass ``--no-view3d`` to drop it.  When the 3D tile is shown each episode is
 trimmed to the span that has sim data.  Tiles are 4:3 (16:9 views are
 center-cropped) and silent.  The run must have been captured with
-``--live-videos``.  Pass ``--poster`` to also write a ``poster.jpg`` of the
+``--live-videos``.  Pass ``--poster`` to also write a lossless ``poster.png`` of the
 grid's first frame beside the output.
 
 Example:
-    python scripts/combine_real_episode_videos.py episodes/20260712_191914 \\
-        --out episodes/20260712_191914/combined.mp4
+    python scripts/combine_real_episode_videos.py \\
+        episodes/20260712_191914/episode_0001 \\
+        episodes/20260713_090000/episode_0003 --out website/demo.mp4
 """
 
 from __future__ import annotations
@@ -44,6 +46,7 @@ import numpy as np
 # the tile grid wherever its token appears in ``--cameras``.
 VIEW3D_TILE = "view3d"
 VIEW3D_CAMERA = "view3d_camera"
+VIEW3D_TARGET_DOT = "view3d_target_dot"
 # User-facing tokens in ``--cameras`` that select the 3D overview tile.
 VIEW3D_TOKENS = frozenset({"3d", "view3d"})
 
@@ -99,10 +102,11 @@ def load_tag_overlays(directory: Path, live_origin_wall_t: float | None) -> dict
         if entry.get("timebase") == "timeline":
             continue
         tags = [tag["corners"] for tag in entry["tags"]]
-        if tags:
-            by_camera.setdefault(entry["camera"], []).append(
-                {"t": float(entry["t"]) - live_origin_wall_t, "tags": tags}
-            )
+        # Keep empty detections as explicit clear states. Otherwise, a tag
+        # outline remains visible until a later frame happens to detect a tag.
+        by_camera.setdefault(entry["camera"], []).append(
+            {"t": float(entry["t"]) - live_origin_wall_t, "tags": tags}
+        )
     overlays: dict[str, tuple[dict, ...]] = {}
     for camera, entries in by_camera.items():
         # Older recordings did not label their timebase. Their file interleaves
@@ -131,6 +135,8 @@ def write_overlay_subtitles(
     source_size: tuple[int, int],
     cell_size: tuple[int, int],
     duration: float,
+    *,
+    stroke_scale: float = 1.0,
 ) -> None:
     """Draw saved geometry in the fill-cropped, resized tile without text."""
     source_width, source_height = source_size
@@ -140,15 +146,90 @@ def write_overlay_subtitles(
     scale = max(cell_width / source_width, cell_height / source_height)
     offset_x = (cell_width - source_width * scale) / 2
     offset_y = (cell_height - source_height * scale) / 2
+
     def point(raw):
-        return round(offset_x + raw[0] * scale), round(offset_y + raw[1] * scale)
+        return offset_x + raw[0] * scale, offset_y + raw[1] * scale
+
+    # \p4 gives the vertices one-eighth-pixel precision. A filled polygon
+    # supplies the stroke, avoiding ASS's border renderer and its outline.
+    def coordinate(value: float) -> int:
+        return round(value * 8)
+
     def line(start, end, color, width=2):
+        """Return a filled, subpixel-width ASS polygon for one line segment."""
         x1, y1 = point(start)
         x2, y2 = point(end)
-        return (
-            rf"{{\an7\pos(0,0)\p1\1c{color}\3c{color}\bord{width}}}"
-            f"m {x1} {y1} l {x2} {y2}{{\\p0}}"
+        length = math.hypot(x2 - x1, y2 - y1)
+        if length == 0:
+            return ""
+        half_width = width * stroke_scale / 2
+        normal_x = (y1 - y2) * half_width / length
+        normal_y = (x2 - x1) * half_width / length
+
+        vertices = (
+            (x1 + normal_x, y1 + normal_y),
+            (x2 + normal_x, y2 + normal_y),
+            (x2 - normal_x, y2 - normal_y),
+            (x1 - normal_x, y1 - normal_y),
         )
+        commands = [
+            f"m {coordinate(vertices[0][0])} {coordinate(vertices[0][1])}",
+            *(f"l {coordinate(x)} {coordinate(y)}" for x, y in vertices[1:]),
+            "c",
+        ]
+        return rf"{{\an7\pos(0,0)\p4\1c{color}\bord0\shad0}}{' '.join(commands)}{{\p0}}"
+
+    def offset_polygon(vertices, distance):
+        """Offset a convex polygon's edges leftward, preserving joined corners."""
+        shifted = []
+        for index, vertex in enumerate(vertices):
+            previous = vertices[index - 1]
+            following = vertices[(index + 1) % len(vertices)]
+            before_x, before_y = vertex[0] - previous[0], vertex[1] - previous[1]
+            after_x, after_y = following[0] - vertex[0], following[1] - vertex[1]
+            before_length = math.hypot(before_x, before_y)
+            after_length = math.hypot(after_x, after_y)
+            if before_length == 0 or after_length == 0:
+                shifted.append(vertex)
+                continue
+            before_normal = (-before_y / before_length, before_x / before_length)
+            after_normal = (-after_y / after_length, after_x / after_length)
+            first = (vertex[0] + before_normal[0] * distance, vertex[1] + before_normal[1] * distance)
+            second = (vertex[0] + after_normal[0] * distance, vertex[1] + after_normal[1] * distance)
+            cross = before_x * after_y - before_y * after_x
+            if abs(cross) < 1e-6:
+                shifted.append(((first[0] + second[0]) / 2, (first[1] + second[1]) / 2))
+                continue
+            delta_x, delta_y = second[0] - first[0], second[1] - first[1]
+            factor = (delta_x * after_y - delta_y * after_x) / cross
+            shifted.append((first[0] + factor * before_x, first[1] + factor * before_y))
+        return shifted
+
+    def outline(corners, color, width=2):
+        """Return one closed polygon ring for a continuous AprilTag border."""
+        vertices = [point(corner) for corner in corners]
+        if len(vertices) < 3:
+            return ""
+        area = sum(
+            vertex[0] * following[1] - following[0] * vertex[1]
+            for vertex, following in zip(vertices, vertices[1:] + vertices[:1])
+        )
+        half_width = width * stroke_scale / 2
+        outer = offset_polygon(vertices, -half_width if area > 0 else half_width)
+        inner = offset_polygon(vertices, half_width if area > 0 else -half_width)
+
+        def path(points):
+            return [
+                f"m {coordinate(points[0][0])} {coordinate(points[0][1])}",
+                *(f"l {coordinate(x)} {coordinate(y)}" for x, y in points[1:]),
+                "c",
+            ]
+
+        return (
+            rf"{{\an7\pos(0,0)\p4\1c{color}\bord0\shad0}}"
+            f"{' '.join(path(outer) + path(list(reversed(inner))))}{{\\p0}}"
+        )
+
     lines = [
         "[Script Info]",
         "ScriptType: v4.00+",
@@ -173,10 +254,8 @@ def write_overlay_subtitles(
         )
         drawings = []
         for corners in overlay.get("tags", []):
-            drawings.extend(line(corners[i], corners[(i + 1) % len(corners)], "&H00FF00&") for i in range(len(corners)))
+            drawings.append(outline(corners, "&H00FF00&"))
         drawings.extend(line(start, end, "&H00A5FF&") for start, end in overlay.get("cube_edges", []))
-        colors = {"red": "&H0000FF&", "green": "&H00FF00&", "blue": "&HFF0000&"}
-        drawings.extend(line(start, end, colors[color], 3) for start, end, color in overlay.get("axes", []))
         if end <= start or not drawings:
             continue
         for drawing in drawings:
@@ -214,13 +293,23 @@ def build_view3d_model(render_size: tuple[int, int]):
     from pick_and_place import build_scene
     from pick_and_place.episodes import cube_quat_from_pose
     from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
-    from pick_and_place.paper_detection import add_paper_target_marker
     from pick_and_place.workspace_overlays import PAN_AXIS
 
     width, height = render_size
     source = CubePose(x=PAN_AXIS[0] + 0.1, y=PAN_AXIS[1], z=CUBE_HALF_SIZE)
-    spec = build_scene(include_environment=True)
-    add_paper_target_marker(spec)
+    # A finite tabletop lets the rendered view retain the physical setup's
+    # visible north edge instead of extending the floor indefinitely.
+    spec = build_scene(include_environment=True, tabletop=True)
+    target_dot = spec.worldbody.add_body(name=VIEW3D_TARGET_DOT)
+    target_dot.add_geom(
+        name=f"{VIEW3D_TARGET_DOT}_geom",
+        type=mujoco.mjtGeom.mjGEOM_SPHERE,
+        pos=(0.0, 0.0, 0.004),
+        size=(0.008, 0.0, 0.0),
+        rgba=(0.1, 0.7, 1.0, 0.0),
+        contype=0,
+        conaffinity=0,
+    )
     spec.visual.global_.offwidth = max(spec.visual.global_.offwidth, width)
     spec.visual.global_.offheight = max(spec.visual.global_.offheight, height)
     spec.worldbody.add_camera(name=VIEW3D_CAMERA)
@@ -230,6 +319,25 @@ def build_view3d_model(render_size: tuple[int, int]):
     cube.add_freejoint()
     model = spec.compile()
     return model, mujoco.MjData(model)
+
+
+def place_view3d_target_dot(model, data, episode_metadata: dict) -> None:
+    """Show the recorded drop-target centre as a dot when metadata provides it."""
+    import mujoco
+
+    metadata = episode_metadata.get("episode_metadata", {})
+    target_x = metadata.get("target_x")
+    target_y = metadata.get("target_y")
+    geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, f"{VIEW3D_TARGET_DOT}_geom")
+    if geom_id < 0:
+        return
+    if target_x is None or target_y is None:
+        model.geom_rgba[geom_id, 3] = 0.0
+        return
+    body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, VIEW3D_TARGET_DOT)
+    model.body_pos[body_id] = (float(target_x), float(target_y), 0.0)
+    model.geom_rgba[geom_id, 3] = 1.0
+    mujoco.mj_forward(model, data)
 
 
 def solve_view3d_pose(model, data, directory: Path, matrix: np.ndarray) -> bool:
@@ -393,6 +501,7 @@ def render_view3d_videos(
     videos: dict[Path, Path] = {}
     windows: dict[Path, tuple[float, float]] = {}
     for index, episode in enumerate(episodes):
+        episode_metadata = json.loads((episode.directory / "episode.json").read_text())
         camera = metadata[episode.directory]
         matrix = np.array(camera["camera_matrix"], dtype=float)
         model.cam_fovy[camera_id] = math.degrees(
@@ -401,6 +510,7 @@ def render_view3d_videos(
         if not solve_view3d_pose(model, data, episode.directory, matrix):
             print(f"3D view skipped: no workspace tags solved in {episode.directory.name}.")
             return {}, {}
+        place_view3d_target_dot(model, data, episode_metadata)
         timeline = np.load(episode.directory / "timeline.npz")
         sim_qpos = np.asarray(timeline["sim_qpos"], dtype=float)
         if sim_qpos.ndim != 2 or sim_qpos.shape[1] != model.nq:
@@ -418,60 +528,76 @@ def render_view3d_videos(
     return videos, windows
 
 
-def load_episodes(root: Path, camera_names: tuple[str, ...]) -> list[Episode]:
-    """Load complete episodes in their recorded order."""
-    episodes: list[Episode] = []
-    for directory in sorted(root.glob("episode_*")):
-        metadata_path = directory / "episode.json"
-        if not metadata_path.is_file():
-            continue
-        metadata = json.loads(metadata_path.read_text())
-        cameras = metadata.get("cameras", {})
-        missing = [name for name in camera_names if name not in cameras]
-        if missing:
-            raise ValueError(f"{directory}: missing requested camera(s): {', '.join(missing)}")
-        live_videos = {
-            name: camera.get("live_video")
-            for name, camera in cameras.items()
-        }
-        unavailable = [name for name in camera_names if not live_videos.get(name)]
-        if unavailable:
-            raise ValueError(
-                f"{directory}: no live video for {', '.join(unavailable)}; "
-                "record with real.py --live-videos"
-            )
-        paths = {name: directory / live_videos[name] for name in camera_names}
-        absent = [str(path) for path in paths.values() if not path.is_file()]
-        if absent:
-            raise FileNotFoundError(f"{directory}: missing video file(s): {', '.join(absent)}")
-        fps = float(metadata["fps"])
-        if fps <= 0:
-            raise ValueError(f"{directory}: fps must be positive")
-        duration = live_duration(paths)
-        wrist_camera = cameras.get("wrist", {})
-        wrist_size = (int(wrist_camera["width"]), int(wrist_camera["height"]))
-        camera_sizes = {
-            name: (int(camera["width"]), int(camera["height"]))
-            for name, camera in cameras.items()
-        }
-        episodes.append(
-            Episode(
-                directory=directory,
-                cameras=paths,
-                fps=fps,
-                duration=duration,
-                visual_overlays=load_visual_overlays(directory),
-                tag_overlays=load_tag_overlays(
-                    directory, metadata.get("live_capture_origin_wall_t")
-                ),
-                wrist_size=wrist_size,
-                camera_sizes=camera_sizes,
-                live_origin_wall_t=metadata.get("live_capture_origin_wall_t"),
-            )
+def load_episode(directory: Path, camera_names: tuple[str, ...]) -> Episode:
+    """Load one complete recorded episode."""
+    metadata_path = directory / "episode.json"
+    if not metadata_path.is_file():
+        raise FileNotFoundError(f"{directory}: missing episode.json")
+    metadata = json.loads(metadata_path.read_text())
+    cameras = metadata.get("cameras", {})
+    missing = [name for name in camera_names if name not in cameras]
+    if missing:
+        raise ValueError(f"{directory}: missing requested camera(s): {', '.join(missing)}")
+    live_videos = {name: camera.get("live_video") for name, camera in cameras.items()}
+    unavailable = [name for name in camera_names if not live_videos.get(name)]
+    if unavailable:
+        raise ValueError(
+            f"{directory}: no live video for {', '.join(unavailable)}; "
+            "record with real.py --live-videos"
         )
-    if not episodes:
+    paths = {name: directory / live_videos[name] for name in camera_names}
+    absent = [str(path) for path in paths.values() if not path.is_file()]
+    if absent:
+        raise FileNotFoundError(f"{directory}: missing video file(s): {', '.join(absent)}")
+    fps = float(metadata["fps"])
+    if fps <= 0:
+        raise ValueError(f"{directory}: fps must be positive")
+    wrist_camera = cameras.get("wrist", {})
+    return Episode(
+        directory=directory,
+        cameras=paths,
+        fps=fps,
+        duration=live_duration(paths),
+        visual_overlays=load_visual_overlays(directory),
+        tag_overlays=load_tag_overlays(directory, metadata.get("live_capture_origin_wall_t")),
+        wrist_size=(int(wrist_camera["width"]), int(wrist_camera["height"])),
+        camera_sizes={name: (int(camera["width"]), int(camera["height"])) for name, camera in cameras.items()},
+        live_origin_wall_t=metadata.get("live_capture_origin_wall_t"),
+    )
+
+
+def load_episodes(root: Path, camera_names: tuple[str, ...]) -> list[Episode]:
+    """Load complete episodes in a run's recorded order."""
+    directories = [directory for directory in sorted(root.glob("episode_*")) if (directory / "episode.json").is_file()]
+    if not directories:
         raise FileNotFoundError(f"No complete episode_#### directories found in {root}")
-    return episodes
+    return [load_episode(directory, camera_names) for directory in directories]
+
+
+def missing_replay_data(episode: Episode, tiles: tuple[str, ...]) -> list[str]:
+    """Return the recorded inputs absent from an episode's requested replay tiles."""
+    missing: list[str] = []
+    if "wrist" in tiles and not (episode.directory / "visual_servo_overlays.jsonl").is_file():
+        missing.append("visual-servo overlays")
+    if VIEW3D_TILE not in tiles:
+        return missing
+
+    metadata = json.loads((episode.directory / "episode.json").read_text())
+    workspace = metadata.get("cameras", {}).get("workspace", {})
+    if "camera_matrix" not in workspace:
+        missing.append("workspace camera calibration")
+    if not (episode.directory / "timeline.npz").is_file():
+        missing.append("simulation timeline")
+    tags_path = episode.directory / "tag_locations.jsonl"
+    if not tags_path.is_file():
+        missing.append("workspace AprilTag detections")
+    elif not any(
+        json.loads(line).get("camera") == "workspace" and json.loads(line).get("tags")
+        for line in tags_path.read_text().splitlines()
+        if line
+    ):
+        missing.append("workspace AprilTag detections")
+    return missing
 
 
 def parse_size(value: str) -> tuple[int, int]:
@@ -534,6 +660,8 @@ def build_command(
     overlay_subtitles: dict[tuple[Path, str], list[Path]],
     view3d_videos: dict[Path, Path],
     trim_windows: dict[Path, tuple[float, float]],
+    crf: int,
+    preset: str,
     *,
     still: bool = False,
 ) -> list[str]:
@@ -575,21 +703,69 @@ def build_command(
     filters.append("".join(grid_labels) + f"concat=n={len(grid_labels)}:v=1:a=0[video]")
     command.extend(("-filter_complex", ";".join(filters), "-map", "[video]"))
     if still:
-        command.extend(("-frames:v", "1", "-update", "1", str(output)))
+        command.extend(("-frames:v", "1", "-c:v", "png", "-update", "1", str(output)))
     else:
         command.extend(
             (
-                "-c:v", "libx264", "-crf", "20", "-pix_fmt", "yuv420p",
+                "-c:v", "libx264", "-crf", str(crf), "-preset", preset,
+                "-profile:v", "high", "-level:v", "4.1", "-pix_fmt", "yuv420p",
                 "-movflags", "+faststart", str(output),
             )
         )
     return command
 
 
+def prepare_render_inputs(
+    episodes: list[Episode],
+    camera_names: tuple[str, ...],
+    tiles: tuple[str, ...],
+    cell_size: tuple[int, int],
+    temp_dir: Path,
+    *,
+    overlay_stroke_scale: float = 1.0,
+) -> tuple[dict[tuple[Path, str], list[Path]], dict[Path, Path], dict[Path, tuple[float, float]]]:
+    """Create cell-size-specific overlays and optional 3D replay tiles."""
+    overlay_subtitles: dict[tuple[Path, str], list[Path]] = {}
+    for index, episode in enumerate(episodes):
+        for camera in camera_names:
+            tags = episode.tag_overlays.get(camera, ())
+            if tags:
+                subtitle_path = temp_dir / f"episode_{index:04d}_{camera}_tags.ass"
+                write_overlay_subtitles(
+                    subtitle_path,
+                    tags,
+                    episode.camera_sizes[camera],
+                    cell_size,
+                    episode.duration,
+                    stroke_scale=overlay_stroke_scale,
+                )
+                overlay_subtitles[episode.directory, camera] = [subtitle_path]
+        if "wrist" in camera_names and episode.visual_overlays:
+            subtitle_path = temp_dir / f"episode_{index:04d}_servo.ass"
+            write_overlay_subtitles(
+                subtitle_path,
+                episode.visual_overlays,
+                episode.wrist_size,
+                cell_size,
+                episode.duration,
+                stroke_scale=overlay_stroke_scale,
+            )
+            overlay_subtitles.setdefault((episode.directory, "wrist"), []).append(subtitle_path)
+    view3d_videos, trim_windows = (
+        render_view3d_videos(episodes, cell_size, temp_dir)
+        if VIEW3D_TILE in tiles
+        else ({}, {})
+    )
+    return overlay_subtitles, view3d_videos, trim_windows
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "run", type=Path, help="real.py --live-videos run directory, e.g. episodes/<timestamp>"
+        "sources",
+        type=Path,
+        nargs="+",
+        help="run directory or individual episode_#### directory; sources are joined in this order",
     )
     parser.add_argument("--out", type=Path, default=None, help="output MP4 (default: RUN/combined.mp4)")
     parser.add_argument(
@@ -607,15 +783,38 @@ def main() -> None:
     )
     parser.add_argument("--fps", type=float, default=None, help="output frame rate (default: recording rate)")
     parser.add_argument(
+        "--crf",
+        type=int,
+        default=23,
+        help="H.264 constant-quality value, 0-51; lower is higher quality and larger (default: 23)",
+    )
+    parser.add_argument(
+        "--preset",
+        default="slow",
+        choices=("ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"),
+        help="H.264 encoder speed/compression tradeoff (default: slow)",
+    )
+    parser.add_argument(
         "--poster",
         action="store_true",
-        help="also write poster.jpg (the tiled grid's first frame) beside the output",
+        help="also write lossless poster.png (the tiled grid's first frame) beside the output",
+    )
+    parser.add_argument(
+        "--poster-cell",
+        type=parse_size,
+        default=None,
+        help="tile size for --poster (default: --cell)",
     )
     parser.add_argument(
         "--no-view3d",
         dest="view3d",
         action="store_false",
         help="drop the '3d' sim-overview tile from the layout",
+    )
+    parser.add_argument(
+        "--include-incomplete",
+        action="store_true",
+        help="include episodes missing recorded overlay or 3D-replay inputs",
     )
     args = parser.parse_args()
 
@@ -631,38 +830,38 @@ def main() -> None:
     camera_names = tuple(tile for tile in tiles if tile != VIEW3D_TILE)
     if not camera_names:
         parser.error("--cameras must name at least one camera view")
-    episodes = load_episodes(args.run, camera_names)
+    episodes: list[Episode] = []
+    for source in args.sources:
+        if (source / "episode.json").is_file():
+            episode = load_episode(source, camera_names)
+            episodes.append(episode)
+        else:
+            episodes.extend(load_episodes(source, camera_names))
+    if not args.include_incomplete:
+        complete_episodes = []
+        for episode in episodes:
+            missing = missing_replay_data(episode, tiles)
+            if missing:
+                print(f"Skipping {episode.directory.name}: missing {', '.join(missing)}.")
+            else:
+                complete_episodes.append(episode)
+        episodes = complete_episodes
+        if not episodes:
+            parser.error("No episodes contain all requested replay inputs")
     fps = args.fps if args.fps is not None else episodes[0].fps
     if fps <= 0:
         parser.error("--fps must be positive")
-    output = args.out if args.out is not None else args.run / "combined.mp4"
+    if not 0 <= args.crf <= 51:
+        parser.error("--crf must be between 0 and 51")
+    if args.out is None and len(args.sources) > 1:
+        parser.error("--out is required when combining multiple sources")
+    output = args.out if args.out is not None else args.sources[0] / "combined.mp4"
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="combine-real-episode-videos-") as temp_dir:
-        overlay_subtitles: dict[tuple[Path, str], list[Path]] = {}
-        for index, episode in enumerate(episodes):
-            for camera in camera_names:
-                tags = episode.tag_overlays.get(camera, ())
-                if tags:
-                    subtitle_path = Path(temp_dir) / f"episode_{index:04d}_{camera}_tags.ass"
-                    write_overlay_subtitles(
-                        subtitle_path, tags, episode.camera_sizes[camera], args.cell, episode.duration
-                    )
-                    overlay_subtitles[episode.directory, camera] = [subtitle_path]
-            if "wrist" in camera_names:
-                if episode.visual_overlays:
-                    subtitle_path = Path(temp_dir) / f"episode_{index:04d}_servo.ass"
-                    write_overlay_subtitles(
-                        subtitle_path,
-                        episode.visual_overlays,
-                        episode.wrist_size,
-                        args.cell,
-                        episode.duration,
-                    )
-                    overlay_subtitles.setdefault((episode.directory, "wrist"), []).append(subtitle_path)
-        view3d_videos, trim_windows = (
-            render_view3d_videos(episodes, args.cell, Path(temp_dir))
-            if VIEW3D_TILE in tiles
-            else ({}, {})
+        render_temp_dir = Path(temp_dir) / "video"
+        render_temp_dir.mkdir()
+        overlay_subtitles, view3d_videos, trim_windows = prepare_render_inputs(
+            episodes, camera_names, tiles, args.cell, render_temp_dir
         )
         # Drop the 3D tile if its render was unavailable so the grid stays whole.
         if VIEW3D_TILE in tiles and not view3d_videos:
@@ -671,17 +870,35 @@ def main() -> None:
         subprocess.run(
             build_command(
                 episodes, tiles, args.cell, fps, output,
-                overlay_subtitles, view3d_videos, trim_windows,
+                overlay_subtitles, view3d_videos, trim_windows, args.crf, args.preset,
             ),
             check=True,
         )
         print(f"Wrote {output} ({len(episodes)} episode(s), {len(tiles)} tile(s))")
         if args.poster:
-            poster_path = output.with_name("poster.jpg")
+            poster_path = output.with_name("poster.png")
+            poster_cell = args.poster_cell if args.poster_cell is not None else args.cell
+            poster_temp_dir = Path(temp_dir) / "poster"
+            poster_temp_dir.mkdir()
+            poster_stroke_scale = min(
+                poster_cell[0] / args.cell[0], poster_cell[1] / args.cell[1]
+            )
+            poster_overlays, poster_view3d, poster_windows = prepare_render_inputs(
+                episodes,
+                camera_names,
+                tiles,
+                poster_cell,
+                poster_temp_dir,
+                overlay_stroke_scale=poster_stroke_scale,
+            )
+            poster_tiles = tiles if VIEW3D_TILE not in tiles or poster_view3d else tuple(
+                tile for tile in tiles if tile != VIEW3D_TILE
+            )
             subprocess.run(
                 build_command(
-                    episodes, tiles, args.cell, fps, poster_path,
-                    overlay_subtitles, view3d_videos, trim_windows, still=True,
+                    episodes, poster_tiles, poster_cell, fps, poster_path,
+                    poster_overlays, poster_view3d, poster_windows, args.crf, args.preset,
+                    still=True,
                 ),
                 check=True,
             )

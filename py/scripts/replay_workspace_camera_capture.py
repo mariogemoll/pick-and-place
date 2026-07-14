@@ -17,6 +17,11 @@ Example:
 
 Press ``+``/``-`` to change the real-image contribution to the overlay, and
 ``q`` or Escape to quit.
+
+Pass ``--export output.png`` to write the rectified camera and 3D render side
+by side, or add ``--export-layout 3d`` to write only the 3D render.
+Pass ``--export-normal`` and ``--export-3d`` to write those views to separate
+files.
 """
 
 from __future__ import annotations
@@ -31,10 +36,12 @@ import numpy as np
 
 from pick_and_place.camera_compare import load_intrinsics
 from pick_and_place.paper_detection import add_paper_target_marker, place_paper_target_marker
-from pick_and_place.scene import build_environment
+from pick_and_place.scene import build_scene
+from pick_and_place.trajectory import REST_ARM_JOINTS
 from pick_and_place.workspace_overlays import is_cube_drop_allowed
 
 WINDOW_TITLE = "workspace capture replay  (+/- overlay, q / Esc quit)"
+EXPORT_LAYOUTS = ("side-by-side", "normal", "3d")
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -85,7 +92,7 @@ def _restore_scene(
     if not isinstance(camera, dict) or not isinstance(cube, dict):
         raise SystemExit("capture camera and cube poses must be JSON objects")
 
-    spec = build_environment(apriltag_cube=True)
+    spec = build_scene(include_environment=True, tabletop=True, apriltag_cube=True)
     add_paper_target_marker(spec)
     spec.worldbody.add_camera(
         name="workspace_camera",
@@ -97,6 +104,10 @@ def _restore_scene(
     spec.visual.global_.offheight = max(spec.visual.global_.offheight, render_height)
     model = spec.compile()
     data = mujoco.MjData(model)
+    for joint_name, angle in REST_ARM_JOINTS.items():
+        data.joint(joint_name).qpos = angle
+    gripper = data.joint("gripper")
+    gripper.qpos = model.jnt_range[gripper.id, 0]
 
     camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "workspace_camera")
     cube_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pick_cube")
@@ -148,6 +159,50 @@ def _status(image: np.ndarray, text: str) -> np.ndarray:
     return result
 
 
+def _crop_to_four_thirds(image: np.ndarray) -> np.ndarray:
+    """Return a centered 4:3 crop without resampling the image."""
+    height, width = image.shape[:2]
+    if width * 3 > height * 4:
+        crop_width = height * 4 // 3
+        left = (width - crop_width) // 2
+        return image[:, left : left + crop_width]
+    crop_height = width * 3 // 4
+    top = (height - crop_height) // 2
+    return image[top : top + crop_height, :]
+
+
+def _export_image(
+    output: Path,
+    layout: str,
+    real_bgr: np.ndarray,
+    sim_bgr: np.ndarray,
+    cv2_module,
+    *,
+    jpeg_quality: int,
+) -> None:
+    """Write the requested camera/3D comparison image."""
+    real_bgr = _crop_to_four_thirds(real_bgr)
+    sim_bgr = _crop_to_four_thirds(sim_bgr)
+    if layout == "side-by-side":
+        image = np.hstack((real_bgr, sim_bgr))
+    elif layout == "normal":
+        image = real_bgr
+    else:
+        image = sim_bgr
+    output.parent.mkdir(parents=True, exist_ok=True)
+    params: list[int] = []
+    if output.suffix.lower() in {".jpg", ".jpeg"}:
+        params = [
+            cv2_module.IMWRITE_JPEG_QUALITY,
+            jpeg_quality,
+            cv2_module.IMWRITE_JPEG_SAMPLING_FACTOR,
+            cv2_module.IMWRITE_JPEG_SAMPLING_FACTOR_444,
+        ]
+    if not cv2_module.imwrite(str(output), image, params):
+        raise SystemExit(f"could not write export image: {output}")
+    print(f"Wrote {output}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -161,11 +216,45 @@ def main() -> None:
         default=0.5,
         help="initial real-image contribution to the overlay (0..1)",
     )
+    parser.add_argument(
+        "--export",
+        type=Path,
+        metavar="PNG",
+        help="write one replay image and exit",
+    )
+    parser.add_argument(
+        "--export-layout",
+        choices=EXPORT_LAYOUTS,
+        default="side-by-side",
+        help="export the rectified and 3D views side by side, or only the 3D view",
+    )
+    parser.add_argument(
+        "--export-normal",
+        type=Path,
+        metavar="PNG",
+        help="write the cropped rectified camera view and exit (can be combined with --export-3d)",
+    )
+    parser.add_argument(
+        "--export-3d",
+        type=Path,
+        metavar="PNG",
+        help="write the cropped 3D view and exit (can be combined with --export-normal)",
+    )
+    parser.add_argument(
+        "--jpeg-quality",
+        type=int,
+        default=100,
+        help="JPEG quality for .jpg/.jpeg exports (0..100; default: 100)",
+    )
     args = parser.parse_args()
     if args.width < 1 or args.height < 1:
         parser.error("--width and --height must be positive")
     if not 0.0 <= args.overlay_alpha <= 1.0:
         parser.error("--overlay-alpha must be between 0 and 1")
+    if not 0 <= args.jpeg_quality <= 100:
+        parser.error("--jpeg-quality must be between 0 and 100")
+    if args.export is not None and (args.export_normal is not None or args.export_3d is not None):
+        parser.error("--export cannot be combined with --export-normal or --export-3d")
 
     try:
         import cv2
@@ -177,19 +266,68 @@ def main() -> None:
     raw_rgb, intrinsics_path, poses = _load_capture(args.capture_dir, cv2)
     raw_height, raw_width = raw_rgb.shape[:2]
     _, remap = load_intrinsics(intrinsics_path, raw_width, raw_height, cv2)
-    display_matrix, _ = load_intrinsics(intrinsics_path, args.width, args.height, cv2)
     real_rgb = cv2.remap(raw_rgb, *remap, cv2.INTER_LINEAR)
-    real_rgb = cv2.resize(real_rgb, (args.width, args.height), interpolation=cv2.INTER_AREA)
+    render_width, render_height = args.width, args.height
+    if args.export is not None or args.export_normal is not None or args.export_3d is not None:
+        # Render at the rectified camera's native aspect ratio, then crop both
+        # views identically to 4:3. Rendering directly at 4:3 would squeeze the
+        # camera image and change the simulated camera's horizontal field of view.
+        scale = max(args.width / real_rgb.shape[1], args.height / real_rgb.shape[0])
+        render_width = round(real_rgb.shape[1] * scale)
+        render_height = round(real_rgb.shape[0] * scale)
+    display_matrix, _ = load_intrinsics(intrinsics_path, render_width, render_height, cv2)
+    real_rgb = cv2.resize(
+        real_rgb, (render_width, render_height), interpolation=cv2.INTER_LANCZOS4
+    )
 
     model, data, camera_id = _restore_scene(
-        poses, render_width=args.width, render_height=args.height
+        poses, render_width=render_width, render_height=render_height
     )
     model.cam_fovy[camera_id] = float(
-        np.degrees(2.0 * np.arctan((args.height / 2.0) / display_matrix[1, 1]))
+        np.degrees(2.0 * np.arctan((render_height / 2.0) / display_matrix[1, 1]))
     )
     mujoco.mj_forward(model, data)
-    renderer = mujoco.Renderer(model, width=args.width, height=args.height)
+    renderer = mujoco.Renderer(model, width=render_width, height=render_height)
+    # Frame collision boxes share faces with their visual counterparts. Keep the
+    # collision-only group hidden so those coplanar surfaces cannot z-fight.
+    renderer._scene_option.geomgroup[3] = False
     alpha = args.overlay_alpha
+    if args.export is not None or args.export_normal is not None or args.export_3d is not None:
+        try:
+            renderer.update_scene(data, camera="workspace_camera")
+            sim_rgb = renderer.render()
+            real_bgr = cv2.cvtColor(real_rgb, cv2.COLOR_RGB2BGR)
+            sim_bgr = cv2.cvtColor(sim_rgb, cv2.COLOR_RGB2BGR)
+            if args.export is not None:
+                _export_image(
+                    args.export,
+                    args.export_layout,
+                    real_bgr,
+                    sim_bgr,
+                    cv2,
+                    jpeg_quality=args.jpeg_quality,
+                )
+            if args.export_normal is not None:
+                _export_image(
+                    args.export_normal,
+                    "normal",
+                    real_bgr,
+                    sim_bgr,
+                    cv2,
+                    jpeg_quality=args.jpeg_quality,
+                )
+            if args.export_3d is not None:
+                _export_image(
+                    args.export_3d,
+                    "3d",
+                    real_bgr,
+                    sim_bgr,
+                    cv2,
+                    jpeg_quality=args.jpeg_quality,
+                )
+        finally:
+            renderer.close()
+        return
     cv2.namedWindow(WINDOW_TITLE, cv2.WINDOW_NORMAL)
 
     try:

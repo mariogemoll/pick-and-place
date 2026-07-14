@@ -576,24 +576,11 @@ def execute_episode(
                         )
 
                     if captured_at is not None and recording is not None:
-                        axis_points, _ = cv2.projectPoints(
-                            np.float32([[0, 0, 0], [0.03, 0, 0], [0, 0.03, 0], [0, 0, 0.03]]),
-                            rvec,
-                            tvec,
-                            wrist_camera_matrix,
-                            np.zeros(5),
-                        )
-                        axis_points = axis_points.reshape(-1, 2).tolist()
                         recording.record_visual_servo_overlay(
                             captured_at,
                             {
                                 "tags": [np.asarray(det.corners).tolist() for det in detections],
                                 "cube_edges": [[pts_img[i].tolist(), pts_img[j].tolist()] for i, j in edges],
-                                "axes": [
-                                    [axis_points[0], axis_points[1], "red"],
-                                    [axis_points[0], axis_points[2], "green"],
-                                    [axis_points[0], axis_points[3], "blue"],
-                                ],
                             },
                         )
 
