@@ -7,8 +7,11 @@ Plays a prepared episode's trajectory under the same position-servo physics as
 ``sim.py`` and writes it straight into a LeRobotDataset with the same schema as
 the real recordings (``real.py``): one frame per control tick, holding the
 measured joints as ``observation.state``, the commanded set point as ``action``,
-and a wrist and overhead camera image. The two cameras are rendered offscreen
-from the named MuJoCo cameras, so no hardware is involved.
+and a wrist and overhead camera image. State and images are captured before the
+tick's command is applied, so each frame pairs the observation at time t with
+the action issued at time t — the same observe-then-act ordering as a real
+recording. The two cameras are rendered offscreen from the named MuJoCo
+cameras, so no hardware is involved.
 
 The image features are 512x512 squares — the input size of the SmolVLA vision
 tower. Each camera's vertical field of view is set from its calibrated
@@ -114,13 +117,15 @@ def record_episode(
     """Play ``episode``'s trajectory under physics and record every control tick.
 
     The arm is driven through the position-servo actuators exactly as in
-    ``sim.py``: each tick writes the trajectory set point to ``data.ctrl`` and
-    advances the sim by a batch of physics substeps. The commanded set point is
-    the ``action``; the joints read back from ``data`` after stepping are the
-    ``observation.state``. Both are expressed in the real joint frame (degrees /
-    0-100 gripper), so the dataset is unit-for-unit comparable to a real
-    recording. ``viewer`` (a launched passive viewer, or
-    ``None``) is synced once per tick if given.
+    ``sim.py``: each tick captures the frame (measured joints as
+    ``observation.state``, cameras) first, then writes the trajectory set point
+    — the ``action`` — to ``data.ctrl`` and advances the sim by a batch of
+    physics substeps. Capturing before stepping pairs each observation with the
+    command issued from it, matching a real recording, where the state is read
+    before the servos have tracked the new set point. Both streams are
+    expressed in the real joint frame (degrees / 0-100 gripper), so the dataset
+    is unit-for-unit comparable to a real recording. ``viewer`` (a launched
+    passive viewer, or ``None``) is synced once per tick if given.
 
     The dataset is created lazily on the first episode once the (fixed) 512x512
     frame shape is known. The caller commits the episode with ``save_episode``
@@ -149,21 +154,6 @@ def record_episode(
     while True:
         traj_t = (data.time - playback_start) * speed
         frame = trajectory.evaluate(traj_t)
-        for name, value in frame.joints.items():
-            data.ctrl[actuator_id[name]] = value
-        data.ctrl[actuator_id["gripper"]] = frame.gripper
-        mujoco.mj_step(model, data, nstep=simulation_steps_per_tick)
-
-        curr_contacts = {
-            (min(n1, n2), max(n1, n2))
-            for n1, n2 in scan_contacts(
-                model, data, episode.robot_geom_ids, episode.env_geom_ids
-            )
-            if is_unexpected(n1, n2)
-        }
-        for pair in curr_contacts - prev_contacts:
-            print(f"collision t={traj_t:.3f}s  {pair[0]} ↔ {pair[1]}")
-        prev_contacts = curr_contacts
 
         measured_arm = {name: get_joint(model, data, name) for name in ARM_JOINT_NAMES}
         measured_gripper = get_joint(model, data, "gripper")
@@ -192,10 +182,26 @@ def record_episode(
                 "encoder queue size."
             )
 
-        if viewer is not None:
-            viewer.sync()
-
         if traj_t >= trajectory.duration:
             break
+
+        for name, value in frame.joints.items():
+            data.ctrl[actuator_id[name]] = value
+        data.ctrl[actuator_id["gripper"]] = frame.gripper
+        mujoco.mj_step(model, data, nstep=simulation_steps_per_tick)
+
+        curr_contacts = {
+            (min(n1, n2), max(n1, n2))
+            for n1, n2 in scan_contacts(
+                model, data, episode.robot_geom_ids, episode.env_geom_ids
+            )
+            if is_unexpected(n1, n2)
+        }
+        for pair in curr_contacts - prev_contacts:
+            print(f"collision t={traj_t:.3f}s  {pair[0]} ↔ {pair[1]}")
+        prev_contacts = curr_contacts
+
+        if viewer is not None:
+            viewer.sync()
 
     print(placement_error(model, data, episode.target).summary())
