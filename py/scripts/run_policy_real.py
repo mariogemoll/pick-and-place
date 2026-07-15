@@ -36,6 +36,11 @@ run continuously at each camera's native rate and resolution — undistorted but
 never cropped — on one shared clock, optionally including a third
 ``--workspace-camera`` view and, with ``--record-audio``, the audio input muxed
 into every video. That is the mode for watchable footage of the policy performing.
+``--action-log`` additionally writes one .npz per attempt with the per-tick
+measured state, the action the policy returned (the ensembled one when temporal
+ensembling is on), the command actually sent, and every raw action chunk the
+model predicted — all in the real frame — so the freshest prediction can be
+compared offline against the ensembled/executed motion.
 
 The run is organised as a sequence of attempts. Each attempt locates the
 drop-zone square (the success target) and the cube on the overhead camera —
@@ -211,6 +216,80 @@ class CameraReader:
         self._cap.release()
 
 
+class ActionLog:
+    """Accumulate one attempt's per-tick actions and write them to
+    ``<root>/attempt_NNN.npz`` when the attempt ends.
+
+    Logged per tick: the measured joint state, the action the policy returned
+    (the ensembled one when temporal ensembling is on), and the velocity-capped
+    command actually sent. Whenever the model predicted a fresh chunk that tick
+    (every tick under ensembling, every ``n_action_steps`` ticks otherwise), the
+    whole chunk is logged too, keyed by the tick it arrived on. Everything is in
+    the real frame (degrees, gripper 0-100). Row 0 of a chunk is the model's
+    freshest prediction for its arrival tick, so ``chunks[i, 0] - action`` at
+    ``chunk_tick[i]`` measures how far the ensemble lags the newest prediction,
+    and comparing chunks across arrival ticks exposes mode flips.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.attempt = 0
+        self._clear()
+
+    def _clear(self) -> None:
+        self._tick: list[int] = []
+        self._t: list[float] = []
+        self._state: list[np.ndarray] = []
+        self._action: list[np.ndarray] = []
+        self._commanded: list[np.ndarray] = []
+        self._chunk_tick: list[int] = []
+        self._chunks: list[np.ndarray] = []
+
+    def start_attempt(self) -> None:
+        self.attempt += 1
+        self._clear()
+
+    def log_tick(
+        self,
+        tick: int,
+        t: float,
+        state: np.ndarray,
+        action: np.ndarray,
+        commanded: np.ndarray,
+        chunk: np.ndarray | None = None,
+    ) -> None:
+        self._tick.append(tick)
+        self._t.append(t)
+        self._state.append(np.asarray(state, dtype=np.float32))
+        self._action.append(np.asarray(action, dtype=np.float32))
+        self._commanded.append(np.asarray(commanded, dtype=np.float32))
+        if chunk is not None:
+            self._chunk_tick.append(tick)
+            self._chunks.append(np.asarray(chunk, dtype=np.float32))
+
+    def end_attempt(self, outcome: str) -> None:
+        if not self._tick:
+            return
+        path = self.root / f"attempt_{self.attempt:03d}.npz"
+        np.savez_compressed(
+            path,
+            tick=np.array(self._tick, dtype=np.int64),
+            t=np.array(self._t, dtype=np.float64),
+            state=np.stack(self._state),
+            action=np.stack(self._action),
+            commanded=np.stack(self._commanded),
+            chunk_tick=np.array(self._chunk_tick, dtype=np.int64),
+            chunks=(
+                np.stack(self._chunks)
+                if self._chunks
+                else np.zeros((0, 0, 0), dtype=np.float32)
+            ),
+            outcome=np.array(outcome),
+        )
+        print(f"Wrote action log: {path}")
+
+
 def _ramp_follower(
     follower, target_real: np.ndarray, low, high, warned, max_joint_speed: float
 ) -> None:
@@ -311,6 +390,17 @@ def main() -> None:
             "writes into <dir>/<timestamp>/: undistorted full-resolution wrist_live.mp4 "
             "and overhead_live.mp4 (plus workspace_live.mp4 with --workspace-camera) on "
             "a shared clock — unlike --save-video's cropped per-tick policy-input frames"
+        ),
+    )
+    parser.add_argument(
+        "--action-log",
+        type=Path,
+        default=None,
+        help=(
+            "root directory for per-attempt action logs; each run writes "
+            "<dir>/<timestamp>/attempt_NNN.npz with the per-tick state, returned "
+            "(ensembled) action, sent command, and every raw predicted chunk, all "
+            "in the real frame"
         ),
     )
     parser.add_argument(
@@ -541,6 +631,34 @@ def main() -> None:
     if getattr(policy.config, "temporal_ensemble_coeff", None) is not None:
         print(f"Temporal ensembling coeff: {policy.config.temporal_ensemble_coeff}")
 
+    # Action logging: capture every raw chunk the model predicts by wrapping
+    # predict_action_chunk, which select_action calls both under temporal
+    # ensembling (every tick, before the ensembler averages it away) and in
+    # queued mode (once per re-query). The control loop drains the capture each
+    # tick and unnormalizes it through the same postprocessor as the returned
+    # action, so the log compares like with like in real units.
+    action_log = None
+    captured_chunk: list = [None]
+    if args.action_log is not None:
+        import datetime
+
+        log_dir = args.action_log / datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        action_log = ActionLog(log_dir)
+        print(f"Logging per-attempt actions and raw chunks to {log_dir}")
+        if hasattr(policy, "predict_action_chunk"):
+            _predict_action_chunk = policy.predict_action_chunk
+
+            def _capture_predict_action_chunk(batch):
+                chunk = _predict_action_chunk(batch)
+                captured_chunk[0] = chunk
+                return chunk
+
+            policy.predict_action_chunk = _capture_predict_action_chunk
+        else:
+            print(
+                "Warning: policy has no predict_action_chunk; logging without raw chunks."
+            )
+
     print("Connecting to follower...")
     # Keep torque on a plain disconnect so the arm holds rather than going limp;
     # torque is only released deliberately at REST in the finally block.
@@ -742,12 +860,18 @@ def main() -> None:
 
         scanner = threading.Thread(target=scan_loop, daemon=True)
         scanner.start()
+        if action_log is not None:
+            action_log.start_attempt()
+        outcome = "error"
         try:
-            return _control_loop(attempt_start, next_tick,
-                                 report_time, report_tick, infer_seconds, placement)
+            outcome = _control_loop(attempt_start, next_tick,
+                                    report_time, report_tick, infer_seconds, placement)
+            return outcome
         finally:
             stop_scan.set()
             scanner.join(timeout=2.0)
+            if action_log is not None:
+                action_log.end_attempt(outcome)
 
     def _control_loop(attempt_start, next_tick,
                       report_time, report_tick, infer_seconds, placement) -> str:
@@ -760,6 +884,7 @@ def main() -> None:
         prev_arm = None
         prev_t = None
         announced = False
+        raw_lag = None  # newest chunk's first action vs the ensembled one, deg
         while True:
             if _drain_stdin_lines():
                 return "abandoned"
@@ -809,17 +934,39 @@ def main() -> None:
                 )
             follower.send_action(joints_to_action(commanded))
 
+            # Drain the chunk captured during this tick's inference (if any) and
+            # unnormalize the whole (chunk, dim) sequence in one pass — the
+            # postprocessor's stats broadcast per action dimension. Row 0 is the
+            # model's freshest prediction for this very tick, so its gap to the
+            # returned (ensembled) action is the ensemble lag.
+            chunk_real = None
+            if captured_chunk[0] is not None:
+                chunk_real = (
+                    postprocessor(captured_chunk[0].squeeze(0))
+                    .to("cpu")
+                    .numpy()[:, : len(JOINT_NAMES)]
+                )
+                captured_chunk[0] = None
+                raw_lag = float(
+                    np.max(np.abs(chunk_real[0, :GRIPPER_INDEX] - action_real[:GRIPPER_INDEX]))
+                )
+            if action_log is not None:
+                action_log.log_tick(
+                    tick, time.monotonic(), state, action_real, commanded, chunk_real
+                )
+
             if tick % 10 == 0:
                 np.set_printoptions(precision=2, suppress=True)
                 now = time.monotonic()
                 ticks = tick - report_tick
                 rate = f"  {ticks / (now - report_time):5.1f} Hz" if ticks else ""
                 infer = f"  infer {infer_seconds / ticks * 1000.0:5.1f} ms" if ticks else ""
+                lag = f"  raw-ens {raw_lag:4.1f}deg" if raw_lag is not None else ""
                 if args.attempt_timeout > 0:
                     clock = f"  {now - attempt_start:4.1f}/{args.attempt_timeout:.0f}s"
                 else:
                     clock = f"  {now - attempt_start:4.1f}s"
-                print(f"tick {tick:4d}  action={commanded}{rate}{infer}{clock}")
+                print(f"tick {tick:4d}  action={commanded}{rate}{infer}{lag}{clock}")
                 report_time, report_tick, infer_seconds = now, tick, 0.0
 
             tick += 1

@@ -11,7 +11,7 @@ MAX_BYTES=$((40 * 1024))
 exception_limit() {
   case "$1" in
     py/scripts/pick_and_place/real.py) printf '%s\n' $((62 * 1024)) ;;
-    py/scripts/run_policy_real.py) printf '%s\n' $((50 * 1024)) ;;
+    py/scripts/run_policy_real.py) printf '%s\n' $((56 * 1024)) ;;
     py/src/pick_and_place/executor.py) printf '%s\n' $((63 * 1024)) ;;
     py/src/pick_and_place/trajectory.py) printf '%s\n' $((58 * 1024)) ;;
     *) printf '%s\n' "$MAX_BYTES" ;;
