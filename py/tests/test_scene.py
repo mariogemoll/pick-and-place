@@ -42,7 +42,7 @@ def test_scene_contains_robot_floor_light_and_cube():
     assert model.nlight == 2
     assert model.light_castshadow[light_id] == 0
     assert model.light_castshadow[warm_spotlight_id] == 0
-    np.testing.assert_allclose(model.light_specular[light_id], (0.0, 0.0, 0.0))
+    np.testing.assert_allclose(model.light_specular[light_id], (0.22, 0.22, 0.22))
     np.testing.assert_allclose(
         model.light_diffuse[warm_spotlight_id], (0.4, 0.28, 0.17)
     )

@@ -77,6 +77,8 @@ def run_recording(
     task: str,
     source_xy: tuple[float, float] | None = None,
     target_xy: tuple[float, float] | None = None,
+    background_panorama: Path | None = None,
+    table_texture: Path | None = None,
     speed: float = 1.0,
     vcodec: str = "auto",
     streaming_encoding: bool = True,
@@ -99,7 +101,13 @@ def run_recording(
     # the overhead camera; calibrated extrinsics place it where the real one sits.
     print(f"{label}Building scene...")
     dummy_source = CubePose(x=PAN_AXIS[0] + 0.1, y=PAN_AXIS[1], z=CUBE_HALF_SIZE)
-    model, data = _build_model(dummy_source, include_environment=True, paper_target_marker=True)
+    model, data = _build_model(
+        dummy_source,
+        include_environment=True,
+        paper_target_marker=True,
+        background_panorama=background_panorama,
+        table_texture=table_texture,
+    )
     model.opt.timestep = 1.0 / HARDWARE_SIMULATION_HZ
     apply_camera_extrinsics_to_model(model, load_local_camera_extrinsics())
     mujoco.mj_forward(model, data)
@@ -281,6 +289,18 @@ def main() -> None:
     parser.add_argument("--viewer", action="store_true", help="open the 3D MuJoCo viewer")
     parser.add_argument("--seed", type=int, default=None, help="RNG seed for pose sampling")
     parser.add_argument(
+        "--background-panorama",
+        type=Path,
+        default=None,
+        help="equirectangular room panorama to render as a skybox behind the scene",
+    )
+    parser.add_argument(
+        "--table-texture",
+        type=Path,
+        default=None,
+        help="top-down table texture (from reconstruct_table_texture.py) for the floor",
+    )
+    parser.add_argument(
         "--dataset-root",
         type=Path,
         default=None,
@@ -334,6 +354,8 @@ def main() -> None:
     common = dict(
         source_xy=tuple(args.source) if args.source is not None else None,
         target_xy=tuple(args.target) if args.target is not None else None,
+        background_panorama=args.background_panorama,
+        table_texture=args.table_texture,
         speed=args.speed,
         vcodec=args.vcodec,
         streaming_encoding=args.streaming_encoding,

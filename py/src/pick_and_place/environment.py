@@ -31,12 +31,14 @@ WORKSPACE_FRAME_QUAT = (-0.707107, 0.0, 0.0, -0.707107)
 OVERHEAD_CAMERA_MOUNT_POS = (0.316979, -0.0729945, 0.0)
 OVERHEAD_CAMERA_MOUNT_QUAT = (-0.707107, 0.0, 0.0, -0.707107)
 
-WORKSPACE_FRAME_RED = (0.91, 0.3, 0.24, 1.0)
-WORKSPACE_FRAME_GRAY = (0.55, 0.55, 0.58, 1.0)
-WORKSPACE_FRAME_YELLOW = (0.93, 0.67, 0.18, 1.0)
-WORKSPACE_FRAME_BLUE = (0.18, 0.55, 0.91, 1.0)
-# A brighter grey for the overhead mount (dark parts hierarchy: camera < motor < mount).
-MOUNT_BRIGHT_GRAY = (0.3, 0.3, 0.3, 1.0)
+# The frame rails are natural MDF/plywood. The plastic support blocks are
+# 3D-printed: the pair flanking the robot base is black, the camera-arm base is
+# white. Matched to the real rig, replacing the old schematic red/yellow/blue.
+WORKSPACE_FRAME_MDF = (0.72, 0.66, 0.54, 1.0)
+FRAME_PLASTIC_BLACK = (0.11, 0.11, 0.12, 1.0)
+FRAME_PLASTIC_WHITE = (0.85, 0.86, 0.88, 1.0)
+# The overhead camera mount is white 3D-printed plastic.
+MOUNT_PLASTIC_WHITE = (0.85, 0.86, 0.88, 1.0)
 
 WORKSPACE_FRAME_APRILTAG_PLATES: tuple[tuple[int, str, tuple[float, float, float]], ...] = (
     (12, "ne", (0.230, 0.230, 0.0025)),
@@ -66,12 +68,12 @@ def add_workspace_frame(
     # Part 03 is the overhead camera arm base, also plastic.
     _add_workspace_frame_part(
         spec, frame, "north_01", WORKSPACE_FRAME_STL_DIR / "part_01_box_10p45_flat.stl",
-        pos=(-0.24775, 0.2813, 0), rgba=WORKSPACE_FRAME_RED, material="mdf",
+        pos=(-0.24775, 0.2813, 0), rgba=WORKSPACE_FRAME_MDF, material="mdf",
         col_size=(0.05225, 0.0187, 0.0036), collision_default=collision_default
     )
     _add_workspace_frame_part(
         spec, frame, "north_02", WORKSPACE_FRAME_STL_DIR / "part_02_box_11p6.stl",
-        pos=(-0.1375, 0.2813, 0), rgba=WORKSPACE_FRAME_GRAY, material=ENVIRONMENT_PLASTIC_MATERIAL,
+        pos=(-0.1375, 0.2813, 0), rgba=FRAME_PLASTIC_BLACK, material=ENVIRONMENT_PLASTIC_MATERIAL,
         col_size=(0.053, 0.0187, 0.0036), col_pos=(-0.1325, 0.2813, 0.0036), collision_default=collision_default
     )
     # North 03 is the arm base for the overhead camera (Yellow plastic).
@@ -86,7 +88,7 @@ def add_workspace_frame(
         meshname="overhead_cam_arm_base",
         pos=(-0.0534305, 0.206079, 0.005),
         quat=(-0.5, -0.5, 0.5, 0.5),
-        rgba=WORKSPACE_FRAME_YELLOW,
+        rgba=FRAME_PLASTIC_WHITE,
         material=ENVIRONMENT_PLASTIC_MATERIAL,
         contype=0,
         conaffinity=0,
@@ -104,12 +106,12 @@ def add_workspace_frame(
 
     _add_workspace_frame_part(
         spec, frame, "north_04", WORKSPACE_FRAME_STL_DIR / "part_02_box_11p6.stl",
-        pos=(0.1375, 0.2813, 0), quat=(0, 0, 0, 1), rgba=WORKSPACE_FRAME_GRAY, material=ENVIRONMENT_PLASTIC_MATERIAL,
+        pos=(0.1375, 0.2813, 0), quat=(0, 0, 0, 1), rgba=FRAME_PLASTIC_BLACK, material=ENVIRONMENT_PLASTIC_MATERIAL,
         col_size=(0.053, 0.0187, 0.0036), col_pos=(0.1325, 0.2813, 0.0036), collision_default=collision_default
     )
     _add_workspace_frame_part(
         spec, frame, "north_05", WORKSPACE_FRAME_STL_DIR / "part_01_box_10p45_flat.stl",
-        pos=(0.24775, 0.2813, 0), quat=(0, 0, 0, 1), rgba=WORKSPACE_FRAME_RED, material="mdf",
+        pos=(0.24775, 0.2813, 0), quat=(0, 0, 0, 1), rgba=WORKSPACE_FRAME_MDF, material="mdf",
         col_size=(0.05225, 0.0187, 0.0036), collision_default=collision_default
     )
 
@@ -117,49 +119,49 @@ def add_workspace_frame(
     side_quat = (0.707107, 0.0, 0.0, -0.707107)
     _add_workspace_frame_part(
         spec, frame, "east_01", WORKSPACE_FRAME_STL_DIR / "part_01_box_10p45_flat.stl",
-        pos=(0.2813, 0.24775, 0), quat=side_quat, rgba=WORKSPACE_FRAME_RED, material="mdf",
+        pos=(0.2813, 0.24775, 0), quat=side_quat, rgba=WORKSPACE_FRAME_MDF, material="mdf",
         col_size=(0.0187, 0.05225, 0.0036), collision_default=collision_default
     )
     _add_workspace_frame_part(
         spec, frame, "east_02", WORKSPACE_FRAME_STL_DIR / "part_03_box_15p9.stl",
-        pos=(0.2813, 0.116, 0), quat=side_quat, rgba=WORKSPACE_FRAME_YELLOW, material="mdf",
+        pos=(0.2813, 0.116, 0), quat=side_quat, rgba=WORKSPACE_FRAME_MDF, material="mdf",
         col_size=(0.0187, 0.0695, 0.0036), collision_default=collision_default
     )
     _add_workspace_frame_part(
         spec, frame, "east_03", WORKSPACE_FRAME_STL_DIR / "part_04_box_7p3.stl",
-        pos=(0.2813, 0, 0), quat=side_quat, rgba=WORKSPACE_FRAME_BLUE, material="mdf",
+        pos=(0.2813, 0, 0), quat=side_quat, rgba=WORKSPACE_FRAME_MDF, material="mdf",
         col_size=(0.0187, 0.0365, 0.0036), collision_default=collision_default
     )
     _add_workspace_frame_part(
         spec, frame, "east_04", WORKSPACE_FRAME_STL_DIR / "part_03_box_15p9.stl",
-        pos=(0.2813, -0.116, 0), quat=side_quat, rgba=WORKSPACE_FRAME_YELLOW, material="mdf",
+        pos=(0.2813, -0.116, 0), quat=side_quat, rgba=WORKSPACE_FRAME_MDF, material="mdf",
         col_size=(0.0187, 0.0695, 0.0036), collision_default=collision_default
     )
     _add_workspace_frame_part(
         spec, frame, "east_05", WORKSPACE_FRAME_STL_DIR / "part_01_box_10p45_flat.stl",
-        pos=(0.2813, -0.24775, 0), quat=(0.707107, 0.0, 0.0, 0.707107), rgba=WORKSPACE_FRAME_RED, material="mdf",
+        pos=(0.2813, -0.24775, 0), quat=(0.707107, 0.0, 0.0, 0.707107), rgba=WORKSPACE_FRAME_MDF, material="mdf",
         col_size=(0.0187, 0.05225, 0.0036), collision_default=collision_default
     )
 
     # South side (all MDF).
     _add_workspace_frame_part(
         spec, frame, "south_01", WORKSPACE_FRAME_STL_DIR / "part_01_box_10p45_flat.stl",
-        pos=(0.24775, -0.2813, 0), quat=(0, 0, 0, 1), rgba=WORKSPACE_FRAME_RED, material="mdf",
+        pos=(0.24775, -0.2813, 0), quat=(0, 0, 0, 1), rgba=WORKSPACE_FRAME_MDF, material="mdf",
         col_size=(0.05225, 0.0187, 0.0036), collision_default=collision_default
     )
     _add_workspace_frame_part(
         spec, frame, "south_02", WORKSPACE_FRAME_STL_DIR / "part_03_box_15p9.stl",
-        pos=(0.116, -0.2813, 0), quat=(0, 0, 0, 1), rgba=WORKSPACE_FRAME_YELLOW, material="mdf",
+        pos=(0.116, -0.2813, 0), quat=(0, 0, 0, 1), rgba=WORKSPACE_FRAME_MDF, material="mdf",
         col_size=(0.0695, 0.0187, 0.0036), collision_default=collision_default
     )
     _add_workspace_frame_part(
         spec, frame, "south_04", WORKSPACE_FRAME_STL_DIR / "part_03_box_15p9.stl",
-        pos=(-0.116, -0.2813, 0), quat=(0, 0, 0, 1), rgba=WORKSPACE_FRAME_YELLOW, material="mdf",
+        pos=(-0.116, -0.2813, 0), quat=(0, 0, 0, 1), rgba=WORKSPACE_FRAME_MDF, material="mdf",
         col_size=(0.0695, 0.0187, 0.0036), collision_default=collision_default
     )
     _add_workspace_frame_part(
         spec, frame, "south_05", WORKSPACE_FRAME_STL_DIR / "part_01_box_10p45_flat.stl",
-        pos=(-0.24775, -0.2813, 0), quat=(-1, 0, 0, 0), rgba=WORKSPACE_FRAME_RED, material="mdf",
+        pos=(-0.24775, -0.2813, 0), quat=(-1, 0, 0, 0), rgba=WORKSPACE_FRAME_MDF, material="mdf",
         col_size=(0.05225, 0.0187, 0.0036), collision_default=collision_default
     )
 
@@ -167,27 +169,27 @@ def add_workspace_frame(
     west_quat = (0.707107, 0.0, 0.0, 0.707107)
     _add_workspace_frame_part(
         spec, frame, "west_01", WORKSPACE_FRAME_STL_DIR / "part_01_box_10p45_flat.stl",
-        pos=(-0.2813, -0.24775, 0), quat=west_quat, rgba=WORKSPACE_FRAME_RED, material="mdf",
+        pos=(-0.2813, -0.24775, 0), quat=west_quat, rgba=WORKSPACE_FRAME_MDF, material="mdf",
         col_size=(0.0187, 0.05225, 0.0036), collision_default=collision_default
     )
     _add_workspace_frame_part(
         spec, frame, "west_02", WORKSPACE_FRAME_STL_DIR / "part_03_box_15p9.stl",
-        pos=(-0.2813, -0.116, 0), quat=west_quat, rgba=WORKSPACE_FRAME_YELLOW, material="mdf",
+        pos=(-0.2813, -0.116, 0), quat=west_quat, rgba=WORKSPACE_FRAME_MDF, material="mdf",
         col_size=(0.0187, 0.0695, 0.0036), collision_default=collision_default
     )
     _add_workspace_frame_part(
         spec, frame, "west_03", WORKSPACE_FRAME_STL_DIR / "part_04_box_7p3.stl",
-        pos=(-0.2813, 0, 0), quat=west_quat, rgba=WORKSPACE_FRAME_BLUE, material="mdf",
+        pos=(-0.2813, 0, 0), quat=west_quat, rgba=WORKSPACE_FRAME_MDF, material="mdf",
         col_size=(0.0187, 0.0365, 0.0036), collision_default=collision_default
     )
     _add_workspace_frame_part(
         spec, frame, "west_04", WORKSPACE_FRAME_STL_DIR / "part_03_box_15p9.stl",
-        pos=(-0.2813, 0.116, 0), quat=west_quat, rgba=WORKSPACE_FRAME_YELLOW, material="mdf",
+        pos=(-0.2813, 0.116, 0), quat=west_quat, rgba=WORKSPACE_FRAME_MDF, material="mdf",
         col_size=(0.0187, 0.0695, 0.0036), collision_default=collision_default
     )
     _add_workspace_frame_part(
         spec, frame, "west_05", WORKSPACE_FRAME_STL_DIR / "part_01_box_10p45_flat.stl",
-        pos=(-0.2813, 0.24775, 0), quat=(-0.707107, 0.0, 0.0, 0.707107), rgba=WORKSPACE_FRAME_RED, material="mdf",
+        pos=(-0.2813, 0.24775, 0), quat=(-0.707107, 0.0, 0.0, 0.707107), rgba=WORKSPACE_FRAME_MDF, material="mdf",
         col_size=(0.0187, 0.05225, 0.0036), collision_default=collision_default
     )
 
@@ -323,7 +325,7 @@ def add_overhead_camera_mount(
         meshname="overhead_mount_bottom",
         pos=(0.0365125, -0.2626, 0),
         quat=(0.5, 0.5, 0.5, 0.5),
-        rgba=MOUNT_BRIGHT_GRAY,
+        rgba=MOUNT_PLASTIC_WHITE,
         material=ENVIRONMENT_PLASTIC_MATERIAL,
         contype=0,
         conaffinity=0,
@@ -335,7 +337,7 @@ def add_overhead_camera_mount(
         meshname="overhead_mount_middle",
         pos=(0.0730125, -0.2439, 0.188),
         quat=(0.5, 0.5, 0.5, 0.5),
-        rgba=MOUNT_BRIGHT_GRAY,
+        rgba=MOUNT_PLASTIC_WHITE,
         material=ENVIRONMENT_PLASTIC_MATERIAL,
         contype=0,
         conaffinity=0,
@@ -347,7 +349,7 @@ def add_overhead_camera_mount(
         meshname="overhead_mount_top",
         pos=(0.0730125, -0.2439, 0.188),
         quat=(0.5, 0.5, 0.5, 0.5),
-        rgba=MOUNT_BRIGHT_GRAY,
+        rgba=MOUNT_PLASTIC_WHITE,
         material=ENVIRONMENT_PLASTIC_MATERIAL,
         contype=0,
         conaffinity=0,

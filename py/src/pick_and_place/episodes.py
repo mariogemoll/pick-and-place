@@ -655,9 +655,16 @@ def _build_model(
     offwidth: int = 1280,
     offheight: int = 720,
     paper_target_marker: bool = False,
+    background_panorama: Path | str | None = None,
+    table_texture: Path | str | None = None,
     robot_dynamics: bool | str | Path = True,
 ) -> tuple[mujoco.MjModel, mujoco.MjData]:
-    spec = build_scene(include_environment=include_environment, robot_dynamics=robot_dynamics)
+    spec = build_scene(
+        include_environment=include_environment,
+        background_panorama=background_panorama,
+        table_texture=table_texture,
+        robot_dynamics=robot_dynamics,
+    )
     if paper_target_marker:
         add_paper_target_marker(spec)
     spec.visual.global_.offwidth = max(spec.visual.global_.offwidth, offwidth)

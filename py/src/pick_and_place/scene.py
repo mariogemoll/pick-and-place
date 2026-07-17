@@ -7,8 +7,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import cv2
 import mujoco
+import numpy as np
 
+from pick_and_place.background_panorama import add_background_panorama
 from pick_and_place.builder import STOCK_ASSETS_DIR, build_robot
 from pick_and_place.environment import (
     APRILTAG_TEXTURE_DIR,
@@ -64,6 +67,8 @@ def build_scene(
     include_environment: bool = True,
     tabletop: bool = False,
     apriltag_cube: bool | None = None,
+    background_panorama: Path | str | None = None,
+    table_texture: Path | str | None = None,
     robot_dynamics: bool | str | Path = True,
 ) -> mujoco.MjSpec:
     """Return the composed robot with a floor, workspace overlays, soft light, and cube.
@@ -72,6 +77,10 @@ def build_scene(
     the simple scene, or the AprilTag-stickered cube (a perception target) for
     the standard scene. When left ``None`` it follows ``include_environment``, so
     the simple scene gets the red cube and the standard scene the tagged one.
+
+    ``background_panorama`` optionally wraps the scene in a skybox textured with
+    an equirectangular room panorama, giving the wrist camera a realistic backdrop
+    beyond the tabletop.
     """
     if apriltag_cube is None:
         apriltag_cube = include_environment
@@ -103,8 +112,15 @@ def build_scene(
         add_workspace_frame_apriltags(spec)
     if tabletop:
         _add_tabletop(spec)
+    elif background_panorama is not None or table_texture is not None:
+        # The panorama supplies everything beyond the setup, so the floor ends at
+        # the workspace frame and the skybox shows past it. When a table texture is
+        # given, the finite floor carries the reconstructed real table surface.
+        _add_workspace_floor(spec, texture=table_texture)
     else:
         _add_groundplane(spec)
+    if background_panorama is not None:
+        add_background_panorama(spec, background_panorama)
 
     return spec
 
@@ -146,14 +162,16 @@ def _add_scene_lighting(spec: mujoco.MjSpec) -> None:
     """Configure the neutral headlight and overhead fill used by replay renders."""
     spec.visual.headlight.diffuse = (0.6, 0.6, 0.6)
     spec.visual.headlight.ambient = (0.3, 0.3, 0.3)
-    spec.visual.headlight.specular = (0.0, 0.0, 0.0)
+    # A little specular so glossy materials (servos, camera, PLA sheen) show
+    # highlights instead of reading as flat matte.
+    spec.visual.headlight.specular = (0.18, 0.18, 0.18)
     scene_light = spec.worldbody.add_light(
         name="scene_light",
         pos=(0.0, 0.0, 1.0),
         dir=(0.0, 0.0, -1.0),
         diffuse=(0.35, 0.35, 0.35),
         ambient=(0.15, 0.15, 0.15),
-        specular=(0.0, 0.0, 0.0),
+        specular=(0.22, 0.22, 0.22),
     )
     scene_light.castshadow = False
     warm_spotlight = spec.worldbody.add_light(
@@ -164,7 +182,7 @@ def _add_scene_lighting(spec: mujoco.MjSpec) -> None:
         exponent=8.0,
         diffuse=(0.4, 0.28, 0.17),
         ambient=(0.04, 0.028, 0.017),
-        specular=(0.0, 0.0, 0.0),
+        specular=(0.12, 0.09, 0.06),
     )
     warm_spotlight.castshadow = False
 
@@ -181,6 +199,69 @@ def _add_groundplane(spec: mujoco.MjSpec) -> None:
         size=(0.0, 0.0, 0.05),
         material="groundplane",
     )
+
+
+#: Half-extent of the workspace frame's outer edge (the ``0.3`` in the table
+#: constants above); the finite floor spans this square around the frame center.
+WORKSPACE_FLOOR_HALF = 0.3
+WORKSPACE_FLOOR_THICKNESS = 0.02
+
+
+def _add_workspace_floor(spec: mujoco.MjSpec, *, texture: Path | str | None = None) -> None:
+    """Add a finite floor that ends flush with the workspace frame.
+
+    Used with a background panorama: beyond this square the skybox is visible, so
+    the floor must not extend past the frame. The top face sits at world Z=0 and
+    is collidable, so the pick cube rests on it exactly as it does on the infinite
+    ground plane. When *texture* is given (an equirect-free top-down PNG from
+    ``reconstruct_table_texture.py``), the floor carries the real table surface,
+    registered so the texel at world (x, y) sits over that point.
+    """
+    if texture is not None:
+        _add_floor_texture(spec, texture)
+        rgba = (1.0, 1.0, 1.0, 1.0)
+    else:
+        spec.add_material(name="groundplane", rgba=(0.82, 0.74, 0.6, 1.0), reflectance=0.0)
+        rgba = (0.82, 0.74, 0.6, 1.0)
+    spec.worldbody.add_geom(
+        name="floor",
+        type=mujoco.mjtGeom.mjGEOM_BOX,
+        pos=(WORKSPACE_FRAME_POS[0], WORKSPACE_FRAME_POS[1], -WORKSPACE_FLOOR_THICKNESS / 2),
+        size=(WORKSPACE_FLOOR_HALF, WORKSPACE_FLOOR_HALF, WORKSPACE_FLOOR_THICKNESS / 2),
+        material="groundplane",
+        rgba=rgba,
+    )
+
+
+def _add_floor_texture(spec: mujoco.MjSpec, texture: Path | str) -> None:
+    """Create the ``groundplane`` material carrying the top-down table texture.
+
+    Added after :func:`apply_materials` (which clears materials), mirroring the
+    AprilTag textures, so the texture survives into the compiled model. The image
+    is rotated to MuJoCo's box-top UV convention so world +X/+Y line up with the
+    texture's rows/columns.
+    """
+    bgr = cv2.imread(str(texture))
+    if bgr is None:
+        raise FileNotFoundError(f"could not read table texture: {texture}")
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    # The texture is built with row 0 = +X and column 0 = -Y; rotate into the
+    # orientation MuJoCo samples the box top face so features land in place.
+    rgb = np.rot90(rgb, k=-1).copy()
+    height, width = rgb.shape[:2]
+
+    tex = spec.add_texture(
+        name="table_texture",
+        type=mujoco.mjtTexture.mjTEXTURE_2D,
+        width=width,
+        height=height,
+        nchannel=3,
+    )
+    tex.data = rgb.tobytes()
+    material = spec.add_material(name="groundplane")
+    material.textures[1] = "table_texture"
+    material.texrepeat = [1.0, 1.0]
+    material.texuniform = False
 
 
 def _add_tabletop(spec: mujoco.MjSpec) -> None:

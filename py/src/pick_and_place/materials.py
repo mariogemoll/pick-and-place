@@ -23,14 +23,47 @@ from dataclasses import dataclass, field
 
 import mujoco
 
-PLASTIC_RGBA: tuple[float, float, float, float] = (0.8, 0.8, 0.8, 1.0)
+# Printed parts are white PLA; sampled from real footage they read as a
+# neutral-to-slightly-cool white rather than the flat mid-grey used before.
+PLASTIC_RGBA: tuple[float, float, float, float] = (0.85, 0.86, 0.88, 1.0)
 ENVIRONMENT_PLASTIC_RGBA: tuple[float, float, float, float] = (0.62, 0.62, 0.62, 1.0)
-MOTOR_RGBA: tuple[float, float, float, float] = (0.15, 0.15, 0.15, 1.0)
+# STS-3215 servo bodies are near-black glossy plastic.
+MOTOR_RGBA: tuple[float, float, float, float] = (0.11, 0.11, 0.12, 1.0)
 CAMERA_RGBA: tuple[float, float, float, float] = (0.05, 0.05, 0.05, 1.0)
-MDF_RGBA: tuple[float, float, float, float] = (0.62, 0.62, 0.62, 1.0)
+MDF_RGBA: tuple[float, float, float, float] = (0.72, 0.66, 0.54, 1.0)
 _COLLISION_RGBA: tuple[float, float, float, float] = (0.2, 0.8, 0.2, 0.5)
 
 _MOTOR_THRESHOLD = 0.3  # all RGB channels below this → classify as motor
+
+
+@dataclass(frozen=True)
+class Finish:
+    """Specular finish of a material: highlight strength, tightness, mirror-ness."""
+
+    specular: float = 0.0
+    shininess: float = 0.0
+    reflectance: float = 0.0
+
+
+# Per-material surface finish. The printed PLA parts have a soft satin sheen; the
+# servo and camera bodies are glossy black plastic; MDF and the workspace-frame
+# plastic are near-matte. Highlights only appear when the scene lights emit
+# specular (see ``scene._add_scene_lighting``).
+_FINISHES: dict[str, Finish] = {
+    "plastic": Finish(specular=0.2, shininess=0.35),
+    "environment_plastic": Finish(specular=0.12, shininess=0.25),
+    "motor": Finish(specular=0.5, shininess=0.6),
+    "camera": Finish(specular=0.6, shininess=0.7),
+    "mdf": Finish(specular=0.05, shininess=0.15),
+    "collision": Finish(),
+}
+
+
+def _apply_finish(material: mujoco.MjsMaterial, name: str) -> None:
+    finish = _FINISHES.get(name, Finish())
+    material.specular = finish.specular
+    material.shininess = finish.shininess
+    material.reflectance = finish.reflectance
 
 
 @dataclass
@@ -138,9 +171,11 @@ def apply_materials(spec: mujoco.MjSpec, config: MaterialConfig) -> None:
             mat = spec.add_material()
             mat.name = name
             mat.rgba = list(config.rgba_for(name))
+            _apply_finish(mat, name)
 
     for name in config.custom:
         if name in needed:
             mat = spec.add_material()
             mat.name = name
             mat.rgba = list(config.rgba_for(name))
+            _apply_finish(mat, name)
