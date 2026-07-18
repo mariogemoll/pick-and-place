@@ -13,12 +13,10 @@ the action issued at time t — the same observe-then-act ordering as a real
 recording. The two cameras are rendered offscreen from the named MuJoCo
 cameras, so no hardware is involved.
 
-The image features are 512x512 squares — the input size of the SmolVLA vision
-tower. Each camera's vertical field of view is set from its calibrated
-intrinsics, so a sim frame matches a real frame that has been undistorted,
-center-cropped to a square, and resized to 512x512. (Undistortion is a no-op in
-sim: the sim camera is an ideal pinhole, so there is nothing to fake-then-invert
-— matching the field of view is all that is needed.)
+Each camera's vertical field of view is set from its calibrated intrinsics. The
+render resolution is configurable, and defaults to 512x512 for existing callers.
+(Undistortion is a no-op in sim: the sim camera is an ideal pinhole, so there is
+nothing to fake-then-invert — matching the field of view is all that is needed.)
 
 When the episode carries a miscalibration draw (see
 :mod:`pick_and_place.miscalibration`), playback mirrors the real hardware
@@ -102,21 +100,24 @@ def fovy_from_intrinsics(intrinsics: dict[str, Any]) -> float:
 
 
 class SimCameraRig:
-    """Offscreen renderers for the wrist and overhead cameras at 512x512.
+    """Offscreen renderers for the wrist and overhead cameras.
 
     Each camera's ``cam_fovy`` is overridden from its calibrated intrinsics (when
-    available) so the square sim render matches a square crop of the real
-    undistorted feed. Falls back to the model's built-in fovy for any camera
-    without local intrinsics.
+    available) so the sim render matches the real undistorted feed. Falls back
+    to the model's built-in fovy for any camera without local intrinsics.
     """
 
     def __init__(
         self,
         model: mujoco.MjModel,
         intrinsics_by_name: dict[str, dict[str, Any]] | None = None,
-        size: int = SQUARE_SIZE,
+        width: int = SQUARE_SIZE,
+        height: int = SQUARE_SIZE,
     ) -> None:
-        self.size = size
+        if width < 1 or height < 1:
+            raise ValueError("camera width and height must be positive")
+        self.width = width
+        self.height = height
         intrinsics_by_name = intrinsics_by_name or {}
         self._cameras = []
         for name in (WRIST_CAMERA, OVERHEAD_CAMERA):
@@ -127,10 +128,10 @@ class SimCameraRig:
             if intrinsics is not None:
                 model.cam_fovy[cam_id] = fovy_from_intrinsics(intrinsics)
             self._cameras.append(name)
-        self._renderer = mujoco.Renderer(model, width=size, height=size)
+        self._renderer = mujoco.Renderer(model, width=width, height=height)
 
     def render(self, data: mujoco.MjData, camera: str) -> np.ndarray:
-        """Render one camera to an ``(size, size, 3)`` uint8 RGB array."""
+        """Render one camera to an ``(height, width, 3)`` uint8 RGB array."""
         self._renderer.update_scene(data, camera=camera)
         return self._renderer.render()
 
@@ -218,7 +219,8 @@ def record_episode(
         )
 
     if recording is not None and recording.dataset is None:
-        recording.create_dataset((rig.size, rig.size, 3), (rig.size, rig.size, 3))
+        image_shape = (rig.height, rig.width, 3)
+        recording.create_dataset(image_shape, image_shape)
 
     time_origin = data.time
 

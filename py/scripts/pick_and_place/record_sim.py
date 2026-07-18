@@ -8,12 +8,12 @@ Each run samples episodes, plays their trajectories under the model's
 position-servo physics, and writes them straight into one LeRobotDataset
 (``datasets/<timestamp>/`` by default) with the same schema the real arm
 produces: per control tick, the measured joints as ``observation.state``, the
-commanded set point as ``action``, and a 512x512 wrist and overhead image
+commanded set point as ``action``, and a 640x480 wrist and overhead image
 rendered offscreen from the named MuJoCo cameras. No hardware is involved.
 
 Camera fields of view come from the calibrated intrinsics in
-``config/camera_intrinsics``, so a sim frame matches a real frame that has been
-undistorted, center-cropped to a square, and resized to 512x512.
+``config/camera_intrinsics``, so a sim frame matches the calibrated real camera
+resolution by default.
 
 The episode rollout is sequential within a process (stateful physics, one
 persistent scene), so ``--workers N`` shards the run across N processes, each
@@ -105,17 +105,22 @@ def run_recording(
     vcodec: str = "auto",
     streaming_encoding: bool = True,
     image_writer_threads: int = 4,
+    image_width: int = 640,
+    image_height: int = 480,
     use_viewer: bool = False,
     miscalibration: bool = False,
     label: str = "",
+    first_episode: int = 0,
 ) -> int:
     """Record ``episodes`` episodes into one LeRobotDataset; return the count saved.
 
     Builds a single persistent scene (the cube freejoint is repositioned and the
     arm reset each episode), renders the wrist/overhead cameras offscreen, and
     plays each sampled trajectory under physics. ``label`` prefixes log lines so
-    parallel shards stay legible. ``use_viewer`` opens the 3D viewer (single
-    process only); shard workers always run headless.
+    parallel shards stay legible. ``first_episode`` is the global index of this
+    shard's first episode, ensuring each episode's RNG stream is independent of
+    the worker count. ``use_viewer`` opens the 3D viewer (single process only);
+    shard workers always run headless.
     """
     source = _to_cube(source_xy)
     target = _to_cube(target_xy)
@@ -135,7 +140,12 @@ def run_recording(
     apply_camera_extrinsics_to_model(model, load_local_camera_extrinsics())
     mujoco.mj_forward(model, data)
 
-    rig = SimCameraRig(model, load_local_camera_intrinsics())
+    rig = SimCameraRig(
+        model,
+        load_local_camera_intrinsics(),
+        width=image_width,
+        height=image_height,
+    )
 
     recording = RecordingSession(
         repo_id=repo_id,
@@ -148,7 +158,6 @@ def run_recording(
     )
     print(f"{label}Recording into LeRobotDataset at: {dataset_root}")
 
-    rng = np.random.default_rng(seed)
     miscalibration_model = MiscalibrationModel() if miscalibration else None
     viewer_cm = mujoco.viewer.launch_passive(model, data) if use_viewer else None
     viewer = viewer_cm.__enter__() if viewer_cm is not None else _MockViewer()
@@ -160,6 +169,8 @@ def run_recording(
                 print(f"{label}Viewer closed; stopping.")
                 break
             print(f"{label}--- Episode {index + 1}/{episodes} ---")
+            global_episode = first_episode + index
+            rng = _episode_rng(seed, global_episode)
             draw = (
                 miscalibration_model.sample(rng)
                 if miscalibration_model is not None
@@ -249,6 +260,13 @@ def _split(total: int, workers: int) -> list[int]:
     """Spread ``total`` episodes as evenly as possible over ``workers`` shards."""
     base, extra = divmod(total, workers)
     return [base + (1 if i < extra else 0) for i in range(workers)]
+
+
+def _episode_rng(root_seed: int | None, global_episode: int) -> np.random.Generator:
+    """Return the deterministic RNG stream for one globally numbered episode."""
+    if root_seed is None:
+        return np.random.default_rng()
+    return np.random.default_rng(np.random.SeedSequence([root_seed, global_episode]))
 
 
 def merge_shards(
@@ -396,6 +414,8 @@ def main() -> None:
         default=4,
         help="background image-writer threads for PNG-then-encode mode",
     )
+    parser.add_argument("--image-width", type=int, default=640, help="camera image width (px)")
+    parser.add_argument("--image-height", type=int, default=480, help="camera image height (px)")
     args = parser.parse_args()
 
     if args.episodes < 1:
@@ -404,6 +424,8 @@ def main() -> None:
         parser.error("--workers must be at least 1")
     if args.speed <= 0.0:
         parser.error("--speed must be positive")
+    if args.image_width < 1 or args.image_height < 1:
+        parser.error("--image-width and --image-height must be positive")
     if args.viewer and args.workers > 1:
         parser.error("--viewer requires --workers 1")
 
@@ -423,6 +445,8 @@ def main() -> None:
         vcodec=args.vcodec,
         streaming_encoding=args.streaming_encoding,
         image_writer_threads=args.image_writer_threads,
+        image_width=args.image_width,
+        image_height=args.image_height,
         miscalibration=args.miscalibration,
     )
 
@@ -440,14 +464,15 @@ def main() -> None:
 
     counts = _split(args.episodes, args.workers)
     jobs = []
+    first_episode = 0
     for i, count in enumerate(counts):
         if count == 0:
             continue
         jobs.append(
             dict(
                 episodes=count,
-                # Distinct seeds so shards don't sample identical pose streams.
-                seed=None if args.seed is None else args.seed + i,
+                seed=args.seed,
+                first_episode=first_episode,
                 dataset_root=base_root.with_name(f"{base_root.name}_shard{i}"),
                 repo_id=f"{args.repo_id}-shard{i}",
                 task=args.task,
@@ -455,6 +480,7 @@ def main() -> None:
                 **common,
             )
         )
+        first_episode += count
 
     print(f"Sharding {args.episodes} episodes across {len(jobs)} workers (spawn).")
     # Spawn rather than fork: each worker needs its own MuJoCo GL context, which
