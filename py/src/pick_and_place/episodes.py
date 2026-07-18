@@ -26,6 +26,7 @@ import numpy as np
 from pick_and_place import build_scene
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.kinematics import ARM_JOINT_NAMES, So101Kinematics, derive_kinematics
+from pick_and_place.miscalibration import MiscalibrationDraw
 from pick_and_place.paper_detection import add_paper_target_marker
 from pick_and_place.robot_dynamics import set_actuator_activation
 from pick_and_place.trajectory import (
@@ -627,10 +628,17 @@ class Episode:
     ``model``/``data`` are compiled with the cube as a dynamic free body and the
     arm initialised at the start pose (both ``qpos`` and ``ctrl`` set). The
     ``trajectory`` already carries the sampled start/end poses.
+
+    ``source``/``target`` are the *true* cube poses physics and scoring use.
+    ``believed_source``/``believed_target`` are what the planner acted on; they
+    differ from the true poses only when a ``miscalibration`` draw was injected
+    (the ``trajectory`` is planned entirely in the believed frame).
     """
 
     source: CubePose
     target: CubePose
+    believed_source: CubePose
+    believed_target: CubePose
     start_joints: dict[str, float]
     start_gripper: float
     end_joints: dict[str, float]
@@ -643,6 +651,7 @@ class Episode:
     env_geom_ids: set[int] = field(repr=False)
     trajectory: Trajectory = field(repr=False)
     attempts: int = 1
+    miscalibration: MiscalibrationDraw | None = None
 
     @property
     def grasp(self) -> GraspChoice:
@@ -658,12 +667,14 @@ def _build_model(
     background_panorama: Path | str | None = None,
     table_texture: Path | str | None = None,
     robot_dynamics: bool | str | Path = True,
+    apriltag_cube: bool | None = None,
 ) -> tuple[mujoco.MjModel, mujoco.MjData]:
     spec = build_scene(
         include_environment=include_environment,
         background_panorama=background_panorama,
         table_texture=table_texture,
         robot_dynamics=robot_dynamics,
+        apriltag_cube=apriltag_cube,
     )
     if paper_target_marker:
         add_paper_target_marker(spec)
@@ -699,6 +710,7 @@ def prepare_episode(
     failed_trajectory_limit: int = 8,
     free_grasp: bool = False,
     target_sampler: Callable[[np.random.Generator], CubePose] | None = None,
+    miscalibration: MiscalibrationDraw | None = None,
 ) -> Episode:
     """Sample poses and return the first collision-free pick-and-carry.
 
@@ -716,6 +728,14 @@ def prepare_episode(
 
     ``free_grasp`` keeps the low recovery drop timing, but pickup itself uses
     the same canonical full-range grasp as normal episodes.
+
+    ``miscalibration`` splits the episode into true and believed state: the
+    trajectory is planned and preflighted against the *believed* cube/target
+    (true pose plus the draw's belief error) — everything the real planner
+    would know — while the returned ``data`` keeps the cube at the true pose
+    and holds the arm at the physically-true start joints (planned start plus
+    the draw's joint-zero offsets), so running the plan open-loop misses the
+    way real reaching misses.
     """
     fixed_source = source is not None
     fixed_target = target is not None
@@ -751,6 +771,11 @@ def prepare_episode(
 
         ep_source = source if fixed_source else sample_cube(rng)
         ep_target = target if fixed_target else (target_sampler or sample_target)(rng)
+        if miscalibration is not None:
+            believed_source = miscalibration.believe_cube(ep_source)
+            believed_target = miscalibration.believe_target(ep_target)
+        else:
+            believed_source, believed_target = ep_source, ep_target
         if fixed_start:
             ep_start_joints, ep_start_gripper = dict(start_joints), float(start_gripper)
         else:
@@ -807,15 +832,15 @@ def prepare_episode(
 
         trajectory = None
         grasp_iter = (
-            free_grasp_candidates(kinematics, ep_source)
+            free_grasp_candidates(kinematics, believed_source)
             if free_grasp
-            else grasp_candidates(kinematics, ep_source)
+            else grasp_candidates(kinematics, believed_source)
         )
         for candidate_grasp in grasp_iter:
             candidate_trajectories = trajectory_candidates_for_grasp(
                 kinematics,
-                ep_source,
-                ep_target,
+                believed_source,
+                believed_target,
                 ep_start_joints,
                 ep_start_gripper,
                 ep_end_joints,
@@ -897,9 +922,27 @@ def prepare_episode(
                 break
 
         if trajectory is not None:
+            if miscalibration is not None:
+                # The plan is vetted; now put physics into the *true* start
+                # state: the arm physically sits at the planned start plus the
+                # drawn joint-zero offsets (a real servo commanded ``theta``
+                # rests at model angle ``theta + offset``). The cube already
+                # sits at the true pose — only the plan used the believed one.
+                offsets = miscalibration.offsets_rad(0.0)
+                for name, value in ep_start_joints.items():
+                    true_value = value + offsets.get(name, 0.0)
+                    set_joint(ep_model, ep_data, name, true_value)
+                    ep_data.ctrl[actuator_id[name]] = true_value
+                    set_actuator_activation(
+                        ep_model, ep_data, actuator_id[name], true_value
+                    )
+                ep_data.qvel[:] = 0.0
+                mujoco.mj_forward(ep_model, ep_data)
             return Episode(
                 source=ep_source,
                 target=ep_target,
+                believed_source=believed_source,
+                believed_target=believed_target,
                 start_joints=ep_start_joints,
                 start_gripper=ep_start_gripper,
                 end_joints=ep_end_joints,
@@ -912,6 +955,7 @@ def prepare_episode(
                 env_geom_ids=env_geom_ids,
                 trajectory=trajectory,
                 attempts=attempt,
+                miscalibration=miscalibration,
             )
 
         if fixed_source and fixed_target:

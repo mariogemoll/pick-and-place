@@ -47,6 +47,7 @@ from pick_and_place.episodes import (
     prepare_episode,
 )
 from pick_and_place.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
+from pick_and_place.miscalibration import MiscalibrationDraw, MiscalibrationModel
 from pick_and_place.recording import RecordingSession
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.paper_detection import DROP_ZONE_HALF_SIZE, place_paper_target_marker
@@ -68,6 +69,27 @@ def _to_cube(xy: tuple[float, float] | None) -> CubePose | None:
     return CubePose(x=xy[0], y=xy[1], z=CUBE_HALF_SIZE) if xy is not None else None
 
 
+def _miscalibration_metadata(draw: MiscalibrationDraw) -> dict[str, float]:
+    """Episode metadata recording the injected draw (believed-vs-true errors)."""
+    metadata = {
+        f"injected_offset_{name}_deg": float(value)
+        for name, value in draw.base_offsets_deg.items()
+    }
+    dx, dy, dz, dyaw = draw.cube_belief_error
+    tx, ty = draw.target_belief_error
+    metadata.update(
+        {
+            "injected_cube_belief_dx": float(dx),
+            "injected_cube_belief_dy": float(dy),
+            "injected_cube_belief_dz": float(dz),
+            "injected_cube_belief_dyaw": float(dyaw),
+            "injected_target_belief_dx": float(tx),
+            "injected_target_belief_dy": float(ty),
+        }
+    )
+    return metadata
+
+
 def run_recording(
     *,
     episodes: int,
@@ -84,6 +106,7 @@ def run_recording(
     streaming_encoding: bool = True,
     image_writer_threads: int = 4,
     use_viewer: bool = False,
+    miscalibration: bool = False,
     label: str = "",
 ) -> int:
     """Record ``episodes`` episodes into one LeRobotDataset; return the count saved.
@@ -126,6 +149,7 @@ def run_recording(
     print(f"{label}Recording into LeRobotDataset at: {dataset_root}")
 
     rng = np.random.default_rng(seed)
+    miscalibration_model = MiscalibrationModel() if miscalibration else None
     viewer_cm = mujoco.viewer.launch_passive(model, data) if use_viewer else None
     viewer = viewer_cm.__enter__() if viewer_cm is not None else _MockViewer()
 
@@ -136,6 +160,17 @@ def run_recording(
                 print(f"{label}Viewer closed; stopping.")
                 break
             print(f"{label}--- Episode {index + 1}/{episodes} ---")
+            draw = (
+                miscalibration_model.sample(rng)
+                if miscalibration_model is not None
+                else None
+            )
+            if draw is not None:
+                offsets = ", ".join(
+                    f"{name}={value:+.2f}°"
+                    for name, value in sorted(draw.base_offsets_deg.items())
+                )
+                print(f"{label}Injected joint-zero offsets: {offsets}")
             try:
                 episode = prepare_episode(
                     rng,
@@ -145,6 +180,7 @@ def run_recording(
                     data=data,
                     verbose=True,
                     include_environment=True,
+                    miscalibration=draw,
                 )
             except EpisodeSamplingError as exc:
                 print(f"{label}Skipping: {exc}")
@@ -163,16 +199,32 @@ def run_recording(
                 alpha=1.0,
             )
 
-            record_episode(
+            status = record_episode(
                 episode,
                 recording=recording,
                 rig=rig,
                 viewer=viewer if use_viewer else None,
                 speed=speed,
             )
+            if status != "success":
+                if recording.has_pending_frames():
+                    recording.discard_episode()
+                print(f"{label}Discarded {status} episode (not added to dataset).")
+                continue
             error = placement_error(model, data, episode.target)
             metadata = cube_pose_metadata(episode.source, episode.target)
             metadata.update(placement_error_metadata(error, detected=True))
+            if draw is not None:
+                metadata.update(
+                    {
+                        "believed_cube_start_x": float(episode.believed_source.x),
+                        "believed_cube_start_y": float(episode.believed_source.y),
+                        "believed_cube_start_yaw": float(episode.believed_source.yaw),
+                        "believed_target_x": float(episode.believed_target.x),
+                        "believed_target_y": float(episode.believed_target.y),
+                    }
+                )
+                metadata.update(_miscalibration_metadata(draw))
             recording.save_episode(metadata)
             recorded += 1
             print(f"{label}Saved episode to dataset ({recorded} total).")
@@ -287,6 +339,17 @@ def main() -> None:
         help="playback speed multiplier of the nominal trajectory pace (1.0 = nominal)",
     )
     parser.add_argument("--viewer", action="store_true", help="open the 3D MuJoCo viewer")
+    parser.add_argument(
+        "--miscalibration",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "inject per-episode draws of the measured real-robot miscalibration "
+            "(joint-zero offsets, believed cube/target pose error): the plan runs "
+            "in the believed frame, physics in the true frame, and the descent "
+            "runs the wrist-camera visual servo like the real arm"
+        ),
+    )
     parser.add_argument("--seed", type=int, default=None, help="RNG seed for pose sampling")
     parser.add_argument(
         "--background-panorama",
@@ -360,6 +423,7 @@ def main() -> None:
         vcodec=args.vcodec,
         streaming_encoding=args.streaming_encoding,
         image_writer_threads=args.image_writer_threads,
+        miscalibration=args.miscalibration,
     )
 
     if args.workers == 1:

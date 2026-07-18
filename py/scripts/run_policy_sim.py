@@ -59,6 +59,7 @@ from pick_and_place.follower import (
 )
 from pick_and_place.episodes import sample_cube, sample_target
 from pick_and_place.geometry import CUBE_HALF_SIZE
+from pick_and_place.miscalibration import MiscalibrationDraw, MiscalibrationModel
 from pick_and_place.paper_detection import (
     DROP_ZONE_HALF_SIZE,
     add_paper_target_marker,
@@ -74,9 +75,10 @@ from pick_and_place.policy import (
     select_device,
 )
 
-# Control/render rate. The sim steps at the model timestep; one policy query and
-# one camera render happen per control tick.
-CONTROL_HZ = 10.0
+# One policy query and one camera render happen per control tick; the sim steps
+# at the model timestep in between. The rate matches the real rig's control loop
+# (and the dataset fps), so a chunked policy's action spacing plays back true.
+from pick_and_place.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 
 
 def _build_model(
@@ -85,6 +87,8 @@ def _build_model(
     target_xy: tuple[float, float],
     render_h: int,
     render_w: int,
+    background_panorama: Path | None = None,
+    table_texture: Path | None = None,
 ):
     """Compile the standard (AprilTag, calibrated-camera) scene with the pick cube
     placed as a free rigid body at the requested pose. Mirrors the layout used by
@@ -96,7 +100,11 @@ def _build_model(
 
     ``render_h``/``render_w`` enlarge the offscreen framebuffer so the camera
     renders fed to the policy fit whatever resolution the checkpoint expects."""
-    spec = build_scene(include_environment=True)
+    spec = build_scene(
+        include_environment=True,
+        background_panorama=background_panorama,
+        table_texture=table_texture,
+    )
     spec.visual.global_.offwidth = max(spec.visual.global_.offwidth, render_w)
     spec.visual.global_.offheight = max(spec.visual.global_.offheight, render_h)
     apply_camera_extrinsics_to_spec(spec, load_local_camera_extrinsics())
@@ -114,6 +122,7 @@ def _build_model(
     add_paper_target_marker(spec)
 
     model = spec.compile()
+    model.opt.timestep = 1.0 / HARDWARE_SIMULATION_HZ
     place_paper_target_marker(
         model,
         target_xy,
@@ -132,10 +141,20 @@ def _joint_qpos_adr(model: mujoco.MjModel) -> list[int]:
     ]
 
 
-def _sim_state_to_real(qpos_rad: np.ndarray) -> np.ndarray:
+def _sim_state_to_real(
+    qpos_rad: np.ndarray, joint_offsets_rad: dict[str, float] | None = None
+) -> np.ndarray:
     """Sim joint positions (radians, ``JOINT_NAMES`` order) -> real-frame state
-    vector (arm degrees + gripper 0-100), matching the dataset convention."""
-    arm = {name: float(qpos_rad[i]) for i, name in enumerate(ARM_JOINT_NAMES)}
+    vector (arm degrees + gripper 0-100), matching the dataset convention.
+
+    With a miscalibration draw, the observation is servo-style readback: the
+    physically true joint angle less the injected joint-zero offset.
+    """
+    offsets = joint_offsets_rad or {}
+    arm = {
+        name: float(qpos_rad[i]) - offsets.get(name, 0.0)
+        for i, name in enumerate(ARM_JOINT_NAMES)
+    }
     return sim_frame_to_real(arm, float(qpos_rad[GRIPPER_INDEX])).astype(np.float32)
 
 
@@ -146,18 +165,24 @@ def _real_action_to_ctrl(action_real: np.ndarray) -> np.ndarray:
     return np.array([arm_rad[name] for name in ARM_JOINT_NAMES] + [gripper_rad])
 
 
-def _set_neutral(model: mujoco.MjModel, data: mujoco.MjData) -> None:
+def _set_neutral(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    joint_offsets_rad: dict[str, float] | None = None,
+) -> None:
     """Park the arm at the neutral pose with the gripper open, and hold it there
     by initialising the position-servo set points to the same values."""
     actuator_id = {
         name: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name) for name in JOINT_NAMES
     }
+    offsets = joint_offsets_rad or {}
     targets = dict(NEUTRAL_ARM_JOINTS)
     targets["gripper"] = GRIPPER_OPEN
     for name, value in targets.items():
+        true_value = value + offsets.get(name, 0.0)
         adr = model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)]
-        data.qpos[adr] = value
-        data.ctrl[actuator_id[name]] = value
+        data.qpos[adr] = true_value
+        data.ctrl[actuator_id[name]] = true_value
     mujoco.mj_forward(model, data)
 
 
@@ -210,6 +235,27 @@ def main() -> None:
         help="pin the drop-zone center (x, y); omit to sample one randomly like the recording",
     )
     parser.add_argument("--seed", type=int, default=None, help="RNG seed for random target sampling")
+    parser.add_argument(
+        "--miscalibration",
+        action="store_true",
+        help=(
+            "inject a fresh measured joint-zero miscalibration draw for the initial "
+            "scene and every Enter resample; observations use servo-style readback "
+            "and actions are shifted into the true physical joint frame"
+        ),
+    )
+    parser.add_argument(
+        "--background-panorama",
+        type=Path,
+        default=None,
+        help="equirectangular room panorama to render as a skybox behind the scene",
+    )
+    parser.add_argument(
+        "--table-texture",
+        type=Path,
+        default=None,
+        help="top-down table texture (from reconstruct_table_texture.py) for the floor",
+    )
     parser.add_argument(
         "--steps",
         type=int,
@@ -273,6 +319,10 @@ def main() -> None:
     )
 
     rng = np.random.default_rng(args.seed)
+    miscalibration_model = MiscalibrationModel() if args.miscalibration else None
+    draw: MiscalibrationDraw | None = (
+        miscalibration_model.sample(rng) if miscalibration_model is not None else None
+    )
 
     # Sample a random drop zone the same way the recording does, unless pinned.
     if args.target is not None:
@@ -288,8 +338,17 @@ def main() -> None:
         target_xy,
         image_hw[0],
         image_hw[1],
+        background_panorama=args.background_panorama,
+        table_texture=args.table_texture,
     )
-    _set_neutral(model, data)
+    episode_time_origin = data.time
+
+    def offsets_rad_now() -> dict[str, float]:
+        if draw is None:
+            return {}
+        return draw.offsets_rad(data.time - episode_time_origin)
+
+    _set_neutral(model, data, offsets_rad_now())
     joint_adr = _joint_qpos_adr(model)
     cube_qadr, cube_dofadr = _cube_freejoint_addrs(model)
     ctrl_low = model.actuator_ctrlrange[:, 0].copy()
@@ -340,10 +399,18 @@ def main() -> None:
     def resample_scene() -> None:
         """Restart the episode: park the arm, drop a freshly sampled cube, draw a
         freshly sampled drop zone, and reset the policy's action chunk."""
-        _set_neutral(model, data)
+        nonlocal draw, episode_time_origin, target_xy
+        draw = (
+            miscalibration_model.sample(rng)
+            if miscalibration_model is not None
+            else None
+        )
+        episode_time_origin = data.time
+        _set_neutral(model, data, offsets_rad_now())
         cube = sample_cube(rng)
         _place_cube(data, cube_qadr, cube_dofadr, (cube.x, cube.y), cube.yaw)
         target = sample_target(rng)
+        target_xy = (target.x, target.y)
         place_paper_target_marker(
             model,
             (target.x, target.y),
@@ -354,6 +421,11 @@ def main() -> None:
         )
         mujoco.mj_forward(model, data)
         policy.reset()
+        if draw is not None:
+            offsets = ", ".join(
+                f"{name}={value:+.2f}°" for name, value in sorted(draw.base_offsets_deg.items())
+            )
+            print(f"Injected joint-zero offsets: {offsets}")
         print(
             f"Resampled: cube ({cube.x:.4f}, {cube.y:.4f}) yaw {cube.yaw:.3f}, "
             f"drop zone ({target.x:.4f}, {target.y:.4f})"
@@ -380,6 +452,11 @@ def main() -> None:
     else:
         print(f"Running closed-loop with fine-tuned checkpoint {args.checkpoint!r}.")
     print("Press Enter to resample the cube and drop zone and restart the scene.")
+    if draw is not None:
+        offsets = ", ".join(
+            f"{name}={value:+.2f}°" for name, value in sorted(draw.base_offsets_deg.items())
+        )
+        print(f"Injected joint-zero offsets: {offsets}")
     tick = 0
     try:
         while viewer is None or viewer.is_running():
@@ -392,7 +469,9 @@ def main() -> None:
             wrist_frame = render("wrist_camera")
             overhead_frame = render("overhead_camera")
             observation = {
-                "observation.state": _sim_state_to_real(data.qpos[joint_adr]),
+                "observation.state": _sim_state_to_real(
+                    data.qpos[joint_adr], offsets_rad_now()
+                ),
                 overhead_key: overhead_frame,
                 wrist_key: wrist_frame,
             }
@@ -419,7 +498,9 @@ def main() -> None:
             )
             action_real = action.to("cpu").numpy().reshape(-1)[: len(JOINT_NAMES)]
             ctrl = _real_action_to_ctrl(action_real)
-            data.ctrl[:] = np.clip(ctrl, ctrl_low, ctrl_high)
+            offsets = offsets_rad_now()
+            offset_ctrl = np.array([offsets.get(name, 0.0) for name in JOINT_NAMES])
+            data.ctrl[:] = np.clip(ctrl + offset_ctrl, ctrl_low, ctrl_high)
 
             mujoco.mj_step(model, data, nstep=substeps)
             if viewer is not None:
@@ -427,7 +508,13 @@ def main() -> None:
 
             if tick % 10 == 0:
                 np.set_printoptions(precision=3, suppress=True)
-                print(f"tick {tick:4d}  ctrl(rad)={data.ctrl[:]}")
+                cube_xyz = data.qpos[cube_qadr : cube_qadr + 3]
+                dist = math.hypot(cube_xyz[0] - target_xy[0], cube_xyz[1] - target_xy[1])
+                print(
+                    f"tick {tick:4d}  ctrl(rad)={data.ctrl[:]}  "
+                    f"cube=({cube_xyz[0]:+.3f}, {cube_xyz[1]:+.3f}, {cube_xyz[2]:+.3f})  "
+                    f"to-target={dist * 100:.1f}cm"
+                )
 
             tick += 1
             if args.steps and tick >= args.steps:
@@ -447,7 +534,12 @@ def main() -> None:
             cv2.destroyAllWindows()
         if viewer_ctx is not None:
             viewer_ctx.__exit__(None, None, None)
-    print(f"Ran {tick} control ticks.")
+    cube_xyz = data.qpos[cube_qadr : cube_qadr + 3]
+    dist = math.hypot(cube_xyz[0] - target_xy[0], cube_xyz[1] - target_xy[1])
+    print(
+        f"Ran {tick} control ticks. Final cube ({cube_xyz[0]:+.4f}, {cube_xyz[1]:+.4f}, "
+        f"{cube_xyz[2]:+.4f}), {dist * 100:.1f}cm from the drop-zone center."
+    )
 
 
 if __name__ == "__main__":

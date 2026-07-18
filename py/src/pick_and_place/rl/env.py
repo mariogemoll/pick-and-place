@@ -53,6 +53,7 @@ from pick_and_place import build_scene
 from pick_and_place.episodes import build_geom_sets, is_unexpected, scan_contacts
 from pick_and_place.follower import JOINT_NAMES
 from pick_and_place.geometry import CUBE_HALF_SIZE
+from pick_and_place.miscalibration import MiscalibrationDraw, MiscalibrationModel
 from pick_and_place.rl.episode_pool import EpisodePool, ResetSnapshot
 
 # Snapshot reset stages: stage k resets at the start of this scripted phase (and
@@ -115,8 +116,26 @@ HELD_CARRY_PROGRESS_SCALE = 5.0
 HELD_CARRY_TIME_PENALTY = 0.001
 
 
+def _rotate_6d_about_z(rot6d: np.ndarray, angle: float) -> np.ndarray:
+    """Rotate a 6D (first-two-columns) orientation by ``angle`` about world z."""
+    cols = rot6d.reshape(3, 2, order="F")
+    c, s = math.cos(angle), math.sin(angle)
+    rz = np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+    return (rz @ cols).flatten(order="F")
+
+
 class ReverseCurriculumEnv(gym.Env):
-    """Pick-and-place env whose reset distribution is a recorded-episode pool."""
+    """Pick-and-place env whose reset distribution is a recorded-episode pool.
+
+    An optional :class:`MiscalibrationModel` separates true from believed state:
+    each reset draws joint-zero offsets and cube/target localization errors from
+    the measured real-robot distributions; the observation then reports the
+    believed state (servo-style joint readback, systematically-off cube/target
+    poses) while physics, reward, and termination stay on the true state, and
+    actions are believed-frame set points the plant executes offset away. A
+    policy trained this way cannot reach open-loop from the localization alone
+    and must learn the correcting behaviour, the way real reaching must.
+    """
 
     metadata = {"render_modes": ["rgb_array", "human"], "render_fps": 50}
 
@@ -129,6 +148,7 @@ class ReverseCurriculumEnv(gym.Env):
         phase_end_fraction: float | None = None,
         reward_profile: str = "carry-drop",
         render_mode: str | None = None,
+        miscalibration: MiscalibrationModel | None = None,
     ) -> None:
         super().__init__()
         self.pool = pool if isinstance(pool, EpisodePool) else EpisodePool(Path(pool))
@@ -184,6 +204,9 @@ class ReverseCurriculumEnv(gym.Env):
 
         control_hz = self.pool.control_hz or 50.0
         self._sim_steps = max(1, round((1.0 / control_hz) / float(self.model.opt.timestep)))
+        self._control_period = self._sim_steps * float(self.model.opt.timestep)
+        self._miscalibration = miscalibration
+        self._draw: MiscalibrationDraw | None = None
 
         self._target_xy = np.zeros(2)
         self._held_carry_prev_distance = math.inf
@@ -220,6 +243,11 @@ class ReverseCurriculumEnv(gym.Env):
             phase_end_fraction=self.phase_end_fraction,
         )
         self._restore(snapshot)
+        self._draw = (
+            self._miscalibration.sample(self.np_random)
+            if self._miscalibration is not None
+            else None
+        )
         self._held_carry_prev_distance = self._held_carry_distance()
         self._drop_prev_distance = self._drop_distance()
         self._drop_release_bonus_paid = False
@@ -230,7 +258,10 @@ class ReverseCurriculumEnv(gym.Env):
 
     def step(self, action):
         ctrl = np.clip(action, self.action_space.low, self.action_space.high)
-        self.data.ctrl[self._ctrl_index] = ctrl
+        # The policy's command is a believed-frame set point: the plant executes
+        # it at the drawn joint-zero offset away, as real servos do. MuJoCo
+        # clamps the shifted ctrl to the actuator range like a real joint limit.
+        self.data.ctrl[self._ctrl_index] = ctrl + self._joint_offsets_rad()
         for _ in range(self._sim_steps):
             mujoco.mj_step(self.model, self.data)
         self._step_count += 1
@@ -301,15 +332,38 @@ class ReverseCurriculumEnv(gym.Env):
     def _cube_velocity(self) -> np.ndarray:
         return self.data.qvel[self._cube_dof_adr : self._cube_dof_adr + 6]
 
+    def _joint_offsets_rad(self) -> np.ndarray:
+        """The drawn joint-zero offsets (radians) in JOINT_NAMES order, or zeros."""
+        offsets = np.zeros(len(JOINT_NAMES))
+        if self._draw is not None:
+            by_name = self._draw.offsets_rad(self._step_count * self._control_period)
+            for i, name in enumerate(JOINT_NAMES):
+                offsets[i] = by_name.get(name, 0.0)
+        return offsets
+
     def _observation(self) -> np.ndarray:
+        """The policy's view of the state — the *believed* frame when a
+        miscalibration draw is active: joints as servo-style readback (true
+        minus offset), cube and target as the systematically-off localization.
+        Physics, reward, and termination all stay on the true state."""
+        joints = self.data.qpos[self._joint_qpos_adr].copy()
+        cube_xyz = np.asarray(self._cube_xyz(), dtype=np.float64).copy()
+        cube_rot6d = self._cube_orientation_6d()
+        target_xy = self._target_xy.copy()
+        if self._draw is not None:
+            joints -= self._joint_offsets_rad()
+            dx, dy, dz, dyaw = self._draw.cube_belief_error
+            cube_xyz += (dx, dy, dz)
+            cube_rot6d = _rotate_6d_about_z(cube_rot6d, dyaw)
+            target_xy += self._draw.target_belief_error
         return np.concatenate(
             [
-                self.data.qpos[self._joint_qpos_adr],
+                joints,
                 self.data.qvel[self._joint_dof_adr],
-                self._cube_xyz(),
-                self._cube_orientation_6d(),
+                cube_xyz,
+                cube_rot6d,
                 self._cube_velocity(),
-                self._target_xy,
+                target_xy,
             ]
         ).astype(np.float32)
 

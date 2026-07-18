@@ -45,7 +45,10 @@ from pick_and_place.episodes import (
     sample_target,
     scan_contacts,
 )
+from pick_and_place.executor import HARDWARE_SIMULATION_HZ
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.miscalibration import MiscalibrationModel
+from pick_and_place.sim_recorder import record_episode
 from pick_and_place.paper_detection import (
     DROP_ZONE_HALF_SIZE,
     place_paper_target_marker,
@@ -65,6 +68,18 @@ def _watch_for_skip(skip_event: threading.Event) -> None:
     """Set ``skip_event`` whenever the user presses Enter in the terminal."""
     for _ in iter(sys.stdin.readline, ""):
         skip_event.set()
+
+
+class _NullViewer:
+    """Viewer stand-in for ``--no-viewer`` runs — e.g. watching only the
+    wrist-mixed OpenCV window under plain ``python`` on macOS, where the MuJoCo
+    viewer would require ``mjpython``."""
+
+    def is_running(self) -> bool:
+        return True
+
+    def sync(self) -> None:
+        pass
 
 
 def _plate_corners_allowed(cx: float, cy: float, yaw: float, half_size: float) -> bool:
@@ -167,6 +182,24 @@ def _mark_target_point(viewer: mujoco.viewer.Handle, target: CubePose) -> None:
         rgba=np.array((1.0, 0.1, 0.1, 1.0), dtype=np.float32),
     )
     scn.ngeom += 1
+
+
+def _dwell(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    viewer: mujoco.viewer.Handle,
+    seconds: float,
+) -> None:
+    """Step the sim in real time for ``seconds`` holding the current ctrl, so
+    the placed cube stays visible for a beat after a closed-loop episode."""
+    end = data.time + seconds
+    while viewer.is_running() and data.time < end:
+        step_start = time.time()
+        mujoco.mj_step(model, data)
+        viewer.sync()
+        remaining = model.opt.timestep - (time.time() - step_start)
+        if remaining > 0:
+            time.sleep(remaining)
 
 
 def _play(
@@ -293,7 +326,37 @@ def main() -> None:
         action="store_true",
         help="use raw upstream MuJoCo actuators instead of fitted actuator time constants",
     )
+    parser.add_argument(
+        "--miscalibration",
+        action="store_true",
+        help=(
+            "inject per-episode draws of the measured real-robot miscalibration and "
+            "play closed-loop like the hardware executor (wrist visual servo on the "
+            "descent, checkpoint replans), so the viewer shows the open-loop miss "
+            "and its correction"
+        ),
+    )
+    parser.add_argument(
+        "--wrist-mixed",
+        action="store_true",
+        help=(
+            "open an OpenCV window blending the true wrist render (detected tags "
+            "outlined) with the believed-world render, the sim analog of the "
+            "hardware wrist-mixed overlay; requires --miscalibration"
+        ),
+    )
+    parser.add_argument(
+        "--no-viewer",
+        action="store_true",
+        help=(
+            "run without the MuJoCo viewer window, so plain python works on macOS; "
+            "combine with --wrist-mixed to still watch the episode"
+        ),
+    )
     args = parser.parse_args()
+
+    if args.wrist_mixed and not args.miscalibration:
+        parser.error("--wrist-mixed requires --miscalibration (closed-loop playback)")
 
     if args.speed <= 0.0:
         raise ValueError("--speed must be positive")
@@ -326,12 +389,21 @@ def main() -> None:
         include_environment=args.environment,
         paper_target_marker=True,
         robot_dynamics=not args.no_robot_dynamics,
+        # The closed-loop descent servo detects the cube's AprilTags in wrist
+        # renders, so miscalibrated playback needs the tagged cube even when
+        # the rest of the environment is not included.
+        apriltag_cube=True if args.miscalibration else None,
     )
+    miscalibration_model = MiscalibrationModel() if args.miscalibration else None
+    if miscalibration_model is not None:
+        # The closed-loop player advances a whole 30 Hz control tick of physics
+        # substeps at a time, which requires the hardware runner's timestep.
+        model.opt.timestep = 1.0 / HARDWARE_SIMULATION_HZ
     mujoco.mj_forward(model, data)
 
     marker_sampler = _MarkerTargetSampler()
 
-    def plan(verbose: bool) -> Episode:
+    def plan(verbose: bool, miscalibration=None) -> Episode:
         return prepare_episode(
             rng,
             source,
@@ -345,11 +417,19 @@ def main() -> None:
             failed_trajectory_dir=args.save_failed_trajectories,
             failed_trajectory_limit=args.failed_trajectory_limit,
             target_sampler=marker_sampler if target is None else None,
+            miscalibration=miscalibration,
         )
 
     if args.plan_only:
         try:
-            episode = plan(verbose=True)
+            episode = plan(
+                verbose=True,
+                miscalibration=(
+                    miscalibration_model.sample(rng)
+                    if miscalibration_model is not None
+                    else None
+                ),
+            )
         except EpisodeSamplingError as exc:
             raise SystemExit(str(exc)) from exc
         print(
@@ -363,14 +443,17 @@ def main() -> None:
     skip_event = threading.Event()
     if sys.stdin.isatty():
         threading.Thread(target=_watch_for_skip, args=(skip_event,), daemon=True).start()
-    print("Press Enter (in the viewer or the terminal) to skip to the next episode; "
-          "close the viewer to stop.")
+    if args.no_viewer:
+        print("Press Enter in the terminal to skip to the next episode; Ctrl-C to stop.")
+    else:
+        print("Press Enter (in the viewer or the terminal) to skip to the next episode; "
+              "close the viewer to stop.")
 
     def on_key(keycode: int) -> None:
         if keycode in _ENTER_KEYS:
             skip_event.set()
 
-    with mujoco.viewer.launch_passive(model, data, key_callback=on_key) as viewer:
+    def run(viewer) -> None:
         index = 0
         while viewer.is_running():
             if args.episodes and index >= args.episodes:
@@ -380,8 +463,19 @@ def main() -> None:
                 f"\n--- Episode {index}"
                 f"{f'/{args.episodes}' if args.episodes else ''} ---"
             )
+            draw = (
+                miscalibration_model.sample(rng)
+                if miscalibration_model is not None
+                else None
+            )
+            if draw is not None:
+                offsets = ", ".join(
+                    f"{name}={value:+.2f}°"
+                    for name, value in sorted(draw.base_offsets_deg.items())
+                )
+                print(f"Injected joint-zero offsets: {offsets}")
             try:
-                episode = plan(verbose=True)
+                episode = plan(verbose=True, miscalibration=draw)
             except EpisodeSamplingError as exc:
                 print(str(exc))
                 # A pinned source/target with no feasible plan fails every time,
@@ -393,10 +487,33 @@ def main() -> None:
                 else marker_sampler.yaw
             )
             _show_target_marker(model, episode.target, marker_yaw)
-            _mark_target_point(viewer, episode.target)
+            if hasattr(viewer, "user_scn"):
+                _mark_target_point(viewer, episode.target)
             skip_event.clear()
-            if _play(episode, args.speed, viewer, skip_event):
+            if draw is not None:
+                # Closed-loop playback: the same offset injection, wrist visual
+                # servo and checkpoint replans as a recorded run, paced for
+                # viewing. The placement summary is printed by the player.
+                status = record_episode(
+                    episode,
+                    viewer=viewer,
+                    speed=args.speed,
+                    realtime=True,
+                    should_stop=lambda: skip_event.is_set()
+                    or not viewer.is_running(),
+                    show_wrist_mixed=args.wrist_mixed,
+                )
+                if status == "success":
+                    _dwell(model, data, viewer, END_DWELL / args.speed)
+                skip_event.clear()
+            elif _play(episode, args.speed, viewer, skip_event):
                 print(placement_error(model, data, episode.target).summary())
+
+    if args.no_viewer:
+        run(_NullViewer())
+    else:
+        with mujoco.viewer.launch_passive(model, data, key_callback=on_key) as viewer:
+            run(viewer)
 
 
 if __name__ == "__main__":
