@@ -94,25 +94,67 @@ def gripper_position_to_angle(position: float) -> float:
     return math.radians(angle_deg)
 
 def sim_frame_to_real(
-    arm_joints_rad: dict[str, float], gripper_rad: float
+    arm_joints_rad: dict[str, float],
+    gripper_rad: float,
+    offsets_deg: dict[str, float] | None = None,
 ) -> np.ndarray:
     """Convert a trajectory set point (sim frame) into a real-frame 6-vector.
 
     Arm joints: radians->degrees. Gripper: nonlinear angle->position map.
+
+    ``offsets_deg`` are per-joint zero errors measured by the session
+    calibration, in the "add to the sim joints" (exporter) sense. A servo whose
+    command reads ``theta`` sits physically at model angle ``theta + offset``, so
+    to place a joint at the planned model angle the command is
+    ``degrees(model) - offset``. Passing ``offsets_deg`` applies that
+    feed-forward correction; omitting it (the default) is the raw mapping the
+    calibration and pair export rely on.
     """
     out = np.zeros(len(JOINT_NAMES), dtype=float)
     for i, name in enumerate(ARM_JOINT_NAMES):
-        out[i] = math.degrees(arm_joints_rad[name])
+        deg = math.degrees(arm_joints_rad[name])
+        if offsets_deg is not None:
+            deg -= offsets_deg.get(name, 0.0)
+        out[i] = deg
     out[GRIPPER_INDEX] = gripper_angle_to_position(gripper_rad)
     return out
 
-def real_frame_to_sim(real_joints: np.ndarray) -> tuple[dict[str, float], float]:
-    """Convert a real-frame 6-vector back into sim-frame joints (radians)."""
+def real_frame_to_sim(
+    real_joints: np.ndarray, offsets_deg: dict[str, float] | None = None
+) -> tuple[dict[str, float], float]:
+    """Convert a real-frame 6-vector back into sim-frame joints (radians).
+
+    The inverse of :func:`sim_frame_to_real`: with ``offsets_deg`` given, a servo
+    readback ``theta`` maps to the joint's true model angle ``theta + offset`` so
+    the sim mirror and any replanning start from where the arm physically is.
+    Omit ``offsets_deg`` (the default) to recover the raw servo readback the
+    calibration fit consumes.
+    """
     arm_joints_rad = {}
     for i, name in enumerate(ARM_JOINT_NAMES):
-        arm_joints_rad[name] = math.radians(real_joints[i])
+        deg = float(real_joints[i])
+        if offsets_deg is not None:
+            deg += offsets_deg.get(name, 0.0)
+        arm_joints_rad[name] = math.radians(deg)
     gripper_rad = gripper_position_to_angle(real_joints[GRIPPER_INDEX])
     return arm_joints_rad, gripper_rad
+
+
+def load_joint_zero_offsets(path: Any) -> dict[str, float]:
+    """Read the latest session joint-zero offsets (degrees) from a store written
+    by the calibration driver (``config/joint_zeros.json``).
+
+    Returns the fitted arm-joint offsets in the "add to the sim joints" sense,
+    ready to hand to :func:`sim_frame_to_real` / :func:`real_frame_to_sim`.
+    """
+    import json
+    from pathlib import Path
+
+    store = json.loads(Path(path).read_text())
+    latest = store.get("latest")
+    if latest is None:
+        raise ValueError(f"{path} has no 'latest' calibration entry.")
+    return {name: float(value) for name, value in latest["offsets_deg"].items()}
 
 def make_so101_follower(
     port: str,

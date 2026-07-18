@@ -66,6 +66,7 @@ from pick_and_place.recording import RecordingSession
 from pick_and_place.episode_video import EpisodeVideoSession
 from pick_and_place.follower import (
     action_to_joints,
+    load_joint_zero_offsets,
     make_so101_follower,
     real_frame_to_sim,
     sim_frame_to_real,
@@ -93,6 +94,8 @@ from pick_and_place.trajectory import (
     REST_ARM_JOINTS,
     REST_GRIPPER,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # Plan-search budget per episode: how many source/target/end resamples to try
 # before declaring the cube unreachable from the current pose and aborting.
@@ -176,6 +179,18 @@ def main() -> None:
     )
     parser.add_argument("--follower-port", required=True, help="serial port of the SO-101 follower")
     parser.add_argument("--follower-id", default="folly", help="follower calibration id (default: folly)")
+    parser.add_argument(
+        "--joint-zeros",
+        type=Path,
+        default=REPO_ROOT / "config" / "joint_zeros.json",
+        help="session joint-zero calibration to apply feed-forward "
+        "(default: config/joint_zeros.json)",
+    )
+    parser.add_argument(
+        "--no-joint-zero-correction",
+        action="store_true",
+        help="ignore the joint-zero calibration and command raw servo angles",
+    )
     parser.add_argument(
         "--speed",
         type=float,
@@ -485,6 +500,20 @@ def main() -> None:
     )
     follower.connect()
 
+    if args.no_joint_zero_correction:
+        joint_offsets: dict[str, float] | None = None
+        print("Joint-zero correction disabled; commanding raw servo angles.")
+    elif args.joint_zeros.exists():
+        joint_offsets = load_joint_zero_offsets(args.joint_zeros)
+        pretty = ", ".join(f"{k}={v:+.2f}" for k, v in joint_offsets.items())
+        print(f"Applying session joint-zero correction from {args.joint_zeros}: {pretty} deg")
+    else:
+        joint_offsets = None
+        print(
+            f"No joint-zero calibration at {args.joint_zeros}; commanding raw servo angles. "
+            "Run scripts/calibrate_joint_zeros.py at session start."
+        )
+
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     dataset_root = (
         args.dataset_root
@@ -535,12 +564,15 @@ def main() -> None:
     def read_current_sim_pose() -> tuple[dict[str, float], float]:
         """Read the real arm and convert to the sim joint frame."""
         actual = action_to_joints(follower.get_observation(), clamp_low)
-        return real_frame_to_sim(actual)
+        return real_frame_to_sim(actual, joint_offsets)
 
     def move_to(arm_joints: dict[str, float], gripper: float, viewer) -> None:
         """Smoothly ramp the real arm and the sim onto ``arm_joints``/``gripper``."""
         target_real = clamp_and_warn(
-            sim_frame_to_real(arm_joints, gripper), clamp_low, clamp_high, clip_warned
+            sim_frame_to_real(arm_joints, gripper, joint_offsets),
+            clamp_low,
+            clamp_high,
+            clip_warned,
         )
         ramp_to_resting(
             follower, target_real, arm_joints, gripper, actuator_id, model, data, viewer
@@ -884,6 +916,7 @@ def main() -> None:
                     free_grasp=True,
                     pickup_empty_gripper_position=args.pickup_empty_gripper_position,
                     pickup_gripper_margin=args.pickup_gripper_margin,
+                    joint_offsets_deg=joint_offsets,
                 )
                 if status == "restart":
                     raise EpisodeAborted
@@ -1159,6 +1192,7 @@ def main() -> None:
                                 else check_final_placement
                             ),
                             record_rest_to_rest=args.video_rest_to_rest,
+                            joint_offsets_deg=joint_offsets,
                         )
 
                         if status == "restart":

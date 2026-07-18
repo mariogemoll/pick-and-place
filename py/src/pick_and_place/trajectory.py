@@ -283,6 +283,19 @@ def _square_to_cube_face(nominal: float, cube_yaw: float) -> float:
     return cube_yaw + round((nominal - cube_yaw) / quarter) * quarter
 
 
+def fold_cube_yaw(reference: float, cube_yaw: float) -> float:
+    """Snap a detected cube yaw to the quarter-turn-equivalent nearest ``reference``.
+
+    A cube grasp repeats every 90 deg (:func:`_square_to_cube_face`), so a
+    detection that lands a quarter or half turn off the current target is the
+    same physical grasp. Folding the yaw into ``[reference - 45deg,
+    reference + 45deg)`` keeps the grasp roll continuous, so the single-tag
+    planar-pose ambiguity can no longer flip the wrist 90/180 deg mid-descent.
+    """
+    quarter = math.pi / 2.0
+    return reference + (cube_yaw - reference + quarter / 2.0) % quarter - quarter / 2.0
+
+
 def _face_from_closing(closing_azimuth: float, cube_yaw: float) -> CubeFace:
     local = _normalize_angle(closing_azimuth - cube_yaw)
     index = int(round(local / (math.pi / 2.0))) % 4

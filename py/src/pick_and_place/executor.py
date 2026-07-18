@@ -294,6 +294,7 @@ def execute_episode(
     pickup_gripper_margin: float = PICKUP_GRIPPER_MARGIN,
     success_metadata: Callable[[], dict[str, Any]] | None = None,
     record_rest_to_rest: bool = False,
+    joint_offsets_deg: dict[str, float] | None = None,
 ) -> str:
     """Run one pass of a prepared episode on an already-connected follower.
 
@@ -324,6 +325,12 @@ def execute_episode(
     REST to the episode's start pose and the final return to REST. The caller
     must have already parked the physical arm at REST before calling. Does not
     connect/disconnect the follower or otherwise move it to REST.
+
+    ``joint_offsets_deg`` (from the session calibration) is applied feed-forward
+    to every arm command and to the readback the checkpoint replanner starts
+    from, so open-loop reaching lands near the planned model pose instead of the
+    servos' miscalibrated zero. Left ``None`` the arm runs on its raw servo
+    calibration. The image-space descent servo still corrects the residual.
     """
     model = episode.model
     data = episode.data
@@ -762,14 +769,14 @@ def execute_episode(
         # In rest-to-rest mode the physical arm is already at REST. Start the
         # cameras there, then include the transition to the planned start pose.
         start_real = clamp_and_warn(
-            sim_frame_to_real(start_joints, start_gripper),
+            sim_frame_to_real(start_joints, start_gripper, joint_offsets_deg),
             clamp_low,
             clamp_high,
             clip_warned,
         )
         if record_rest_to_rest:
             rest_real = clamp_and_warn(
-                sim_frame_to_real(REST_ARM_JOINTS, REST_GRIPPER),
+                sim_frame_to_real(REST_ARM_JOINTS, REST_GRIPPER, joint_offsets_deg),
                 clamp_low,
                 clamp_high,
                 clip_warned,
@@ -809,7 +816,12 @@ def execute_episode(
             next_tick = time.monotonic()
 
             # Setup PBVS dynamically updating current source
-            from pick_and_place.trajectory import DescentPhase, _shortest_delta, grasp_candidates
+            from pick_and_place.trajectory import (
+                DescentPhase,
+                _shortest_delta,
+                fold_cube_yaw,
+                grasp_candidates,
+            )
             import dataclasses
             import cv2
 
@@ -850,7 +862,17 @@ def execute_episode(
                             and latest_estimate.frame_id != last_servo_frame_id
                         ):
                             last_servo_frame_id = latest_estimate.frame_id
-                            new_source = latest_estimate.source
+                            # A cube grasp repeats every 90 deg, so fold the
+                            # detected yaw onto the quarter-turn nearest the
+                            # current target. Without this the single-tag
+                            # planar-pose ambiguity flips the yaw 90/180 deg and
+                            # the re-solved grasp spins the wrist right around.
+                            folded_yaw = fold_cube_yaw(
+                                dynamic_source.yaw, latest_estimate.source.yaw
+                            )
+                            new_source = dataclasses.replace(
+                                latest_estimate.source, yaw=folded_yaw
+                            )
 
                             # Smoothly interpolate target to avoid arm jumps.
                             alpha = 0.1
@@ -954,7 +976,7 @@ def execute_episode(
                 prev_contacts = curr_contacts
 
                 commanded = clamp_and_warn(
-                    sim_frame_to_real(frame.joints, frame.gripper),
+                    sim_frame_to_real(frame.joints, frame.gripper, joint_offsets_deg),
                     clamp_low,
                     clamp_high,
                     clip_warned,
@@ -1183,7 +1205,7 @@ def execute_episode(
 
             # Sense: get actual joints
             actual = action_to_joints(follower.get_observation(), commanded)
-            measured_joints, measured_gripper = real_frame_to_sim(actual)
+            measured_joints, measured_gripper = real_frame_to_sim(actual, joint_offsets_deg)
             measured_shadow = mujoco.MjData(model)
             for name, value in measured_joints.items():
                 set_joint(model, measured_shadow, name, value)
@@ -1289,7 +1311,7 @@ def execute_episode(
         if episode_status == "success" and record_rest_to_rest and viewer.is_running():
             print("Returning real arm to REST...")
             rest_real = clamp_and_warn(
-                sim_frame_to_real(REST_ARM_JOINTS, REST_GRIPPER),
+                sim_frame_to_real(REST_ARM_JOINTS, REST_GRIPPER, joint_offsets_deg),
                 clamp_low,
                 clamp_high,
                 clip_warned,
