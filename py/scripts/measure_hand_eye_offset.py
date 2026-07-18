@@ -91,7 +91,9 @@ def _measure_episode(
     deltas: list[np.ndarray] = []
     pixel_deltas: list[np.ndarray] = []
     per_frame: list[dict] = []
-    image_ext = next(iter((episode_dir / "wrist_real").glob("*"))).suffix
+    image_ext = next((p.suffix for p in (episode_dir / "wrist_real").glob("*")), None)
+    if image_ext is None:
+        return [], [], []
     for frame in index["frames"]:
         if frame["cube_tracking"] != "stable":
             continue

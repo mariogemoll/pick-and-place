@@ -12,7 +12,8 @@ frames must carry world-frame deltas), computes the implied rotation per frame
 (tangential offset / radius), and reports the robust per-episode and overall
 pan offset in degrees.
 
-The resulting value is the ``--pan-offset-deg`` to bake into pair exports and,
+The resulting value is the shoulder_pan entry for the exporter's
+``--joint-offsets-deg`` and,
 sign-flipped appropriately, the correction for the real scripted pipeline's
 kinematics.
 """
@@ -68,7 +69,7 @@ def main() -> None:
         f"\noverall: n={len(arr)} median={np.median(arr):+.3f}deg "
         f"mean={arr.mean():+.3f}deg std={arr.std():.3f}deg"
     )
-    print(f"suggested exporter flag: --pan-offset-deg {np.median(arr):.2f}")
+    print(f"suggested exporter flag: --joint-offsets-deg shoulder_pan={np.median(arr):.2f}")
 
 
 if __name__ == "__main__":

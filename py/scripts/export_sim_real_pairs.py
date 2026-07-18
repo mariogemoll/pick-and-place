@@ -440,7 +440,7 @@ def _export_episode(
     max_frames: int | None,
     stable_only: bool,
     apply_alignment: bool,
-    pan_offset_deg: float,
+    joint_offsets_deg: dict[str, float],
 ) -> None:
     intrinsics = load_local_camera_intrinsics()
     model, data = _build_model(episode, intrinsics, out_w, out_h)
@@ -545,7 +545,8 @@ def _export_episode(
                 continue
             _set_cube(data, cube_qadr, cube_dadr, cube_x, cube_y, cube_yaw)
             sim_joints = _real_to_sim_vector(episode.states[frame_index])
-            sim_joints[JOINT_NAMES.index("shoulder_pan")] += math.radians(pan_offset_deg)
+            for joint_name, offset_deg in joint_offsets_deg.items():
+                sim_joints[JOINT_NAMES.index(joint_name)] += math.radians(offset_deg)
             for i, name in enumerate(JOINT_NAMES):
                 data.qpos[qpos_addrs[name]] = sim_joints[i]
             mujoco.mj_forward(model, data)
@@ -595,7 +596,7 @@ def _export_episode(
         "fps": episode.fps,
         "width": out_w,
         "height": out_h,
-        "pan_offset_deg": pan_offset_deg,
+        "joint_offsets_deg": joint_offsets_deg,
         "workspace_alignment": None
         if alignment is None
         else {
@@ -657,10 +658,14 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--pan-offset-deg",
-        type=float,
-        default=0.0,
-        help="add this offset to the sim shoulder_pan when posing (hand-eye calibration test)",
+        "--joint-offsets-deg",
+        type=str,
+        default="",
+        metavar="NAME=DEG[,NAME=DEG...]",
+        help=(
+            "add these zero-offset corrections to the sim joints when posing, e.g. "
+            "'shoulder_pan=3.75,elbow_flex=3.3' (fitted by fit_joint_zeros)"
+        ),
     )
     parser.add_argument(
         "--shard",
@@ -670,6 +675,15 @@ def main() -> None:
         help="process only episodes with episode_index %% N == I, for parallel runs",
     )
     args = parser.parse_args()
+
+    joint_offsets_deg: dict[str, float] = {}
+    if args.joint_offsets_deg:
+        for item in args.joint_offsets_deg.split(","):
+            name, _, value = item.partition("=")
+            name = name.strip()
+            if name not in JOINT_NAMES:
+                parser.error(f"unknown joint {name!r} in --joint-offsets-deg")
+            joint_offsets_deg[name] = float(value)
 
     shard_index, shard_count = 0, 1
     if args.shard is not None:
@@ -710,7 +724,7 @@ def main() -> None:
                     max_frames=args.max_frames,
                     stable_only=args.stable_only,
                     apply_alignment=args.apply_workspace_alignment,
-                    pan_offset_deg=args.pan_offset_deg,
+                    joint_offsets_deg=joint_offsets_deg,
                 )
             except Exception as exc:
                 print(f"error: {dataset_root.name} episode {index}: {exc}")
