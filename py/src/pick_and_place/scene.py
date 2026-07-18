@@ -67,8 +67,8 @@ def build_scene(
     include_environment: bool = True,
     tabletop: bool = False,
     apriltag_cube: bool | None = None,
-    background_panorama: Path | str | None = None,
-    table_texture: Path | str | None = None,
+    background_panorama: Path | str | np.ndarray | None = None,
+    table_texture: Path | str | np.ndarray | None = None,
     robot_dynamics: bool | str | Path = True,
 ) -> mujoco.MjSpec:
     """Return the composed robot with a floor, workspace overlays, soft light, and cube.
@@ -207,7 +207,9 @@ WORKSPACE_FLOOR_HALF = 0.3
 WORKSPACE_FLOOR_THICKNESS = 0.02
 
 
-def _add_workspace_floor(spec: mujoco.MjSpec, *, texture: Path | str | None = None) -> None:
+def _add_workspace_floor(
+    spec: mujoco.MjSpec, *, texture: Path | str | np.ndarray | None = None
+) -> None:
     """Add a finite floor that ends flush with the workspace frame.
 
     Used with a background panorama: beyond this square the skybox is visible, so
@@ -233,7 +235,7 @@ def _add_workspace_floor(spec: mujoco.MjSpec, *, texture: Path | str | None = No
     )
 
 
-def _add_floor_texture(spec: mujoco.MjSpec, texture: Path | str) -> None:
+def _add_floor_texture(spec: mujoco.MjSpec, texture: Path | str | np.ndarray) -> None:
     """Create the ``groundplane`` material carrying the top-down table texture.
 
     Added after :func:`apply_materials` (which clears materials), mirroring the
@@ -241,10 +243,15 @@ def _add_floor_texture(spec: mujoco.MjSpec, texture: Path | str) -> None:
     is rotated to MuJoCo's box-top UV convention so world +X/+Y line up with the
     texture's rows/columns.
     """
-    bgr = cv2.imread(str(texture))
-    if bgr is None:
-        raise FileNotFoundError(f"could not read table texture: {texture}")
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    if isinstance(texture, np.ndarray):
+        if texture.ndim != 3 or texture.shape[2] != 3:
+            raise ValueError("table texture array must have shape (height, width, 3)")
+        rgb = np.asarray(texture, dtype=np.uint8)
+    else:
+        bgr = cv2.imread(str(texture))
+        if bgr is None:
+            raise FileNotFoundError(f"could not read table texture: {texture}")
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
     # The texture is built with row 0 = +X and column 0 = -Y; rotate into the
     # orientation MuJoCo samples the box top face so features land in place.
     rgb = np.rot90(rgb, k=-1).copy()

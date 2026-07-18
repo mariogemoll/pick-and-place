@@ -8,8 +8,9 @@ Each run samples episodes, plays their trajectories under the model's
 position-servo physics, and writes them straight into one LeRobotDataset
 (``datasets/<timestamp>/`` by default) with the same schema the real arm
 produces: per control tick, the measured joints as ``observation.state``, the
-commanded set point as ``action``, and a 640x480 wrist and overhead image
-rendered offscreen from the named MuJoCo cameras. No hardware is involved.
+commanded set point as ``action``, and a 960x720 wrist and overhead image by
+default. Cameras are rendered at 1920x1080 before downsampling so silhouettes
+and shadow edges are antialiased. No hardware is involved.
 
 Camera fields of view come from the calibrated intrinsics in
 ``config/camera_intrinsics``, so a sim frame matches the calibrated real camera
@@ -33,6 +34,7 @@ from pathlib import Path
 import mujoco
 import mujoco.viewer
 import numpy as np
+from tqdm import tqdm
 
 from pick_and_place.camera_extrinsics import (
     apply_camera_extrinsics_to_model,
@@ -40,11 +42,19 @@ from pick_and_place.camera_extrinsics import (
 )
 from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
 from pick_and_place.dataset_metadata import cube_pose_metadata, placement_error_metadata
+from pick_and_place.domain_randomization import (
+    DomainRandomizationPreset,
+    DomainRandomizer,
+    domain_seed,
+    generate_procedural_appearance,
+    orient_cube,
+)
 from pick_and_place.episodes import (
     EpisodeSamplingError,
     _build_model,
     placement_error,
     prepare_episode,
+    sample_cube,
 )
 from pick_and_place.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 from pick_and_place.miscalibration import MiscalibrationDraw, MiscalibrationModel
@@ -53,6 +63,15 @@ from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.paper_detection import DROP_ZONE_HALF_SIZE, place_paper_target_marker
 from pick_and_place.sim_recorder import SimCameraRig, record_episode
 from pick_and_place.workspace_overlays import PAN_AXIS, is_cube_drop_allowed
+
+
+SAVED_IMAGE_WIDTH = 960
+SAVED_IMAGE_HEIGHT = 720
+RENDER_WIDTH = 1920
+RENDER_HEIGHT = 1080
+SHADOW_MAP_SIZE = 8192
+OFFSCREEN_SAMPLES = 8
+SHADOW_CONE_SCALE = 0.4
 
 
 class _MockViewer:
@@ -72,8 +91,7 @@ def _to_cube(xy: tuple[float, float] | None) -> CubePose | None:
 def _miscalibration_metadata(draw: MiscalibrationDraw) -> dict[str, float]:
     """Episode metadata recording the injected draw (believed-vs-true errors)."""
     metadata = {
-        f"injected_offset_{name}_deg": float(value)
-        for name, value in draw.base_offsets_deg.items()
+        f"injected_offset_{name}_deg": float(value) for name, value in draw.base_offsets_deg.items()
     }
     dx, dy, dz, dyaw = draw.cube_belief_error
     tx, ty = draw.target_belief_error
@@ -105,12 +123,17 @@ def run_recording(
     vcodec: str = "auto",
     streaming_encoding: bool = True,
     image_writer_threads: int = 4,
-    image_width: int = 640,
-    image_height: int = 480,
+    image_width: int = SAVED_IMAGE_WIDTH,
+    image_height: int = SAVED_IMAGE_HEIGHT,
+    render_width: int = RENDER_WIDTH,
+    render_height: int = RENDER_HEIGHT,
     use_viewer: bool = False,
     miscalibration: bool = False,
+    domain_randomization: Path | None = None,
     label: str = "",
     first_episode: int = 0,
+    max_attempts: int = 50,
+    show_progress: bool = True,
 ) -> int:
     """Record ``episodes`` episodes into one LeRobotDataset; return the count saved.
 
@@ -122,12 +145,22 @@ def run_recording(
     the worker count. ``use_viewer`` opens the 3D viewer (single process only);
     shard workers always run headless.
     """
+    preset = DomainRandomizationPreset.load(domain_randomization) if domain_randomization else None
+    domain_seeds = (
+        [_domain_seed(seed, first_episode + index) for index in range(episodes)]
+        if preset is not None
+        else []
+    )
+    initial_sample = preset.sample(domain_seeds[0]) if preset is not None else None
+    if preset is not None:
+        initial_appearance = generate_procedural_appearance(initial_sample)
+        table_texture = initial_appearance.table_rgb
+        background_panorama = initial_appearance.background_rgb
     source = _to_cube(source_xy)
     target = _to_cube(target_xy)
 
     # One persistent scene reused across episodes. The environment is required for
     # the overhead camera; calibrated extrinsics place it where the real one sits.
-    print(f"{label}Building scene...")
     dummy_source = CubePose(x=PAN_AXIS[0] + 0.1, y=PAN_AXIS[1], z=CUBE_HALF_SIZE)
     model, data = _build_model(
         dummy_source,
@@ -135,16 +168,23 @@ def run_recording(
         paper_target_marker=True,
         background_panorama=background_panorama,
         table_texture=table_texture,
+        offwidth=render_width,
+        offheight=render_height,
     )
     model.opt.timestep = 1.0 / HARDWARE_SIMULATION_HZ
+    _configure_render_quality(model)
     apply_camera_extrinsics_to_model(model, load_local_camera_extrinsics())
     mujoco.mj_forward(model, data)
 
+    randomizer = DomainRandomizer(model) if preset is not None else None
     rig = SimCameraRig(
         model,
         load_local_camera_intrinsics(),
         width=image_width,
         height=image_height,
+        render_width=render_width,
+        render_height=render_height,
+        postprocess=randomizer.postprocess if randomizer is not None else None,
     )
 
     recording = RecordingSession(
@@ -156,45 +196,65 @@ def run_recording(
         streaming_encoding=streaming_encoding,
         image_writer_threads=image_writer_threads,
     )
-    print(f"{label}Recording into LeRobotDataset at: {dataset_root}")
+    # LeRobot/Hugging Face otherwise emits a separate Map bar while finalizing
+    # every episode, obscuring the one useful recording-level progress bar.
+    from datasets.utils.logging import disable_progress_bar
 
-    miscalibration_model = MiscalibrationModel() if miscalibration else None
+    disable_progress_bar()
+
+    miscalibration_model = MiscalibrationModel() if miscalibration and preset is None else None
     viewer_cm = mujoco.viewer.launch_passive(model, data) if use_viewer else None
     viewer = viewer_cm.__enter__() if viewer_cm is not None else _MockViewer()
 
     recorded = 0
     try:
-        for index in range(episodes):
+        progress = tqdm(
+            range(episodes),
+            desc=label.strip() or "recording",
+            unit="ep",
+            disable=not show_progress,
+            dynamic_ncols=True,
+        )
+        for index in progress:
             if not viewer.is_running():
-                print(f"{label}Viewer closed; stopping.")
+                if show_progress:
+                    tqdm.write(f"{label}Viewer closed; stopping.")
                 break
-            print(f"{label}--- Episode {index + 1}/{episodes} ---")
             global_episode = first_episode + index
             rng = _episode_rng(seed, global_episode)
+            domain_seed = domain_seeds[index] if preset is not None else None
+            sample = preset.sample(domain_seed) if preset is not None else None
             draw = (
-                miscalibration_model.sample(rng)
-                if miscalibration_model is not None
-                else None
-            )
-            if draw is not None:
-                offsets = ", ".join(
-                    f"{name}={value:+.2f}°"
-                    for name, value in sorted(draw.base_offsets_deg.items())
+                sample.miscalibration
+                if sample is not None
+                else (
+                    miscalibration_model.sample(rng) if miscalibration_model is not None else None
                 )
-                print(f"{label}Injected joint-zero offsets: {offsets}")
+            )
+            if sample is not None:
+                randomizer.apply(sample)
+                rig.reload_textures(randomizer.texture_ids)
             try:
+                episode_source = source
+                if sample is not None:
+                    episode_source = orient_cube(
+                        source if source is not None else sample_cube(rng),
+                        sample.cube_orientation_index,
+                    )
                 episode = prepare_episode(
                     rng,
-                    source,
+                    episode_source,
                     target,
                     model=model,
                     data=data,
-                    verbose=True,
+                    verbose=False,
                     include_environment=True,
                     miscalibration=draw,
+                    max_attempts=max_attempts,
                 )
             except EpisodeSamplingError as exc:
-                print(f"{label}Skipping: {exc}")
+                tqdm.write(f"{label}Skipping episode {index + 1}: {exc}")
+                progress.set_postfix(saved=recorded, skipped=index + 1 - recorded)
                 continue
 
             # Render the black drop-zone square at the episode's target so the
@@ -209,6 +269,8 @@ def run_recording(
                 usable=is_cube_drop_allowed(ep_target.x, ep_target.y),
                 alpha=1.0,
             )
+            if randomizer is not None:
+                randomizer.tint_episode_markers()
 
             status = record_episode(
                 episode,
@@ -216,11 +278,15 @@ def run_recording(
                 rig=rig,
                 viewer=viewer if use_viewer else None,
                 speed=speed,
+                believed_wrist_camera_pose=(
+                    randomizer.believed_wrist_camera_pose if randomizer is not None else None
+                ),
+                verbose=False,
             )
             if status != "success":
                 if recording.has_pending_frames():
                     recording.discard_episode()
-                print(f"{label}Discarded {status} episode (not added to dataset).")
+                progress.set_postfix(saved=recorded, skipped=index + 1 - recorded)
                 continue
             error = placement_error(model, data, episode.target)
             metadata = cube_pose_metadata(episode.source, episode.target)
@@ -236,19 +302,35 @@ def run_recording(
                     }
                 )
                 metadata.update(_miscalibration_metadata(draw))
+            if sample is not None:
+                metadata.update(
+                    {
+                        "source_domain": "sim",
+                        "domain_preset": preset.name,
+                        "domain_seed": domain_seed,
+                        "domain_sample_json": sample.metadata_json(),
+                        "cube_start_roll": float(episode.source.roll),
+                        "cube_start_pitch": float(episode.source.pitch),
+                        "cube_orientation_index": sample.cube_orientation_index,
+                    }
+                )
             recording.save_episode(metadata)
             recorded += 1
-            print(f"{label}Saved episode to dataset ({recorded} total).")
+            progress.set_postfix(saved=recorded, skipped=index + 1 - recorded)
     finally:
         if viewer_cm is not None:
             viewer_cm.__exit__(None, None, None)
         rig.close()
         if recording.dataset is not None:
             recording.finalize()
-            print(f"{label}Dataset written to {dataset_root} ({recorded} episodes)")
-        else:
-            print(f"{label}No episodes recorded.")
     return recorded
+
+
+def _configure_render_quality(model: mujoco.MjModel) -> None:
+    """Use a dense, tightly focused shadow map for supersampled recordings."""
+    model.vis.quality.shadowsize = SHADOW_MAP_SIZE
+    model.vis.quality.offsamples = OFFSCREEN_SAMPLES
+    model.vis.map.shadowscale = SHADOW_CONE_SCALE
 
 
 def _worker(kwargs: dict) -> None:
@@ -267,6 +349,11 @@ def _episode_rng(root_seed: int | None, global_episode: int) -> np.random.Genera
     if root_seed is None:
         return np.random.default_rng()
     return np.random.default_rng(np.random.SeedSequence([root_seed, global_episode]))
+
+
+def _domain_seed(root_seed: int | None, global_episode: int) -> int:
+    """Stable per-episode seed for domain sampling, independent of pose draws."""
+    return domain_seed(root_seed, global_episode)
 
 
 def merge_shards(
@@ -368,7 +455,19 @@ def main() -> None:
             "runs the wrist-camera visual servo like the real arm"
         ),
     )
+    parser.add_argument(
+        "--domain-randomization",
+        type=Path,
+        default=None,
+        help="strict visual domain-randomization preset; includes measured miscalibration",
+    )
     parser.add_argument("--seed", type=int, default=None, help="RNG seed for pose sampling")
+    parser.add_argument(
+        "--max-attempts",
+        type=int,
+        default=50,
+        help="trajectory resamples allowed per episode before skipping it (default: 50)",
+    )
     parser.add_argument(
         "--background-panorama",
         type=Path,
@@ -414,8 +513,30 @@ def main() -> None:
         default=4,
         help="background image-writer threads for PNG-then-encode mode",
     )
-    parser.add_argument("--image-width", type=int, default=640, help="camera image width (px)")
-    parser.add_argument("--image-height", type=int, default=480, help="camera image height (px)")
+    parser.add_argument(
+        "--image-width",
+        type=int,
+        default=SAVED_IMAGE_WIDTH,
+        help=f"saved camera image width (default: {SAVED_IMAGE_WIDTH})",
+    )
+    parser.add_argument(
+        "--image-height",
+        type=int,
+        default=SAVED_IMAGE_HEIGHT,
+        help=f"saved camera image height (default: {SAVED_IMAGE_HEIGHT})",
+    )
+    parser.add_argument(
+        "--render-width",
+        type=int,
+        default=RENDER_WIDTH,
+        help=f"MuJoCo source render width before downsampling/cropping (default: {RENDER_WIDTH})",
+    )
+    parser.add_argument(
+        "--render-height",
+        type=int,
+        default=RENDER_HEIGHT,
+        help=f"MuJoCo source render height before downsampling/cropping (default: {RENDER_HEIGHT})",
+    )
     args = parser.parse_args()
 
     if args.episodes < 1:
@@ -426,6 +547,10 @@ def main() -> None:
         parser.error("--speed must be positive")
     if args.image_width < 1 or args.image_height < 1:
         parser.error("--image-width and --image-height must be positive")
+    if args.render_width < args.image_width or args.render_height < args.image_height:
+        parser.error("--render-width and --render-height must be at least the image dimensions")
+    if args.max_attempts < 1:
+        parser.error("--max-attempts must be at least 1")
     if args.viewer and args.workers > 1:
         parser.error("--viewer requires --workers 1")
 
@@ -447,7 +572,11 @@ def main() -> None:
         image_writer_threads=args.image_writer_threads,
         image_width=args.image_width,
         image_height=args.image_height,
+        render_width=args.render_width,
+        render_height=args.render_height,
         miscalibration=args.miscalibration,
+        domain_randomization=args.domain_randomization,
+        max_attempts=args.max_attempts,
     )
 
     if args.workers == 1:
@@ -477,6 +606,7 @@ def main() -> None:
                 repo_id=f"{args.repo_id}-shard{i}",
                 task=args.task,
                 label=f"[shard {i}] ",
+                show_progress=i == 0,
                 **common,
             )
         )

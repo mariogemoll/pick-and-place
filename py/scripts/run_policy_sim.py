@@ -57,9 +57,18 @@ from pick_and_place.follower import (
     real_frame_to_sim,
     sim_frame_to_real,
 )
-from pick_and_place.episodes import sample_cube, sample_target
-from pick_and_place.geometry import CUBE_HALF_SIZE
+from pick_and_place.episodes import cube_quat_from_pose, sample_cube, sample_target
+from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.domain_randomization import (
+    DomainRandomizationPreset,
+    DomainRandomizer,
+    domain_seed,
+    generate_procedural_appearance,
+    orient_cube,
+    reload_renderer_textures,
+)
 from pick_and_place.miscalibration import MiscalibrationDraw, MiscalibrationModel
+from pick_and_place.sim_recorder import resize_and_center_crop
 from pick_and_place.paper_detection import (
     DROP_ZONE_HALF_SIZE,
     add_paper_target_marker,
@@ -82,13 +91,12 @@ from pick_and_place.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 
 
 def _build_model(
-    source_xy: tuple[float, float],
-    source_yaw: float,
+    source: CubePose,
     target_xy: tuple[float, float],
     render_h: int,
     render_w: int,
-    background_panorama: Path | None = None,
-    table_texture: Path | None = None,
+    background_panorama: Path | np.ndarray | None = None,
+    table_texture: Path | np.ndarray | None = None,
 ):
     """Compile the standard (AprilTag, calibrated-camera) scene with the pick cube
     placed as a free rigid body at the requested pose. Mirrors the layout used by
@@ -114,9 +122,8 @@ def _build_model(
             camera.fovy = float(intrinsics[camera.name]["fovy_deg"])
 
     cube = spec.body("pick_cube")
-    cube.pos = (source_xy[0], source_xy[1], CUBE_HALF_SIZE)
-    half_yaw = source_yaw / 2.0
-    cube.quat = (math.cos(half_yaw), 0.0, 0.0, math.sin(half_yaw))
+    cube.pos = (source.x, source.y, source.z)
+    cube.quat = cube_quat_from_pose(source)
     cube.add_freejoint()
 
     add_paper_target_marker(spec)
@@ -192,18 +199,10 @@ def _cube_freejoint_addrs(model: mujoco.MjModel) -> tuple[int, int]:
     return int(model.jnt_qposadr[model.body_jntadr[body_id]]), int(model.body_dofadr[body_id])
 
 
-def _place_cube(data: mujoco.MjData, qadr: int, dofadr: int, xy, yaw: float) -> None:
-    """Drop the cube at ``xy``/``yaw`` (resting on the table) with zero velocity."""
-    half_yaw = yaw / 2.0
-    data.qpos[qadr : qadr + 7] = (
-        xy[0],
-        xy[1],
-        CUBE_HALF_SIZE,
-        math.cos(half_yaw),
-        0.0,
-        0.0,
-        math.sin(half_yaw),
-    )
+def _place_cube(data: mujoco.MjData, qadr: int, dofadr: int, pose: CubePose) -> None:
+    """Drop a cube pose onto the table with zero velocity."""
+    data.qpos[qadr : qadr + 3] = (pose.x, pose.y, pose.z)
+    data.qpos[qadr + 3 : qadr + 7] = cube_quat_from_pose(pose)
     data.qvel[dofadr : dofadr + 6] = 0.0
 
 
@@ -224,6 +223,18 @@ def main() -> None:
         default=None,
         help="render width fed to the policy (default: the checkpoint's training width, else 640)",
     )
+    parser.add_argument(
+        "--render-width",
+        type=int,
+        default=1920,
+        help="MuJoCo source render width before downsampling/cropping (default: 1920)",
+    )
+    parser.add_argument(
+        "--render-height",
+        type=int,
+        default=1080,
+        help="MuJoCo source render height before downsampling/cropping (default: 1080)",
+    )
     parser.add_argument("--source", type=float, nargs=2, metavar=("X", "Y"), default=(0.22, 0.0))
     parser.add_argument("--source-yaw", type=float, default=0.0, help="cube yaw (radians)")
     parser.add_argument(
@@ -242,6 +253,15 @@ def main() -> None:
             "inject a fresh measured joint-zero miscalibration draw for the initial "
             "scene and every Enter resample; observations use servo-style readback "
             "and actions are shifted into the true physical joint frame"
+        ),
+    )
+    parser.add_argument(
+        "--domain-randomization",
+        type=Path,
+        default=None,
+        help=(
+            "strict per-episode sim randomization preset; includes measured "
+            "miscalibration, cameras, lighting, materials, cube orientation, and appearance"
         ),
     )
     parser.add_argument(
@@ -308,6 +328,8 @@ def main() -> None:
     image_hw, (overhead_key, wrist_key) = resolve_checkpoint_cameras(
         args.checkpoint, override_hw=(args.image_height, args.image_width) if all(override) else None
     )
+    if args.render_width < image_hw[1] or args.render_height < image_hw[0]:
+        parser.error("--render-width and --render-height must be at least the policy image size")
 
     from lerobot.utils.control_utils import predict_action
 
@@ -319,9 +341,20 @@ def main() -> None:
     )
 
     rng = np.random.default_rng(args.seed)
-    miscalibration_model = MiscalibrationModel() if args.miscalibration else None
+    preset = (
+        DomainRandomizationPreset.load(args.domain_randomization)
+        if args.domain_randomization is not None
+        else None
+    )
+    domain_episode = 0
+    active_sample = (
+        preset.sample(domain_seed(args.seed, domain_episode)) if preset is not None else None
+    )
+    miscalibration_model = MiscalibrationModel() if args.miscalibration and preset is None else None
     draw: MiscalibrationDraw | None = (
-        miscalibration_model.sample(rng) if miscalibration_model is not None else None
+        active_sample.miscalibration
+        if active_sample is not None
+        else (miscalibration_model.sample(rng) if miscalibration_model is not None else None)
     )
 
     # Sample a random drop zone the same way the recording does, unless pinned.
@@ -332,15 +365,37 @@ def main() -> None:
         target_xy = (sampled.x, sampled.y)
     print(f"Drop zone at ({target_xy[0]:.4f}, {target_xy[1]:.4f})")
 
-    model, data = _build_model(
-        tuple(args.source),
-        args.source_yaw,
-        target_xy,
-        image_hw[0],
-        image_hw[1],
-        background_panorama=args.background_panorama,
-        table_texture=args.table_texture,
+    source_pose = CubePose(
+        x=float(args.source[0]),
+        y=float(args.source[1]),
+        z=CUBE_HALF_SIZE,
+        yaw=args.source_yaw,
     )
+    if active_sample is not None:
+        source_pose = orient_cube(source_pose, active_sample.cube_orientation_index)
+        appearance = generate_procedural_appearance(active_sample)
+        background_panorama = appearance.background_rgb
+        table_texture = appearance.table_rgb
+    else:
+        background_panorama = args.background_panorama
+        table_texture = args.table_texture
+
+    model, data = _build_model(
+        source_pose,
+        target_xy,
+        args.render_height,
+        args.render_width,
+        background_panorama=background_panorama,
+        table_texture=table_texture,
+    )
+    randomizer = DomainRandomizer(model) if active_sample is not None else None
+    if randomizer is not None:
+        randomizer.apply(active_sample)
+        randomizer.tint_episode_markers()
+        print(
+            f"Domain sample episode {domain_episode}: seed={active_sample.seed}, "
+            f"cube_orientation={active_sample.cube_orientation_index}"
+        )
     episode_time_origin = data.time
 
     def offsets_rad_now() -> dict[str, float]:
@@ -372,11 +427,14 @@ def main() -> None:
     if getattr(policy.config, "temporal_ensemble_coeff", None) is not None:
         print(f"Temporal ensembling coeff: {policy.config.temporal_ensemble_coeff}")
 
-    renderer = mujoco.Renderer(model, height=hw[0], width=hw[1])
+    renderer = mujoco.Renderer(
+        model, height=args.render_height, width=args.render_width
+    )
 
     def render(camera: str) -> np.ndarray:
         renderer.update_scene(data, camera=camera)
-        return renderer.render()  # (H, W, 3) uint8 RGB
+        image = resize_and_center_crop(renderer.render(), hw[0], hw[1])
+        return randomizer.postprocess(image) if randomizer is not None else image
 
     substeps = max(1, round((1.0 / CONTROL_HZ) / model.opt.timestep))
     period = 1.0 / CONTROL_HZ
@@ -399,16 +457,29 @@ def main() -> None:
     def resample_scene() -> None:
         """Restart the episode: park the arm, drop a freshly sampled cube, draw a
         freshly sampled drop zone, and reset the policy's action chunk."""
-        nonlocal draw, episode_time_origin, target_xy
-        draw = (
-            miscalibration_model.sample(rng)
-            if miscalibration_model is not None
-            else None
-        )
+        nonlocal active_sample, domain_episode, draw, episode_time_origin, target_xy
+        domain_episode += 1
+        if preset is not None:
+            active_sample = preset.sample(domain_seed(args.seed, domain_episode))
+            randomizer.apply(active_sample)
+            reload_renderer_textures(renderer, randomizer.texture_ids)
+            draw = active_sample.miscalibration
+            print(
+                f"Domain sample episode {domain_episode}: seed={active_sample.seed}, "
+                f"cube_orientation={active_sample.cube_orientation_index}"
+            )
+        else:
+            draw = (
+                miscalibration_model.sample(rng)
+                if miscalibration_model is not None
+                else None
+            )
         episode_time_origin = data.time
         _set_neutral(model, data, offsets_rad_now())
         cube = sample_cube(rng)
-        _place_cube(data, cube_qadr, cube_dofadr, (cube.x, cube.y), cube.yaw)
+        if active_sample is not None:
+            cube = orient_cube(cube, active_sample.cube_orientation_index)
+        _place_cube(data, cube_qadr, cube_dofadr, cube)
         target = sample_target(rng)
         target_xy = (target.x, target.y)
         place_paper_target_marker(
@@ -419,6 +490,8 @@ def main() -> None:
             usable=is_cube_drop_allowed(target.x, target.y),
             alpha=1.0,
         )
+        if randomizer is not None:
+            randomizer.tint_episode_markers()
         mujoco.mj_forward(model, data)
         policy.reset()
         if draw is not None:

@@ -73,19 +73,26 @@ def equirect_to_skybox(equirect_rgb: np.ndarray, face_size: int) -> np.ndarray:
 
 def add_background_panorama(
     spec: mujoco.MjSpec,
-    panorama: Path | str,
+    panorama: Path | str | np.ndarray,
     *,
-    face_size: int = 1024,
+    face_size: int | None = None,
 ) -> None:
     """Add the room panorama to *spec* as a skybox.
 
     *panorama* is an equirectangular image path. It is resampled into cube faces
     and attached as skybox texture data (no asset files are written).
     """
-    bgr = cv2.imread(str(panorama))
-    if bgr is None:
-        raise FileNotFoundError(f"could not read panorama image: {panorama}")
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    if isinstance(panorama, np.ndarray):
+        if panorama.ndim != 3 or panorama.shape[2] != 3:
+            raise ValueError("panorama array must have shape (height, width, 3)")
+        rgb = np.asarray(panorama, dtype=np.uint8)
+        face_size = face_size or 256
+    else:
+        bgr = cv2.imread(str(panorama))
+        if bgr is None:
+            raise FileNotFoundError(f"could not read panorama image: {panorama}")
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        face_size = face_size or 1024
     data = equirect_to_skybox(rgb, face_size)
 
     texture = spec.add_texture(

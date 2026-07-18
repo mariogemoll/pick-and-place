@@ -14,7 +14,7 @@ recording. The two cameras are rendered offscreen from the named MuJoCo
 cameras, so no hardware is involved.
 
 Each camera's vertical field of view is set from its calibrated intrinsics. The
-render resolution is configurable, and defaults to 512x512 for existing callers.
+source render and saved output resolutions are independently configurable.
 (Undistortion is a no-op in sim: the sim camera is an ideal pinhole, so there is
 nothing to fake-then-invert — matching the field of view is all that is needed.)
 
@@ -39,6 +39,7 @@ import math
 import time
 from typing import Any, Callable
 
+import cv2
 import mujoco
 import numpy as np
 
@@ -52,6 +53,7 @@ from pick_and_place.episodes import (
     set_cube_pose,
     set_joint,
 )
+from pick_and_place.domain_randomization import reload_renderer_textures
 from pick_and_place.executor import (
     CONTROL_HZ,
     HARDWARE_SIMULATION_HZ,
@@ -113,11 +115,23 @@ class SimCameraRig:
         intrinsics_by_name: dict[str, dict[str, Any]] | None = None,
         width: int = SQUARE_SIZE,
         height: int = SQUARE_SIZE,
+        render_width: int | None = None,
+        render_height: int | None = None,
+        postprocess: Callable[[np.ndarray], np.ndarray] | None = None,
     ) -> None:
         if width < 1 or height < 1:
             raise ValueError("camera width and height must be positive")
+        render_width = width if render_width is None else render_width
+        render_height = height if render_height is None else render_height
+        if render_width < 1 or render_height < 1:
+            raise ValueError("render width and height must be positive")
+        if render_width < width or render_height < height:
+            raise ValueError("render dimensions must be at least the output dimensions")
         self.width = width
         self.height = height
+        self.render_width = render_width
+        self.render_height = render_height
+        self.postprocess = postprocess
         intrinsics_by_name = intrinsics_by_name or {}
         self._cameras = []
         for name in (WRIST_CAMERA, OVERHEAD_CAMERA):
@@ -128,19 +142,50 @@ class SimCameraRig:
             if intrinsics is not None:
                 model.cam_fovy[cam_id] = fovy_from_intrinsics(intrinsics)
             self._cameras.append(name)
-        self._renderer = mujoco.Renderer(model, width=width, height=height)
+        self._renderer = mujoco.Renderer(
+            model, width=render_width, height=render_height
+        )
 
     def render(self, data: mujoco.MjData, camera: str) -> np.ndarray:
         """Render one camera to an ``(height, width, 3)`` uint8 RGB array."""
         self._renderer.update_scene(data, camera=camera)
-        return self._renderer.render()
+        image = resize_and_center_crop(
+            self._renderer.render(), self.height, self.width
+        )
+        return self.postprocess(image) if self.postprocess is not None else image
 
     def capture(self, data: mujoco.MjData) -> tuple[np.ndarray, np.ndarray]:
         """Render both cameras, returning ``(wrist_rgb, overhead_rgb)``."""
         return self.render(data, WRIST_CAMERA), self.render(data, OVERHEAD_CAMERA)
 
+    def reload_textures(self, texture_ids: tuple[int, ...]) -> None:
+        """Upload textures changed in ``model.tex_data`` to this rig's GL context."""
+        reload_renderer_textures(self._renderer, texture_ids)
+
     def close(self) -> None:
         self._renderer.close()
+
+
+def resize_and_center_crop(
+    image: np.ndarray, output_height: int, output_width: int
+) -> np.ndarray:
+    """Area-downsample an image to cover the output, then center-crop it."""
+    if output_width < 1 or output_height < 1:
+        raise ValueError("output width and height must be positive")
+    height, width = image.shape[:2]
+    scale = max(output_width / width, output_height / height)
+    resized_width = max(output_width, round(width * scale))
+    resized_height = max(output_height, round(height * scale))
+    if (resized_width, resized_height) != (width, height):
+        interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+        image = cv2.resize(
+            image,
+            (resized_width, resized_height),
+            interpolation=interpolation,
+        )
+    left = (resized_width - output_width) // 2
+    top = (resized_height - output_height) // 2
+    return image[top : top + output_height, left : left + output_width].copy()
 
 
 def record_episode(
@@ -153,6 +198,8 @@ def record_episode(
     realtime: bool = False,
     should_stop: Callable[[], bool] | None = None,
     show_wrist_mixed: bool = False,
+    believed_wrist_camera_pose: tuple[np.ndarray, np.ndarray] | None = None,
+    verbose: bool = True,
 ) -> str:
     """Play ``episode``'s trajectory under physics and record every control tick.
 
@@ -192,7 +239,7 @@ def record_episode(
     the injected miscalibration, and the descent shows the servo pulling them
     into register. Needs no MuJoCo viewer, so it works under plain ``python``.
 
-    The dataset is created lazily on the first episode once the (fixed) 512x512
+    The dataset is created lazily on the first episode once the fixed output
     frame shape is known. The caller commits the episode with ``save_episode``
     and ends the run with :meth:`RecordingSession.finalize`.
     """
@@ -201,9 +248,7 @@ def record_episode(
     if (recording is None) != (rig is None):
         raise ValueError("recording and rig must be provided together")
     if show_wrist_mixed and episode.miscalibration is None:
-        raise ValueError(
-            "show_wrist_mixed requires a miscalibration draw (closed-loop playback)"
-        )
+        raise ValueError("show_wrist_mixed requires a miscalibration draw (closed-loop playback)")
 
     model = episode.model
     data = episode.data
@@ -234,8 +279,7 @@ def record_episode(
         """The servo-style readback: true joints minus the offsets in effect."""
         offsets = offsets_rad_now()
         return {
-            name: get_joint(model, data, name) - offsets.get(name, 0.0)
-            for name in ARM_JOINT_NAMES
+            name: get_joint(model, data, name) - offsets.get(name, 0.0) for name in ARM_JOINT_NAMES
         }
 
     # --- wrist visual servo (miscalibrated episodes only) -------------------
@@ -278,11 +322,30 @@ def record_episode(
         set_cube_pose(model, believed_shadow, believed_cube)
         mujoco.mj_kinematics(model, believed_shadow)
         # Body kinematics alone leaves camera poses unset; this fills cam_xpos/xmat.
-        mujoco.mj_camlight(model, believed_shadow)
-        return (
-            believed_shadow.cam_xpos[wrist_cam_id].copy(),
-            believed_shadow.cam_xmat[wrist_cam_id].reshape(3, 3).copy(),
-        )
+        if believed_wrist_camera_pose is None:
+            mujoco.mj_camlight(model, believed_shadow)
+            return (
+                believed_shadow.cam_xpos[wrist_cam_id].copy(),
+                believed_shadow.cam_xmat[wrist_cam_id].reshape(3, 3).copy(),
+            )
+
+        # Rendering uses the perturbed physical camera stored in the model. The
+        # controller maps detections through the nominal mount calibration, so
+        # temporarily restore that local pose only while updating the believed
+        # shadow's camera transform.
+        true_pos = model.cam_pos[wrist_cam_id].copy()
+        true_quat = model.cam_quat[wrist_cam_id].copy()
+        try:
+            model.cam_pos[wrist_cam_id] = believed_wrist_camera_pose[0]
+            model.cam_quat[wrist_cam_id] = believed_wrist_camera_pose[1]
+            mujoco.mj_camlight(model, believed_shadow)
+            return (
+                believed_shadow.cam_xpos[wrist_cam_id].copy(),
+                believed_shadow.cam_xmat[wrist_cam_id].reshape(3, 3).copy(),
+            )
+        finally:
+            model.cam_pos[wrist_cam_id] = true_pos
+            model.cam_quat[wrist_cam_id] = true_quat
 
     def record_tick(frame) -> None:
         if recording is None:
@@ -330,9 +393,7 @@ def record_episode(
             retry = DescentServoRetryState() if is_descent else None
             saw_detection = False
             max_duration = (
-                max(phase.duration, DESCENT_SERVO_MAX_DURATION)
-                if is_descent
-                else phase.duration
+                max(phase.duration, DESCENT_SERVO_MAX_DURATION) if is_descent else phase.duration
             )
 
             while True:
@@ -385,8 +446,7 @@ def record_episode(
                                 (
                                     g
                                     for g in grasp_candidates(kinematics, dynamic_source)
-                                    if g.face == phase.grasp.face
-                                    and g.elbow == phase.grasp.elbow
+                                    if g.face == phase.grasp.face and g.elbow == phase.grasp.elbow
                                 ),
                                 None,
                             )
@@ -485,30 +545,28 @@ def record_episode(
                             convergence = DescentServoConvergence()
                             saw_detection = False
                             playback_start = data.time
-                    elif (
-                        not saw_detection
-                        and raw_phase_t >= phase.duration
-                        and retry.can_retry()
-                    ):
+                    elif not saw_detection and raw_phase_t >= phase.duration and retry.can_retry():
                         retry.start_backup(raw_phase_t)
-                        print(
-                            "warning: descent saw no cube tags; backing up to "
-                            "pregrasp and retrying "
-                            f"({retry.retries_started}/{retry.max_retries})"
-                        )
+                        if verbose:
+                            print(
+                                "warning: descent saw no cube tags; backing up to "
+                                "pregrasp and retrying "
+                                f"({retry.retries_started}/{retry.max_retries})"
+                            )
                     elif phase_t >= max_duration:
-                        if saw_detection:
-                            print(
-                                "warning: descent visual servo hit "
-                                f"{max_duration:.1f}s cap before settling "
-                                f"({convergence.stable_frames}/"
-                                f"{DESCENT_SERVO_STABLE_FRAMES} stable frames)"
-                            )
-                        else:
-                            print(
-                                "warning: descent visual servo hit "
-                                f"{max_duration:.1f}s cap without a cube detection"
-                            )
+                        if verbose:
+                            if saw_detection:
+                                print(
+                                    "warning: descent visual servo hit "
+                                    f"{max_duration:.1f}s cap before settling "
+                                    f"({convergence.stable_frames}/"
+                                    f"{DESCENT_SERVO_STABLE_FRAMES} stable frames)"
+                                )
+                            else:
+                                print(
+                                    "warning: descent visual servo hit "
+                                    f"{max_duration:.1f}s cap without a cube detection"
+                                )
                         return "restart"
                     elif phase_t >= phase.duration and convergence.is_stable():
                         break
@@ -531,8 +589,9 @@ def record_episode(
                     )
                     if is_unexpected(n1, n2)
                 }
-                for pair in curr_contacts - prev_contacts:
-                    print(f"collision t={raw_phase_t:.3f}s  {pair[0]} ↔ {pair[1]}")
+                if verbose:
+                    for pair in curr_contacts - prev_contacts:
+                        print(f"collision t={raw_phase_t:.3f}s  {pair[0]} ↔ {pair[1]}")
                 prev_contacts = curr_contacts
 
                 if viewer is not None:
@@ -548,9 +607,7 @@ def record_episode(
             if not servo_enabled:
                 # Pure feedforward playback: the vetted plan needs no
                 # checkpoints, so just advance phase by phase.
-                current_traj = dataclasses.replace(
-                    current_traj, phases=current_traj.phases[1:]
-                )
+                current_traj = dataclasses.replace(current_traj, phases=current_traj.phases[1:])
                 if not current_traj.phases:
                     status = "success"
                 continue
@@ -563,9 +620,7 @@ def record_episode(
             if completed == "approach" and (
                 len(current_traj.phases) > 1 and current_traj.phases[1].name == "descent"
             ):
-                current_traj = dataclasses.replace(
-                    current_traj, phases=current_traj.phases[1:]
-                )
+                current_traj = dataclasses.replace(current_traj, phases=current_traj.phases[1:])
                 continue
 
             if completed == "descent" and isinstance(phase, DescentPhase):
@@ -581,9 +636,7 @@ def record_episode(
                     if isinstance(current_traj.phases[2], RecoveryLiftPhase)
                     else LiftPhase
                 )
-                grasp_phase = GraspPhase(
-                    dynamic_grasp.grasp_joints, start_gripper=GRIPPER_OPEN
-                )
+                grasp_phase = GraspPhase(dynamic_grasp.grasp_joints, start_gripper=GRIPPER_OPEN)
                 lift_phase = lift_cls(
                     kinematics, dynamic_grasp.grasp_joints, dynamic_grasp.lift_joints
                 )
@@ -598,26 +651,19 @@ def record_episode(
                 len(current_traj.phases) > 1
                 and current_traj.phases[1].name in ("lift", "recovery_lift")
             ):
-                current_traj = dataclasses.replace(
-                    current_traj, phases=current_traj.phases[1:]
-                )
+                current_traj = dataclasses.replace(current_traj, phases=current_traj.phases[1:])
                 continue
 
             if completed == "carry" and (
-                len(current_traj.phases) > 1
-                and current_traj.phases[1].name == "drop_descent"
+                len(current_traj.phases) > 1 and current_traj.phases[1].name == "drop_descent"
             ):
-                current_traj = dataclasses.replace(
-                    current_traj, phases=current_traj.phases[1:]
-                )
+                current_traj = dataclasses.replace(current_traj, phases=current_traj.phases[1:])
                 continue
 
             if completed == "drop_descent" and (
                 len(current_traj.phases) > 1 and current_traj.phases[1].name == "release"
             ):
-                current_traj = dataclasses.replace(
-                    current_traj, phases=current_traj.phases[1:]
-                )
+                current_traj = dataclasses.replace(current_traj, phases=current_traj.phases[1:])
                 continue
 
             if len(current_traj.phases) <= 1:
@@ -626,7 +672,8 @@ def record_episode(
 
             measured_joints = believed_arm_joints()
             measured_gripper = get_joint(model, data, "gripper")
-            print(f"Replanning remaining trajectory after {completed}...")
+            if verbose:
+                print(f"Replanning remaining trajectory after {completed}...")
             candidate_traj = None
             for replan_traj in replan_remaining_candidates(
                 kinematics,
@@ -650,7 +697,8 @@ def record_episode(
                     candidate_traj = replan_traj
                     break
             if candidate_traj is None:
-                print(f"No clean replan after {completed}; aborting episode.")
+                if verbose:
+                    print(f"No clean replan after {completed}; aborting episode.")
                 return "restart"
             current_traj = candidate_traj
     finally:
@@ -661,5 +709,6 @@ def record_episode(
 
             cv2.destroyAllWindows()
 
-    print(placement_error(model, data, episode.target).summary())
+    if verbose:
+        print(placement_error(model, data, episode.target).summary())
     return "success" if status == "success" else "restart"

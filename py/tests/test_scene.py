@@ -143,20 +143,28 @@ def test_environment_contains_textured_workspace_frame_apriltags():
     frame_id = model.body("workspace_frame_frame").id
 
     for tag_id, corner_name, pos in WORKSPACE_FRAME_APRILTAG_PLATES:
-        geom = model.geom(f"workspace_frame_tag_{corner_name}").id
-        material = model.geom_matid[geom]
+        plate = model.geom(f"workspace_frame_tag_{corner_name}").id
+        top = model.geom(f"workspace_frame_tag_{corner_name}_top").id
+        material = model.geom_matid[top]
         texture = model.texture(f"workspace_frame_apriltag_{tag_id:02d}").id
 
-        assert model.tex_type[texture] == mujoco.mjtTexture.mjTEXTURE_CUBE
-        assert model.geom_type[geom] == mujoco.mjtGeom.mjGEOM_BOX
-        assert model.geom_group[geom] == 2
-        assert model.geom_bodyid[geom] == frame_id
-        assert model.geom_contype[geom] == 0
-        assert model.geom_conaffinity[geom] == 0
-        np.testing.assert_allclose(model.geom_size[geom], (0.03, 0.03, 0.0025))
-        np.testing.assert_allclose(model.geom_pos[geom], pos)
+        assert model.tex_type[texture] == mujoco.mjtTexture.mjTEXTURE_2D
+        assert model.geom_type[plate] == mujoco.mjtGeom.mjGEOM_BOX
+        assert model.geom_matid[plate] == -1
+        np.testing.assert_allclose(model.geom_rgba[plate], (0.12, 0.12, 0.12, 1.0))
+        np.testing.assert_allclose(model.geom_size[plate], (0.03, 0.03, 0.0025))
+        np.testing.assert_allclose(model.geom_pos[plate], pos)
+
+        assert model.geom_type[top] == mujoco.mjtGeom.mjGEOM_PLANE
+        np.testing.assert_allclose(model.geom_size[top], (0.03, 0.03, 0.03))
+        np.testing.assert_allclose(model.geom_pos[top], (pos[0], pos[1], pos[2] + 0.00251))
         assert model.mat(material).name == f"workspace_frame_apriltag_{tag_id:02d}_material"
         assert model.mat_texid[material][1] == texture
+        for geom in (plate, top):
+            assert model.geom_group[geom] == 2
+            assert model.geom_bodyid[geom] == frame_id
+            assert model.geom_contype[geom] == 0
+            assert model.geom_conaffinity[geom] == 0
 
 
 def test_workspace_frame_board_visuals_are_primitive_boxes():

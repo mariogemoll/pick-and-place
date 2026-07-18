@@ -664,8 +664,8 @@ def _build_model(
     offwidth: int = 1280,
     offheight: int = 720,
     paper_target_marker: bool = False,
-    background_panorama: Path | str | None = None,
-    table_texture: Path | str | None = None,
+    background_panorama: Path | str | np.ndarray | None = None,
+    table_texture: Path | str | np.ndarray | None = None,
     robot_dynamics: bool | str | Path = True,
     apriltag_cube: bool | None = None,
 ) -> tuple[mujoco.MjModel, mujoco.MjData]:

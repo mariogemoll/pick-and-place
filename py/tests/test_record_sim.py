@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: 0BSD
 
 import importlib.util
+import inspect
 import sys
 import types
 from pathlib import Path
 
 import numpy as np
+
+from pick_and_place.sim_recorder import resize_and_center_crop
 
 
 RECORD_SIM_PATH = Path(__file__).parents[1] / "scripts" / "pick_and_place" / "record_sim.py"
@@ -88,3 +91,40 @@ def test_shard_ranges_preserve_global_episode_rng_streams():
 
     sequential_stream = [module._episode_rng(23, index).integers(2**31) for index in range(10)]
     assert shard_streams == sequential_stream
+
+
+def test_recording_defaults_supersample_saved_frames():
+    module = _record_sim_module()
+    parameters = inspect.signature(module.run_recording).parameters
+
+    assert parameters["image_width"].default == 960
+    assert parameters["image_height"].default == 720
+    assert parameters["render_width"].default == 1920
+    assert parameters["render_height"].default == 1080
+
+
+def test_recording_render_quality_focuses_a_larger_shadow_map():
+    module = _record_sim_module()
+    model = types.SimpleNamespace(
+        vis=types.SimpleNamespace(
+            quality=types.SimpleNamespace(shadowsize=4096, offsamples=4),
+            map=types.SimpleNamespace(shadowscale=0.6),
+        )
+    )
+
+    module._configure_render_quality(model)
+
+    assert model.vis.quality.shadowsize == 8192
+    assert model.vis.quality.offsamples == 8
+    assert model.vis.map.shadowscale == 0.4
+
+
+def test_resize_and_center_crop_downsamples_then_removes_the_sides():
+    image = np.zeros((108, 192, 3), dtype=np.uint8)
+    image[:, :16] = (255, 0, 0)
+    image[:, -16:] = (0, 0, 255)
+
+    result = resize_and_center_crop(image, 48, 64)
+
+    assert result.shape == (48, 64, 3)
+    assert result.max() == 0

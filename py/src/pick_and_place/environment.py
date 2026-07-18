@@ -47,6 +47,11 @@ WORKSPACE_FRAME_APRILTAG_PLATES: tuple[tuple[int, str, tuple[float, float, float
     (15, "se", (0.230, -0.230, 0.0025)),
 )
 
+_APRILTAG_PLATE_HALF_SIZE = 0.03
+_APRILTAG_PLATE_HALF_THICKNESS = 0.0025
+_APRILTAG_SURFACE_OFFSET = 0.00001
+_APRILTAG_PLATE_RGBA = (0.12, 0.12, 0.12, 1.0)
+
 WORKSPACE_FRAME_VISUAL_BOXES: dict[str, tuple[tuple[float, float, float], tuple[float, float, float]]] = {
     "part_01_box_10p45_flat.stl": ((0.005, 0.0, 0.0036), (0.05725, 0.0187, 0.0036)),
     "part_02_box_11p6.stl": ((0.005, 0.0, 0.0036), (0.063, 0.0187, 0.0036)),
@@ -197,14 +202,14 @@ def add_workspace_frame(
 
 
 def add_workspace_frame_apriltags(spec: mujoco.MjSpec) -> None:
-    """Add the textured calibration AprilTag plates to the workspace frame."""
+    """Add calibration plates with AprilTag textures only on their top faces."""
     frame = spec.body("workspace_frame_frame")
     for tag_id, corner_name, pos in WORKSPACE_FRAME_APRILTAG_PLATES:
         texture_name = f"workspace_frame_apriltag_{tag_id:02d}"
         material_name = f"{texture_name}_material"
         spec.add_texture(
             name=texture_name,
-            type=mujoco.mjtTexture.mjTEXTURE_CUBE,
+            type=mujoco.mjtTexture.mjTEXTURE_2D,
             file=str(
                 APRILTAG_TEXTURE_DIR
                 / f"tagStandard41h12_{tag_id:05d}_60x60mm_tag40mm.png"
@@ -215,8 +220,30 @@ def add_workspace_frame_apriltags(spec: mujoco.MjSpec) -> None:
         frame.add_geom(
             name=f"workspace_frame_tag_{corner_name}",
             type=mujoco.mjtGeom.mjGEOM_BOX,
-            size=(0.03, 0.03, 0.0025),
+            size=(
+                _APRILTAG_PLATE_HALF_SIZE,
+                _APRILTAG_PLATE_HALF_SIZE,
+                _APRILTAG_PLATE_HALF_THICKNESS,
+            ),
             pos=pos,
+            rgba=_APRILTAG_PLATE_RGBA,
+            contype=0,
+            conaffinity=0,
+            group=2,
+        )
+        frame.add_geom(
+            name=f"workspace_frame_tag_{corner_name}_top",
+            type=mujoco.mjtGeom.mjGEOM_PLANE,
+            size=(
+                _APRILTAG_PLATE_HALF_SIZE,
+                _APRILTAG_PLATE_HALF_SIZE,
+                _APRILTAG_PLATE_HALF_SIZE,
+            ),
+            pos=(
+                pos[0],
+                pos[1],
+                pos[2] + _APRILTAG_PLATE_HALF_THICKNESS + _APRILTAG_SURFACE_OFFSET,
+            ),
             material=material_name,
             contype=0,
             conaffinity=0,
