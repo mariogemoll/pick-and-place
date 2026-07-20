@@ -134,6 +134,7 @@ def run_recording(
     first_episode: int = 0,
     max_attempts: int = 50,
     show_progress: bool = True,
+    detector_crash_dump_dir: str | None = None,
 ) -> int:
     """Record ``episodes`` episodes into one LeRobotDataset; return the count saved.
 
@@ -281,6 +282,7 @@ def run_recording(
                 believed_wrist_camera_pose=(
                     randomizer.believed_wrist_camera_pose if randomizer is not None else None
                 ),
+                detector_crash_dump_dir=detector_crash_dump_dir,
                 verbose=False,
             )
             if status != "success":
@@ -469,6 +471,14 @@ def main() -> None:
         help="trajectory resamples allowed per episode before skipping it (default: 50)",
     )
     parser.add_argument(
+        "--detector-crash-dump-dir",
+        default=None,
+        help=(
+            "save the wrist frame that crashes the AprilTag helper process here, "
+            "for diagnosing the crash; the run itself continues either way"
+        ),
+    )
+    parser.add_argument(
         "--background-panorama",
         type=Path,
         default=None,
@@ -577,6 +587,7 @@ def main() -> None:
         miscalibration=args.miscalibration,
         domain_randomization=args.domain_randomization,
         max_attempts=args.max_attempts,
+        detector_crash_dump_dir=args.detector_crash_dump_dir,
     )
 
     if args.workers == 1:

@@ -116,19 +116,30 @@ class CubePoseEstimate:
         return transform
 
 
-def make_cube_detector(quad_decimate: float = 1.0):
+def make_cube_detector(quad_decimate: float = 1.0, nthreads: int = 4):
     """Create a pupil-apriltags detector tuned for the cube tags.
 
     ``quad_decimate`` downsamples the image for the quad-detection pass only;
     ``refine_edges`` still locates the final corners at full resolution. Values
     above 1.0 (e.g. 1.5-2.0) cut detection latency markedly for a small accuracy
     cost, which is the main lever for a snappier live feed.
+
+    ``nthreads`` should stay at its default for the single-process live control
+    loop, where lower per-call latency matters. Callers that run many detectors
+    concurrently across OS processes (e.g. sharded sim recording) should pass
+    ``nthreads=1`` to avoid oversubscribing the machine; it costs latency, not
+    accuracy, since the algorithm itself is unaffected by thread count.
+
+    Note that ``nthreads=1`` is *not* a fix for the rare ``libapriltag``
+    segfault — that crash reproduces under strictly single-threaded detection,
+    so it is not a data race however tempting that reading is. Crash
+    containment is :mod:`pick_and_place.detector_process`, not this parameter.
     """
     from pupil_apriltags import Detector
 
     return Detector(
         families="tagStandard41h12",
-        nthreads=4,
+        nthreads=nthreads,
         quad_decimate=float(quad_decimate),
         refine_edges=True,
     )
@@ -475,9 +486,7 @@ class CubeTracker:
         quad_decimate: float = 1.0,
         detector=None,
     ):
-        self.detector = (
-            detector if detector is not None else make_cube_detector(quad_decimate)
-        )
+        self.detector = detector if detector is not None else make_cube_detector(quad_decimate)
         self._ema = PoseEMA(smooth)
         self._stabilizer = OrientationStabilizer(window=history) if history > 0 else None
         self.single_face_weight = float(single_face_weight)

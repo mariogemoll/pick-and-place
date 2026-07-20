@@ -199,6 +199,7 @@ def record_episode(
     should_stop: Callable[[], bool] | None = None,
     show_wrist_mixed: bool = False,
     believed_wrist_camera_pose: tuple[np.ndarray, np.ndarray] | None = None,
+    detector_crash_dump_dir: str | None = None,
     verbose: bool = True,
 ) -> str:
     """Play ``episode``'s trajectory under physics and record every control tick.
@@ -285,12 +286,14 @@ def record_episode(
     # --- wrist visual servo (miscalibrated episodes only) -------------------
     servo_enabled = draw is not None
     servo_renderer = None
+    servo_detector = None
     tracker = None
     servo_camera_matrix = None
     believed_shadow = None
     wrist_cam_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, WRIST_CAMERA)
     if servo_enabled:
         from pick_and_place.cube_detection import CubeTracker, detect_cube_faces
+        from pick_and_place.detector_process import DetectorProcess
         from scipy.spatial.transform import Rotation
 
         if show_wrist_mixed:
@@ -306,7 +309,14 @@ def record_episode(
         servo_camera_matrix = np.array(
             [[fy, 0.0, render_w / 2.0], [0.0, fy, render_h / 2.0], [0.0, 0.0, 1.0]]
         )
-        tracker = CubeTracker(smooth=0.95)
+        # Detect out-of-process: libapriltag segfaults on rare inputs, and in a
+        # sharded run that would take down the whole worker and corrupt its
+        # metadata parquet, losing every episode the shard had banked. Behind
+        # the process boundary a crash costs one detection tick, which the
+        # servo loop already handles as a routine occlusion. nthreads=1 because
+        # sharding already saturates the machine with worker processes.
+        servo_detector = DetectorProcess(nthreads=1, crash_dump_dir=detector_crash_dump_dir)
+        tracker = CubeTracker(smooth=0.95, detector=servo_detector)
         # Kinematics-only mirror holding the believed joints, whose wrist camera
         # pose is what the detection is mapped to world through — the believed
         # pose, not the true one, exactly as the hardware servo uses the sim
@@ -704,6 +714,8 @@ def record_episode(
     finally:
         if servo_renderer is not None:
             servo_renderer.close()
+        if servo_detector is not None:
+            servo_detector.close()
         if show_wrist_mixed:
             import cv2
 
