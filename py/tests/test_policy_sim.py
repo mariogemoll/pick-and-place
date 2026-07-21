@@ -13,7 +13,12 @@ from pick_and_place.policy_controllers import (
     NoOpPolicyController,
 )
 from pick_and_place.policy_evaluation import ScenarioManifest
-from pick_and_place.policy_sim import PolicySimEnv, evaluate_policy_episode
+from pick_and_place.policy_sim import (
+    PolicySimEnv,
+    evaluate_policy_episode,
+    joint_qpos_addresses,
+    real_action_to_sim_ctrl,
+)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
@@ -76,6 +81,33 @@ def test_reset_reproduces_explicit_scenario_state():
 
         np.testing.assert_array_equal(first_observation[STATE_FEATURE], second_observation[STATE_FEATURE])
         assert first_info["task_state"] == second_info["task_state"]
+    finally:
+        env.close()
+
+
+def test_joint_miscalibration_lives_in_environment_and_is_hidden_from_observation():
+    env = PolicySimEnv(
+        image_hw=(16, 16),
+        render_hw=(32, 32),
+        renderer_factory=DummyRenderer,
+    )
+    scenario = replace(
+        _scenario(),
+        miscalibration_sample={"joint_offsets_deg": {"shoulder_pan": 7.5}},
+    )
+    try:
+        observation, info = env.reset(options={"scenario": scenario})
+
+        np.testing.assert_allclose(
+            observation[STATE_FEATURE],
+            scenario.initial_robot_state_real,
+            atol=1e-5,
+        )
+        initial_ctrl = real_action_to_sim_ctrl(scenario.initial_robot_state_real)
+        true_qpos = env.data.qpos[joint_qpos_addresses(env.model)]
+        np.testing.assert_allclose(true_qpos[0], initial_ctrl[0] + np.deg2rad(7.5))
+        assert set(observation) == {STATE_FEATURE, OVERHEAD_FEATURE, WRIST_FEATURE}
+        assert "miscalibration" not in info
     finally:
         env.close()
 

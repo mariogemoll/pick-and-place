@@ -120,26 +120,26 @@ def real_action_to_sim_ctrl(action_real: np.ndarray) -> np.ndarray:
 
 def _miscalibration_from_scenario(scenario: EvaluationScenario) -> MiscalibrationDraw:
     payload = scenario.miscalibration_sample
-    expected = {
-        "base_offsets_deg",
-        "pan_jitter_deg",
-        "cube_belief_error",
-        "target_belief_error",
-    }
+    expected = {"joint_offsets_deg"}
     if set(payload) != expected:
         raise ValueError(
             f"scenario {scenario.scenario_id!r} has invalid miscalibration fields; "
             f"missing={sorted(expected - set(payload))}, unknown={sorted(set(payload) - expected)}"
         )
-    base_offsets = {str(name): float(value) for name, value in payload["base_offsets_deg"].items()}
-    fixed_pan_jitter = float(payload["pan_jitter_deg"])
-    if fixed_pan_jitter:
-        base_offsets["shoulder_pan"] = base_offsets.get("shoulder_pan", 0.0) + fixed_pan_jitter
+    raw_offsets = payload["joint_offsets_deg"]
+    if not isinstance(raw_offsets, dict):
+        raise ValueError("joint_offsets_deg must be a JSON object")
+    unknown_joints = set(raw_offsets) - set(ARM_JOINT_NAMES)
+    if unknown_joints:
+        raise ValueError(f"joint_offsets_deg contains unknown joints: {sorted(unknown_joints)}")
+    joint_offsets = {str(name): float(value) for name, value in raw_offsets.items()}
+    if not all(math.isfinite(value) for value in joint_offsets.values()):
+        raise ValueError("joint_offsets_deg must contain only finite numbers")
     return MiscalibrationDraw(
-        base_offsets_deg=base_offsets,
+        base_offsets_deg=joint_offsets,
         pan_jitter=None,
-        cube_belief_error=tuple(float(value) for value in payload["cube_belief_error"]),
-        target_belief_error=tuple(float(value) for value in payload["target_belief_error"]),
+        cube_belief_error=(0.0, 0.0, 0.0, 0.0),
+        target_belief_error=(0.0, 0.0),
     )
 
 

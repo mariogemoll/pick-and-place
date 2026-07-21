@@ -13,7 +13,7 @@
       "initial_robot_state_real": [0.0, 0.0, 0.0, 0.0, -90.0, 39.3],
       "domain_randomization_preset": null,
       "domain_randomization_sample": {"enabled": false},
-      "miscalibration_sample": {"base_offsets_deg": {}, "pan_jitter_deg": 0.0, "cube_belief_error": [0.0, 0.0, 0.0, 0.0], "target_belief_error": [0.0, 0.0]},
+      "miscalibration_sample": {"joint_offsets_deg": {}},
       "control_hz": 30.0,
       "max_steps": 450
     },
@@ -28,7 +28,7 @@
       "initial_robot_state_real": [0.0, 0.0, 0.0, 0.0, -90.0, 39.3],
       "domain_randomization_preset": null,
       "domain_randomization_sample": {"enabled": false},
-      "miscalibration_sample": {"base_offsets_deg": {}, "pan_jitter_deg": 0.0, "cube_belief_error": [0.0, 0.0, 0.0, 0.0], "target_belief_error": [0.0, 0.0]},
+      "miscalibration_sample": {"joint_offsets_deg": {}},
       "control_hz": 30.0,
       "max_steps": 450
     },
@@ -43,7 +43,7 @@
       "initial_robot_state_real": [0.0, 0.0, 0.0, 0.0, -90.0, 39.3],
       "domain_randomization_preset": null,
       "domain_randomization_sample": {"enabled": false},
-      "miscalibration_sample": {"base_offsets_deg": {}, "pan_jitter_deg": 0.0, "cube_belief_error": [0.0, 0.0, 0.0, 0.0], "target_belief_error": [0.0, 0.0]},
+      "miscalibration_sample": {"joint_offsets_deg": {}},
       "control_hz": 30.0,
       "max_steps": 450
     },
@@ -58,7 +58,7 @@
       "initial_robot_state_real": [0.0, 0.0, 0.0, 0.0, -90.0, 39.3],
       "domain_randomization_preset": null,
       "domain_randomization_sample": {"enabled": false},
-      "miscalibration_sample": {"base_offsets_deg": {}, "pan_jitter_deg": 0.0, "cube_belief_error": [0.0, 0.0, 0.0, 0.0], "target_belief_error": [0.0, 0.0]},
+      "miscalibration_sample": {"joint_offsets_deg": {}},
       "control_hz": 30.0,
       "max_steps": 450
     },
@@ -73,7 +73,7 @@
       "initial_robot_state_real": [0.0, 0.0, 0.0, 0.0, -90.0, 39.3],
       "domain_randomization_preset": null,
       "domain_randomization_sample": {"enabled": false},
-      "miscalibration_sample": {"base_offsets_deg": {}, "pan_jitter_deg": 0.0, "cube_belief_error": [0.0, 0.0, 0.0, 0.0], "target_belief_error": [0.0, 0.0]},
+      "miscalibration_sample": {"joint_offsets_deg": {}},
       "control_hz": 30.0,
       "max_steps": 450
     },
@@ -88,7 +88,7 @@
       "initial_robot_state_real": [0.0, 0.0, 0.0, 0.0, -90.0, 39.3],
       "domain_randomization_preset": null,
       "domain_randomization_sample": {"enabled": false},
-      "miscalibration_sample": {"base_offsets_deg": {}, "pan_jitter_deg": 0.0, "cube_belief_error": [0.0, 0.0, 0.0, 0.0], "target_belief_error": [0.0, 0.0]},
+      "miscalibration_sample": {"joint_offsets_deg": {}},
       "control_hz": 30.0,
       "max_steps": 450
     },
@@ -103,7 +103,7 @@
       "initial_robot_state_real": [0.0, 0.0, 0.0, 0.0, -90.0, 39.3],
       "domain_randomization_preset": null,
       "domain_randomization_sample": {"enabled": false},
-      "miscalibration_sample": {"base_offsets_deg": {}, "pan_jitter_deg": 0.0, "cube_belief_error": [0.0, 0.0, 0.0, 0.0], "target_belief_error": [0.0, 0.0]},
+      "miscalibration_sample": {"joint_offsets_deg": {}},
       "control_hz": 30.0,
       "max_steps": 450
     },
@@ -118,7 +118,7 @@
       "initial_robot_state_real": [0.0, 0.0, 0.0, 0.0, -90.0, 39.3],
       "domain_randomization_preset": null,
       "domain_randomization_sample": {"enabled": false},
-      "miscalibration_sample": {"base_offsets_deg": {}, "pan_jitter_deg": 0.0, "cube_belief_error": [0.0, 0.0, 0.0, 0.0], "target_belief_error": [0.0, 0.0]},
+      "miscalibration_sample": {"joint_offsets_deg": {}},
       "control_hz": 30.0,
       "max_steps": 450
     }
