@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable, Iterable
+from concurrent.futures import Future, ThreadPoolExecutor
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 import mujoco
@@ -57,6 +59,7 @@ from pick_and_place.visual_servo import (
 )
 
 PlanEpisode = Callable[..., Episode]
+TargetSampler = Callable[[np.random.Generator], CubePose]
 WristLocalization = Callable[
     [np.ndarray, dict[str, float], float, CubePose], CubePose | None
 ]
@@ -132,6 +135,49 @@ class WristCameraLocalizer:
         )
 
 
+class AsyncWristLocalization:
+    """Keep wrist detection off the command-critical control thread."""
+
+    def __init__(self, localizer: WristLocalization) -> None:
+        self._localizer = localizer
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wrist-localizer")
+        self._future: Future[CubePose | None] | None = None
+        self._latest: CubePose | None = None
+
+    def __call__(
+        self,
+        frame_rgb: np.ndarray,
+        joints: dict[str, float],
+        gripper: float,
+        prior: CubePose,
+    ) -> CubePose | None:
+        if self._future is not None and self._future.done():
+            self._latest = self._future.result()
+            self._future = None
+        if self._future is None:
+            self._future = self._executor.submit(
+                self._localizer,
+                np.asarray(frame_rgb).copy(),
+                dict(joints),
+                float(gripper),
+                prior,
+            )
+        return self._latest
+
+    def reset(self) -> None:
+        if self._future is not None:
+            if not self._future.cancel():
+                self._future.result()
+            self._future = None
+        self._latest = None
+        reset = getattr(self._localizer, "reset", None)
+        if reset is not None:
+            reset()
+
+    def close(self) -> None:
+        self._executor.shutdown(wait=True, cancel_futures=True)
+
+
 class ScriptedPolicyState(str, Enum):
     """Externally inspectable phase of the scripted controller."""
 
@@ -159,12 +205,20 @@ class ScriptedPolicy:
         target_color: str = "black",
         max_localization_steps: int = 60,
         localization_steps_per_search: int = 15,
+        planning_max_attempts: int = 40,
+        planning_verbose: bool = False,
+        preflight_debug: bool = False,
+        preflight_debug_limit: int = 12,
+        failed_trajectory_dir: Path | None = None,
+        failed_trajectory_limit: int = 8,
         rng_seed: int = 0,
         control_hz: float = 30.0,
         wrist_localizer: WristLocalization | None = None,
         plan_episode: PlanEpisode = prepare_episode,
         replan_candidates: ReplanCandidates = replan_remaining_candidates,
         trajectory_preflight: TrajectoryPreflight | None = None,
+        target_sampler: TargetSampler | None = None,
+        free_grasp: bool = False,
     ) -> None:
         if target_color not in {"black", "white"}:
             raise ValueError("target_color must be 'black' or 'white'")
@@ -172,6 +226,8 @@ class ScriptedPolicy:
             raise ValueError("max_localization_steps must be at least 1")
         if localization_steps_per_search < 1:
             raise ValueError("localization_steps_per_search must be at least 1")
+        if planning_max_attempts < 1:
+            raise ValueError("planning_max_attempts must be at least 1")
         if not np.isfinite(control_hz) or control_hz <= 0.0:
             raise ValueError("control_hz must be positive and finite")
         corners = np.asarray(workspace_corners_world, dtype=float)
@@ -183,12 +239,20 @@ class ScriptedPolicy:
         self.target_color = target_color
         self.max_localization_steps = max_localization_steps
         self.localization_steps_per_search = localization_steps_per_search
+        self.planning_max_attempts = planning_max_attempts
+        self.planning_verbose = planning_verbose
+        self.preflight_debug = preflight_debug
+        self.preflight_debug_limit = preflight_debug_limit
+        self.failed_trajectory_dir = failed_trajectory_dir
+        self.failed_trajectory_limit = failed_trajectory_limit
         self.rng_seed = rng_seed
         self.control_hz = float(control_hz)
         self.wrist_localizer = wrist_localizer
         self._plan_episode = plan_episode
         self._replan_candidates = replan_candidates
         self._trajectory_preflight = trajectory_preflight or self._default_preflight
+        self.target_sampler = target_sampler
+        self.free_grasp = free_grasp
         self.reset()
 
     def reset(self) -> None:
@@ -214,6 +278,12 @@ class ScriptedPolicy:
         self._descent_retry: DescentServoRetryState | None = None
         self._descent_saw_detection = False
 
+    def close(self) -> None:
+        """Release controller-owned background workers, if any."""
+        close_wrist = getattr(self.wrist_localizer, "close", None)
+        if close_wrist is not None:
+            close_wrist()
+
     @property
     def terminal(self) -> bool:
         return self.state in (ScriptedPolicyState.SUCCEEDED, ScriptedPolicyState.FAILED)
@@ -221,6 +291,19 @@ class ScriptedPolicy:
     @property
     def succeeded(self) -> bool:
         return self.state is ScriptedPolicyState.SUCCEEDED
+
+    @property
+    def phase_name(self) -> str | None:
+        """Current trajectory phase, for physical verification and diagnostics."""
+        if self._trajectory is None or not self._trajectory.phases:
+            return None
+        return self._trajectory.phases[0].name
+
+    def begin_execution(self) -> None:
+        """Enter trajectory execution after external localization/planning preflight."""
+        if self.state is not ScriptedPolicyState.READY:
+            raise RuntimeError(f"policy is not ready for execution: {self.state.value}")
+        self._begin_execution()
 
     @staticmethod
     def _hold_action(observation: PolicyObservation) -> np.ndarray:
@@ -266,27 +349,36 @@ class ScriptedPolicy:
 
     def _plan(self, reported_joints: np.ndarray) -> None:
         assert self.cube_pose is not None
-        assert self.drop_target is not None
         start_joints, start_gripper = real_frame_to_sim(reported_joints)
-        target_xy = np.asarray(self.drop_target.xy, dtype=float).reshape(-1)
-        if target_xy.shape != (2,) or not np.all(np.isfinite(target_xy)):
-            raise ValueError(
-                "localized drop target xy must have finite shape (2,), "
-                f"got {target_xy.shape}"
+        target = None
+        if self.target_sampler is None:
+            assert self.drop_target is not None
+            target_xy = np.asarray(self.drop_target.xy, dtype=float).reshape(-1)
+            if target_xy.shape != (2,) or not np.all(np.isfinite(target_xy)):
+                raise ValueError(
+                    "localized drop target xy must have finite shape (2,), "
+                    f"got {target_xy.shape}"
+                )
+            target = CubePose(
+                x=float(target_xy[0]),
+                y=float(target_xy[1]),
+                z=CUBE_HALF_SIZE,
             )
-        target = CubePose(
-            x=float(target_xy[0]),
-            y=float(target_xy[1]),
-            z=CUBE_HALF_SIZE,
-        )
         self.episode = self._plan_episode(
             self._rng,
             self.cube_pose,
             target,
             start_joints=start_joints,
             start_gripper=start_gripper,
-            max_attempts=1,
+            max_attempts=self.planning_max_attempts,
+            verbose=self.planning_verbose,
             include_environment=True,
+            preflight_debug=self.preflight_debug,
+            preflight_debug_limit=self.preflight_debug_limit,
+            failed_trajectory_dir=self.failed_trajectory_dir,
+            failed_trajectory_limit=self.failed_trajectory_limit,
+            free_grasp=self.free_grasp,
+            target_sampler=self.target_sampler,
         )
 
     def _begin_execution(self) -> None:
@@ -536,8 +628,11 @@ class ScriptedPolicy:
         try:
             overhead = self._image(observation, OVERHEAD_FEATURE)
             if self.cube_pose is None:
-                self.cube_pose = self.localizer.localize_cube(overhead)
-            if self.drop_target is None:
+                if self.free_grasp:
+                    self.cube_pose = self.localizer.localize_cube(overhead, free_grasp=True)
+                else:
+                    self.cube_pose = self.localizer.localize_cube(overhead)
+            if self.target_sampler is None and self.drop_target is None:
                 self.drop_target = self.localizer.localize_drop_target(
                     overhead,
                     target_color=self.target_color,
@@ -548,7 +643,8 @@ class ScriptedPolicy:
             return hold
 
         self._localization_steps += 1
-        if self.cube_pose is not None and self.drop_target is not None:
+        target_ready = self.drop_target is not None or self.target_sampler is not None
+        if self.cube_pose is not None and target_ready:
             try:
                 self._plan(hold)
             except Exception as exc:
@@ -561,7 +657,7 @@ class ScriptedPolicy:
             missing = []
             if self.cube_pose is None:
                 missing.append("cube")
-            if self.drop_target is None:
+            if self.target_sampler is None and self.drop_target is None:
                 missing.append("drop target")
             self._fail(
                 "localization_timeout",

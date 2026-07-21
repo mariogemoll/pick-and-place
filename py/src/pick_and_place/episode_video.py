@@ -253,6 +253,7 @@ class EpisodeVideoSession:
     workspace_audio_device: str | int | None = None
     live_videos: bool = False
     record_tag_locations: bool = True
+    input_rectified: bool = False
     _shapes: dict[str, tuple[int, int]] = field(default_factory=dict, init=False)
     _writers: dict[str, Any] = field(default_factory=dict, init=False)
     _pending_dir: Path | None = field(default=None, init=False)
@@ -294,7 +295,8 @@ class EpisodeVideoSession:
             if intrinsics is None:
                 raise RuntimeError(f"Missing intrinsics for the {name} episode video")
             camera_matrix, undistort_map = load_intrinsics(intrinsics, width, height, cv2)
-            self._undistort_maps[name] = undistort_map
+            if not self.input_rectified:
+                self._undistort_maps[name] = undistort_map
             self._camera_metadata[name] = {
                 "video": f"{name}.mp4",
                 "width": width,
@@ -429,7 +431,8 @@ class EpisodeVideoSession:
         if self.record_tag_locations and self._detector is None:
             self._detector = make_cube_detector(quad_decimate=1.5)
         for name, rgb in images.items():
-            rgb = cv2.remap(rgb, *self._undistort_maps[name], cv2.INTER_LINEAR)
+            if name in self._undistort_maps:
+                rgb = cv2.remap(rgb, *self._undistort_maps[name], cv2.INTER_LINEAR)
             if self.record_tag_locations:
                 self._record_tags(
                     name,

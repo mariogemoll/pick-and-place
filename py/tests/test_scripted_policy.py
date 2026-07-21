@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: 0BSD
 
 from dataclasses import dataclass
+import threading
 from types import SimpleNamespace
 
 import numpy as np
@@ -10,7 +11,11 @@ import pytest
 from pick_and_place.follower import ARM_JOINT_NAMES, real_frame_to_sim, sim_frame_to_real
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.policy_controllers import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
-from pick_and_place.scripted_policy import ScriptedPolicy, ScriptedPolicyState
+from pick_and_place.scripted_policy import (
+    AsyncWristLocalization,
+    ScriptedPolicy,
+    ScriptedPolicyState,
+)
 from pick_and_place.trajectory import DescentPhase, Frame, GraspChoice, Trajectory
 
 
@@ -23,8 +28,9 @@ class StubLocalizer:
     def reset(self):
         self.reset_count += 1
 
-    def localize_cube(self, image):
+    def localize_cube(self, image, **kwargs):
         del image
+        self.cube_kwargs = kwargs
         return next(self.cubes, None)
 
     def localize_drop_target(self, image, **kwargs):
@@ -49,6 +55,32 @@ def _policy(localizer, *, max_steps=2):
         max_localization_steps=max_steps,
         plan_episode=lambda *args, **kwargs: SimpleNamespace(trajectory="planned"),
     )
+
+
+def test_async_wrist_localization_returns_the_latest_completed_result():
+    completed = threading.Event()
+    estimate = CubePose(0.1, 0.2, CUBE_HALF_SIZE)
+    received = []
+
+    def localize(frame, joints, gripper, prior):
+        received.append((frame, joints, gripper, prior))
+        completed.set()
+        return estimate
+
+    localizer = AsyncWristLocalization(localize)
+    frame = np.zeros((4, 5, 3), dtype=np.uint8)
+    prior = CubePose(0.0, 0.0, CUBE_HALF_SIZE)
+    try:
+        first = localizer(frame, {"shoulder_pan": 0.1}, 2.0, prior)
+        assert completed.wait(timeout=1.0)
+        second = localizer(frame, {"shoulder_pan": 0.2}, 3.0, prior)
+    finally:
+        localizer.close()
+
+    assert first is None
+    assert second is estimate
+    assert received[0][0] is not frame
+    np.testing.assert_array_equal(received[0][0], frame)
 
 
 def test_scripted_policy_localizes_from_images_and_holds_reported_state():
@@ -180,8 +212,63 @@ def test_scripted_policy_plans_from_localized_poses_and_latest_reported_joints()
         np.radians(reported[:5]),
     )
     assert kwargs["start_gripper"] > 0.0
-    assert kwargs["max_attempts"] == 1
+    assert kwargs["max_attempts"] == 40
     assert kwargs["include_environment"] is True
+
+
+def test_scripted_policy_recovery_samples_target_without_a_source_override():
+    cube = CubePose(0.1, 0.2, CUBE_HALF_SIZE)
+    localizer = StubLocalizer(cubes=[cube])
+    calls = []
+
+    def sample_target(rng):
+        del rng
+        return CubePose(0.2, -0.1, CUBE_HALF_SIZE)
+
+    policy = ScriptedPolicy(
+        localizer,
+        np.ones((4, 3)),
+        target_sampler=sample_target,
+        free_grasp=True,
+        plan_episode=lambda *args, **kwargs: calls.append((args, kwargs))
+        or SimpleNamespace(trajectory="planned"),
+    )
+
+    policy.act(_observation())
+
+    args, kwargs = calls[0]
+    assert args[1] is cube
+    assert args[2] is None
+    assert kwargs["target_sampler"] is sample_target
+    assert kwargs["free_grasp"] is True
+    assert localizer.cube_kwargs == {"free_grasp": True}
+    assert not hasattr(localizer, "target_kwargs")
+
+
+def test_scripted_policy_forwards_planning_diagnostics():
+    cube = CubePose(0.1, 0.2, CUBE_HALF_SIZE)
+    target = SimpleNamespace(xy=(0.2, -0.1))
+    calls = []
+
+    policy = ScriptedPolicy(
+        StubLocalizer(cubes=[cube], targets=[target]),
+        np.ones((4, 3)),
+        planning_max_attempts=7,
+        planning_verbose=True,
+        preflight_debug=True,
+        preflight_debug_limit=3,
+        failed_trajectory_limit=2,
+        plan_episode=lambda *args, **kwargs: calls.append(kwargs)
+        or SimpleNamespace(trajectory="planned"),
+    )
+
+    policy.act(_observation())
+
+    assert calls[0]["max_attempts"] == 7
+    assert calls[0]["verbose"] is True
+    assert calls[0]["preflight_debug"] is True
+    assert calls[0]["preflight_debug_limit"] == 3
+    assert calls[0]["failed_trajectory_limit"] == 2
 
 
 def test_scripted_policy_reports_planning_failure_and_holds():
