@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
@@ -25,6 +26,14 @@ class PolicyController(Protocol):
     def reset(self) -> None: ...
 
     def act(self, observation: PolicyObservation) -> np.ndarray: ...
+
+
+@dataclass(frozen=True)
+class ControllerFailure:
+    """A terminal failure reported by a controller without unsafe motion."""
+
+    code: str
+    message: str
 
 
 def _action_vector(action: object) -> np.ndarray:
