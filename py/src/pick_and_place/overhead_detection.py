@@ -29,7 +29,6 @@ from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.paper_detection import (
     PaperTarget,
     PaperTracker,
-    detect_paper_target,
     project_to_pixel,
     set_paper_target_marker,
 )
@@ -263,15 +262,10 @@ def track_cube(
     when ``return_out_of_zone`` is set. Otherwise returns ``None`` if nothing
     usable is seen before the timeout (not visible, or outside the workspace)."""
     import cv2
-    from scipy.spatial.transform import Rotation
-
     from pick_and_place.camera_compare import load_intrinsics
     from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
-    from pick_and_place.cube_detection import (
-        cube_pose_to_world,
-        estimate_cube_pose,
-        make_cube_detector,
-    )
+    from pick_and_place.cube_detection import make_cube_detector
+    from pick_and_place.overhead_localization import localize_cube
     from pick_and_place.workspace_overlays import is_cube_pickup_allowed
 
     camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
@@ -299,29 +293,26 @@ def track_cube(
         if undistort_map is not None:
             rgb = cv2.remap(rgb, *undistort_map, cv2.INTER_LINEAR)
 
-        estimate = estimate_cube_pose(rgb, detector, camera_matrix)
-        if estimate is None:
+        cube = localize_cube(
+            rgb,
+            detector,
+            camera_matrix,
+            cam_pos,
+            cam_rot,
+            free_grasp=free_grasp,
+        )
+        if cube is None:
             continue
 
-        rotation, position = cube_pose_to_world(estimate, cam_pos, cam_rot)
-        if not is_cube_pickup_allowed(float(position[0]), float(position[1])):
+        if not is_cube_pickup_allowed(cube.x, cube.y):
             print(
-                f"Cube seen at ({position[0]:.3f}, {position[1]:.3f}) but outside the "
+                f"Cube seen at ({cube.x:.3f}, {cube.y:.3f}) but outside the "
                 "allowed pick-up zone."
             )
             if not return_out_of_zone:
                 continue
 
-        roll, pitch, yaw = Rotation.from_matrix(rotation).as_euler("xyz")
-        print(f"Tracked cube: pos=({position[0]:.3f}, {position[1]:.3f}, {position[2]:.3f})")
-        cube = CubePose(
-            x=float(position[0]),
-            y=float(position[1]),
-            z=CUBE_HALF_SIZE,
-            roll=float(roll) if free_grasp else 0.0,
-            pitch=float(pitch) if free_grasp else 0.0,
-            yaw=float(yaw),
-        )
+        print(f"Tracked cube: pos=({cube.x:.3f}, {cube.y:.3f}, {cube.z:.3f})")
         if debug is not None:
             debug.bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
             debug.camera_matrix = camera_matrix.copy()
@@ -348,6 +339,7 @@ def track_drop_zone_square(
 
     from pick_and_place.camera_compare import load_intrinsics
     from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
+    from pick_and_place.overhead_localization import localize_drop_target
     from pick_and_place.workspace_overlays import (
         is_cube_drop_allowed,
         workspace_interior_corners_world,
@@ -381,15 +373,15 @@ def track_drop_zone_square(
         if undistort_map is not None:
             rgb = cv2.remap(rgb, *undistort_map, cv2.INTER_LINEAR)
 
-        raw_target = detect_paper_target(
+        target = localize_drop_target(
             rgb,
+            tracker,
             camera_matrix,
             cam_pos,
             cam_rot,
             target_color=target_color,
             workspace_corners_world=workspace_corners,
         )
-        target = tracker.update(raw_target)
         if target is None:
             continue
 
