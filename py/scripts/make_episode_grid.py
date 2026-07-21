@@ -166,32 +166,32 @@ def build_command(
     crf: int | None,
     out: Path,
 ) -> list[str]:
-    inputs: list[str] = []
+    input_paths = list(dict.fromkeys(clip.path for slot in slots for clip in slot))
+    input_indices = {path: index for index, path in enumerate(input_paths)}
+    inputs = [arg for path in input_paths for arg in ("-i", str(path))]
     filters: list[str] = []
     slot_labels: list[str] = []
-    idx = 0  # running ffmpeg input index
 
     for s, clips in enumerate(slots):
         seg_labels = []
         for clip in clips:
-            # -ss/-t as input options => frame-accurate cut, PTS reset to 0.
-            inputs += [
-                "-ss", f"{clip.seek:.6f}",
-                "-t", f"{clip.duration:.6f}",
-                "-i", str(clip.path),
-            ]
             seg = f"s{s}p{len(seg_labels)}"
+            frame_count = round(clip.duration * fps)
+            start_frame = round(clip.seek * fps)
+            end_frame = start_frame + frame_count
+            idx = input_indices[clip.path]
             filters.append(
-                f"[{idx}:v]scale={cell_w}:{cell_h},setsar=1,fps={fps}[{seg}]"
+                f"[{idx}:v]trim=start_frame={start_frame}:end_frame={end_frame},"
+                f"setpts=PTS-STARTPTS,scale={cell_w}:{cell_h},setsar=1[{seg}]"
             )
             seg_labels.append(f"[{seg}]")
-            idx += 1
         # Concatenate this slot's episodes, then trim to the shared duration so
         # every slot ends at the same instant.
         slot = f"slot{s}"
         filters.append(
             "".join(seg_labels)
-            + f"concat=n={len(seg_labels)}:v=1:a=0,"
+            + f"concat=n={len(seg_labels)}:v=1:a=0,setpts=PTS-STARTPTS,"
+            + f"tpad=stop_mode=clone:stop_duration={duration:.6f},"
             + f"trim=duration={duration:.6f},setpts=PTS-STARTPTS[{slot}]"
         )
         slot_labels.append(f"[{slot}]")
@@ -201,7 +201,11 @@ def build_command(
     )
     filters.append(
         "".join(slot_labels)
-        + f"xstack=inputs={len(slots)}:layout={layout}:fill=black[grid]"
+        + f"xstack=inputs={len(slots)}:layout={layout}:fill=black[stack]"
+    )
+    filters.append(
+        f"[stack]fps={fps},trim=end_frame={round(duration * fps)},"
+        "setpts=PTS-STARTPTS[grid]"
     )
 
     return [
@@ -211,10 +215,88 @@ def build_command(
         "-filter_complex",
         ";".join(filters),
         "-map", "[grid]",
-        "-r", str(fps),
+        "-fps_mode", "passthrough",
+        "-frames:v", str(round(duration * fps)),
         *encode_args(out, crf),
         str(out),
     ]
+
+
+def render_grid(
+    ffmpeg: str,
+    slots: list[list[Clip]],
+    rows: int,
+    cols: int,
+    cell_w: int,
+    cell_h: int,
+    fps: int,
+    duration: float,
+    crf: int | None,
+    out: Path,
+) -> None:
+    """Render a grid from exact source frame indices.
+
+    Video files contain many episodes back to back. Random FFmpeg seeks can
+    expose decoder preroll frames at those boundaries, so each cell is read
+    sequentially from its requested source-frame index instead.
+    """
+    import cv2
+
+    total_frames = round(duration * fps)
+    states = [
+        {"clip_index": 0, "capture": None, "remaining": 0, "last": None}
+        for _ in slots
+    ]
+    command = [
+        ffmpeg,
+        "-y",
+        "-f", "rawvideo",
+        "-pix_fmt", "bgr24",
+        "-video_size", f"{cols * cell_w}x{rows * cell_h}",
+        "-framerate", str(fps),
+        "-i", "-",
+        "-frames:v", str(total_frames),
+        *encode_args(out, crf),
+        str(out),
+    ]
+    process = subprocess.Popen(command, stdin=subprocess.PIPE)
+    assert process.stdin is not None
+    try:
+        for _ in range(total_frames):
+            grid = np.zeros((rows * cell_h, cols * cell_w, 3), dtype=np.uint8)
+            for slot_index, (playlist, state) in enumerate(zip(slots, states)):
+                while state["remaining"] == 0 and state["clip_index"] < len(playlist):
+                    capture = state["capture"]
+                    if capture is not None:
+                        capture.release()
+                    clip = playlist[state["clip_index"]]
+                    capture = cv2.VideoCapture(str(clip.path))
+                    capture.set(cv2.CAP_PROP_POS_FRAMES, round(clip.seek * fps))
+                    state["capture"] = capture
+                    state["remaining"] = round(clip.duration * fps)
+                    state["clip_index"] += 1
+
+                capture = state["capture"]
+                if state["remaining"] and capture is not None:
+                    ok, frame = capture.read()
+                    if not ok:
+                        raise RuntimeError("Could not read requested video frame")
+                    state["last"] = cv2.resize(frame, (cell_w, cell_h), interpolation=cv2.INTER_AREA)
+                    state["remaining"] -= 1
+                frame = state["last"]
+                if frame is None:
+                    raise RuntimeError("Episode playlist ended before the grid duration")
+                row, col = divmod(slot_index, cols)
+                grid[row * cell_h:(row + 1) * cell_h, col * cell_w:(col + 1) * cell_w] = frame
+            process.stdin.write(grid.tobytes())
+    finally:
+        process.stdin.close()
+        for state in states:
+            capture = state["capture"]
+            if capture is not None:
+                capture.release()
+    if process.wait() != 0:
+        raise RuntimeError("ffmpeg failed while encoding the grid")
 
 
 def main() -> None:
@@ -293,11 +375,10 @@ def main() -> None:
     for s, clips in enumerate(slots):
         print(f"slot {s}: {len(clips)} episodes")
 
-    cmd = build_command(
+    render_grid(
         find_ffmpeg(), slots, args.rows, args.cols,
         cell_w, cell_h, args.fps, args.duration, args.crf, args.out,
     )
-    subprocess.run(cmd, check=True)
     print(f"Wrote {args.out} ({args.rows}x{args.cols}, "
           f"{cell_w}x{cell_h} cells, {args.duration:.0f}s)")
 

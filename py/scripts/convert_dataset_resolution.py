@@ -57,6 +57,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -191,6 +192,15 @@ def main() -> None:
         help="background image-writer threads for PNG-then-encode mode",
     )
     parser.add_argument(
+        "--camera-workers",
+        type=int,
+        default=len(FEATURE_TO_CAMERA),
+        help=(
+            "parallel camera decode/resize workers (default: one per camera); "
+            "use 1 to process cameras serially"
+        ),
+    )
+    parser.add_argument(
         "--encoder-queue-maxsize",
         type=int,
         default=3000,
@@ -212,6 +222,8 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
+    if args.camera_workers < 1:
+        parser.error("--camera-workers must be positive")
     include_episodes = (
         read_episode_indices(args.episodes_file) if args.episodes_file is not None else None
     )
@@ -338,6 +350,24 @@ def main() -> None:
 
     # Built lazily once the first frame reveals each camera's stored resolution.
     undistort_maps: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+
+    def read_and_transform(feature: str, camera: str) -> np.ndarray:
+        rgb = streams[feature].read_rgb()
+        if args.already_rectified:
+            return center_crop_and_resize(rgb, args.width, args.height, cv2)
+        if camera not in undistort_maps:
+            h, w = rgb.shape[:2]
+            undistort_maps[camera] = build_undistort_map(
+                intrinsics_by_camera[camera], w, h, cv2
+            )
+        return transform_frame(rgb, undistort_maps[camera], args.width, args.height, cv2)
+
+    def advance_stream(feature: str, camera: str, keep: bool) -> np.ndarray | None:
+        if not keep:
+            streams[feature].skip()
+            return None
+        return read_and_transform(feature, camera)
+
     current_episode = int(episode_indices[0])
     episode_has_frames = False
     # A source episode can have more rows than real video frames (e.g. a
@@ -349,65 +379,58 @@ def main() -> None:
     last_row_index: int | None = None
     last_processed: dict[str, np.ndarray] = {}
 
+    worker_count = min(args.camera_workers, len(FEATURE_TO_CAMERA))
     try:
-        progress_desc = (
-            "Converting frames" if kept_frame_count == len(rows) else "Scanning frames"
-        )
-        for i in tqdm(range(len(states)), desc=progress_desc, unit="frame"):
-            episode = int(episode_indices[i])
-            if episode != current_episode:
-                if episode_has_frames:
-                    recording.save_episode(metadata_by_episode[current_episode])
-                current_episode = episode
-                episode_has_frames = False
+        with ThreadPoolExecutor(
+            max_workers=worker_count, thread_name_prefix="camera-convert"
+        ) as workers:
+            progress_desc = (
+                "Converting frames" if kept_frame_count == len(rows) else "Scanning frames"
+            )
+            for i in tqdm(range(len(states)), desc=progress_desc, unit="frame"):
+                episode = int(episode_indices[i])
+                if episode != current_episode:
+                    if episode_has_frames:
+                        recording.save_episode(metadata_by_episode[current_episode])
+                    current_episode = episode
+                    episode_has_frames = False
 
-            row_index = int(row_indices[i])
-            keep_row = bool(keep_rows[i])
-            if row_index != last_row_index:
-                pulled: dict[str, np.ndarray] = {}
-                for feature, camera in FEATURE_TO_CAMERA.items():
-                    if not keep_row:
-                        streams[feature].skip()
-                        continue
-                    rgb = streams[feature].read_rgb()
-                    if args.already_rectified:
-                        pulled[feature] = center_crop_and_resize(
-                            rgb, args.width, args.height, cv2
-                        )
-                    else:
-                        if camera not in undistort_maps:
-                            h, w = rgb.shape[:2]
-                            undistort_maps[camera] = build_undistort_map(
-                                intrinsics_by_camera[camera], w, h, cv2
-                            )
-                        pulled[feature] = transform_frame(
-                            rgb, undistort_maps[camera], args.width, args.height, cv2
-                        )
-                last_processed = pulled
-                last_row_index = row_index
+                row_index = int(row_indices[i])
+                keep_row = bool(keep_rows[i])
+                if row_index != last_row_index:
+                    futures = {
+                        feature: workers.submit(advance_stream, feature, camera, keep_row)
+                        for feature, camera in FEATURE_TO_CAMERA.items()
+                    }
+                    last_processed = {
+                        feature: frame
+                        for feature, future in futures.items()
+                        if (frame := future.result()) is not None
+                    }
+                    last_row_index = row_index
 
-            if not keep_row:
-                continue
+                if not keep_row:
+                    continue
 
-            frame: dict[str, Any] = {
-                "observation.state": np.asarray(states[i], np.float32),
-                "action": np.asarray(actions[i], np.float32),
-                "task": task_by_index[int(task_indices[i])],
-                **last_processed,
-            }
-            recording.dataset.add_frame(frame)
-            episode_has_frames = True
+                frame: dict[str, Any] = {
+                    "observation.state": np.asarray(states[i], np.float32),
+                    "action": np.asarray(actions[i], np.float32),
+                    "task": task_by_index[int(task_indices[i])],
+                    **last_processed,
+                }
+                recording.dataset.add_frame(frame)
+                episode_has_frames = True
 
-            dropped = recording.dropped_frame_count()
-            if dropped:
-                raise RuntimeError(
-                    f"Streaming video encoder dropped {dropped} frame(s); the video would "
-                    "desync from the recorded rows. Use --vcodec auto or "
-                    "--no-streaming-encoding."
-                )
+                dropped = recording.dropped_frame_count()
+                if dropped:
+                    raise RuntimeError(
+                        f"Streaming video encoder dropped {dropped} frame(s); the video would "
+                        "desync from the recorded rows. Use --vcodec auto or "
+                        "--no-streaming-encoding."
+                    )
 
-        if episode_has_frames:
-            recording.save_episode(metadata_by_episode[current_episode])
+            if episode_has_frames:
+                recording.save_episode(metadata_by_episode[current_episode])
     finally:
         for stream in streams.values():
             stream.close()
