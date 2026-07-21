@@ -93,6 +93,39 @@ def test_shard_ranges_preserve_global_episode_rng_streams():
     assert shard_streams == sequential_stream
 
 
+def test_resuming_at_an_offset_extends_the_run_instead_of_repeating_it():
+    """``--first-episode`` must continue the interrupted run's seed stream.
+
+    A resume is only worth anything if the episodes it records are ones the
+    interrupted run had not reached. Both per-episode streams key off the global
+    index, so offsetting the resume past the last index the original run reached
+    has to yield episodes disjoint from everything already banked.
+    """
+    module = _record_sim_module()
+
+    banked = [module._episode_rng(0, index).integers(2**31) for index in range(300)]
+    resumed = [module._episode_rng(0, 300 + index).integers(2**31) for index in range(50)]
+    assert not set(banked) & set(resumed)
+
+    # Sharding the resume must not perturb it either: the union of the shards is
+    # exactly the contiguous global range, whatever the worker count.
+    first_episode = 300
+    sharded = []
+    for count in module._split(50, 4):
+        sharded.extend(
+            module._episode_rng(0, first_episode + index).integers(2**31)
+            for index in range(count)
+        )
+        first_episode += count
+    assert sharded == resumed
+
+    # The domain-randomization stream is keyed the same way, so it carries the
+    # same guarantee -- otherwise a resume would repeat appearances already banked.
+    banked_domain = {module._domain_seed(0, index) for index in range(300)}
+    resumed_domain = {module._domain_seed(0, 300 + index) for index in range(50)}
+    assert not banked_domain & resumed_domain
+
+
 def test_recording_defaults_supersample_saved_frames():
     module = _record_sim_module()
     parameters = inspect.signature(module.run_recording).parameters

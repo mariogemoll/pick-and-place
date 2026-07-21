@@ -407,6 +407,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--episodes", type=int, default=1, help="number of episodes to record")
     parser.add_argument(
+        "--first-episode",
+        type=int,
+        default=0,
+        help=(
+            "global index of the first episode, for resuming an interrupted run "
+            "(default: 0). Each episode's pose and domain-randomization seeds are "
+            "derived from --seed and this global index, so a resume that starts "
+            "past the last index the previous run reached extends it rather than "
+            "repeating it. Reuse the earlier run's --seed for that to hold"
+        ),
+    )
+    parser.add_argument(
         "--workers",
         type=int,
         default=1,
@@ -563,6 +575,12 @@ def main() -> None:
         parser.error("--max-attempts must be at least 1")
     if args.viewer and args.workers > 1:
         parser.error("--viewer requires --workers 1")
+    if args.first_episode < 0:
+        parser.error("--first-episode must not be negative")
+    if args.first_episode > 0 and args.seed is None:
+        # Without a seed the per-episode streams are drawn fresh, so a global
+        # offset cannot line up with anything: the resume it implies is illusory.
+        parser.error("--first-episode requires --seed (reuse the interrupted run's seed)")
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     base_root = (
@@ -598,13 +616,14 @@ def main() -> None:
             repo_id=args.repo_id,
             task=args.task,
             use_viewer=args.viewer,
+            first_episode=args.first_episode,
             **common,
         )
         return
 
     counts = _split(args.episodes, args.workers)
     jobs = []
-    first_episode = 0
+    first_episode = args.first_episode
     for i, count in enumerate(counts):
         if count == 0:
             continue
@@ -623,7 +642,13 @@ def main() -> None:
         )
         first_episode += count
 
-    print(f"Sharding {args.episodes} episodes across {len(jobs)} workers (spawn).")
+    # Print the global range, not just the count: when resuming, which indices a
+    # run covers is the thing you need to check against the interrupted run.
+    print(
+        f"Sharding {args.episodes} episodes "
+        f"[{args.first_episode}, {args.first_episode + args.episodes}) "
+        f"across {len(jobs)} workers (spawn)."
+    )
     # Spawn rather than fork: each worker needs its own MuJoCo GL context, which
     # does not survive a fork. Spawn is the default on macOS and safe on Linux.
     ctx = multiprocessing.get_context("spawn")
