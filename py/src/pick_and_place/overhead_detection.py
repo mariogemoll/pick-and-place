@@ -264,8 +264,7 @@ def track_cube(
     import cv2
     from pick_and_place.camera_compare import load_intrinsics
     from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
-    from pick_and_place.cube_detection import make_cube_detector
-    from pick_and_place.overhead_localization import localize_cube
+    from pick_and_place.overhead_localization import OverheadLocalizer
     from pick_and_place.workspace_overlays import is_cube_pickup_allowed
 
     camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
@@ -277,7 +276,7 @@ def track_cube(
         raise RuntimeError(f"Missing {camera_name} intrinsics at {intrinsics}")
     camera_matrix, undistort_map = load_intrinsics(intrinsics, 1920, 1080, cv2)
 
-    detector = make_cube_detector()
+    localizer = OverheadLocalizer(camera_matrix, cam_pos, cam_rot)
 
     # Flush a few stale frames so we read what the arm sees now, not buffered.
     for _ in range(5):
@@ -293,12 +292,8 @@ def track_cube(
         if undistort_map is not None:
             rgb = cv2.remap(rgb, *undistort_map, cv2.INTER_LINEAR)
 
-        cube = localize_cube(
+        cube = localizer.localize_cube(
             rgb,
-            detector,
-            camera_matrix,
-            cam_pos,
-            cam_rot,
             free_grasp=free_grasp,
         )
         if cube is None:
@@ -339,17 +334,13 @@ def track_drop_zone_square(
 
     from pick_and_place.camera_compare import load_intrinsics
     from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
-    from pick_and_place.overhead_localization import localize_drop_target
+    from pick_and_place.overhead_localization import OverheadLocalizer
     from pick_and_place.workspace_overlays import (
         is_cube_drop_allowed,
         workspace_interior_corners_world,
     )
 
     workspace_corners = workspace_interior_corners_world()
-
-    # This function is called once per episode. Do not let the tracker's cached
-    # estimate satisfy a new episode when the square is no longer visible.
-    tracker.reset()
 
     camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
     cam_pos = data.cam_xpos[camera_id].copy()
@@ -359,6 +350,12 @@ def track_drop_zone_square(
     if not intrinsics.exists():
         raise RuntimeError(f"Missing {camera_name} intrinsics at {intrinsics}")
     camera_matrix, undistort_map = load_intrinsics(intrinsics, 1920, 1080, cv2)
+    localizer = OverheadLocalizer(
+        camera_matrix,
+        cam_pos,
+        cam_rot,
+        paper_tracker=tracker,
+    )
 
     for _ in range(5):
         cap.read()
@@ -373,12 +370,8 @@ def track_drop_zone_square(
         if undistort_map is not None:
             rgb = cv2.remap(rgb, *undistort_map, cv2.INTER_LINEAR)
 
-        target = localize_drop_target(
+        target = localizer.localize_drop_target(
             rgb,
-            tracker,
-            camera_matrix,
-            cam_pos,
-            cam_rot,
             target_color=target_color,
             workspace_corners_world=workspace_corners,
         )
