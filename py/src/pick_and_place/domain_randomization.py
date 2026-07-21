@@ -415,6 +415,7 @@ class DomainRandomizer:
         self._geom_rgba = model.geom_rgba.copy()
         self._cam_pos = model.cam_pos.copy()
         self._cam_quat = model.cam_quat.copy()
+        self._tex_data = model.tex_data.copy()
         self._texture_ids = tuple(
             ident
             for name in ("table_texture", "background_panorama")
@@ -432,7 +433,8 @@ class DomainRandomizer:
         camera = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, "wrist_camera")
         return self._cam_pos[camera].copy(), self._cam_quat[camera].copy()
 
-    def apply(self, sample: DomainSample) -> None:
+    def reset(self) -> None:
+        """Restore the canonical compiled model after a randomized episode."""
         model = self.model
         model.light_pos[:] = self._light_pos
         model.light_dir[:] = self._light_dir
@@ -448,6 +450,14 @@ class DomainRandomizer:
         model.geom_rgba[:] = self._geom_rgba
         model.cam_pos[:] = self._cam_pos
         model.cam_quat[:] = self._cam_quat
+        model.tex_data[:] = self._tex_data
+        self._sample = None
+        self._frame = 0
+        self._image_rng_seed = 0
+
+    def apply(self, sample: DomainSample) -> None:
+        self.reset()
+        model = self.model
 
         cool = np.array((1.0 / sample.light_warm_cool, 1.0, sample.light_warm_cool))
         fill = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_LIGHT, "scene_light")

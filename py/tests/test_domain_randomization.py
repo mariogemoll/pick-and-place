@@ -79,6 +79,20 @@ def test_apply_restores_canonical_visual_model_before_next_sample():
     np.testing.assert_array_equal(model.geom_size, canonical_collision)
 
 
+def test_reset_restores_canonical_model_without_applying_another_sample():
+    preset = DomainRandomizationPreset.load(PRESET)
+    model = _procedural_model(preset)
+    randomizer = DomainRandomizer(model)
+    canonical_camera = model.cam_pos.copy()
+    canonical_texture = model.tex_data.copy()
+
+    randomizer.apply(preset.sample(1))
+    randomizer.reset()
+
+    np.testing.assert_array_equal(model.cam_pos, canonical_camera)
+    np.testing.assert_array_equal(model.tex_data, canonical_texture)
+
+
 def test_marker_tint_preserves_the_placed_target_color():
     preset = DomainRandomizationPreset.load(PRESET)
     model = _procedural_model(preset)

@@ -54,6 +54,7 @@ from pick_and_place.episodes import build_geom_sets, is_unexpected, scan_contact
 from pick_and_place.follower import JOINT_NAMES
 from pick_and_place.geometry import CUBE_HALF_SIZE
 from pick_and_place.miscalibration import MiscalibrationDraw, MiscalibrationModel
+from pick_and_place.policy_evaluation import TaskOracleConfig
 from pick_and_place.rl.episode_pool import EpisodePool, ResetSnapshot
 
 # Snapshot reset stages: stage k resets at the start of this scripted phase (and
@@ -75,13 +76,14 @@ REWARD_PROFILES: tuple[str, ...] = ("held-carry", "carry-drop")
 # Success oracle, matching record_episodes.py: the cube has settled within this
 # far (m) of the target in the floor plane, sits at cube-half-size above the
 # floor, and is at rest.
-SUCCESS_XY_TOLERANCE = 0.04
-SUCCESS_Z_TOLERANCE = 0.01
+_EVALUATION_THRESHOLDS = TaskOracleConfig()
+SUCCESS_XY_TOLERANCE = _EVALUATION_THRESHOLDS.success_xy_tolerance_m
+SUCCESS_Z_TOLERANCE = _EVALUATION_THRESHOLDS.resting_height_tolerance_m
 # Cube speed (m/s and rad/s) below which it counts as settled rather than still
 # falling or rolling — required so a cube passing through the target mid-bounce
 # is not scored as a successful placement.
-SETTLED_LIN_SPEED = 0.02
-SETTLED_ANG_SPEED = 0.2
+SETTLED_LIN_SPEED = _EVALUATION_THRESHOLDS.settled_linear_speed_m_s
+SETTLED_ANG_SPEED = _EVALUATION_THRESHOLDS.settled_angular_speed_rad_s
 
 # Generous bounds beyond which the cube is considered knocked out of the
 # workspace (a failure): more than this far from the arm base horizontally, or

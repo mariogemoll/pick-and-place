@@ -50,13 +50,7 @@ from pick_and_place.camera_extrinsics import (
     load_local_camera_extrinsics,
 )
 from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
-from pick_and_place.follower import (
-    ARM_JOINT_NAMES,
-    GRIPPER_INDEX,
-    JOINT_NAMES,
-    real_frame_to_sim,
-    sim_frame_to_real,
-)
+from pick_and_place.follower import JOINT_NAMES
 from pick_and_place.episodes import cube_quat_from_pose, sample_cube, sample_target
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.domain_randomization import (
@@ -82,6 +76,11 @@ from pick_and_place.policy import (
     make_policy,
     resolve_checkpoint_cameras,
     select_device,
+)
+from pick_and_place.policy_sim import (
+    joint_qpos_addresses,
+    real_action_to_sim_ctrl,
+    sim_state_to_real,
 )
 
 # One policy query and one camera render happen per control tick; the sim steps
@@ -139,37 +138,6 @@ def _build_model(
         alpha=1.0,
     )
     return model, mujoco.MjData(model)
-
-
-def _joint_qpos_adr(model: mujoco.MjModel) -> list[int]:
-    return [
-        int(model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)])
-        for name in JOINT_NAMES
-    ]
-
-
-def _sim_state_to_real(
-    qpos_rad: np.ndarray, joint_offsets_rad: dict[str, float] | None = None
-) -> np.ndarray:
-    """Sim joint positions (radians, ``JOINT_NAMES`` order) -> real-frame state
-    vector (arm degrees + gripper 0-100), matching the dataset convention.
-
-    With a miscalibration draw, the observation is servo-style readback: the
-    physically true joint angle less the injected joint-zero offset.
-    """
-    offsets = joint_offsets_rad or {}
-    arm = {
-        name: float(qpos_rad[i]) - offsets.get(name, 0.0)
-        for i, name in enumerate(ARM_JOINT_NAMES)
-    }
-    return sim_frame_to_real(arm, float(qpos_rad[GRIPPER_INDEX])).astype(np.float32)
-
-
-def _real_action_to_ctrl(action_real: np.ndarray) -> np.ndarray:
-    """Real-frame action vector from the policy -> sim ctrl (radians,
-    ``JOINT_NAMES`` order, which the actuators follow)."""
-    arm_rad, gripper_rad = real_frame_to_sim(action_real)
-    return np.array([arm_rad[name] for name in ARM_JOINT_NAMES] + [gripper_rad])
 
 
 def _set_neutral(
@@ -404,7 +372,7 @@ def main() -> None:
         return draw.offsets_rad(data.time - episode_time_origin)
 
     _set_neutral(model, data, offsets_rad_now())
-    joint_adr = _joint_qpos_adr(model)
+    joint_adr = joint_qpos_addresses(model)
     cube_qadr, cube_dofadr = _cube_freejoint_addrs(model)
     ctrl_low = model.actuator_ctrlrange[:, 0].copy()
     ctrl_high = model.actuator_ctrlrange[:, 1].copy()
@@ -542,7 +510,7 @@ def main() -> None:
             wrist_frame = render("wrist_camera")
             overhead_frame = render("overhead_camera")
             observation = {
-                "observation.state": _sim_state_to_real(
+                "observation.state": sim_state_to_real(
                     data.qpos[joint_adr], offsets_rad_now()
                 ),
                 overhead_key: overhead_frame,
@@ -570,7 +538,7 @@ def main() -> None:
                 robot_type="so101",
             )
             action_real = action.to("cpu").numpy().reshape(-1)[: len(JOINT_NAMES)]
-            ctrl = _real_action_to_ctrl(action_real)
+            ctrl = real_action_to_sim_ctrl(action_real)
             offsets = offsets_rad_now()
             offset_ctrl = np.array([offsets.get(name, 0.0) for name in JOINT_NAMES])
             data.ctrl[:] = np.clip(ctrl + offset_ctrl, ctrl_low, ctrl_high)
