@@ -64,6 +64,25 @@ def test_smoke_manifest_is_frozen_and_hashable():
     assert json.loads(manifest.canonical_json()) == json.loads(json.dumps(manifest.to_dict()))
 
 
+def test_scripted_perturbation_smoke_manifest_has_frozen_joint_and_camera_offsets():
+    manifest = ScenarioManifest.load(
+        REPOSITORY_ROOT / "config/evaluation/scripted_perturbation_smoke_v1.json"
+    )
+
+    assert manifest.suite == "scripted_perturbation_smoke_v1"
+    assert len(manifest.scenarios) == 2
+    for scenario in manifest.scenarios:
+        sample = scenario.domain_randomization_sample
+        assert sample["enabled"] is True
+        assert any(sample["overhead_camera_position_m"])
+        assert any(sample["overhead_camera_rotation_deg"])
+        assert any(sample["wrist_camera_position_m"])
+        assert any(sample["wrist_camera_rotation_deg"])
+        assert any(scenario.miscalibration_sample["joint_offsets_deg"].values())
+        assert scenario.control_hz == 30.0
+        assert scenario.max_steps / scenario.control_hz == 15.0
+
+
 def test_initial_resting_state_is_not_a_settled_placement_milestone():
     oracle = TaskSuccessOracle()
 

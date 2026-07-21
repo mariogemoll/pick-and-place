@@ -49,6 +49,13 @@ def _scenario(max_steps=2):
     return replace(manifest.scenarios[0], max_steps=max_steps)
 
 
+def _perturbed_scenario():
+    manifest = ScenarioManifest.load(
+        REPOSITORY_ROOT / "config/evaluation/scripted_perturbation_smoke_v1.json"
+    )
+    return manifest.scenarios[0]
+
+
 def test_visual_env_exposes_only_deployable_observation_and_privileged_info():
     env = PolicySimEnv(
         image_hw=(16, 16),
@@ -109,6 +116,35 @@ def test_joint_miscalibration_lives_in_environment_and_is_hidden_from_observatio
         np.testing.assert_allclose(true_qpos[0], initial_ctrl[0] + np.deg2rad(7.5))
         assert set(observation) == {STATE_FEATURE, OVERHEAD_FEATURE, WRIST_FEATURE}
         assert "miscalibration" not in info
+    finally:
+        env.close()
+
+
+def test_frozen_camera_perturbations_are_environment_only_and_resettable():
+    env = PolicySimEnv(
+        image_hw=(16, 16),
+        render_hw=(32, 32),
+        renderer_factory=DummyRenderer,
+    )
+    camera_ids = np.array([
+        env.model.camera(name).id for name in ("overhead_camera", "wrist_camera")
+    ])
+    try:
+        env.reset(options={"scenario": _scenario()})
+        nominal_positions = env.model.cam_pos[camera_ids].copy()
+        nominal_quaternions = env.model.cam_quat[camera_ids].copy()
+
+        observation, info = env.reset(options={"scenario": _perturbed_scenario()})
+
+        assert not np.allclose(env.model.cam_pos[camera_ids], nominal_positions)
+        assert not np.allclose(env.model.cam_quat[camera_ids], nominal_quaternions)
+        assert set(observation) == {STATE_FEATURE, OVERHEAD_FEATURE, WRIST_FEATURE}
+        assert "domain_randomization_sample" not in info
+        assert "miscalibration_sample" not in info
+
+        env.reset(options={"scenario": _scenario()})
+        np.testing.assert_allclose(env.model.cam_pos[camera_ids], nominal_positions)
+        np.testing.assert_allclose(env.model.cam_quat[camera_ids], nominal_quaternions)
     finally:
         env.close()
 
