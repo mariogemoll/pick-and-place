@@ -126,13 +126,24 @@ def test_oracle_tracks_lift_carry_release_and_failure_taxonomy():
 
 
 def test_aggregation_and_artifacts_are_structured(tmp_path):
-    results = [_result("scenario-0", True), _result("scenario-1", False)]
+    results = [
+        _result("scenario-0", True),
+        replace(
+            _result("scenario-1", False),
+            controller_failure={"code": "planning_error", "message": "no safe plan"},
+        ),
+    ]
 
     summary = aggregate_episode_results(results)
     assert summary["success_rate"] == 0.5
     assert summary["success_rate_95ci_wilson"][0] < 0.5
     assert summary["success_rate_95ci_wilson"][1] > 0.5
     assert summary["by_workspace_region"]["near"]["success_rate"] == 1.0
+    assert summary["controller_failures"] == {
+        "count": 1,
+        "rate": 0.5,
+        "by_code": {"planning_error": 1},
+    }
 
     output_dir = tmp_path / "evaluation"
     write_evaluation_artifacts(output_dir, {"policy_type": "no-op"}, results)

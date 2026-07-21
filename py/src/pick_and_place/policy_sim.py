@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from dataclasses import asdict, fields
+from dataclasses import asdict, fields, replace
 from typing import Any
 
 import gymnasium as gym
@@ -496,4 +496,10 @@ def evaluate_policy_episode(
         action = controller.act(observation)
         observation, _, terminated, truncated, _ = env.step(action)
         step += 1
-    return env.episode_result()
+        if getattr(controller, "failure", None) is not None:
+            break
+    result = env.episode_result()
+    controller_failure = getattr(controller, "failure", None)
+    if controller_failure is not None:
+        result = replace(result, controller_failure=asdict(controller_failure))
+    return result

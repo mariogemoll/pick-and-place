@@ -362,6 +362,7 @@ class EpisodeResult:
     control_steps: int
     simulated_time_s: float
     time_to_success_s: float | None
+    controller_failure: dict[str, str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -396,6 +397,11 @@ def _aggregate(results: Sequence[EpisodeResult], *, include_strata: bool) -> dic
     success_times = [
         result.time_to_success_s for result in results if result.time_to_success_s is not None
     ]
+    controller_failure_codes = [
+        result.controller_failure["code"]
+        for result in results
+        if result.controller_failure is not None
+    ]
     summary: dict[str, Any] = {
         "episode_count": total,
         "success_count": successes,
@@ -406,6 +412,14 @@ def _aggregate(results: Sequence[EpisodeResult], *, include_strata: bool) -> dic
         },
         "failure_rates": {
             field.name: _rate(results, field.name, "failures") for field in fields(FailureFlags)
+        },
+        "controller_failures": {
+            "count": len(controller_failure_codes),
+            "rate": len(controller_failure_codes) / total if total else 0.0,
+            "by_code": {
+                code: controller_failure_codes.count(code)
+                for code in sorted(set(controller_failure_codes))
+            },
         },
         "final_xy_error_m": {
             "median": median(errors) if errors else None,

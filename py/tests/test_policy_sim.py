@@ -11,6 +11,7 @@ from pick_and_place.policy_controllers import (
     STATE_FEATURE,
     WRIST_FEATURE,
     NoOpPolicyController,
+    ControllerFailure,
 )
 from pick_and_place.policy_evaluation import ScenarioManifest
 from pick_and_place.policy_sim import (
@@ -125,5 +126,34 @@ def test_no_op_controller_times_out_without_false_success():
         assert not result.success
         assert result.failures.missed_pickup
         assert result.failures.timeout
+    finally:
+        env.close()
+
+
+def test_controller_failure_stops_episode_and_is_reported():
+    class FailingController(NoOpPolicyController):
+        failure = None
+
+        def act(self, observation):
+            self.failure = ControllerFailure("localization_error", "camera frame is invalid")
+            return super().act(observation)
+
+        def reset(self):
+            self.failure = None
+
+    env = PolicySimEnv(
+        image_hw=(16, 16),
+        render_hw=(32, 32),
+        renderer_factory=DummyRenderer,
+    )
+    try:
+        result = evaluate_policy_episode(env, FailingController(), _scenario(max_steps=10))
+
+        assert result.control_steps == 1
+        assert result.controller_failure == {
+            "code": "localization_error",
+            "message": "camera frame is invalid",
+        }
+        assert not result.failures.timeout
     finally:
         env.close()
