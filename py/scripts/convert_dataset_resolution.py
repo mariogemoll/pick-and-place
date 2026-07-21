@@ -64,7 +64,12 @@ import numpy as np
 
 from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
 from pick_and_place.recording import RecordingSession
-from pick_and_place.image_rectify import SQUARE_SIZE, build_undistort_map, transform_frame
+from pick_and_place.image_rectify import (
+    SQUARE_SIZE,
+    build_undistort_map,
+    center_crop_and_resize,
+    transform_frame,
+)
 
 # Which calibrated camera each dataset image feature was captured with.
 FEATURE_TO_CAMERA = {
@@ -161,6 +166,14 @@ def main() -> None:
     parser.add_argument("--width", type=int, default=SQUARE_SIZE, help="output width (px)")
     parser.add_argument("--height", type=int, default=SQUARE_SIZE, help="output height (px)")
     parser.add_argument(
+        "--already-rectified",
+        action="store_true",
+        help=(
+            "skip lens undistortion for pinhole images already rendered or rectified, "
+            "then center-crop and resize them"
+        ),
+    )
+    parser.add_argument(
         "--vcodec",
         default="auto",
         help="LeRobot video codec (default: auto = best available HW encoder)",
@@ -217,10 +230,12 @@ def main() -> None:
     data_path = info["data_path"]
     video_path = info["video_path"]
 
-    intrinsics_by_camera = load_local_camera_intrinsics()
-    missing = [cam for cam in FEATURE_TO_CAMERA.values() if cam not in intrinsics_by_camera]
-    if missing:
-        raise SystemExit(f"no calibrated intrinsics for {missing}; cannot undistort")
+    intrinsics_by_camera = {}
+    if not args.already_rectified:
+        intrinsics_by_camera = load_local_camera_intrinsics()
+        missing = [cam for cam in FEATURE_TO_CAMERA.values() if cam not in intrinsics_by_camera]
+        if missing:
+            raise SystemExit(f"no calibrated intrinsics for {missing}; cannot undistort")
 
     tasks = pd.read_parquet(args.src / "meta" / "tasks.parquet")
     # tasks.parquet is indexed by the task string with a ``task_index`` column.
@@ -355,14 +370,19 @@ def main() -> None:
                         streams[feature].skip()
                         continue
                     rgb = streams[feature].read_rgb()
-                    if camera not in undistort_maps:
-                        h, w = rgb.shape[:2]
-                        undistort_maps[camera] = build_undistort_map(
-                            intrinsics_by_camera[camera], w, h, cv2
+                    if args.already_rectified:
+                        pulled[feature] = center_crop_and_resize(
+                            rgb, args.width, args.height, cv2
                         )
-                    pulled[feature] = transform_frame(
-                        rgb, undistort_maps[camera], args.width, args.height, cv2
-                    )
+                    else:
+                        if camera not in undistort_maps:
+                            h, w = rgb.shape[:2]
+                            undistort_maps[camera] = build_undistort_map(
+                                intrinsics_by_camera[camera], w, h, cv2
+                            )
+                        pulled[feature] = transform_frame(
+                            rgb, undistort_maps[camera], args.width, args.height, cv2
+                        )
                 last_processed = pulled
                 last_row_index = row_index
 

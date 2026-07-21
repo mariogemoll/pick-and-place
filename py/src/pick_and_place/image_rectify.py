@@ -58,7 +58,12 @@ def transform_frame(
     is therefore uniform, preserving the rectified pinhole's pixel geometry.
     """
     rectified = cv2.remap(rgb, undistort_map[0], undistort_map[1], cv2.INTER_LINEAR)
-    h, w = rectified.shape[:2]
+    return center_crop_and_resize(rectified, out_w, out_h, cv2)
+
+
+def center_crop_and_resize(rgb: np.ndarray, out_w: int, out_h: int, cv2: Any) -> np.ndarray:
+    """Center-crop an already rectified image and resize it without distortion."""
+    h, w = rgb.shape[:2]
     aspect = out_w / out_h
     if w / h > aspect:
         crop_h = h
@@ -68,7 +73,7 @@ def transform_frame(
         crop_h = round(w / aspect)
     x0 = (w - crop_w) // 2
     y0 = (h - crop_h) // 2
-    crop = rectified[y0 : y0 + crop_h, x0 : x0 + crop_w]
+    crop = rgb[y0 : y0 + crop_h, x0 : x0 + crop_w]
     return cv2.resize(crop, (out_w, out_h), interpolation=cv2.INTER_AREA)
 
 
