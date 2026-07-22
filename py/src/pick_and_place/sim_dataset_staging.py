@@ -11,6 +11,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from tqdm import tqdm
+
 from pick_and_place.dataset_subset import (
     SUCCESS_XY_TOLERANCE_M,
     load_all_episodes,
@@ -118,8 +120,13 @@ def merge_episodes(
         raise ValueError("cannot merge an empty episode selection")
 
     print(f"Merging {len(episode_roots)} episode(s) into {output_root}...")
+    repo_ids = [f"{output_repo_id}-{root.name}" for root in episode_roots]
     aggregate_datasets(
-        repo_ids=[f"{output_repo_id}-{root.name}" for root in episode_roots],
+        # LeRobot shows progress while copying, but loading every source's
+        # metadata happens first and can take several minutes for large staged
+        # collections. It consumes repo_ids and roots together, so wrapping one
+        # side of that zip reports each completed metadata load.
+        repo_ids=tqdm(repo_ids, desc="Load metadata", unit="episode", dynamic_ncols=True),
         aggr_repo_id=output_repo_id,
         roots=episode_roots,
         aggr_root=output_root,

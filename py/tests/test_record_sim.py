@@ -76,9 +76,14 @@ def test_find_episode_datasets_tolerates_a_missing_root(tmp_path):
 def test_merge_episodes_passes_roots_through_in_order(tmp_path, monkeypatch):
     roots = [_episode_dir(tmp_path, f"ep00000{i}", complete=True) for i in range(3)]
     captured = {}
+    progress = {}
 
     def fake_aggregate(**kwargs):
         captured.update(kwargs)
+
+    def fake_tqdm(iterable, **kwargs):
+        progress.update(kwargs)
+        return iterable
 
     lerobot = types.ModuleType("lerobot")
     datasets = types.ModuleType("lerobot.datasets")
@@ -87,6 +92,7 @@ def test_merge_episodes_passes_roots_through_in_order(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "lerobot", lerobot)
     monkeypatch.setitem(sys.modules, "lerobot.datasets", datasets)
     monkeypatch.setitem(sys.modules, "lerobot.datasets.aggregate", aggregate)
+    monkeypatch.setattr(staging, "tqdm", fake_tqdm)
 
     staging.merge_episodes(
         roots,
@@ -96,7 +102,10 @@ def test_merge_episodes_passes_roots_through_in_order(tmp_path, monkeypatch):
     )
 
     assert captured["roots"] == roots
+    assert captured["repo_ids"] == [f"test/merged-{root.name}" for root in roots]
     assert captured["aggr_root"] == tmp_path / "merged"
+    assert progress["desc"] == "Load metadata"
+    assert progress["unit"] == "episode"
     # keep_episodes=True must leave the staged episodes on disk.
     assert all(root.exists() for root in roots)
 

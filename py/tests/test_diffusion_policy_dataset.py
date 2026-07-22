@@ -7,12 +7,17 @@ from pathlib import Path
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
-from pick_and_place import dppo_dataset
-from pick_and_place.dppo_dataset import CAMERA_FEATURES, export_dppo_dataset, normalize_min_max
+from pick_and_place import diffusion_policy_dataset
+from pick_and_place.diffusion_policy_dataset import (
+    CAMERA_FEATURES,
+    export_diffusion_policy_dataset,
+    normalize_min_max,
+)
 
 
-def test_normalize_min_max_uses_dppo_range_and_preserves_constant_columns():
+def test_normalize_min_max_uses_policy_range_and_preserves_constant_columns():
     values = np.array([[1.0, 5.0], [3.0, 5.0]], dtype=np.float32)
 
     normalized, minimum, maximum = normalize_min_max(values)
@@ -74,10 +79,10 @@ def _write_tiny_dataset(root: Path) -> None:
     )
 
 
-def test_export_writes_dppo_arrays_normalization_and_camera_order(tmp_path, monkeypatch):
+def test_export_writes_policy_arrays_normalization_and_camera_order(tmp_path, monkeypatch):
     source = tmp_path / "source"
-    output = tmp_path / "dppo"
-    second_output = tmp_path / "dppo-second"
+    output = tmp_path / "diffusion-policy"
+    second_output = tmp_path / "diffusion-policy-second"
     _write_tiny_dataset(source)
 
     def fake_write_images(destination, *, channel_offset, rows, **kwargs):
@@ -88,9 +93,9 @@ def test_export_writes_dppo_arrays_normalization_and_camera_order(tmp_path, monk
         feature = CAMERA_FEATURES[channel_offset // 3]
         return [source / "videos" / feature / "chunk-000" / "file-000.mp4"]
 
-    monkeypatch.setattr(dppo_dataset, "_write_camera_images", fake_write_images)
+    monkeypatch.setattr(diffusion_policy_dataset, "_write_camera_images", fake_write_images)
 
-    manifest = export_dppo_dataset(source, output, image_size=8)
+    manifest = export_diffusion_policy_dataset(source, output, image_size=8)
 
     with np.load(output / "train.npz", allow_pickle=False) as dataset:
         assert set(dataset.files) == {"states", "actions", "images", "traj_lengths"}
@@ -107,7 +112,12 @@ def test_export_writes_dppo_arrays_normalization_and_camera_order(tmp_path, monk
         np.testing.assert_array_equal(normalization["action_max"], [2.0, 5.0])
     assert manifest["camera_features"] == list(CAMERA_FEATURES)
     assert json.loads((output / "export.json").read_text()) == manifest
-    assert not output.with_name("dppo.building").exists()
+    assert not output.with_name("diffusion-policy.building").exists()
 
-    export_dppo_dataset(source, second_output, image_size=8)
+    export_diffusion_policy_dataset(source, second_output, image_size=8)
     assert (second_output / "train.npz").read_bytes() == (output / "train.npz").read_bytes()
+
+
+def test_export_rejects_nonpositive_worker_count(tmp_path):
+    with pytest.raises(ValueError, match="workers must be positive"):
+        export_diffusion_policy_dataset(tmp_path / "source", tmp_path / "output", workers=0)

@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Mario Gemoll
+# SPDX-License-Identifier: 0BSD
+
+# The DPPO backend pins PyTorch 2.4, which predates NVIDIA Blackwell support. Keep the
+# upstream package otherwise unchanged while using the current stable runtime.
+torch==2.13.0
