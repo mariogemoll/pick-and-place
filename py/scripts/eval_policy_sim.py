@@ -42,6 +42,8 @@ from pick_and_place.scripted_policy import (
     ScriptedPolicy,
     WristCameraLocalizer,
 )
+from pick_and_place.cube_detection import CubeTracker
+from pick_and_place.detector_process import DetectorProcess
 from pick_and_place.workspace_overlays import workspace_interior_corners_world
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -199,11 +201,25 @@ def _make_scripted_controller(
     overhead_position = data.cam_xpos[overhead_id].copy()
     overhead_rotation = data.cam_xmat[overhead_id].reshape(3, 3).copy()
     workspace_corners = workspace_interior_corners_world()
+    # Run AprilTag detection out-of-process. The pupil_apriltags C destructor
+    # (apriltag_detector_destroy) segfaults when a Detector is garbage-collected
+    # inside a multiprocessing pool worker, killing the worker outright
+    # (BrokenProcessPool) and taking every banked episode with it. DetectorProcess
+    # is the same containment sim_recorder.py uses; detection is bit-identical
+    # across the process boundary, so the controller behaves exactly as it does on
+    # real hardware -- only the detector's address space changes.
+    overhead_detector = DetectorProcess(nthreads=1)
+    wrist_detector = DetectorProcess(nthreads=1)
+    # Both localizers rebuild their detector every episode via reset(). Hand each
+    # one the single persistent handle so no child process leaks per episode --
+    # a DetectorProcess holds no per-frame state and is built for reuse across a
+    # long run.
     controller = ScriptedPolicy(
         OverheadLocalizer(
             camera_matrices["overhead_camera"],
             overhead_position,
             overhead_rotation,
+            detector_factory=lambda: overhead_detector,
         ),
         workspace_corners,
         control_hz=control_hz,
@@ -211,9 +227,22 @@ def _make_scripted_controller(
             WristCameraLocalizer(
                 model,
                 camera_matrices["wrist_camera"],
+                tracker_factory=lambda: CubeTracker(smooth=0.95, detector=wrist_detector),
             )
         ),
     )
+    # ScriptedPolicy.close() only reaches the async wrist wrapper, so tear the two
+    # detector children down alongside it.
+    _controller_close = controller.close
+
+    def _close_with_detectors() -> None:
+        try:
+            _controller_close()
+        finally:
+            overhead_detector.close()
+            wrist_detector.close()
+
+    controller.close = _close_with_detectors  # type: ignore[method-assign]
     metadata = {
         "type": "scripted",
         "class": f"{type(controller).__module__}.{type(controller).__name__}",
@@ -223,6 +252,7 @@ def _make_scripted_controller(
         },
         "control_hz": controller.control_hz,
         "wrist_localization": "asynchronous_latest_completed",
+        "apriltag_detection": "out-of-process (DetectorProcess, nthreads=1)",
         "target_color": controller.target_color,
         "max_localization_steps": controller.max_localization_steps,
         "localization_steps_per_search": controller.localization_steps_per_search,
