@@ -14,6 +14,25 @@ import numpy as np
 from pick_and_place.follower import JOINT_NAMES
 
 
+def _silence_ffmpeg_encoder_reports() -> None:
+    """Keep routine FFmpeg codec reports off stderr while retaining errors.
+
+    LeRobot's streaming camera thread restores FFmpeg's native callback after
+    every video. That callback prints libx264's full statistics block, so a
+    per-episode dataset collection produces hundreds of lines that obscure the
+    recorder's progress bar. Replacing the restore hook is process-local; pool
+    workers each configure their own PyAV instance when their first dataset is
+    created.
+    """
+    import av
+
+    def restore_quiet_callback() -> None:
+        av.logging.set_level(av.logging.ERROR)
+
+    restore_quiet_callback()
+    av.logging.restore_default_callback = restore_quiet_callback
+
+
 @dataclass
 class RecordingSession:
     """Holds the ``LeRobotDataset`` written across one collection run.
@@ -53,6 +72,7 @@ class RecordingSession:
         overhead_shape: tuple,
         workspace_shape: tuple | None = None,
     ) -> None:
+        _silence_ffmpeg_encoder_reports()
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
         joint_names = list(JOINT_NAMES)

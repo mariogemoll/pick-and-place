@@ -5,12 +5,12 @@
 """Record pick-and-place LeRobotDatasets from the sim, mirroring ``real.py``.
 
 Each run samples episodes, plays their trajectories under the model's
-position-servo physics, and writes them straight into one LeRobotDataset
-(``datasets/<timestamp>/`` by default) with the same schema the real arm
-produces: per control tick, the measured joints as ``observation.state``, the
-commanded set point as ``action``, and a 960x720 wrist and overhead image by
-default. Cameras are rendered at 1920x1080 before downsampling so silhouettes
-and shadow edges are antialiased. No hardware is involved.
+position-servo physics, and stages each completed trajectory as an independent
+LeRobotDataset. They use the same schema the real arm produces: per control
+tick, the measured joints as ``observation.state``, the commanded set point as
+``action``, and a 960x720 wrist and overhead image by default. Cameras are
+rendered at 1920x1080 before downsampling so silhouettes and shadow edges are
+antialiased. No hardware is involved.
 
 Camera fields of view come from the calibrated intrinsics in
 ``config/camera_intrinsics``, so a sim frame matches the calibrated real camera
@@ -19,12 +19,16 @@ resolution by default.
 The episode rollout is sequential within a process (stateful physics, one
 persistent scene), so ``--workers N`` runs a pool of N processes pulling
 episode indices off a shared queue. Each episode is written as its own
-single-episode dataset under ``<root>_episodes/`` and finalized immediately,
-then merged into ``<root>``. That granularity is what bounds a failure: an
-episode that wedges or dies costs only itself, never the episodes a worker had
-already banked. The parent kills and replaces a worker whose episode exceeds
-``--episode-timeout``. Pose sampling and rendering are pure CPU/GL — no
-training GPU is involved.
+single-episode dataset under ``<root>_episodes/`` and finalized immediately.
+Repeated runs against the same root append new global episode indices, making
+it possible to top up the staging area until it contains enough successful
+placements. Run ``finalize_sim_dataset.py`` afterward to select exactly the
+desired number and merge them into ``<root>`` without re-encoding video.
+
+That granularity is also what bounds a failure: an episode that wedges or dies
+costs only itself, never the episodes a worker had already banked. The parent
+kills and replaces a worker whose episode exceeds ``--episode-timeout``. Pose
+sampling and rendering are pure CPU/GL — no training GPU is involved.
 
 This is sim-only. To collect on the physical SO-101 follower, use ``real.py``.
 """
@@ -33,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import multiprocessing
 import queue as queue_module
 import shutil
@@ -71,6 +76,14 @@ from pick_and_place.recording import RecordingSession
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.paper_detection import DROP_ZONE_HALF_SIZE, place_paper_target_marker
 from pick_and_place.sim_recorder import SimCameraRig, record_episode
+from pick_and_place.sim_dataset_staging import (
+    episode_index,
+    episode_staging_root,
+    ensure_collection_config,
+    find_episode_datasets,
+    next_episode_index,
+    successful_episode_datasets,
+)
 from pick_and_place.workspace_overlays import (
     PAN_AXIS,
     is_cube_drop_allowed,
@@ -102,6 +115,17 @@ class _MockViewer:
 
 def _to_cube(xy: tuple[float, float] | None) -> CubePose | None:
     return CubePose(x=xy[0], y=xy[1], z=CUBE_HALF_SIZE) if xy is not None else None
+
+
+def _configured_file(path: Path | None) -> dict[str, str] | None:
+    """Identify a collection input by stable path and content hash."""
+    if path is None:
+        return None
+    resolved = path.resolve()
+    return {
+        "path": str(resolved),
+        "sha256": hashlib.sha256(resolved.read_bytes()).hexdigest(),
+    }
 
 
 def _miscalibration_metadata(draw: MiscalibrationDraw) -> dict[str, float]:
@@ -253,7 +277,12 @@ def run_recording(
             # it lazily on the first frame, once the camera shapes are known.
             episode_root = dataset_root / f"ep{global_episode:06d}"
             if episode_root.exists():
-                # A previous run already banked this index; never write it twice.
+                if (episode_root / "meta" / "info.json").is_file():
+                    raise FileExistsError(
+                        f"refusing to overwrite complete staged episode {episode_root}"
+                    )
+                # A killed worker may leave an incomplete directory before the
+                # watchdog retries the same deterministic global index.
                 shutil.rmtree(episode_root, ignore_errors=True)
             recording = RecordingSession(
                 repo_id=f"{repo_id}-ep{global_episode:06d}",
@@ -563,69 +592,23 @@ def run_pool(
         print(f"WARNING: worker(s) exited with an error: {failed}")
 
 
-def find_episode_datasets(episodes_root: Path) -> list[Path]:
-    """Return the complete single-episode dataset dirs under ``episodes_root``.
-
-    A dataset is complete only once its writers are closed, which is what writes
-    ``meta/info.json``. A dir without it is a worker that was killed mid-episode,
-    so skipping those is what makes a kill cost exactly one episode. Sorted by
-    global index so the merged dataset is ordered by index, not by which worker
-    happened to finish first.
-    """
-    if not episodes_root.exists():
-        return []
-    return sorted(
-        (path for path in episodes_root.iterdir() if (path / "meta" / "info.json").exists()),
-        key=lambda path: path.name,
-    )
-
-
-def merge_episodes(
-    episode_roots: list[Path],
-    *,
-    output_root: Path,
-    output_repo_id: str,
-    keep_episodes: bool,
-) -> None:
-    """Merge single-episode datasets into one dataset at ``output_root``.
-
-    Uses LeRobot's aggregation, which stream-copies video (``shutil.copy`` plus
-    concat-demuxer remux) rather than re-encoding, so merging costs no
-    generation loss.
-    """
-    from lerobot.datasets.aggregate import aggregate_datasets
-
-    if not episode_roots:
-        print("No complete episodes to merge.")
-        return
-
-    print(f"Merging {len(episode_roots)} episode(s) into {output_root}...")
-    aggregate_datasets(
-        repo_ids=[f"{output_repo_id}-{root.name}" for root in episode_roots],
-        aggr_repo_id=output_repo_id,
-        roots=episode_roots,
-        aggr_root=output_root,
-    )
-    print(f"Merged dataset -> {output_root}")
-    if not keep_episodes:
-        for root in episode_roots:
-            shutil.rmtree(root, ignore_errors=True)
-        print(f"Removed {len(episode_roots)} episode dir(s).")
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--episodes", type=int, default=1, help="number of episodes to record")
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        default=1,
+        help="number of additional global episode indices to attempt",
+    )
     parser.add_argument(
         "--first-episode",
         type=int,
-        default=0,
+        default=None,
         help=(
-            "global index of the first episode, for resuming an interrupted run "
-            "(default: 0). Each episode's pose and domain-randomization seeds are "
-            "derived from --seed and this global index, so a resume that starts "
-            "past the last index the previous run reached extends it rather than "
-            "repeating it. Reuse the earlier run's --seed for that to hold"
+            "global index of the first new episode (default: one past every complete "
+            "or partial episode already under <root>_episodes, otherwise 0). Each "
+            "episode's pose and domain-randomization seeds are derived from --seed "
+            "and this index; reuse the same seed for every top-up run"
         ),
     )
     parser.add_argument(
@@ -634,7 +617,7 @@ def main() -> None:
         default=1,
         help=(
             "record across N processes pulling from a shared episode queue "
-            "(each episode is written as its own dataset, merged at the end)"
+            "(each completed episode is independently finalized in the staging area)"
         ),
     )
     parser.add_argument(
@@ -657,17 +640,6 @@ def main() -> None:
             "(default: 1). 0 marks it failed immediately. Unbounded retries "
             "would spin forever on an index that wedges every time"
         ),
-    )
-    parser.add_argument(
-        "--merge",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="after the run, merge the per-episode datasets into one at <root> (default: on)",
-    )
-    parser.add_argument(
-        "--keep-episodes",
-        action="store_true",
-        help="keep the per-episode datasets after merging (default: remove them)",
     )
     parser.add_argument(
         "--source",
@@ -740,7 +712,10 @@ def main() -> None:
         "--dataset-root",
         type=Path,
         default=None,
-        help="output dir for the LeRobotDataset (default: datasets/<timestamp>)",
+        help=(
+            "eventual finalized dataset path; collection writes to the sibling "
+            "<root>_episodes directory (default base: datasets/<timestamp>)"
+        ),
     )
     parser.add_argument(
         "--repo-id",
@@ -817,12 +792,8 @@ def main() -> None:
         parser.error("--max-attempts must be at least 1")
     if args.viewer and args.workers > 1:
         parser.error("--viewer requires --workers 1")
-    if args.first_episode < 0:
+    if args.first_episode is not None and args.first_episode < 0:
         parser.error("--first-episode must not be negative")
-    if args.first_episode > 0 and args.seed is None:
-        # Without a seed the per-episode streams are drawn fresh, so a global
-        # offset cannot line up with anything: the resume it implies is illusory.
-        parser.error("--first-episode requires --seed (reuse the interrupted run's seed)")
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     base_root = (
@@ -850,12 +821,48 @@ def main() -> None:
         detector_crash_dump_dir=args.detector_crash_dump_dir,
     )
 
-    # Episodes are staged as one dataset each, then merged into `base_root`.
-    # They live in a sibling dir so the merge output is not nested inside its
-    # own inputs.
-    episodes_root = base_root.with_name(f"{base_root.name}_episodes")
+    # Episodes are staged as siblings of the eventual aggregate so collection
+    # can be topped up and resumed without touching an already-finalized root.
+    episodes_root = episode_staging_root(base_root)
     episodes_root.mkdir(parents=True, exist_ok=True)
-    indices = list(range(args.first_episode, args.first_episode + args.episodes))
+    collection_config = {
+        "format_version": 1,
+        "seed": args.seed,
+        "repo_id": args.repo_id,
+        "task": args.task,
+        "source_xy": common["source_xy"],
+        "target_xy": common["target_xy"],
+        "background_panorama": _configured_file(args.background_panorama),
+        "table_texture": _configured_file(args.table_texture),
+        "speed": args.speed,
+        "vcodec": args.vcodec,
+        "streaming_encoding": args.streaming_encoding,
+        "image_width": args.image_width,
+        "image_height": args.image_height,
+        "render_width": args.render_width,
+        "render_height": args.render_height,
+        "miscalibration": args.miscalibration,
+        "domain_randomization": _configured_file(args.domain_randomization),
+        "max_attempts": args.max_attempts,
+    }
+    first_episode = (
+        next_episode_index(episodes_root)
+        if args.first_episode is None
+        else args.first_episode
+    )
+    if first_episode > 0 and args.seed is None:
+        parser.error("a top-up run requires --seed; reuse the staging area's original seed")
+    complete_indices = {episode_index(path) for path in find_episode_datasets(episodes_root)}
+    indices = list(range(first_episode, first_episode + args.episodes))
+    conflicts = sorted(complete_indices.intersection(indices))
+    if conflicts:
+        parser.error(
+            f"requested range overlaps complete staged episode(s): {conflicts[:10]}"
+        )
+    try:
+        ensure_collection_config(episodes_root, collection_config)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     job = dict(
         seed=args.seed,
@@ -867,7 +874,7 @@ def main() -> None:
 
     print(
         f"Recording {args.episodes} episodes "
-        f"[{args.first_episode}, {args.first_episode + args.episodes}) "
+        f"[{first_episode}, {first_episode + args.episodes}) "
         f"across {args.workers} worker(s) -> {episodes_root}"
     )
 
@@ -889,17 +896,15 @@ def main() -> None:
         )
 
     banked = find_episode_datasets(episodes_root)
-    print(f"\nBanked {len(banked)}/{args.episodes} attempted episodes in {episodes_root}")
-
-    if args.merge:
-        merge_episodes(
-            banked,
-            output_root=base_root,
-            output_repo_id=args.repo_id,
-            keep_episodes=args.keep_episodes,
-        )
-    else:
-        print("Skipping merge (--no-merge).")
+    successful = successful_episode_datasets(banked)
+    print(
+        f"\nStaged totals in {episodes_root}: {len(banked)} complete, "
+        f"{len(successful)} successful."
+    )
+    print(
+        "Top up by running this recorder again with the same --dataset-root and --seed. "
+        "Finalize with finalize_sim_dataset.py once enough successful episodes are staged."
+    )
 
 
 if __name__ == "__main__":

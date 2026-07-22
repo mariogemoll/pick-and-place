@@ -8,7 +8,10 @@ import types
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
+import pytest
 
+from pick_and_place import sim_dataset_staging as staging
 from pick_and_place.sim_recorder import resize_and_center_crop
 
 
@@ -71,7 +74,6 @@ def test_find_episode_datasets_tolerates_a_missing_root(tmp_path):
 
 
 def test_merge_episodes_passes_roots_through_in_order(tmp_path, monkeypatch):
-    module = _record_sim_module()
     roots = [_episode_dir(tmp_path, f"ep00000{i}", complete=True) for i in range(3)]
     captured = {}
 
@@ -86,7 +88,7 @@ def test_merge_episodes_passes_roots_through_in_order(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "lerobot.datasets", datasets)
     monkeypatch.setitem(sys.modules, "lerobot.datasets.aggregate", aggregate)
 
-    module.merge_episodes(
+    staging.merge_episodes(
         roots,
         output_root=tmp_path / "merged",
         output_repo_id="test/merged",
@@ -100,7 +102,6 @@ def test_merge_episodes_passes_roots_through_in_order(tmp_path, monkeypatch):
 
 
 def test_merge_episodes_removes_staged_dirs_unless_kept(tmp_path, monkeypatch):
-    module = _record_sim_module()
     roots = [_episode_dir(tmp_path, f"ep00000{i}", complete=True) for i in range(2)]
 
     lerobot = types.ModuleType("lerobot")
@@ -111,7 +112,7 @@ def test_merge_episodes_removes_staged_dirs_unless_kept(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "lerobot.datasets", datasets)
     monkeypatch.setitem(sys.modules, "lerobot.datasets.aggregate", aggregate)
 
-    module.merge_episodes(
+    staging.merge_episodes(
         roots,
         output_root=tmp_path / "merged",
         output_repo_id="test/merged",
@@ -121,27 +122,58 @@ def test_merge_episodes_removes_staged_dirs_unless_kept(tmp_path, monkeypatch):
     assert not any(root.exists() for root in roots)
 
 
-def test_merge_episodes_is_a_noop_without_complete_episodes(tmp_path, monkeypatch):
-    """A run where every worker died must not raise, just report nothing."""
-    module = _record_sim_module()
-    called = []
+def test_merge_episodes_rejects_an_empty_selection():
+    with pytest.raises(ValueError, match="empty episode selection"):
+        staging.merge_episodes(
+            [],
+            output_root=Path("unused"),
+            output_repo_id="test/merged",
+            keep_episodes=False,
+        )
 
-    lerobot = types.ModuleType("lerobot")
-    datasets = types.ModuleType("lerobot.datasets")
-    aggregate = types.ModuleType("lerobot.datasets.aggregate")
-    aggregate.aggregate_datasets = lambda **kwargs: called.append(kwargs)
-    monkeypatch.setitem(sys.modules, "lerobot", lerobot)
-    monkeypatch.setitem(sys.modules, "lerobot.datasets", datasets)
-    monkeypatch.setitem(sys.modules, "lerobot.datasets.aggregate", aggregate)
 
-    module.merge_episodes(
-        [],
-        output_root=tmp_path / "merged",
-        output_repo_id="test/merged",
-        keep_episodes=False,
-    )
+def test_next_episode_index_advances_past_complete_and_partial_dirs(tmp_path):
+    _episode_dir(tmp_path, "ep000003", complete=True)
+    _episode_dir(tmp_path, "ep000007", complete=False)
+    (tmp_path / "notes").mkdir()
 
-    assert called == []
+    assert staging.next_episode_index(tmp_path) == 8
+
+
+def test_top_up_requires_the_same_collection_configuration(tmp_path):
+    config = {
+        "seed": 42,
+        "source_xy": (0.1, 0.2),
+        "domain_randomization": {"sha256": "abc"},
+    }
+    staging.ensure_collection_config(tmp_path, config)
+    staging.ensure_collection_config(tmp_path, config.copy())
+
+    with pytest.raises(ValueError, match="seed"):
+        staging.ensure_collection_config(
+            tmp_path,
+            {"seed": 43, "domain_randomization": {"sha256": "abc"}},
+        )
+
+
+def test_successful_episode_selection_uses_recorded_placement(tmp_path, monkeypatch):
+    roots = [_episode_dir(tmp_path, f"ep00000{i}", complete=True) for i in range(3)]
+
+    def fake_episodes(root):
+        error = {"ep000000": 0.01, "ep000001": 0.06, "ep000002": 0.02}[root.name]
+        return pd.DataFrame(
+            {
+                "placement_detected": [root.name != "ep000002"],
+                "cube_end_x": [error],
+                "cube_end_y": [0.0],
+                "target_x": [0.0],
+                "target_y": [0.0],
+            }
+        )
+
+    monkeypatch.setattr(staging, "load_all_episodes", fake_episodes)
+
+    assert staging.successful_episode_datasets(roots) == [roots[0]]
 
 
 def test_episode_rng_depends_only_on_root_seed_and_global_episode():
