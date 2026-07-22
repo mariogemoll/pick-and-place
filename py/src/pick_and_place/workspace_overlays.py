@@ -210,11 +210,50 @@ def is_target_plate_allowed(
 
 def is_target_plate_position_allowed(x: float, y: float) -> bool:
     """Return whether any square-plate yaw can fit at the target center."""
+    return _first_allowed_target_plate_yaw(x, y) is not None
+
+
+def _first_allowed_target_plate_yaw(
+    x: float,
+    y: float,
+    half_size: float = TARGET_PLATE_HALF_SIZE,
+) -> float | None:
+    """Scan ``[0, 90)`` degrees for a fitting yaw; ``None`` if the center is unusable."""
     for step in range(90):
         yaw = step * (math.pi / 2.0) / 90.0
-        if is_target_plate_allowed(x, y, yaw):
-            return True
-    return False
+        if is_target_plate_allowed(x, y, yaw, half_size=half_size):
+            return yaw
+    return None
+
+
+def sample_target_plate_yaw(
+    rng: np.random.Generator,
+    x: float,
+    y: float,
+    *,
+    half_size: float = TARGET_PLATE_HALF_SIZE,
+    max_attempts: int = 200,
+) -> float:
+    """Sample a plate yaw in ``[0, 90)`` degrees whose corners stay in bounds.
+
+    The plate is square, so any yaw outside ``[0, 90)`` is equivalent to one
+    inside it.
+
+    Yaw 0 is *not* a safe fallback, despite being the axis-aligned minimum
+    against the frame rails. Near an AprilTag plate offset diagonally from the
+    target, yaw 0 is the worst case: the plate reaches toward the tag with its
+    corner, ``half_size * sqrt(2)`` from the center. Rotating toward 45 degrees
+    presents an edge midpoint instead, only ``half_size`` out, which can clear a
+    tag the axis-aligned plate overlaps. Falling back to the discrete scan
+    therefore preserves the guarantee that
+    :func:`is_target_plate_position_allowed` makes about the center.
+    """
+    for _ in range(max_attempts):
+        yaw = float(rng.uniform(0.0, math.pi / 2.0))
+        if is_target_plate_allowed(x, y, yaw, half_size=half_size):
+            return yaw
+    fallback = _first_allowed_target_plate_yaw(x, y, half_size)
+    return 0.0 if fallback is None else fallback
 
 
 def is_cube_recovery_target_allowed(x: float, y: float) -> bool:

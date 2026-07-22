@@ -17,9 +17,14 @@ Camera fields of view come from the calibrated intrinsics in
 resolution by default.
 
 The episode rollout is sequential within a process (stateful physics, one
-persistent scene), so ``--workers N`` shards the run across N processes, each
-writing its own ``<root>_shard<i>`` dataset that can be merged afterwards. Pose
-sampling and rendering are pure CPU/GL — no training GPU is involved.
+persistent scene), so ``--workers N`` runs a pool of N processes pulling
+episode indices off a shared queue. Each episode is written as its own
+single-episode dataset under ``<root>_episodes/`` and finalized immediately,
+then merged into ``<root>``. That granularity is what bounds a failure: an
+episode that wedges or dies costs only itself, never the episodes a worker had
+already banked. The parent kills and replaces a worker whose episode exceeds
+``--episode-timeout``. Pose sampling and rendering are pure CPU/GL — no
+training GPU is involved.
 
 This is sim-only. To collect on the physical SO-101 follower, use ``real.py``.
 """
@@ -29,6 +34,10 @@ from __future__ import annotations
 import argparse
 import datetime
 import multiprocessing
+import queue as queue_module
+import shutil
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 import mujoco
@@ -62,7 +71,11 @@ from pick_and_place.recording import RecordingSession
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.paper_detection import DROP_ZONE_HALF_SIZE, place_paper_target_marker
 from pick_and_place.sim_recorder import SimCameraRig, record_episode
-from pick_and_place.workspace_overlays import PAN_AXIS, is_cube_drop_allowed
+from pick_and_place.workspace_overlays import (
+    PAN_AXIS,
+    is_cube_drop_allowed,
+    sample_target_plate_yaw,
+)
 
 
 SAVED_IMAGE_WIDTH = 960
@@ -72,6 +85,9 @@ RENDER_HEIGHT = 1080
 SHADOW_MAP_SIZE = 8192
 OFFSCREEN_SAMPLES = 8
 SHADOW_CONE_SCALE = 0.4
+# ~8.5x the ~35 s nominal episode under libx264, so an episode that burns many
+# trajectory resamples (up to --max-attempts) is not mistaken for a wedge.
+DEFAULT_EPISODE_TIMEOUT = 300.0
 
 
 class _MockViewer:
@@ -110,17 +126,18 @@ def _miscalibration_metadata(draw: MiscalibrationDraw) -> dict[str, float]:
 
 def run_recording(
     *,
-    episodes: int,
+    index_source: Callable[[], int | None],
     seed: int | None,
     dataset_root: Path,
     repo_id: str,
     task: str,
+    heartbeat: Callable[[int | None], None] | None = None,
     source_xy: tuple[float, float] | None = None,
     target_xy: tuple[float, float] | None = None,
     background_panorama: Path | None = None,
     table_texture: Path | None = None,
     speed: float = 1.0,
-    vcodec: str = "auto",
+    vcodec: str = "h264",
     streaming_encoding: bool = True,
     image_writer_threads: int = 4,
     image_width: int = SAVED_IMAGE_WIDTH,
@@ -131,28 +148,39 @@ def run_recording(
     miscalibration: bool = False,
     domain_randomization: Path | None = None,
     label: str = "",
-    first_episode: int = 0,
     max_attempts: int = 50,
     show_progress: bool = True,
     detector_crash_dump_dir: str | None = None,
 ) -> int:
-    """Record ``episodes`` episodes into one LeRobotDataset; return the count saved.
+    """Record episodes pulled from ``index_source``; return the count saved.
 
     Builds a single persistent scene (the cube freejoint is repositioned and the
     arm reset each episode), renders the wrist/overhead cameras offscreen, and
     plays each sampled trajectory under physics. ``label`` prefixes log lines so
-    parallel shards stay legible. ``first_episode`` is the global index of this
-    shard's first episode, ensuring each episode's RNG stream is independent of
-    the worker count. ``use_viewer`` opens the 3D viewer (single process only);
-    shard workers always run headless.
+    parallel workers stay legible.
+
+    ``index_source`` yields the next global episode index, or ``None`` when the
+    run is done. Pulling rather than owning a contiguous block means a worker
+    that finishes early takes more work instead of idling, and a worker that
+    dies costs only its in-flight episode. Every per-episode RNG stream is keyed
+    off the global index, so which worker records which episode does not change
+    what gets recorded.
+
+    Each episode is written as its own single-episode LeRobotDataset under
+    ``dataset_root`` and finalized immediately, then merged afterwards. A
+    dataset is only readable once its parquet writers are closed, so finalizing
+    per episode is what makes a killed worker cost one episode rather than
+    every episode it had banked.
+
+    ``heartbeat`` reports the in-flight global index (``None`` between
+    episodes) so the parent's watchdog can tell a wedged worker from a slow one.
+    ``use_viewer`` opens the 3D viewer (single process only); pool workers
+    always run headless.
     """
     preset = DomainRandomizationPreset.load(domain_randomization) if domain_randomization else None
-    domain_seeds = (
-        [_domain_seed(seed, first_episode + index) for index in range(episodes)]
-        if preset is not None
-        else []
-    )
-    initial_sample = preset.sample(domain_seeds[0]) if preset is not None else None
+    # Appearance is re-applied per episode from that episode's own domain seed,
+    # so this initial sample only seeds the textures the scene is built with.
+    initial_sample = preset.sample(_domain_seed(seed, 0)) if preset is not None else None
     if preset is not None:
         initial_appearance = generate_procedural_appearance(initial_sample)
         table_texture = initial_appearance.table_rgb
@@ -188,15 +216,6 @@ def run_recording(
         postprocess=randomizer.postprocess if randomizer is not None else None,
     )
 
-    recording = RecordingSession(
-        repo_id=repo_id,
-        root=dataset_root,
-        task=task,
-        fps=CONTROL_HZ,
-        vcodec=vcodec,
-        streaming_encoding=streaming_encoding,
-        image_writer_threads=image_writer_threads,
-    )
     # LeRobot/Hugging Face otherwise emits a separate Map bar while finalizing
     # every episode, obscuring the one useful recording-level progress bar.
     from datasets.utils.logging import disable_progress_bar
@@ -208,22 +227,46 @@ def run_recording(
     viewer = viewer_cm.__enter__() if viewer_cm is not None else _MockViewer()
 
     recorded = 0
+    attempted = 0
+    recording: RecordingSession | None = None
     try:
         progress = tqdm(
-            range(episodes),
             desc=label.strip() or "recording",
             unit="ep",
             disable=not show_progress,
             dynamic_ncols=True,
         )
-        for index in progress:
+        while True:
             if not viewer.is_running():
                 if show_progress:
                     tqdm.write(f"{label}Viewer closed; stopping.")
                 break
-            global_episode = first_episode + index
+            global_episode = index_source()
+            if global_episode is None:
+                break
+            if heartbeat is not None:
+                heartbeat(global_episode)
+            attempted += 1
+            progress.update(1)
+
+            # One dataset per episode, finalized below. `record_episode` creates
+            # it lazily on the first frame, once the camera shapes are known.
+            episode_root = dataset_root / f"ep{global_episode:06d}"
+            if episode_root.exists():
+                # A previous run already banked this index; never write it twice.
+                shutil.rmtree(episode_root, ignore_errors=True)
+            recording = RecordingSession(
+                repo_id=f"{repo_id}-ep{global_episode:06d}",
+                root=episode_root,
+                task=task,
+                fps=CONTROL_HZ,
+                vcodec=vcodec,
+                streaming_encoding=streaming_encoding,
+                image_writer_threads=image_writer_threads,
+            )
+
             rng = _episode_rng(seed, global_episode)
-            domain_seed = domain_seeds[index] if preset is not None else None
+            domain_seed = _domain_seed(seed, global_episode) if preset is not None else None
             sample = preset.sample(domain_seed) if preset is not None else None
             draw = (
                 sample.miscalibration
@@ -254,24 +297,35 @@ def run_recording(
                     max_attempts=max_attempts,
                 )
             except EpisodeSamplingError as exc:
-                tqdm.write(f"{label}Skipping episode {index + 1}: {exc}")
-                progress.set_postfix(saved=recorded, skipped=index + 1 - recorded)
+                tqdm.write(f"{label}Skipping episode {global_episode}: {exc}")
+                progress.set_postfix(saved=recorded, skipped=attempted - recorded)
                 continue
 
             # Render the black drop-zone square at the episode's target so the
             # frames match a real recording, where a physical paper square sits on
-            # the table marking where the cube must be placed.
+            # the table marking where the cube must be placed. The yaw is drawn
+            # after `prepare_episode` so it does not perturb the pose stream: an
+            # episode index keeps the poses it had before the plate rotated.
             ep_target = episode.target
+            target_plate_yaw = sample_target_plate_yaw(
+                rng, ep_target.x, ep_target.y, half_size=DROP_ZONE_HALF_SIZE
+            )
             place_paper_target_marker(
                 model,
                 (ep_target.x, ep_target.y),
-                0.0,
+                target_plate_yaw,
                 (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
                 usable=is_cube_drop_allowed(ep_target.x, ep_target.y),
                 alpha=1.0,
             )
             if randomizer is not None:
                 randomizer.tint_episode_markers()
+            # `place_paper_target_marker` writes `model.body_pos`/`body_quat`,
+            # but rendering reads the derived `data.xpos`. Without this the
+            # episode's first frame is rendered from the previous episode's
+            # kinematics, showing the plate at its old target for one frame
+            # before it snaps into place.
+            mujoco.mj_forward(model, data)
 
             status = record_episode(
                 episode,
@@ -288,11 +342,17 @@ def run_recording(
             if status != "success":
                 if recording.has_pending_frames():
                     recording.discard_episode()
-                progress.set_postfix(saved=recorded, skipped=index + 1 - recorded)
+                # An aborted episode leaves a dataset dir holding no episode;
+                # drop it so the merge sees only banked episodes.
+                recording.finalize()
+                shutil.rmtree(episode_root, ignore_errors=True)
+                recording = None
+                progress.set_postfix(saved=recorded, skipped=attempted - recorded)
                 continue
             error = placement_error(model, data, episode.target)
             metadata = cube_pose_metadata(episode.source, episode.target)
             metadata.update(placement_error_metadata(error, detected=True))
+            metadata["target_plate_yaw"] = float(target_plate_yaw)
             if draw is not None:
                 metadata.update(
                     {
@@ -317,13 +377,20 @@ def run_recording(
                     }
                 )
             recording.save_episode(metadata)
+            # Close the parquet writers now: until finalize runs the files carry
+            # no footer and are unreadable, which is exactly how a killed worker
+            # used to lose every episode it had banked.
+            recording.finalize()
+            recording = None
             recorded += 1
-            progress.set_postfix(saved=recorded, skipped=index + 1 - recorded)
+            progress.set_postfix(saved=recorded, skipped=attempted - recorded)
+            if heartbeat is not None:
+                heartbeat(None)
     finally:
         if viewer_cm is not None:
             viewer_cm.__exit__(None, None, None)
         rig.close()
-        if recording.dataset is not None:
+        if recording is not None and recording.dataset is not None:
             recording.finalize()
     return recorded
 
@@ -335,15 +402,25 @@ def _configure_render_quality(model: mujoco.MjModel) -> None:
     model.vis.map.shadowscale = SHADOW_CONE_SCALE
 
 
-def _worker(kwargs: dict) -> None:
-    """multiprocessing entry point: record one shard, headless."""
-    run_recording(**kwargs)
+def _worker(kwargs: dict, index_queue, status, worker_id: int) -> None:
+    """multiprocessing entry point: pull episodes off the queue, headless.
 
+    ``status[worker_id]`` is ``(global_episode, started_at)`` while an episode is
+    in flight and ``(None, time)`` between episodes, which is what lets the
+    parent's watchdog distinguish a wedged worker from an idle one.
+    """
 
-def _split(total: int, workers: int) -> list[int]:
-    """Spread ``total`` episodes as evenly as possible over ``workers`` shards."""
-    base, extra = divmod(total, workers)
-    return [base + (1 if i < extra else 0) for i in range(workers)]
+    def next_index() -> int | None:
+        try:
+            return index_queue.get_nowait()
+        except queue_module.Empty:
+            return None
+
+    def report(global_episode: int | None) -> None:
+        status[worker_id] = (global_episode, time.time())
+
+    report(None)
+    run_recording(index_source=next_index, heartbeat=report, **kwargs)
 
 
 def _episode_rng(root_seed: int | None, global_episode: int) -> np.random.Generator:
@@ -358,49 +435,182 @@ def _domain_seed(root_seed: int | None, global_episode: int) -> int:
     return domain_seed(root_seed, global_episode)
 
 
-def merge_shards(
-    jobs: list[dict],
+def find_wedged_workers(
+    status: dict,
+    worker_ids,
+    *,
+    now: float,
+    episode_timeout: float,
+) -> list[tuple[int, int, float]]:
+    """Return ``(worker_id, episode, age)`` for each worker past its deadline.
+
+    A worker is only judged while an episode is in flight. Between episodes it
+    reports ``None``, and an idle worker with an empty queue would otherwise
+    look indistinguishable from a wedged one and be killed forever.
+    """
+    wedged = []
+    for worker_id in worker_ids:
+        episode, since = status.get(worker_id, (None, now))
+        if episode is None:
+            continue
+        age = now - since
+        if age > episode_timeout:
+            wedged.append((worker_id, episode, age))
+    return wedged
+
+
+def claim_retry(attempts: dict[int, int], episode: int, episode_retries: int) -> bool:
+    """Record a wedge against ``episode``; return whether to requeue it.
+
+    Bounding this matters: requeuing unconditionally would spin forever on an
+    index that wedges every time it is attempted.
+    """
+    attempts[episode] = attempts.get(episode, 0) + 1
+    return attempts[episode] <= episode_retries
+
+
+def run_pool(
+    job: dict,
+    *,
+    indices: list[int],
+    workers: int,
+    episode_timeout: float,
+    episode_retries: int = 1,
+    poll_interval: float = 5.0,
+) -> None:
+    """Run ``indices`` across a pool of workers, replacing any that wedge.
+
+    Workers pull from a shared queue, so a worker that finishes early takes more
+    work rather than idling on a pre-assigned block. The parent watches each
+    worker's in-flight episode: one that exceeds ``episode_timeout`` is killed
+    and a replacement started. Workers have been observed to spin at 100% CPU
+    indefinitely, both before recording anything and partway through a run; the
+    previous ``join()`` on every worker meant one such worker hung the entire
+    run silently. The timeout has to be enforced from out here because a wedged
+    worker cannot time itself out -- it is not running Python that would notice.
+
+    A killed episode is requeued at most ``episode_retries`` times and then
+    abandoned. Unbounded requeuing would spin forever if an index wedges
+    deterministically; abandoning costs one episode, and the loop already treats
+    episodes as attempts rather than guaranteed successes.
+    """
+    # Spawn rather than fork: each worker needs its own MuJoCo GL context, which
+    # does not survive a fork. Spawn is the default on macOS and safe on Linux.
+    ctx = multiprocessing.get_context("spawn")
+    index_queue = ctx.Queue()
+    for index in indices:
+        index_queue.put(index)
+    status = ctx.Manager().dict()
+
+    def start(worker_id: int):
+        status[worker_id] = (None, time.time())
+        proc = ctx.Process(
+            target=_worker,
+            args=(
+                {**job, "label": f"[w{worker_id}] ", "show_progress": worker_id == 0},
+                index_queue,
+                status,
+                worker_id,
+            ),
+        )
+        proc.start()
+        return proc
+
+    procs = {worker_id: start(worker_id) for worker_id in range(workers)}
+    killed = 0
+    abandoned: list[int] = []
+    attempts: dict[int, int] = {}
+    try:
+        while True:
+            alive = {wid: p for wid, p in procs.items() if p.is_alive()}
+            if not alive:
+                break
+            now = time.time()
+            wedged = find_wedged_workers(
+                status, list(alive), now=now, episode_timeout=episode_timeout
+            )
+            for worker_id, episode, age in wedged:
+                # Kill it and replace it. The partial dataset dir has no
+                # info.json, so the merge skips it.
+                retry = claim_retry(attempts, episode, episode_retries)
+                print(
+                    f"\n[watchdog] worker {worker_id} stuck on episode {episode} "
+                    f"for {age:.0f}s (limit {episode_timeout:.0f}s); killing and "
+                    + ("requeuing" if retry else "abandoning it (retry limit reached)")
+                )
+                alive[worker_id].kill()
+                alive[worker_id].join(timeout=30)
+                if retry:
+                    index_queue.put(episode)
+                else:
+                    abandoned.append(episode)
+                killed += 1
+                procs[worker_id] = start(worker_id)
+            time.sleep(poll_interval)
+    finally:
+        for proc in procs.values():
+            if proc.is_alive():
+                proc.kill()
+            proc.join(timeout=30)
+
+    failed = [wid for wid, p in procs.items() if p.exitcode not in (0, -9)]
+    if killed:
+        print(f"[watchdog] replaced {killed} wedged worker(s) during the run")
+    if abandoned:
+        print(f"[watchdog] abandoned episode(s) after repeated wedges: {sorted(abandoned)}")
+    if failed:
+        # Loud, not silent: the old code could not distinguish this from success.
+        print(f"WARNING: worker(s) exited with an error: {failed}")
+
+
+def find_episode_datasets(episodes_root: Path) -> list[Path]:
+    """Return the complete single-episode dataset dirs under ``episodes_root``.
+
+    A dataset is complete only once its writers are closed, which is what writes
+    ``meta/info.json``. A dir without it is a worker that was killed mid-episode,
+    so skipping those is what makes a kill cost exactly one episode. Sorted by
+    global index so the merged dataset is ordered by index, not by which worker
+    happened to finish first.
+    """
+    if not episodes_root.exists():
+        return []
+    return sorted(
+        (path for path in episodes_root.iterdir() if (path / "meta" / "info.json").exists()),
+        key=lambda path: path.name,
+    )
+
+
+def merge_episodes(
+    episode_roots: list[Path],
     *,
     output_root: Path,
     output_repo_id: str,
-    keep_shards: bool,
+    keep_episodes: bool,
 ) -> None:
-    """Merge the non-empty shard datasets into one dataset at ``output_root``.
+    """Merge single-episode datasets into one dataset at ``output_root``.
 
-    Shards that recorded no episodes (all samples infeasible) are skipped. Unless
-    ``keep_shards`` is set, the merged shard directories are removed afterwards.
+    Uses LeRobot's aggregation, which stream-copies video (``shutil.copy`` plus
+    concat-demuxer remux) rather than re-encoding, so merging costs no
+    generation loss.
     """
-    import shutil
+    from lerobot.datasets.aggregate import aggregate_datasets
 
-    from lerobot.datasets.dataset_tools import merge_datasets
-    from lerobot.datasets.lerobot_dataset import LeRobotDataset
-
-    datasets = []
-    used_roots: list[Path] = []
-    for job in jobs:
-        root = job["dataset_root"]
-        if not (root / "meta" / "info.json").exists():
-            continue
-        dataset = LeRobotDataset(repo_id=job["repo_id"], root=root)
-        if dataset.meta.total_episodes == 0:
-            continue
-        datasets.append(dataset)
-        used_roots.append(root)
-
-    if not datasets:
-        print("No non-empty shards to merge.")
+    if not episode_roots:
+        print("No complete episodes to merge.")
         return
 
-    print(f"Merging {len(datasets)} shard(s) into {output_root}...")
-    merged = merge_datasets(datasets, output_repo_id=output_repo_id, output_dir=output_root)
-    print(
-        f"Merged dataset: {merged.meta.total_episodes} episodes, "
-        f"{merged.meta.total_frames} frames -> {output_root}"
+    print(f"Merging {len(episode_roots)} episode(s) into {output_root}...")
+    aggregate_datasets(
+        repo_ids=[f"{output_repo_id}-{root.name}" for root in episode_roots],
+        aggr_repo_id=output_repo_id,
+        roots=episode_roots,
+        aggr_root=output_root,
     )
-    if not keep_shards:
-        for root in used_roots:
+    print(f"Merged dataset -> {output_root}")
+    if not keep_episodes:
+        for root in episode_roots:
             shutil.rmtree(root, ignore_errors=True)
-        print(f"Removed {len(used_roots)} shard dir(s).")
+        print(f"Removed {len(episode_roots)} episode dir(s).")
 
 
 def main() -> None:
@@ -422,18 +632,42 @@ def main() -> None:
         "--workers",
         type=int,
         default=1,
-        help="shard the run across N processes (each writes its own <root>_shard<i> dataset)",
+        help=(
+            "record across N processes pulling from a shared episode queue "
+            "(each episode is written as its own dataset, merged at the end)"
+        ),
+    )
+    parser.add_argument(
+        "--episode-timeout",
+        type=float,
+        default=DEFAULT_EPISODE_TIMEOUT,
+        help=(
+            "seconds a single episode may take before its worker is treated as "
+            f"wedged, killed and replaced, and the episode requeued (default: "
+            f"{DEFAULT_EPISODE_TIMEOUT:.0f}). Workers have been observed to spin "
+            "at 100%% CPU forever; without this the run never returns"
+        ),
+    )
+    parser.add_argument(
+        "--episode-retries",
+        type=int,
+        default=1,
+        help=(
+            "times a wedged episode may be requeued before it is abandoned "
+            "(default: 1). 0 marks it failed immediately. Unbounded retries "
+            "would spin forever on an index that wedges every time"
+        ),
     )
     parser.add_argument(
         "--merge",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="after a sharded run, merge the shards into one dataset at <root> (default: on)",
+        help="after the run, merge the per-episode datasets into one at <root> (default: on)",
     )
     parser.add_argument(
-        "--keep-shards",
+        "--keep-episodes",
         action="store_true",
-        help="keep the per-shard datasets after merging (default: remove them)",
+        help="keep the per-episode datasets after merging (default: remove them)",
     )
     parser.add_argument(
         "--source",
@@ -520,8 +754,16 @@ def main() -> None:
     )
     parser.add_argument(
         "--vcodec",
-        default="auto",
-        help="LeRobot video codec (default: auto = best available HW encoder)",
+        default="h264",
+        help=(
+            "LeRobot video codec (default: h264 = software libx264). Measured "
+            "~35 s/episode against ~122-167 s for h264_nvenc on a single-GPU "
+            "machine: MuJoCo renders offscreen through EGL on that same GPU, so "
+            "hardware encoding contends with rendering while software encoding "
+            "runs on otherwise-idle cores. Prefer an explicit codec over 'auto', "
+            "which probes for a hardware encoder and silently picks the slow "
+            "path; pinning it also keeps one encoding profile across a dataset"
+        ),
     )
     parser.add_argument(
         "--streaming-encoding",
@@ -608,72 +850,56 @@ def main() -> None:
         detector_crash_dump_dir=args.detector_crash_dump_dir,
     )
 
-    if args.workers == 1:
-        run_recording(
-            episodes=args.episodes,
-            seed=args.seed,
-            dataset_root=base_root,
-            repo_id=args.repo_id,
-            task=args.task,
-            use_viewer=args.viewer,
-            first_episode=args.first_episode,
-            **common,
-        )
-        return
+    # Episodes are staged as one dataset each, then merged into `base_root`.
+    # They live in a sibling dir so the merge output is not nested inside its
+    # own inputs.
+    episodes_root = base_root.with_name(f"{base_root.name}_episodes")
+    episodes_root.mkdir(parents=True, exist_ok=True)
+    indices = list(range(args.first_episode, args.first_episode + args.episodes))
 
-    counts = _split(args.episodes, args.workers)
-    jobs = []
-    first_episode = args.first_episode
-    for i, count in enumerate(counts):
-        if count == 0:
-            continue
-        jobs.append(
-            dict(
-                episodes=count,
-                seed=args.seed,
-                first_episode=first_episode,
-                dataset_root=base_root.with_name(f"{base_root.name}_shard{i}"),
-                repo_id=f"{args.repo_id}-shard{i}",
-                task=args.task,
-                label=f"[shard {i}] ",
-                show_progress=i == 0,
-                **common,
-            )
-        )
-        first_episode += count
-
-    # Print the global range, not just the count: when resuming, which indices a
-    # run covers is the thing you need to check against the interrupted run.
-    print(
-        f"Sharding {args.episodes} episodes "
-        f"[{args.first_episode}, {args.first_episode + args.episodes}) "
-        f"across {len(jobs)} workers (spawn)."
+    job = dict(
+        seed=args.seed,
+        dataset_root=episodes_root,
+        repo_id=args.repo_id,
+        task=args.task,
+        **common,
     )
-    # Spawn rather than fork: each worker needs its own MuJoCo GL context, which
-    # does not survive a fork. Spawn is the default on macOS and safe on Linux.
-    ctx = multiprocessing.get_context("spawn")
-    procs = [ctx.Process(target=_worker, args=(job,)) for job in jobs]
-    for p in procs:
-        p.start()
-    for p in procs:
-        p.join()
 
-    failed = [i for i, p in enumerate(procs) if p.exitcode != 0]
-    print("\nShard datasets:")
-    for job in jobs:
-        print(f"  {job['dataset_root']}")
-    if failed:
-        raise SystemExit(f"{len(failed)} shard worker(s) exited with an error: {failed}")
+    print(
+        f"Recording {args.episodes} episodes "
+        f"[{args.first_episode}, {args.first_episode + args.episodes}) "
+        f"across {args.workers} worker(s) -> {episodes_root}"
+    )
 
-    if args.merge:
-        merge_shards(
-            jobs,
-            output_root=base_root,
-            output_repo_id=args.repo_id,
-            keep_shards=args.keep_shards,
+    if args.workers == 1 and args.viewer:
+        # The viewer needs the main process, so skip the pool entirely.
+        remaining = list(indices)
+        run_recording(
+            index_source=lambda: remaining.pop(0) if remaining else None,
+            use_viewer=True,
+            **job,
         )
     else:
-        print("Skipping merge (--no-merge); combine later with merge_datasets.sh.")
+        run_pool(
+            job,
+            indices=indices,
+            workers=args.workers,
+            episode_timeout=args.episode_timeout,
+            episode_retries=args.episode_retries,
+        )
+
+    banked = find_episode_datasets(episodes_root)
+    print(f"\nBanked {len(banked)}/{args.episodes} attempted episodes in {episodes_root}")
+
+    if args.merge:
+        merge_episodes(
+            banked,
+            output_root=base_root,
+            output_repo_id=args.repo_id,
+            keep_episodes=args.keep_episodes,
+        )
+    else:
+        print("Skipping merge (--no-merge).")
 
 
 if __name__ == "__main__":

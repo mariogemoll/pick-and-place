@@ -53,7 +53,12 @@ from pick_and_place.paper_detection import (
     DROP_ZONE_HALF_SIZE,
     place_paper_target_marker,
 )
-from pick_and_place.workspace_overlays import PAN_AXIS, is_cube_drop_allowed, is_target_plate_allowed
+from pick_and_place.workspace_overlays import (
+    PAN_AXIS,
+    is_cube_drop_allowed,
+    is_target_plate_allowed,
+    sample_target_plate_yaw,
+)
 
 # How long the final pose is held after a trajectory finishes, before the next
 # episode is planned, so the placed cube is visible for a beat.
@@ -82,37 +87,25 @@ class _NullViewer:
         pass
 
 
-def _plate_corners_allowed(cx: float, cy: float, yaw: float, half_size: float) -> bool:
-    """Whether every corner of a ``yaw``-rotated square plate centered at
-    ``(cx, cy)`` still clears the frame rails and calibration AprilTags."""
-    return is_target_plate_allowed(cx, cy, yaw, half_size=half_size)
-
-
 def _sample_marker_yaw(rng: np.random.Generator, cx: float, cy: float) -> float:
     """Sample a marker yaw in [0, 90) degrees whose plate corners stay in bounds.
 
-    The plate is square, so any yaw outside [0, 90) is equivalent to one inside
-    it. Falls back to yaw 0 (axis-aligned, the smallest possible footprint) if
-    no sampled yaw fits after enough tries. Used for a CLI-pinned ``--target``,
-    where the position itself cannot be resampled.
+    Used for a CLI-pinned ``--target``, where the position itself cannot be
+    resampled. ``record_sim.py`` draws the same way, so both paths rotate the
+    plate identically.
     """
-    for _ in range(200):
-        yaw = rng.uniform(0.0, math.pi / 2.0)
-        if _plate_corners_allowed(cx, cy, yaw, DROP_ZONE_HALF_SIZE):
-            return yaw
-    return 0.0
+    return sample_target_plate_yaw(rng, cx, cy, half_size=DROP_ZONE_HALF_SIZE)
 
 
 def _sample_target_plate(rng: np.random.Generator, max_attempts: int = 200) -> tuple[CubePose, float]:
     """Jointly sample a target position and marker yaw whose plate footprint
     fully fits the allowed drop zone; the plate's center is the placement
-    target. Falls back to a freshly sampled position at yaw 0 (the smallest
-    possible footprint) if nothing fits within ``max_attempts``.
+    target.
     """
     for _ in range(max_attempts):
         candidate = sample_target(rng)
         yaw = _sample_marker_yaw(rng, candidate.x, candidate.y)
-        if _plate_corners_allowed(candidate.x, candidate.y, yaw, DROP_ZONE_HALF_SIZE):
+        if is_target_plate_allowed(candidate.x, candidate.y, yaw, half_size=DROP_ZONE_HALF_SIZE):
             return candidate, yaw
     candidate = sample_target(rng)
     return candidate, _sample_marker_yaw(rng, candidate.x, candidate.y)
@@ -487,6 +480,10 @@ def main() -> None:
                 else marker_sampler.yaw
             )
             _show_target_marker(model, episode.target, marker_yaw)
+            # Marker placement writes model fields; rendering reads the derived
+            # `data.xpos`, so propagate before the first frame or the plate shows
+            # at the previous episode's target for one frame.
+            mujoco.mj_forward(model, data)
             if hasattr(viewer, "user_scn"):
                 _mark_target_point(viewer, episode.target)
             skip_event.clear()
