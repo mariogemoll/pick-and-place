@@ -22,7 +22,7 @@ export interface LicenseConfig {
 }
 
 export const config: LicenseConfig = {
-  excludedDirs: ['node_modules', 'dist', 'build', '.git', '.claude', '.venv', '.ipynb_checkpoints', '.pytest_cache', 'SO-ARM100'],
+  excludedDirs: ['node_modules', 'dist', 'build', '.git', '.claude', '.venv', '.ipynb_checkpoints', '.pytest_cache', 'SO-ARM100', 'third_party'],
   excludedFiles: ['.DS_Store'],
   copyrightText: '2026 Mario Gemoll',
   rules: [

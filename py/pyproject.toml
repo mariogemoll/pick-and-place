@@ -17,6 +17,7 @@ dependencies = [
     "numpy",
     "opencv-python",
     "pupil-apriltags",
+    "pyarrow",
     "reportlab",
     "robot_descriptions",
     "scipy",

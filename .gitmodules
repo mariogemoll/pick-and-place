@@ -1,3 +1,6 @@
 [submodule "SO-ARM100"]
 	path = SO-ARM100
 	url = https://github.com/TheRobotStudio/SO-ARM100.git
+[submodule "third_party/dppo"]
+	path = third_party/dppo
+	url = https://github.com/irom-princeton/dppo.git
