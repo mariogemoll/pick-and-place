@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import math
+import os
 from dataclasses import asdict
 from pathlib import Path
 
@@ -21,6 +23,7 @@ from pick_and_place.policy import (
     resolve_checkpoint_cameras,
     select_device,
 )
+from pick_and_place.dppo_policy import DppoPolicyController
 from pick_and_place.policy_controllers import (
     OVERHEAD_FEATURE,
     WRIST_FEATURE,
@@ -48,6 +51,9 @@ from pick_and_place.workspace_overlays import workspace_interior_corners_world
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST = REPOSITORY_ROOT / "config" / "evaluation" / "smoke_v1.json"
+DEFAULT_DPPO_CONFIG = (
+    REPOSITORY_ROOT / "config" / "diffusion_policy" / "pretrain_so101_mlp_img.yaml"
+)
 SCRIPTED_IMAGE_HW = DEFAULT_IMAGE_HW
 
 
@@ -55,11 +61,14 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--controller",
-        choices=("lerobot", "scripted"),
+        choices=("lerobot", "scripted", "dppo"),
         default="lerobot",
         help="controller implementation (default: lerobot)",
     )
-    parser.add_argument("--checkpoint", help="local LeRobot checkpoint or repository ID")
+    parser.add_argument(
+        "--checkpoint",
+        help="local LeRobot checkpoint or repository ID, or a DPPO state_*.pt file",
+    )
     parser.add_argument(
         "--manifest",
         type=Path,
@@ -86,6 +95,44 @@ def _parse_args() -> argparse.Namespace:
         help="enable ACT temporal ensembling (requires --n-action-steps 1)",
     )
     parser.add_argument(
+        "--dppo-python",
+        type=Path,
+        default=os.environ.get("DPPO_PYTHON"),
+        help="interpreter of the DPPO virtual environment (default: $DPPO_PYTHON)",
+    )
+    parser.add_argument(
+        "--dppo-config",
+        type=Path,
+        default=DEFAULT_DPPO_CONFIG,
+        help=f"DPPO training configuration YAML (default: {DEFAULT_DPPO_CONFIG})",
+    )
+    parser.add_argument(
+        "--dppo-normalization",
+        type=Path,
+        help="normalization.npz written by the Diffusion Policy dataset export",
+    )
+    parser.add_argument(
+        "--dppo-act-steps",
+        type=int,
+        default=None,
+        help="executed actions per policy query (default: the full prediction horizon)",
+    )
+    parser.add_argument(
+        "--dppo-seed",
+        type=int,
+        default=0,
+        help="Torch seed for DDPM action sampling (default: 0)",
+    )
+    parser.add_argument(
+        "--dppo-ddim-steps",
+        type=int,
+        default=None,
+        help=(
+            "sample with DDIM using this many steps instead of the trained DDPM "
+            "schedule; faster but not the training sampler, so not for headline runs"
+        ),
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=None,
@@ -105,10 +152,19 @@ def _parse_args() -> argparse.Namespace:
         parser.error("render dimensions must be positive")
     if args.limit is not None and args.limit < 1:
         parser.error("--limit must be at least 1")
-    if args.controller == "lerobot" and args.checkpoint is None:
-        parser.error("--checkpoint is required for the lerobot controller")
+    if args.controller in ("lerobot", "dppo") and args.checkpoint is None:
+        parser.error(f"--checkpoint is required for the {args.controller} controller")
     if args.controller == "scripted" and args.checkpoint is not None:
         parser.error("--checkpoint does not apply to the scripted controller")
+    if args.controller == "dppo":
+        if args.dppo_python is None:
+            parser.error("--dppo-python (or $DPPO_PYTHON) is required for the dppo controller")
+        if args.dppo_normalization is None:
+            parser.error("--dppo-normalization is required for the dppo controller")
+        for name in ("checkpoint", "dppo_config", "dppo_normalization", "dppo_python"):
+            path = Path(getattr(args, name))
+            if not path.exists():
+                parser.error(f"--{name.replace('_', '-')} does not exist: {path}")
     if args.output.exists():
         parser.error(f"--output already exists: {args.output}")
     return args
@@ -130,6 +186,42 @@ class _EpisodeVideoWriters:
     def close(self) -> None:
         self._overhead.close()
         self._wrist.close()
+
+
+def _sha256_of_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for block in iter(lambda: file.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _dppo_metadata(controller: DppoPolicyController, args: argparse.Namespace) -> dict:
+    return {
+        "type": "dppo-diffusion",
+        "image_features": {
+            "overhead": OVERHEAD_FEATURE,
+            "wrist": WRIST_FEATURE,
+        },
+        "action_horizon": controller.horizon_steps,
+        "executed_action_steps": controller.act_steps,
+        "denoising_steps": controller.handshake["denoising_steps"],
+        "sampler": controller.handshake["sampler"],
+        "checkpoint_epoch": controller.handshake["epoch"],
+        "weights": "ema",
+        "image_augmentation": False,
+        "sampling_seed": controller.handshake["seed"],
+        "server_device": controller.handshake["device"],
+        "server_torch_version": controller.handshake["torch_version"],
+        "config": {
+            "path": str(args.dppo_config.resolve()),
+            "sha256": _sha256_of_file(args.dppo_config),
+        },
+        "normalization": {
+            "path": str(args.dppo_normalization.resolve()),
+            "sha256": _sha256_of_file(args.dppo_normalization),
+        },
+    }
 
 
 def _lerobot_metadata(controller: LeRobotPolicyController) -> dict:
@@ -283,6 +375,24 @@ def main() -> None:
     )
     if args.controller == "lerobot":
         image_hw, _ = resolve_checkpoint_cameras(args.checkpoint, override_hw=override_hw)
+    elif args.controller == "dppo":
+        print(f"Starting the DPPO policy server for {args.checkpoint}...")
+        dppo_controller = DppoPolicyController.launch(
+            python=args.dppo_python,
+            checkpoint=args.checkpoint,
+            config=args.dppo_config,
+            normalization=args.dppo_normalization,
+            device=args.device,
+            seed=args.dppo_seed,
+            act_steps=args.dppo_act_steps,
+            ddim_steps=args.dppo_ddim_steps,
+        )
+        if override_hw is not None and override_hw != dppo_controller.image_hw:
+            raise ValueError(
+                f"--image-height/--image-width {override_hw} do not match the "
+                f"model's trained image size {dppo_controller.image_hw}"
+            )
+        image_hw = dppo_controller.image_hw
     else:
         image_hw = override_hw or SCRIPTED_IMAGE_HW
     if args.render_height < image_hw[0] or args.render_width < image_hw[1]:
@@ -303,6 +413,10 @@ def main() -> None:
             temporal_ensemble_coeff=args.temporal_ensemble_coeff,
         )
         controller_metadata = _lerobot_metadata(controller)
+    elif args.controller == "dppo":
+        device = dppo_controller.handshake["device"]
+        controller = dppo_controller
+        controller_metadata = _dppo_metadata(dppo_controller, args)
     else:
         device = None
         controller, controller_metadata = _make_scripted_controller(

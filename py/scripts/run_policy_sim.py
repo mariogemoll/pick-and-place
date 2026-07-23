@@ -2,17 +2,23 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Run a LeRobot policy (ACT, SmolVLA, ...) in the sim, closed-loop.
+"""Run a learned policy in the sim, closed-loop.
 
-Pass ``--checkpoint`` to evaluate a fine-tuned policy; the default is the base
+``--controller lerobot`` (the default) loads a LeRobot checkpoint (ACT,
+SmolVLA, ...); pass ``--checkpoint`` to evaluate a fine-tune, else the base
 ``lerobot/smolvla_base``. The base is a plumbing spike, not a working manipulator
 — it has never seen this robot, these cameras, or this instruction, so its
 actions are not meaningful (the arm moves but does not solve the task). A policy
-fine-tuned on the project's dataset is the real use case. Either way the loop is
-the same: render the sim cameras, build the observation a LeRobot policy expects
-(two images + proprio state + a language instruction), run ``select_action``, and
-feed the result back into the sim as position targets. The concrete policy class
-is resolved from the checkpoint, so the same script serves whatever was trained.
+fine-tuned on the project's dataset is the real use case.
+
+``--controller dppo`` runs a DPPO diffusion-policy checkpoint (``state_*.pt``)
+instead. Its incompatible dependency stack lives in its own virtual
+environment, so inference happens in a policy-server subprocess
+(``dppo_policy_server.py``) reached through ``DppoPolicyController``.
+
+Either way the loop is the same: render the sim cameras, build the observation
+(two images + proprio state), ask the controller for the next hardware-frame
+action, and feed the result back into the sim as position targets.
 
 The policy speaks the real (hardware) frame the dataset was recorded in — arm
 joints in degrees, gripper as a 0-100 position — while MuJoCo speaks radians. The
@@ -70,12 +76,18 @@ from pick_and_place.paper_detection import (
 )
 from pick_and_place.trajectory import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
 from pick_and_place.workspace_overlays import is_cube_drop_allowed
+from pick_and_place.dppo_policy import DppoPolicyController
 from pick_and_place.policy import (
     DEFAULT_CHECKPOINT,
     DEFAULT_INSTRUCTION,
-    make_policy,
     resolve_checkpoint_cameras,
     select_device,
+)
+from pick_and_place.policy_controllers import (
+    OVERHEAD_FEATURE,
+    STATE_FEATURE,
+    WRIST_FEATURE,
+    LeRobotPolicyController,
 )
 from pick_and_place.policy_sim import (
     joint_qpos_addresses,
@@ -176,8 +188,59 @@ def _place_cube(data: mujoco.MjData, qadr: int, dofadr: int, pose: CubePose) -> 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--controller",
+        choices=("lerobot", "dppo"),
+        default="lerobot",
+        help="policy implementation (default: lerobot)",
+    )
     parser.add_argument("--instruction", default=DEFAULT_INSTRUCTION, help="language task string")
-    parser.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT, help="HF policy checkpoint")
+    parser.add_argument(
+        "--checkpoint",
+        default=DEFAULT_CHECKPOINT,
+        help="HF policy checkpoint, or a DPPO state_*.pt file",
+    )
+    parser.add_argument(
+        "--dppo-python",
+        type=Path,
+        default=os.environ.get("DPPO_PYTHON"),
+        help="interpreter of the DPPO virtual environment (default: $DPPO_PYTHON)",
+    )
+    parser.add_argument(
+        "--dppo-config",
+        type=Path,
+        default=Path(__file__).resolve().parents[2]
+        / "config"
+        / "diffusion_policy"
+        / "pretrain_so101_mlp_img.yaml",
+        help="DPPO training configuration YAML (default: the pretraining configuration)",
+    )
+    parser.add_argument(
+        "--dppo-normalization",
+        type=Path,
+        help="normalization.npz written by the Diffusion Policy dataset export",
+    )
+    parser.add_argument(
+        "--dppo-act-steps",
+        type=int,
+        default=None,
+        help="executed actions per policy query (default: the full prediction horizon)",
+    )
+    parser.add_argument(
+        "--dppo-seed",
+        type=int,
+        default=0,
+        help="Torch seed for DDPM action sampling (default: 0)",
+    )
+    parser.add_argument(
+        "--dppo-ddim-steps",
+        type=int,
+        default=None,
+        help=(
+            "sample with DDIM using this many steps instead of the trained DDPM "
+            "schedule; much faster for interactive viewing (try 10)"
+        ),
+    )
     parser.add_argument("--device", default="auto", help="auto | cpu | mps | cuda")
     parser.add_argument(
         "--image-height",
@@ -293,20 +356,39 @@ def main() -> None:
     override = (args.image_height, args.image_width)
     if any(override) and not all(override):
         parser.error("pass both --image-height and --image-width, or neither")
-    image_hw, (overhead_key, wrist_key) = resolve_checkpoint_cameras(
-        args.checkpoint, override_hw=(args.image_height, args.image_width) if all(override) else None
-    )
+    override_hw = (args.image_height, args.image_width) if all(override) else None
+
+    controller = None
+    if args.controller == "dppo":
+        if args.checkpoint == DEFAULT_CHECKPOINT:
+            parser.error("--checkpoint (a DPPO state_*.pt file) is required for the dppo controller")
+        if args.dppo_python is None:
+            parser.error("--dppo-python (or $DPPO_PYTHON) is required for the dppo controller")
+        if args.dppo_normalization is None:
+            parser.error("--dppo-normalization is required for the dppo controller")
+        print(f"Starting the DPPO policy server for {args.checkpoint}...")
+        controller = DppoPolicyController.launch(
+            python=args.dppo_python,
+            checkpoint=args.checkpoint,
+            config=args.dppo_config,
+            normalization=args.dppo_normalization,
+            device=args.device,
+            seed=args.dppo_seed,
+            act_steps=args.dppo_act_steps,
+            ddim_steps=args.dppo_ddim_steps,
+        )
+        if override_hw is not None and override_hw != controller.image_hw:
+            parser.error(
+                f"--image-height/--image-width {override_hw} do not match the "
+                f"model's trained image size {controller.image_hw}"
+            )
+        image_hw = controller.image_hw
+    else:
+        image_hw, _ = resolve_checkpoint_cameras(args.checkpoint, override_hw=override_hw)
     if args.render_width < image_hw[1] or args.render_height < image_hw[0]:
         parser.error("--render-width and --render-height must be at least the policy image size")
 
-    from lerobot.utils.control_utils import predict_action
-
-    device = select_device(args.device)
-    print(f"Loading {args.checkpoint} on {device} (first run downloads the weights)...")
-    print(
-        f"Feeding {image_hw[1]}x{image_hw[0]} (WxH) frames as {overhead_key!r} (overhead) "
-        f"and {wrist_key!r} (wrist)."
-    )
+    print(f"Feeding {image_hw[1]}x{image_hw[0]} (WxH) overhead and wrist frames.")
 
     rng = np.random.default_rng(args.seed)
     preset = (
@@ -378,22 +460,33 @@ def main() -> None:
     ctrl_high = model.actuator_ctrlrange[:, 1].copy()
 
     hw = image_hw
-    policy, preprocessor, postprocessor = make_policy(
-        args.checkpoint,
-        hw,
-        (overhead_key, wrist_key),
-        device,
-        n_action_steps=args.n_action_steps,
-        temporal_ensemble_coeff=args.temporal_ensemble_coeff,
-    )
-    policy.reset()
-    if hasattr(policy.config, "chunk_size") and hasattr(policy.config, "n_action_steps"):
-        print(
-            f"Policy chunks: predicts {policy.config.chunk_size}, "
-            f"executes {policy.config.n_action_steps} before re-query."
+    if controller is None:
+        device = select_device(args.device)
+        print(f"Loading {args.checkpoint} on {device} (first run downloads the weights)...")
+        controller = LeRobotPolicyController.from_checkpoint(
+            args.checkpoint,
+            device=device,
+            image_hw=hw,
+            instruction=args.instruction,
+            n_action_steps=args.n_action_steps,
+            temporal_ensemble_coeff=args.temporal_ensemble_coeff,
         )
-    if getattr(policy.config, "temporal_ensemble_coeff", None) is not None:
-        print(f"Temporal ensembling coeff: {policy.config.temporal_ensemble_coeff}")
+        config = controller.policy.config
+        if hasattr(config, "chunk_size") and hasattr(config, "n_action_steps"):
+            print(
+                f"Policy chunks: predicts {config.chunk_size}, "
+                f"executes {config.n_action_steps} before re-query."
+            )
+        if getattr(config, "temporal_ensemble_coeff", None) is not None:
+            print(f"Temporal ensembling coeff: {config.temporal_ensemble_coeff}")
+    else:
+        print(
+            f"Policy chunks: predicts {controller.horizon_steps}, "
+            f"executes {controller.act_steps} before re-query "
+            f"({controller.handshake['denoising_steps']} denoising steps, "
+            f"epoch {controller.handshake['epoch']} checkpoint)."
+        )
+    controller.reset()
 
     renderer = mujoco.Renderer(
         model, height=args.render_height, width=args.render_width
@@ -461,7 +554,7 @@ def main() -> None:
         if randomizer is not None:
             randomizer.tint_episode_markers()
         mujoco.mj_forward(model, data)
-        policy.reset()
+        controller.reset()
         if draw is not None:
             offsets = ", ".join(
                 f"{name}={value:+.2f}°" for name, value in sorted(draw.base_offsets_deg.items())
@@ -487,7 +580,8 @@ def main() -> None:
         viewer_ctx = mujoco.viewer.launch_passive(model, data, key_callback=key_callback)
     viewer = viewer_ctx.__enter__() if viewer_ctx is not None else None
 
-    print(f"Instruction: {args.instruction!r}")
+    if args.controller == "lerobot":
+        print(f"Instruction: {args.instruction!r}")
     if args.checkpoint == DEFAULT_CHECKPOINT:
         print("Running closed-loop. Actions are NOT task-calibrated (un-finetuned base).")
     else:
@@ -510,11 +604,11 @@ def main() -> None:
             wrist_frame = render("wrist_camera")
             overhead_frame = render("overhead_camera")
             observation = {
-                "observation.state": sim_state_to_real(
+                STATE_FEATURE: sim_state_to_real(
                     data.qpos[joint_adr], offsets_rad_now()
                 ),
-                overhead_key: overhead_frame,
-                wrist_key: wrist_frame,
+                OVERHEAD_FEATURE: overhead_frame,
+                WRIST_FEATURE: wrist_frame,
             }
             if wrist_writer is not None:
                 wrist_writer.append_data(wrist_frame)
@@ -527,17 +621,7 @@ def main() -> None:
                     break
                 if key in (13, 10):  # Enter / keypad Enter
                     pending_resample["flag"] = True
-            action = predict_action(
-                observation,
-                policy,
-                device,
-                preprocessor,
-                postprocessor,
-                use_amp=False,
-                task=args.instruction,
-                robot_type="so101",
-            )
-            action_real = action.to("cpu").numpy().reshape(-1)[: len(JOINT_NAMES)]
+            action_real = controller.act(observation)
             ctrl = real_action_to_sim_ctrl(action_real)
             offsets = offsets_rad_now()
             offset_ctrl = np.array([offsets.get(name, 0.0) for name in JOINT_NAMES])
@@ -568,6 +652,9 @@ def main() -> None:
         print("\nInterrupted.")
     finally:
         renderer.close()
+        close_controller = getattr(controller, "close", None)
+        if close_controller is not None:
+            close_controller()
         if wrist_writer is not None:
             wrist_writer.close()
             overhead_writer.close()
