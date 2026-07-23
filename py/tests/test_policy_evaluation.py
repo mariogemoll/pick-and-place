@@ -64,6 +64,26 @@ def test_smoke_manifest_is_frozen_and_hashable():
     assert json.loads(manifest.canonical_json()) == json.loads(json.dumps(manifest.to_dict()))
 
 
+def test_compressed_headline_manifests_are_frozen_and_paired():
+    canonical = ScenarioManifest.load(
+        REPOSITORY_ROOT / "config/evaluation/canonical_100_v1.json.xz"
+    )
+    randomized = ScenarioManifest.load(REPOSITORY_ROOT / "config/evaluation/dr_100_v1.json.xz")
+
+    assert len(canonical.scenarios) == len(randomized.scenarios) == 100
+    assert [scenario.source_position_m for scenario in canonical.scenarios] == [
+        scenario.source_position_m for scenario in randomized.scenarios
+    ]
+    assert [scenario.target_position_m for scenario in canonical.scenarios] == [
+        scenario.target_position_m for scenario in randomized.scenarios
+    ]
+    assert all(scenario.domain_randomization_preset is None for scenario in canonical.scenarios)
+    assert all(
+        scenario.domain_randomization_preset == "act_mild_v1"
+        for scenario in randomized.scenarios
+    )
+
+
 def test_scripted_perturbation_smoke_manifest_has_frozen_joint_and_camera_offsets():
     manifest = ScenarioManifest.load(
         REPOSITORY_ROOT / "config/evaluation/scripted_perturbation_smoke_v1.json"

@@ -321,7 +321,7 @@ class PolicySimEnv(gym.Env):
         place_paper_target_marker(
             self.model,
             tuple(self._target_xy),
-            0.0,
+            scenario.target_plate_yaw_rad,
             (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
             usable=is_cube_drop_allowed(*self._target_xy),
             alpha=1.0,

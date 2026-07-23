@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
+import lzma
 import math
 import subprocess
 from dataclasses import asdict, dataclass, fields
@@ -24,7 +25,8 @@ import numpy as np
 
 from pick_and_place.geometry import CUBE_HALF_SIZE
 
-SCENARIO_MANIFEST_VERSION = 1
+# v2 added the required target_plate_yaw_rad field to each scenario.
+SCENARIO_MANIFEST_VERSION = 2
 
 
 def _number_tuple(value: object, length: int, name: str) -> tuple[float, ...]:
@@ -62,6 +64,9 @@ class EvaluationScenario:
     miscalibration_sample: dict[str, Any]
     control_hz: float
     max_steps: int
+    # Drop-plate yaw in radians. The plate is square, so all distinct
+    # orientations live in [0, pi/2).
+    target_plate_yaw_rad: float
 
     def __post_init__(self) -> None:
         if not self.scenario_id:
@@ -72,6 +77,8 @@ class EvaluationScenario:
             raise ValueError("control_hz must be a positive finite number")
         if self.max_steps < 1:
             raise ValueError("max_steps must be at least 1")
+        if not 0.0 <= self.target_plate_yaw_rad < math.pi / 2.0:
+            raise ValueError("target_plate_yaw_rad must be in [0, pi/2)")
         quaternion_norm = math.sqrt(sum(value * value for value in self.source_orientation_wxyz))
         if not math.isclose(quaternion_norm, 1.0, abs_tol=1e-6):
             raise ValueError("source_orientation_wxyz must be a unit quaternion")
@@ -110,6 +117,7 @@ class EvaluationScenario:
             ),
             control_hz=float(payload["control_hz"]),
             max_steps=int(payload["max_steps"]),
+            target_plate_yaw_rad=float(payload["target_plate_yaw_rad"]),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -138,7 +146,11 @@ class ScenarioManifest:
 
     @classmethod
     def load(cls, path: Path | str) -> "ScenarioManifest":
-        payload = json.loads(Path(path).read_text())
+        path = Path(path)
+        if path.suffix == ".xz":
+            payload = json.loads(lzma.decompress(path.read_bytes()))
+        else:
+            payload = json.loads(path.read_text())
         if not isinstance(payload, dict) or set(payload) != {
             "schema_version",
             "suite",
