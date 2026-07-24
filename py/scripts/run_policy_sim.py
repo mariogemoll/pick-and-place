@@ -212,7 +212,7 @@ def main() -> None:
         default=Path(__file__).resolve().parents[2]
         / "config"
         / "diffusion_policy"
-        / "pretrain_so101_mlp_img.yaml",
+        / "pretrain_so101_unet_img.yaml",
         help="DPPO training configuration YAML (default: the pretraining configuration)",
     )
     parser.add_argument(
@@ -224,7 +224,7 @@ def main() -> None:
         "--dppo-act-steps",
         type=int,
         default=None,
-        help="executed actions per policy query (default: the full prediction horizon)",
+        help="executed actions per policy query (default: the training configuration)",
     )
     parser.add_argument(
         "--dppo-seed",
@@ -483,6 +483,7 @@ def main() -> None:
         print(
             f"Policy chunks: predicts {controller.horizon_steps}, "
             f"executes {controller.act_steps} before re-query "
+            f"with {controller.cond_steps} observations "
             f"({controller.handshake['denoising_steps']} denoising steps, "
             f"epoch {controller.handshake['epoch']} checkpoint)."
         )

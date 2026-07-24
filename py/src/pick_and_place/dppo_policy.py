@@ -10,9 +10,10 @@ followed by an ``.npz`` payload. ``scripts/dppo_policy_server.py`` implements
 the other end and documents the message contract.
 
 :class:`DppoPolicyController` adapts that server to the evaluator's
-``PolicyController`` protocol. The policy predicts a short action horizon per
-query; the controller queues the first ``act_steps`` actions and serves one per
-control tick, re-querying when the queue empties.
+``PolicyController`` protocol. The policy predicts an action horizon per query;
+the controller queues the first ``act_steps`` actions and serves one per control
+tick, re-querying when the queue empties. Observation history is retained on
+every control tick, including while queued actions are being executed.
 """
 
 from __future__ import annotations
@@ -80,6 +81,7 @@ class DppoPolicyController:
             key: value.item() for key, value in handshake.items()
         }
         self.horizon_steps = int(self.handshake["horizon_steps"])
+        self.cond_steps = int(self.handshake["cond_steps"])
         self.obs_dim = int(self.handshake["obs_dim"])
         self.action_dim = int(self.handshake["action_dim"])
         self.image_hw = (
@@ -87,7 +89,7 @@ class DppoPolicyController:
             int(self.handshake["image_width"]),
         )
         if act_steps is None:
-            act_steps = self.horizon_steps
+            act_steps = int(self.handshake["act_steps"])
         if not 1 <= act_steps <= self.horizon_steps:
             self.close()
             raise ValueError(
@@ -95,6 +97,7 @@ class DppoPolicyController:
             )
         self.act_steps = act_steps
         self._queue: deque[np.ndarray] = deque()
+        self._history: deque[dict[str, np.ndarray]] = deque(maxlen=self.cond_steps)
 
     @classmethod
     def launch(
@@ -145,20 +148,28 @@ class DppoPolicyController:
 
     def reset(self) -> None:
         self._queue.clear()
+        self._history.clear()
 
     def act(self, observation: PolicyObservation) -> np.ndarray:
         for feature in (STATE_FEATURE, OVERHEAD_FEATURE, WRIST_FEATURE):
             if feature not in observation:
                 raise KeyError(f"observation is missing {feature!r}")
+        current = {
+            "state": np.asarray(observation[STATE_FEATURE], dtype=np.float32).copy(),
+            "overhead": np.asarray(observation[OVERHEAD_FEATURE], dtype=np.uint8).copy(),
+            "wrist": np.asarray(observation[WRIST_FEATURE], dtype=np.uint8).copy(),
+        }
+        self._history.append(current)
         if not self._queue:
+            history = [self._history[0]] * (self.cond_steps - len(self._history))
+            history.extend(self._history)
             assert self._process.stdin is not None
             try:
                 write_message(
                     self._process.stdin,
                     {
-                        "state": np.asarray(observation[STATE_FEATURE], dtype=np.float32),
-                        "overhead": np.asarray(observation[OVERHEAD_FEATURE], dtype=np.uint8),
-                        "wrist": np.asarray(observation[WRIST_FEATURE], dtype=np.uint8),
+                        key: np.stack([item[key] for item in history])
+                        for key in ("state", "overhead", "wrist")
                     },
                 )
             except BrokenPipeError:

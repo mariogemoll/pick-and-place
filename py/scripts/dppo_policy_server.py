@@ -201,8 +201,17 @@ def main() -> None:
             f"obs {obs_min.shape} vs ({obs_dim},), action {action_min.shape} vs ({action_dim},)"
         )
 
-    if int(cfg.cond_steps) != 1 or int(cfg.img_cond_steps) != 1:
-        raise ValueError("this server only supports single-step observation conditioning")
+    cond_steps = int(cfg.cond_steps)
+    img_cond_steps = int(cfg.img_cond_steps)
+    if not 1 <= img_cond_steps <= cond_steps:
+        raise ValueError(
+            f"img_cond_steps must be in [1, cond_steps], got {img_cond_steps}"
+        )
+    act_steps = int(cfg.get("act_steps", cfg.horizon_steps))
+    if not 1 <= act_steps <= int(cfg.horizon_steps):
+        raise ValueError(
+            f"act_steps must be in [1, {int(cfg.horizon_steps)}], got {act_steps}"
+        )
 
     stdin = sys.stdin.buffer
     stdout = sys.stdout.buffer
@@ -210,6 +219,9 @@ def main() -> None:
         stdout,
         {
             "horizon_steps": np.asarray(int(cfg.horizon_steps)),
+            "act_steps": np.asarray(act_steps),
+            "cond_steps": np.asarray(cond_steps),
+            "img_cond_steps": np.asarray(img_cond_steps),
             "obs_dim": np.asarray(obs_dim),
             "action_dim": np.asarray(action_dim),
             "image_height": np.asarray(image_height),
@@ -224,7 +236,8 @@ def main() -> None:
     )
     print(
         f"dppo policy server: epoch {epoch} checkpoint on {device}, "
-        f"horizon {int(cfg.horizon_steps)}, {image_width}x{image_height} images, "
+        f"{cond_steps} observations, predicts {int(cfg.horizon_steps)} and "
+        f"executes {act_steps} actions, {image_width}x{image_height} images, "
         f"{sampler} sampling",
         file=sys.stderr,
         flush=True,
@@ -236,23 +249,26 @@ def main() -> None:
         if request is None:
             return
         state = np.asarray(request["state"], dtype=np.float32)
-        if state.shape != (obs_dim,):
-            raise ValueError(f"state must have shape ({obs_dim},), got {state.shape}")
+        if state.shape != (cond_steps, obs_dim):
+            raise ValueError(
+                f"state must have shape ({cond_steps}, {obs_dim}), got {state.shape}"
+            )
         images = []
         for key in ("overhead", "wrist"):
             image = np.asarray(request[key])
-            if image.shape != expected_image_shape or image.dtype != np.uint8:
+            expected_history_shape = (cond_steps, *expected_image_shape)
+            if image.shape != expected_history_shape or image.dtype != np.uint8:
                 raise ValueError(
-                    f"{key} image must be uint8 with shape {expected_image_shape}, "
+                    f"{key} image must be uint8 with shape {expected_history_shape}, "
                     f"got {image.dtype} {image.shape}"
                 )
-            images.append(image.transpose(2, 0, 1))
-        rgb = np.concatenate(images, axis=0)
+            images.append(image.transpose(0, 3, 1, 2))
+        rgb = np.concatenate(images, axis=1)
 
         state_normalized = normalize_state(state, obs_min, obs_max)
         cond = {
-            "state": torch.from_numpy(state_normalized).float().view(1, 1, obs_dim).to(device),
-            "rgb": torch.from_numpy(rgb).float().view(1, 1, *rgb.shape).to(device),
+            "state": torch.from_numpy(state_normalized).float().unsqueeze(0).to(device),
+            "rgb": torch.from_numpy(rgb).float().unsqueeze(0).to(device),
         }
         sample = model(cond=cond, deterministic=True)
         actions_normalized = sample.trajectories.cpu().numpy().reshape(-1, action_dim)
