@@ -491,7 +491,7 @@ def main() -> None:
                 # Closed-loop playback: the same offset injection, wrist visual
                 # servo and checkpoint replans as a recorded run, paced for
                 # viewing. The placement summary is printed by the player.
-                status = record_episode(
+                result = record_episode(
                     episode,
                     viewer=viewer,
                     speed=args.speed,
@@ -500,7 +500,7 @@ def main() -> None:
                     or not viewer.is_running(),
                     show_wrist_mixed=args.wrist_mixed,
                 )
-                if status == "success":
+                if result.status == "success":
                     _dwell(model, data, viewer, END_DWELL / args.speed)
                 skip_event.clear()
             elif _play(episode, args.speed, viewer, skip_event):

@@ -32,6 +32,7 @@ CAMERA_FEATURES = (
     "observation.images.wrist",
 )
 FORMAT_VERSION = "diffusion-policy-stitched-v1"
+DEFAULT_POLICY_HZ = 10
 _CAMERA_PROGRESS_BATCH = 128
 _camera_progress_counter: Any | None = None
 
@@ -126,11 +127,33 @@ def normalize_min_max(values: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.nd
     return normalized.astype(np.float32), minimum, maximum
 
 
+def decimated_length(length: int, frame_stride: int) -> int:
+    """Frames kept from a ``length``-frame episode when taking every Nth frame."""
+    if length < 0:
+        raise ValueError("length must be nonnegative")
+    if frame_stride < 1:
+        raise ValueError("frame_stride must be positive")
+    return (length + frame_stride - 1) // frame_stride
+
+
+def _decimated_indices(lengths: list[int], frame_stride: int) -> np.ndarray:
+    """Return stitched-array indices sampled relative to each episode start."""
+    indices: list[np.ndarray] = []
+    source_start = 0
+    for length in lengths:
+        indices.append(source_start + np.arange(0, length, frame_stride, dtype=np.int64))
+        source_start += length
+    if not indices:
+        return np.empty(0, dtype=np.int64)
+    return np.concatenate(indices)
+
+
 def _video_segments(
     dataset_root: Path,
     info: dict[str, Any],
     rows: list[dict[str, Any]],
     feature: str,
+    frame_stride: int,
 ) -> dict[Path, list[tuple[int, int, int]]]:
     fps = float(info["fps"])
     output_start = 0
@@ -140,7 +163,7 @@ def _video_segments(
         start_frame = round(float(row[f"videos/{feature}/from_timestamp"]) * fps)
         path = _video_path(dataset_root, info, row, feature)
         segments[path].append((start_frame, length, output_start))
-        output_start += length
+        output_start += decimated_length(length, frame_stride)
     return dict(segments)
 
 
@@ -153,10 +176,11 @@ def _write_camera_images(
     rows: list[dict[str, Any]],
     feature: str,
     image_size: int,
+    frame_stride: int,
     progress_position: int = 0,
 ) -> list[Path]:
-    segments_by_path = _video_segments(dataset_root, info, rows, feature)
-    expected = sum(int(row["length"]) for row in rows)
+    segments_by_path = _video_segments(dataset_root, info, rows, feature, frame_stride)
+    expected = sum(decimated_length(int(row["length"]), frame_stride) for row in rows)
     written = 0
     camera_name = feature.rsplit(".", maxsplit=1)[-1]
     with tqdm(
@@ -174,6 +198,7 @@ def _write_camera_images(
                 segments=segments,
                 feature=feature,
                 image_size=image_size,
+                frame_stride=frame_stride,
                 report_progress=progress.update,
             )
 
@@ -190,12 +215,13 @@ def _write_camera_video(
     segments: list[tuple[int, int, int]],
     feature: str,
     image_size: int,
+    frame_stride: int,
     report_progress,
 ) -> int:
     if not path.is_file():
         raise FileNotFoundError(path)
     segments.sort()
-    expected = sum(length for _, length, _ in segments)
+    expected = sum(decimated_length(length, frame_stride) for _, length, _ in segments)
     written = 0
     unreported = 0
     segment_index = 0
@@ -212,13 +238,13 @@ def _write_camera_video(
             if frame_index < start:
                 continue
             offset = frame_index - start
-            if offset >= length:
+            if offset >= length or offset % frame_stride:
                 continue
             image = frame.to_ndarray(format="rgb24")
             image = resize_and_center_crop(image, image_size, image_size)
-            destination[output_start + offset, channel_offset : channel_offset + 3] = np.moveaxis(
-                image, -1, 0
-            )
+            destination[
+                output_start + offset // frame_stride, channel_offset : channel_offset + 3
+            ] = np.moveaxis(image, -1, 0)
             written += 1
             unreported += 1
             if unreported == _CAMERA_PROGRESS_BATCH:
@@ -227,7 +253,9 @@ def _write_camera_video(
     if unreported:
         report_progress(unreported)
     if written != expected:
-        raise ValueError(f"decoded {written} selected {feature} frames from {path}; expected {expected}")
+        raise ValueError(
+            f"decoded {written} selected {feature} frames from {path}; expected {expected}"
+        )
     return written
 
 
@@ -251,6 +279,7 @@ def _write_camera_video_worker(
     segments: list[tuple[int, int, int]],
     feature: str,
     image_size: int,
+    frame_stride: int,
 ) -> tuple[Path, int]:
     images = np.load(images_path, mmap_mode="r+")
     try:
@@ -261,6 +290,7 @@ def _write_camera_video_worker(
             segments=segments,
             feature=feature,
             image_size=image_size,
+            frame_stride=frame_stride,
             report_progress=_report_camera_worker_progress,
         )
         return path, written
@@ -276,6 +306,7 @@ def _write_all_camera_images(
     info: dict[str, Any],
     rows: list[dict[str, Any]],
     image_size: int,
+    frame_stride: int,
     workers: int,
 ) -> set[Path]:
     if workers == 1:
@@ -292,6 +323,7 @@ def _write_all_camera_images(
                         rows=rows,
                         feature=feature,
                         image_size=image_size,
+                        frame_stride=frame_stride,
                     )
                 )
             return video_paths
@@ -302,9 +334,15 @@ def _write_all_camera_images(
     tasks = [
         (3 * camera_index, path, segments, feature)
         for camera_index, feature in enumerate(CAMERA_FEATURES)
-        for path, segments in _video_segments(dataset_root, info, rows, feature).items()
+        for path, segments in _video_segments(
+            dataset_root, info, rows, feature, frame_stride
+        ).items()
     ]
-    expected = sum(length for _, _, segments, _ in tasks for _, length, _ in segments)
+    expected = sum(
+        decimated_length(length, frame_stride)
+        for _, _, segments, _ in tasks
+        for _, length, _ in segments
+    )
     context = multiprocessing.get_context("spawn")
     progress_counter = context.Value("q", 0)
     video_paths: set[Path] = set()
@@ -326,6 +364,7 @@ def _write_all_camera_images(
                 segments=segments,
                 feature=feature,
                 image_size=image_size,
+                frame_stride=frame_stride,
             )
             for channel_offset, path, segments, feature in tasks
         }
@@ -410,10 +449,17 @@ def export_diffusion_policy_dataset(
     output_dir: Path,
     *,
     image_size: int = 96,
+    policy_hz: int = DEFAULT_POLICY_HZ,
     max_episodes: int | None = None,
     workers: int = 1,
 ) -> dict[str, Any]:
-    """Export Diffusion Policy arrays without modifying the LeRobot source."""
+    """Export Diffusion Policy arrays without modifying the LeRobot source.
+
+    The source is recorded at the rig's control rate, but the policy runs at
+    ``policy_hz``; every episode is decimated to episode-relative indices
+    ``0, stride, 2 * stride, ...`` so the action chunks a model learns span the
+    same wall-clock time the controller replays them over.
+    """
     dataset_root = dataset_root.resolve()
     output_dir = output_dir.resolve()
     building_dir = output_dir.with_name(f"{output_dir.name}.building")
@@ -436,8 +482,22 @@ def export_diffusion_policy_dataset(
         raise ValueError(
             f"dataset is missing features: {sorted(required_features - set(features))}"
         )
-    if int(info.get("fps", 0)) <= 0:
+    source_fps = int(info.get("fps", 0))
+    if source_fps <= 0:
         raise ValueError("dataset fps must be positive")
+    # The resolution the videos were written at, which every camera shares. A
+    # live rollout has to downsample through it to land on this export's images.
+    video_shapes = {tuple(features[feature]["shape"][:2]) for feature in CAMERA_FEATURES}
+    if len(video_shapes) != 1:
+        raise ValueError(f"dataset cameras must share one resolution, got {video_shapes}")
+    source_video_hw = [int(value) for value in next(iter(video_shapes))]
+    if policy_hz < 1:
+        raise ValueError("policy_hz must be positive")
+    if source_fps % policy_hz:
+        raise ValueError(
+            f"source fps {source_fps} is not an integer multiple of policy_hz {policy_hz}"
+        )
+    frame_stride = source_fps // policy_hz
 
     rows = _load_episode_rows(dataset_root)
     if max_episodes is not None:
@@ -445,11 +505,20 @@ def export_diffusion_policy_dataset(
     if not rows:
         raise ValueError("no episodes selected")
 
-    traj_lengths = np.asarray([int(row["length"]) for row in rows], dtype=np.int64)
+    source_lengths = [int(row["length"]) for row in rows]
+    source_frames = sum(source_lengths)
+    traj_lengths = np.asarray(
+        [decimated_length(length, frame_stride) for length in source_lengths], dtype=np.int64
+    )
     total_frames = int(traj_lengths.sum())
     states_raw, actions_raw = _load_low_dimensional_arrays(dataset_root, info, rows)
-    if len(states_raw) != total_frames or len(actions_raw) != total_frames:
+    if len(states_raw) != source_frames or len(actions_raw) != source_frames:
         raise ValueError("low-dimensional arrays do not match trajectory lengths")
+    keep = _decimated_indices(source_lengths, frame_stride)
+    if len(keep) != total_frames:
+        raise ValueError("decimated index count does not match trajectory lengths")
+    states_raw = states_raw[keep]
+    actions_raw = actions_raw[keep]
     states, obs_min, obs_max = normalize_min_max(states_raw)
     actions, action_min, action_max = normalize_min_max(actions_raw)
 
@@ -474,6 +543,7 @@ def export_diffusion_policy_dataset(
         info=info,
         rows=rows,
         image_size=image_size,
+        frame_stride=frame_stride,
         workers=workers,
     )
 
@@ -505,13 +575,16 @@ def export_diffusion_policy_dataset(
         "episode_indices": [int(row["episode_index"]) for row in rows],
         "num_episodes": len(rows),
         "num_frames": total_frames,
-        "fps": int(info["fps"]),
+        "fps": policy_hz,
+        "source_fps": source_fps,
+        "frame_stride": frame_stride,
         "state_feature": STATE_FEATURE,
         "action_feature": ACTION_FEATURE,
         "camera_features": list(CAMERA_FEATURES),
         "image_layout": "NCHW; RGB cameras concatenated in camera_features order",
         "image_dtype": "uint8",
         "image_size": [image_size, image_size],
+        "source_video_hw": source_video_hw,
         "image_transform": "aspect-fill resize followed by center crop",
         "state_action_normalization": "per-dimension min-max to [-1, 1]",
         "state_dim": int(states.shape[1]),

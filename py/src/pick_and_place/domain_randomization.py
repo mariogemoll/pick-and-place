@@ -19,6 +19,12 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from pick_and_place.background_panorama import equirect_to_skybox
+from pick_and_place.camera_pose_envelope import (
+    apply_camera_jitter,
+    camera_module_geoms,
+    draw_camera_jitter,
+    draw_overhead_camera_jitter,
+)
 from pick_and_place.geometry import CubePose
 from pick_and_place.miscalibration import MiscalibrationDraw, MiscalibrationModel
 
@@ -64,6 +70,8 @@ _SCALAR_FIELDS = {
     "key_light_target_jitter_m",
     "overhead_camera_position_mm",
     "overhead_camera_rotation_deg",
+    "overhead_camera_frame_tag_margin_px",
+    "overhead_camera_focal_pct",
     "wrist_camera_position_mm",
     "wrist_camera_rotation_deg",
     "colorful_appearance_probability",
@@ -76,15 +84,13 @@ def domain_seed(root_seed: int | None, episode_index: int) -> int:
     if root_seed is None:
         return int(np.random.default_rng().integers(2**63))
     return int(
-        np.random.default_rng(
-            np.random.SeedSequence([root_seed, episode_index, 0xD0A1])
-        ).integers(2**63)
+        np.random.default_rng(np.random.SeedSequence([root_seed, episode_index, 0xD0A1])).integers(
+            2**63
+        )
     )
 
 
-def reload_renderer_textures(
-    renderer: mujoco.Renderer, texture_ids: tuple[int, ...]
-) -> None:
+def reload_renderer_textures(renderer: mujoco.Renderer, texture_ids: tuple[int, ...]) -> None:
     """Upload changed ``model.tex_data`` into one renderer's GL context."""
     if not texture_ids:
         return
@@ -158,21 +164,19 @@ class DomainRandomizationPreset:
         def draw(name: str) -> float:
             return float(rng.uniform(*self.ranges[name]))
 
-        def camera_jitter(prefix: str) -> tuple[tuple[float, ...], tuple[float, ...]]:
-            position = rng.uniform(
-                -self.scalars[f"{prefix}_camera_position_mm"],
-                self.scalars[f"{prefix}_camera_position_mm"],
-                size=3,
-            ) / 1000.0
-            rotation = rng.uniform(
-                -self.scalars[f"{prefix}_camera_rotation_deg"],
-                self.scalars[f"{prefix}_camera_rotation_deg"],
-                size=3,
-            )
-            return tuple(float(x) for x in position), tuple(float(x) for x in rotation)
-
-        overhead_position, overhead_rotation = camera_jitter("overhead")
-        wrist_position, wrist_rotation = camera_jitter("wrist")
+        # Focal length is drawn before the pose, because a narrower field of
+        # view pulls the workspace-frame tags outward and so changes which
+        # poses are solvable.
+        overhead_position, overhead_rotation, overhead_focal_scale = draw_overhead_camera_jitter(
+            rng,
+            position_mm=self.scalars["overhead_camera_position_mm"],
+            rotation_deg=self.scalars["overhead_camera_rotation_deg"],
+            focal_pct=self.scalars["overhead_camera_focal_pct"],
+            margin_px=self.scalars["overhead_camera_frame_tag_margin_px"],
+        )
+        wrist_position, wrist_rotation = draw_camera_jitter(
+            rng, self.scalars["wrist_camera_position_mm"], self.scalars["wrist_camera_rotation_deg"]
+        )
 
         target = rng.uniform(
             -self.scalars["key_light_target_jitter_m"],
@@ -207,13 +211,12 @@ class DomainRandomizationPreset:
             light_warm_cool=draw("light_warm_cool"),
             key_light_position=tuple(float(x) for x in key_position),
             key_light_target=tuple(float(x) for x in key_target),
-            key_light_bulb_radius=_draw_log_uniform(
-                rng, self.ranges["key_light_bulb_radius_m"]
-            ),
+            key_light_bulb_radius=_draw_log_uniform(rng, self.ranges["key_light_bulb_radius_m"]),
             fill_light_intensity=draw("fill_light_intensity"),
             material_factors=factors,
             overhead_camera_position_m=overhead_position,
             overhead_camera_rotation_deg=overhead_rotation,
+            overhead_camera_focal_scale=overhead_focal_scale,
             wrist_camera_position_m=wrist_position,
             wrist_camera_rotation_deg=wrist_rotation,
             cube_orientation_index=int(rng.integers(24)),
@@ -254,16 +257,11 @@ def _sample_color(
 ) -> tuple[float, float, float]:
     hue = rng.uniform(*hue_deg) / 360.0
     return tuple(
-        float(x)
-        for x in colorsys.hsv_to_rgb(
-            hue, rng.uniform(*saturation), rng.uniform(*value)
-        )
+        float(x) for x in colorsys.hsv_to_rgb(hue, rng.uniform(*saturation), rng.uniform(*value))
     )
 
 
-def _draw_log_uniform(
-    rng: np.random.Generator, bounds: tuple[float, float]
-) -> float:
+def _draw_log_uniform(rng: np.random.Generator, bounds: tuple[float, float]) -> float:
     low, high = bounds
     if low <= 0.0:
         raise ValueError("log-uniform bounds must be positive")
@@ -282,6 +280,7 @@ class DomainSample:
     material_factors: dict[str, tuple[float, float, float]]
     overhead_camera_position_m: tuple[float, float, float]
     overhead_camera_rotation_deg: tuple[float, float, float]
+    overhead_camera_focal_scale: float
     wrist_camera_position_m: tuple[float, float, float]
     wrist_camera_rotation_deg: tuple[float, float, float]
     cube_orientation_index: int
@@ -312,6 +311,32 @@ class DomainSample:
 class ProceduralAppearance:
     background_rgb: np.ndarray
     table_rgb: np.ndarray
+
+
+def write_procedural_textures(
+    model: mujoco.MjModel, texture_ids: tuple[int, ...], appearance: ProceduralAppearance
+) -> None:
+    """Write a procedural background/table appearance into ``model.tex_data``.
+
+    Shared by :class:`DomainRandomizer` (recording) and
+    :class:`~pick_and_place.episode_rerender.EpisodeRenderer` (re-rendering with
+    the finite-floor + skybox scene), so both draw the same texture pipeline.
+    The caller still has to push the change into a live GL context, e.g. via
+    :func:`reload_renderer_textures`.
+    """
+    for texture_id in texture_ids:
+        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_TEXTURE, texture_id)
+        width = int(model.tex_width[texture_id])
+        height = int(model.tex_height[texture_id])
+        channels = int(model.tex_nchannel[texture_id])
+        address = int(model.tex_adr[texture_id])
+        if name == "table_texture":
+            rgb = cv2.resize(appearance.table_rgb, (width, height), interpolation=cv2.INTER_CUBIC)
+            rgb = np.rot90(rgb, k=-1).copy()
+        else:
+            rgb = equirect_to_skybox(appearance.background_rgb, width)
+        flat = rgb[..., :channels].reshape(-1)
+        model.tex_data[address : address + flat.size] = flat
 
 
 def generate_procedural_appearance(
@@ -415,6 +440,17 @@ class DomainRandomizer:
         self._geom_rgba = model.geom_rgba.copy()
         self._cam_pos = model.cam_pos.copy()
         self._cam_quat = model.cam_quat.copy()
+        # A camera jitter carries its lens and board with it, so those geom poses
+        # are randomized state and need restoring like everything else.
+        self._geom_pos = model.geom_pos.copy()
+        self._geom_quat = model.geom_quat.copy()
+        self._geom_sameframe = model.geom_sameframe.copy()
+        self._camera_modules: dict[int, dict[int, tuple[np.ndarray, np.ndarray]]] = {}
+        # cam_fovy is captured on first use, not here: SimCameraRig overrides it
+        # from the calibrated intrinsics *after* this randomizer is constructed
+        # (record_sim.py builds them in that order), so snapshotting now would
+        # bank the authored value and reset() would quietly undo the calibration.
+        self._cam_fovy: np.ndarray | None = None
         self._tex_data = model.tex_data.copy()
         self._texture_ids = tuple(
             ident
@@ -450,6 +486,11 @@ class DomainRandomizer:
         model.geom_rgba[:] = self._geom_rgba
         model.cam_pos[:] = self._cam_pos
         model.cam_quat[:] = self._cam_quat
+        if self._cam_fovy is not None:
+            model.cam_fovy[:] = self._cam_fovy
+        model.geom_pos[:] = self._geom_pos
+        model.geom_quat[:] = self._geom_quat
+        model.geom_sameframe[:] = self._geom_sameframe
         model.tex_data[:] = self._tex_data
         self._sample = None
         self._frame = 0
@@ -500,6 +541,7 @@ class DomainRandomizer:
             sample.overhead_camera_position_m,
             sample.overhead_camera_rotation_deg,
         )
+        self._apply_camera_focal("overhead_camera", sample.overhead_camera_focal_scale)
         self._apply_camera(
             "wrist_camera", sample.wrist_camera_position_m, sample.wrist_camera_rotation_deg
         )
@@ -517,27 +559,46 @@ class DomainRandomizer:
         camera = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, name)
         if camera < 0:
             return
-        self.model.cam_pos[camera] += position
-        base = Rotation.from_quat(self.model.cam_quat[camera][[1, 2, 3, 0]])
-        delta = Rotation.from_euler("xyz", rotation_deg, degrees=True)
-        quat = (delta * base).as_quat()
-        self.model.cam_quat[camera] = quat[[3, 0, 1, 2]]
+        apply_camera_jitter(
+            self.model,
+            camera,
+            self._cam_pos[camera],
+            self._cam_quat[camera],
+            self._camera_module_base(camera),
+            np.asarray(position, float),
+            np.asarray(rotation_deg, float),
+        )
+
+    def _apply_camera_focal(self, name: str, focal_scale: float) -> None:
+        """Scale a camera's focal length, expressed through ``cam_fovy``.
+
+        Focal length is the only intrinsic that survives into a recorded frame:
+        both pipelines store rectified images, and the rectification pins the
+        principal point to the image centre and removes the distortion. The real
+        camera's focal length varies ~1.5% between sessions, so this is the one
+        intrinsic worth randomizing.
+        """
+        camera = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, name)
+        if camera < 0:
+            return
+        if self._cam_fovy is None:
+            self._cam_fovy = self.model.cam_fovy.copy()
+        half = math.radians(self._cam_fovy[camera]) / 2.0
+        self.model.cam_fovy[camera] = math.degrees(2.0 * math.atan(math.tan(half) / focal_scale))
+
+    def _camera_module_base(self, camera: int) -> dict[int, tuple[np.ndarray, np.ndarray]]:
+        """Canonical geom poses of a camera's own hardware, from the reset snapshot."""
+        if camera not in self._camera_modules:
+            self._camera_modules[camera] = {
+                geom: (self._geom_pos[geom].copy(), self._geom_quat[geom].copy())
+                for geom in camera_module_geoms(self.model, camera)
+            }
+        return self._camera_modules[camera]
 
     def _apply_procedural_textures(self, sample: DomainSample) -> None:
-        appearance = generate_procedural_appearance(sample)
-        for texture_id in self._texture_ids:
-            name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_TEXTURE, texture_id)
-            width = int(self.model.tex_width[texture_id])
-            height = int(self.model.tex_height[texture_id])
-            channels = int(self.model.tex_nchannel[texture_id])
-            address = int(self.model.tex_adr[texture_id])
-            if name == "table_texture":
-                rgb = cv2.resize(appearance.table_rgb, (width, height), interpolation=cv2.INTER_CUBIC)
-                rgb = np.rot90(rgb, k=-1).copy()
-            else:
-                rgb = equirect_to_skybox(appearance.background_rgb, width)
-            flat = rgb[..., :channels].reshape(-1)
-            self.model.tex_data[address : address + flat.size] = flat
+        write_procedural_textures(
+            self.model, self._texture_ids, generate_procedural_appearance(sample)
+        )
 
     def tint_episode_markers(self) -> None:
         sample = getattr(self, "_sample", None)

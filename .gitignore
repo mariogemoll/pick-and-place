@@ -10,9 +10,11 @@ pnpm-lock.yaml
 *.log
 /assets/apriltags
 /datasets
+/docs/
 /dist_assets
 /intermediary-glb
 /intermediary-glb-generic
+/outputs/
 /config/camera_intrinsics/*.json
 /config/camera_extrinsics/*.json
 *.bak

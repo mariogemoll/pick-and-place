@@ -35,6 +35,7 @@ from pick_and_place.follower import (
     real_frame_to_sim,
     sim_frame_to_real,
 )
+from pick_and_place.geometry import JAW_CONTACT_POSITION
 from pick_and_place.miscalibration import MiscalibrationDraw
 from pick_and_place.paper_detection import (
     DROP_ZONE_HALF_SIZE,
@@ -55,6 +56,7 @@ from pick_and_place.policy_evaluation import (
     TaskSuccessOracle,
 )
 from pick_and_place.robot_dynamics import set_actuator_activation
+from pick_and_place.scene_appearance import SceneAppearance, SceneAppearanceOverride
 from pick_and_place.sim_recorder import resize_and_center_crop
 from pick_and_place.workspace_overlays import is_cube_drop_allowed
 
@@ -191,6 +193,7 @@ class PolicySimEnv(gym.Env):
         image_hw: tuple[int, int],
         render_hw: tuple[int, int] = (1080, 1920),
         renderer_factory: RendererFactory = mujoco.Renderer,
+        scene_appearance: SceneAppearance | None = None,
     ) -> None:
         super().__init__()
         image_height, image_width = image_hw
@@ -205,6 +208,13 @@ class PolicySimEnv(gym.Env):
         self._renderer_factory = renderer_factory
         self._renderer: Any | None = None
         self._randomizer = DomainRandomizer(self.model)
+        # A policy must be rolled out in the appearance it was trained on: the
+        # blue-cube checkpoints see a recoloured cube that the compiled scene,
+        # which carries the physical rig's AprilTag cube, does not have.
+        self.scene_appearance = scene_appearance
+        self._appearance_override = (
+            SceneAppearanceOverride(self.model) if scene_appearance is not None else None
+        )
 
         self._joint_qpos_adr = joint_qpos_addresses(self.model)
         actuator_ids = {
@@ -246,6 +256,11 @@ class PolicySimEnv(gym.Env):
         self._cube_geom_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_GEOM, "pick_cube"
         )
+        self._gripper_body_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, "gripper"
+        )
+        if self._gripper_body_id < 0:
+            raise ValueError("policy simulation model has no 'gripper' body")
         self._robot_geom_ids, self._env_geom_ids = build_geom_sets(self.model)
         self._oracle = TaskSuccessOracle()
         self._scenario: EvaluationScenario | None = None
@@ -255,6 +270,9 @@ class PolicySimEnv(gym.Env):
         self._step_count = 0
         self._substeps = 1
         self._last_task_state: TaskState | None = None
+        self._initial_tcp_to_cube_distance_m = math.nan
+        self._min_tcp_to_cube_distance_m = math.nan
+        self._time_to_min_tcp_to_cube_distance_s = math.nan
 
     @property
     def oracle(self) -> TaskSuccessOracle:
@@ -328,6 +346,12 @@ class PolicySimEnv(gym.Env):
         )
         if self._domain_sample is not None:
             self._randomizer.tint_episode_markers()
+        if self._appearance_override is not None:
+            # Ordered as the interactive runner does it: the marker placement
+            # above decides this episode's plate colour, which is the baseline an
+            # unset target field restores.
+            self._appearance_override.refresh_plate_baseline()
+            self._appearance_override.apply(self.scene_appearance)
         self._substeps = max(
             1,
             round((1.0 / scenario.control_hz) / float(self.model.opt.timestep)),
@@ -335,6 +359,9 @@ class PolicySimEnv(gym.Env):
         self._oracle.reset()
         mujoco.mj_forward(self.model, self.data)
         self._last_task_state = self._task_state()
+        self._initial_tcp_to_cube_distance_m = self._tcp_to_cube_distance_m()
+        self._min_tcp_to_cube_distance_m = self._initial_tcp_to_cube_distance_m
+        self._time_to_min_tcp_to_cube_distance_s = 0.0
         observation = self._observation()
         return observation, self._info(self._last_task_state)
 
@@ -410,6 +437,27 @@ class PolicySimEnv(gym.Env):
             out_of_bounds=out_of_bounds,
         )
 
+    def tcp_to_cube_distance_m(self) -> float:
+        """Distance from the jaw contact point to the cube, in metres.
+
+        Privileged: available for reward shaping and diagnostics, never part of
+        the controller observation.
+        """
+        return self._tcp_to_cube_distance_m()
+
+    def _tcp_to_cube_distance_m(self) -> float:
+        gripper_position = self.data.xpos[self._gripper_body_id]
+        gripper_rotation = self.data.xmat[self._gripper_body_id].reshape(3, 3)
+        tcp_position = gripper_position + gripper_rotation @ JAW_CONTACT_POSITION
+        cube_position = self.data.qpos[self._cube_qpos_adr : self._cube_qpos_adr + 3]
+        return float(np.linalg.norm(tcp_position - cube_position))
+
+    def _record_tcp_proximity(self) -> None:
+        distance_m = self._tcp_to_cube_distance_m()
+        if distance_m < self._min_tcp_to_cube_distance_m:
+            self._min_tcp_to_cube_distance_m = distance_m
+            self._time_to_min_tcp_to_cube_distance_s = self._step_count / self._scenario.control_hz
+
     def _info(self, task_state: TaskState) -> dict[str, Any]:
         return {
             "scenario_id": self._scenario.scenario_id,
@@ -434,6 +482,7 @@ class PolicySimEnv(gym.Env):
         self._step_count += 1
 
         self._last_task_state = self._task_state()
+        self._record_tcp_proximity()
         success = self._oracle.update(
             self._last_task_state,
             step_duration_s=1.0 / self._scenario.control_hz,
@@ -464,6 +513,12 @@ class PolicySimEnv(gym.Env):
             milestones=self._oracle.milestones,
             failures=self._oracle.failure_flags(timed_out=timed_out),
             final_xy_error_m=self._last_task_state.xy_error_m,
+            initial_tcp_to_cube_distance_m=self._initial_tcp_to_cube_distance_m,
+            min_tcp_to_cube_distance_m=self._min_tcp_to_cube_distance_m,
+            tcp_to_cube_distance_reduction_m=(
+                self._initial_tcp_to_cube_distance_m - self._min_tcp_to_cube_distance_m
+            ),
+            time_to_min_tcp_to_cube_distance_s=self._time_to_min_tcp_to_cube_distance_s,
             control_steps=self._step_count,
             simulated_time_s=self._step_count / self._scenario.control_hz,
             time_to_success_s=self._oracle.success_time_s,

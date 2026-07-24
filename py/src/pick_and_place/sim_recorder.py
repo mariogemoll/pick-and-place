@@ -37,14 +37,20 @@ from __future__ import annotations
 import dataclasses
 import math
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 import cv2
 import mujoco
 import numpy as np
 
+from pick_and_place.camera_extrinsics import (
+    apply_camera_extrinsics_to_model,
+    load_local_camera_extrinsics,
+)
 from pick_and_place.episodes import (
     Episode,
+    _build_model,
     _preflight,
     get_joint,
     is_unexpected,
@@ -65,6 +71,7 @@ from pick_and_place.follower import (
     sim_frame_to_real,
 )
 from pick_and_place.image_rectify import SQUARE_SIZE
+from pick_and_place.task_phases import PhaseSpan
 from pick_and_place.trajectory import (
     DescentPhase,
     GRIPPER_OPEN,
@@ -82,9 +89,37 @@ from pick_and_place.visual_servo import (
     DescentServoConvergence,
     DescentServoRetryState,
 )
+from pick_and_place.workspace_overlays import PAN_AXIS
 
 WRIST_CAMERA = "wrist_camera"
 OVERHEAD_CAMERA = "overhead_camera"
+
+# Render quality of a recorded dataset: a dense, tightly focused shadow map and
+# multisampled offscreen buffers, so supersampled frames have clean silhouettes
+# and shadow edges.
+SHADOW_MAP_SIZE = 8192
+OFFSCREEN_SAMPLES = 8
+SHADOW_CONE_SCALE = 0.4
+
+# Per-frame privileged ground truth stored as observation.environment_state:
+# the true simulator cube pose, valid in every phase (including in-gripper).
+CUBE_POSE_STATE_NAMES = (
+    "cube_x",
+    "cube_y",
+    "cube_z",
+    "cube_qw",
+    "cube_qx",
+    "cube_qy",
+    "cube_qz",
+)
+
+
+@dataclasses.dataclass(frozen=True)
+class RecordEpisodeResult:
+    """Outcome of one episode playback plus its exact per-frame phase spans."""
+
+    status: str  # "success", "restart", or "stopped"
+    phase_spans: tuple[PhaseSpan, ...]
 
 
 def fovy_from_intrinsics(intrinsics: dict[str, Any]) -> float:
@@ -188,6 +223,75 @@ def resize_and_center_crop(
     return image[top : top + output_height, left : left + output_width].copy()
 
 
+def downsample_through_recording(
+    image: np.ndarray,
+    recording_hw: tuple[int, int],
+    output_hw: tuple[int, int],
+    postprocess: Callable[[np.ndarray], np.ndarray] | None = None,
+) -> np.ndarray:
+    """Reduce a source render to a policy image the way a recording did.
+
+    Datasets reach a policy's input size in two hops: the recorder writes its
+    video at ``recording_hw``, and the dataset export downsamples the decoded
+    frame from there. Going straight from the source render to ``output_hw``
+    covers the same field of view but averages a different neighbourhood into
+    each pixel, which at a 96x96 input is a large fraction of the signal. A
+    policy fed one-hop images is therefore off-distribution from one trained on
+    two-hop ones, so anything rendering observations live has to take both hops.
+
+    ``postprocess`` runs at ``recording_hw``, where the recorder applied it.
+    """
+    image = resize_and_center_crop(image, *recording_hw)
+    if postprocess is not None:
+        image = postprocess(image)
+    return resize_and_center_crop(image, *output_hw)
+
+
+def configure_render_quality(model: mujoco.MjModel) -> None:
+    """Use a dense, tightly focused shadow map for supersampled recordings."""
+    model.vis.quality.shadowsize = SHADOW_MAP_SIZE
+    model.vis.quality.offsamples = OFFSCREEN_SAMPLES
+    model.vis.map.shadowscale = SHADOW_CONE_SCALE
+
+
+def build_recording_scene(
+    *,
+    render_width: int,
+    render_height: int,
+    background_panorama: Path | str | np.ndarray | None = None,
+    table_texture: Path | str | np.ndarray | None = None,
+) -> tuple[mujoco.MjModel, mujoco.MjData]:
+    """Compile the scene a sim recording is rendered from.
+
+    One persistent scene is reused across a run's episodes: the cube is a
+    freejoint body repositioned per episode, so where it compiles is irrelevant
+    and a fixed placeholder pose keeps the compiled model independent of which
+    episodes a worker happens to draw.
+
+    Anything that moves a pixel lives here rather than in the caller —
+    the environment and drop-zone marker, the offscreen buffer size, the
+    physics rate, the render-quality settings, and the locally calibrated
+    camera extrinsics. Recording and re-rendering both build through this
+    function so a recorded frame and a re-rendered one differ only where they
+    are meant to.
+    """
+    placeholder = CubePose(x=PAN_AXIS[0] + 0.1, y=PAN_AXIS[1], z=CUBE_HALF_SIZE)
+    model, data = _build_model(
+        placeholder,
+        include_environment=True,
+        paper_target_marker=True,
+        background_panorama=background_panorama,
+        table_texture=table_texture,
+        offwidth=render_width,
+        offheight=render_height,
+    )
+    model.opt.timestep = 1.0 / HARDWARE_SIMULATION_HZ
+    configure_render_quality(model)
+    apply_camera_extrinsics_to_model(model, load_local_camera_extrinsics())
+    mujoco.mj_forward(model, data)
+    return model, data
+
+
 def record_episode(
     episode: Episode,
     *,
@@ -201,7 +305,7 @@ def record_episode(
     believed_wrist_camera_pose: tuple[np.ndarray, np.ndarray] | None = None,
     detector_crash_dump_dir: str | None = None,
     verbose: bool = True,
-) -> str:
+) -> RecordEpisodeResult:
     """Play ``episode``'s trajectory under physics and record every control tick.
 
     The arm is driven through the position-servo actuators exactly as in
@@ -223,7 +327,15 @@ def record_episode(
     of the true world, and completed phases replan the remainder from the
     believed readback. Returns ``"success"`` when the trajectory ran to
     completion or ``"restart"`` when the descent servo or a checkpoint replan
-    failed — the caller should then discard the recorded episode.
+    failed — the caller should then discard the recorded episode. The result
+    also carries the exact phase spans of the recorded frames: one entry per
+    contiguous run of ticks driven by the same named trajectory phase, taken
+    from the controller itself rather than reconstructed afterwards.
+
+    Each recorded frame additionally stores the true simulator cube pose as
+    ``observation.environment_state`` (position plus wxyz quaternion). This is
+    privileged ground truth for diagnostics and auxiliary supervision; the
+    policy inputs remain joints and cameras only.
 
     ``recording``/``rig`` may be omitted together to play the episode without
     capturing anything — the closed-loop path (offsets, wrist servo, replans)
@@ -266,7 +378,14 @@ def record_episode(
 
     if recording is not None and recording.dataset is None:
         image_shape = (rig.height, rig.width, 3)
-        recording.create_dataset(image_shape, image_shape)
+        recording.create_dataset(
+            image_shape, image_shape, environment_state_names=CUBE_POSE_STATE_NAMES
+        )
+
+    cube_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pick_cube")
+    cube_qpos_adr = int(model.jnt_qposadr[model.body_jntadr[cube_body_id]])
+    recorded_frames = 0
+    phase_spans: list[PhaseSpan] = []
 
     time_origin = data.time
 
@@ -357,24 +476,32 @@ def record_episode(
             model.cam_pos[wrist_cam_id] = true_pos
             model.cam_quat[wrist_cam_id] = true_quat
 
-    def record_tick(frame) -> None:
+    def record_tick(frame, phase_name: str) -> None:
+        nonlocal recorded_frames
         if recording is None:
             return
         measured_arm = {name: get_joint(model, data, name) for name in ARM_JOINT_NAMES}
         measured_gripper = get_joint(model, data, "gripper")
         state = sim_frame_to_real(measured_arm, measured_gripper, offsets_deg_now())
         action = sim_frame_to_real(frame.joints, frame.gripper)
+        cube_pose = np.asarray(
+            data.qpos[cube_qpos_adr : cube_qpos_adr + 7], dtype=np.float32
+        ).copy()
 
         wrist_rgb, overhead_rgb = rig.capture(data)
         recording.dataset.add_frame(
             {
                 "observation.state": state.astype(np.float32),
                 "action": action.astype(np.float32),
+                "observation.environment_state": cube_pose,
                 "observation.images.wrist": wrist_rgb,
                 "observation.images.overhead": overhead_rgb,
                 "task": recording.task,
             }
         )
+        if not phase_spans or phase_spans[-1].name != phase_name:
+            phase_spans.append(PhaseSpan(name=phase_name, start_frame=recorded_frames))
+        recorded_frames += 1
 
         # A dropped encoder frame would leave the video shorter than the recorded
         # rows; rather than write a corrupt episode, fail the moment it happens.
@@ -408,7 +535,7 @@ def record_episode(
 
             while True:
                 if should_stop is not None and should_stop():
-                    return "stopped"
+                    return RecordEpisodeResult("stopped", tuple(phase_spans))
                 tick_start = time.monotonic()
                 raw_phase_t = (data.time - playback_start) * speed
                 phase_t = (
@@ -546,7 +673,7 @@ def record_episode(
                     cv2.waitKey(1)
 
                 frame = phase.evaluate(min(phase_t, phase.duration))
-                record_tick(frame)
+                record_tick(frame, phase.name)
 
                 if is_descent:
                     if retry.is_backing_up():
@@ -577,7 +704,7 @@ def record_episode(
                                     "warning: descent visual servo hit "
                                     f"{max_duration:.1f}s cap without a cube detection"
                                 )
-                        return "restart"
+                        return RecordEpisodeResult("restart", tuple(phase_spans))
                     elif phase_t >= phase.duration and convergence.is_stable():
                         break
                 elif phase_t >= phase.duration:
@@ -709,7 +836,7 @@ def record_episode(
             if candidate_traj is None:
                 if verbose:
                     print(f"No clean replan after {completed}; aborting episode.")
-                return "restart"
+                return RecordEpisodeResult("restart", tuple(phase_spans))
             current_traj = candidate_traj
     finally:
         if servo_renderer is not None:
@@ -723,4 +850,6 @@ def record_episode(
 
     if verbose:
         print(placement_error(model, data, episode.target).summary())
-    return "success" if status == "success" else "restart"
+    return RecordEpisodeResult(
+        "success" if status == "success" else "restart", tuple(phase_spans)
+    )

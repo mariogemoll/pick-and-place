@@ -36,6 +36,7 @@ only re-running the network after ``n_action_steps`` queued actions.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import time
 from pathlib import Path
@@ -68,14 +69,27 @@ from pick_and_place.domain_randomization import (
     reload_renderer_textures,
 )
 from pick_and_place.miscalibration import MiscalibrationDraw, MiscalibrationModel
-from pick_and_place.sim_recorder import resize_and_center_crop
+from pick_and_place.render_randomization import (
+    BackgroundRandomization,
+    CameraRandomization,
+    scene_texture_ids,
+    set_camera_jitter,
+    set_scene_texture,
+    snapshot_overhead_camera,
+)
+from pick_and_place.scene_appearance import (
+    APPEARANCE_PRESETS,
+    SceneAppearanceOverride,
+    parse_appearance,
+)
+from pick_and_place.sim_recorder import OVERHEAD_CAMERA, downsample_through_recording
 from pick_and_place.paper_detection import (
     DROP_ZONE_HALF_SIZE,
     add_paper_target_marker,
     place_paper_target_marker,
 )
 from pick_and_place.trajectory import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
-from pick_and_place.workspace_overlays import is_cube_drop_allowed
+from pick_and_place.workspace_overlays import is_cube_drop_allowed, sample_target_plate_yaw
 from pick_and_place.dppo_policy import DppoPolicyController
 from pick_and_place.policy import (
     DEFAULT_CHECKPOINT,
@@ -101,9 +115,40 @@ from pick_and_place.policy_sim import (
 from pick_and_place.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 
 
+def _resolve_recording_hw(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> tuple[int, int]:
+    """Resolve the resolution observations are downsampled through.
+
+    Taking it from the export that produced the checkpoint's training images
+    keeps the rollout tied to its own dataset rather than to a constant that
+    can drift; exports predating that field have to say so on the command line.
+    """
+    if args.recording_hw is not None:
+        height, width = args.recording_hw
+        if height < 1 or width < 1:
+            parser.error("--recording-hw must be positive")
+        return (height, width)
+    if args.dppo_normalization is None:
+        parser.error("--recording-hw is required without --dppo-normalization to read it from")
+    export_path = args.dppo_normalization.parent / "export.json"
+    if not export_path.exists():
+        parser.error(f"no export.json beside {args.dppo_normalization}; pass --recording-hw")
+    with export_path.open() as file:
+        export = json.load(file)
+    if "source_video_hw" not in export:
+        parser.error(
+            f"{export_path} predates source_video_hw; pass --recording-hw with the "
+            "resolution its source dataset's videos were recorded at"
+        )
+    height, width = export["source_video_hw"]
+    return (int(height), int(width))
+
+
 def _build_model(
     source: CubePose,
     target_xy: tuple[float, float],
+    target_yaw: float,
     render_h: int,
     render_w: int,
     background_panorama: Path | np.ndarray | None = None,
@@ -144,7 +189,7 @@ def _build_model(
     place_paper_target_marker(
         model,
         target_xy,
-        0.0,
+        target_yaw,
         (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
         usable=is_cube_drop_allowed(target_xy[0], target_xy[1]),
         alpha=1.0,
@@ -212,7 +257,7 @@ def main() -> None:
         default=Path(__file__).resolve().parents[2]
         / "config"
         / "diffusion_policy"
-        / "pretrain_so101_mlp_img.yaml",
+        / "pretrain_so101_unet_img.yaml",
         help="DPPO training configuration YAML (default: the pretraining configuration)",
     )
     parser.add_argument(
@@ -221,10 +266,23 @@ def main() -> None:
         help="normalization.npz written by the Diffusion Policy dataset export",
     )
     parser.add_argument(
+        "--recording-hw",
+        type=int,
+        nargs=2,
+        default=None,
+        metavar=("HEIGHT", "WIDTH"),
+        help=(
+            "resolution the training videos were recorded at, which observations are "
+            "downsampled through on the way to the policy's input size. Defaults to "
+            "the source_video_hw recorded by the dataset export, read from export.json "
+            "beside --dppo-normalization"
+        ),
+    )
+    parser.add_argument(
         "--dppo-act-steps",
         type=int,
         default=None,
-        help="executed actions per policy query (default: the full prediction horizon)",
+        help="executed actions per policy query (default: the training configuration)",
     )
     parser.add_argument(
         "--dppo-seed",
@@ -308,6 +366,49 @@ def main() -> None:
         help="top-down table texture (from reconstruct_table_texture.py) for the floor",
     )
     parser.add_argument(
+        "--scene-appearance",
+        type=str,
+        default=None,
+        metavar="NAME",
+        help=(
+            "recolour the scene the way a re-rendered dataset was rendered, either a preset "
+            f"({', '.join(sorted(APPEARANCE_PRESETS))}) or an ad-hoc spec such as "
+            "'cube=blue,floor=dark-gray' (default: the scene as compiled)"
+        ),
+    )
+    parser.add_argument(
+        "--camera-randomization",
+        type=Path,
+        default=None,
+        help=(
+            "domain-randomization preset whose overhead_camera_* scalars draw a fresh "
+            "per-episode overhead camera pose+focal jitter, as rerender_episodes.py does; "
+            "nothing else from the preset is applied"
+        ),
+    )
+    parser.add_argument(
+        "--camera-seed",
+        type=int,
+        default=0,
+        help="root seed for --camera-randomization's per-episode draw (default: 0)",
+    )
+    parser.add_argument(
+        "--background-randomization",
+        type=Path,
+        default=None,
+        help=(
+            "domain-randomization preset whose background/table colour, blur and blob-count "
+            "ranges draw a fresh procedural background+table texture per episode. Needs "
+            "--background-panorama/--table-texture (the finite-floor scene) to have any effect"
+        ),
+    )
+    parser.add_argument(
+        "--background-seed",
+        type=int,
+        default=0,
+        help="root seed for --background-randomization's per-episode draw (default: 0)",
+    )
+    parser.add_argument(
         "--steps",
         type=int,
         default=0,
@@ -333,6 +434,24 @@ def main() -> None:
     )
     parser.add_argument("--headless", action="store_true", help="no viewer; render only for the policy")
     parser.add_argument(
+        "--resample-every",
+        type=int,
+        default=None,
+        help=(
+            "resample the cube and drop zone every N control ticks; the headless "
+            "equivalent of pressing Enter, for sweeping many scenes in one run"
+        ),
+    )
+    parser.add_argument(
+        "--trajectory-json",
+        type=Path,
+        default=None,
+        help=(
+            "write a per-tick record of joints, cube pose and drop-zone pose to this "
+            "path, for offline analysis of where the arm aims"
+        ),
+    )
+    parser.add_argument(
         "--save-video",
         type=Path,
         default=None,
@@ -352,6 +471,32 @@ def main() -> None:
     args = parser.parse_args()
     if args.show and not args.headless:
         parser.error("--show requires --headless")
+
+    # The full preset already draws cameras and appearance (plus lighting,
+    # materials, cube orientation and miscalibration); applying the narrow
+    # rendering draws on top of it would randomize the same axes twice.
+    if args.domain_randomization is not None and (
+        args.camera_randomization is not None or args.background_randomization is not None
+    ):
+        parser.error(
+            "--domain-randomization already randomizes cameras and appearance; "
+            "--camera-randomization/--background-randomization are the narrower alternative"
+        )
+    if args.background_randomization is not None and (
+        args.background_panorama is None and args.table_texture is None
+    ):
+        parser.error(
+            "--background-randomization needs the finite-floor scene: "
+            "pass --background-panorama and/or --table-texture"
+        )
+    try:
+        appearance_name, scene_appearance = (
+            parse_appearance(args.scene_appearance)
+            if args.scene_appearance is not None
+            else (None, None)
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     override = (args.image_height, args.image_width)
     if any(override) and not all(override):
@@ -388,7 +533,14 @@ def main() -> None:
     if args.render_width < image_hw[1] or args.render_height < image_hw[0]:
         parser.error("--render-width and --render-height must be at least the policy image size")
 
-    print(f"Feeding {image_hw[1]}x{image_hw[0]} (WxH) overhead and wrist frames.")
+    recording_hw = _resolve_recording_hw(parser, args)
+    if args.render_width < recording_hw[1] or args.render_height < recording_hw[0]:
+        parser.error("--render-width and --render-height must be at least the recording resolution")
+
+    print(
+        f"Feeding {image_hw[1]}x{image_hw[0]} (WxH) overhead and wrist frames, "
+        f"downsampled through the {recording_hw[1]}x{recording_hw[0]} recording resolution."
+    )
 
     rng = np.random.default_rng(args.seed)
     preset = (
@@ -413,7 +565,16 @@ def main() -> None:
     else:
         sampled = sample_target(rng)
         target_xy = (sampled.x, sampled.y)
-    print(f"Drop zone at ({target_xy[0]:.4f}, {target_xy[1]:.4f})")
+    target_yaw = sample_target_plate_yaw(
+        rng,
+        target_xy[0],
+        target_xy[1],
+        half_size=DROP_ZONE_HALF_SIZE,
+    )
+    print(
+        f"Drop zone at ({target_xy[0]:.4f}, {target_xy[1]:.4f}), "
+        f"yaw {target_yaw:.3f}"
+    )
 
     source_pose = CubePose(
         x=float(args.source[0]),
@@ -433,6 +594,7 @@ def main() -> None:
     model, data = _build_model(
         source_pose,
         target_xy,
+        target_yaw,
         args.render_height,
         args.render_width,
         background_panorama=background_panorama,
@@ -446,6 +608,63 @@ def main() -> None:
             f"Domain sample episode {domain_episode}: seed={active_sample.seed}, "
             f"cube_orientation={active_sample.cube_orientation_index}"
         )
+
+    # The narrow rendering draws a re-rendered dataset was produced with: an
+    # overhead camera pose+focal jitter and a procedural background/table
+    # texture per episode, and nothing else.
+    camera_randomization = (
+        CameraRandomization.from_preset(args.camera_randomization, seed=args.camera_seed)
+        if args.camera_randomization is not None
+        else None
+    )
+    background_randomization = (
+        BackgroundRandomization.from_preset(
+            args.background_randomization, seed=args.background_seed
+        )
+        if args.background_randomization is not None
+        else None
+    )
+    overhead_base = snapshot_overhead_camera(model, OVERHEAD_CAMERA)
+    texture_ids = scene_texture_ids(model)
+    base_tex_data = model.tex_data.copy()
+    appearance_override = SceneAppearanceOverride(model) if scene_appearance is not None else None
+
+    def apply_render_randomization(
+        episode_idx: int, renderer: mujoco.Renderer | None = None
+    ) -> None:
+        """Draw this episode's overhead camera jitter and scene texture."""
+        if camera_randomization is not None:
+            set_camera_jitter(model, overhead_base, camera_randomization.draw(episode_idx))
+        if background_randomization is not None:
+            set_scene_texture(
+                model, texture_ids, background_randomization.draw(episode_idx), base_tex_data
+            )
+            if renderer is not None:
+                reload_renderer_textures(renderer, texture_ids)
+
+    def apply_scene_appearance() -> None:
+        """Repaint the scene, after the drop-zone marker has set the plate's colour."""
+        if appearance_override is None:
+            return
+        appearance_override.refresh_plate_baseline()
+        appearance_override.apply(scene_appearance)
+
+    apply_render_randomization(domain_episode)
+    apply_scene_appearance()
+    if appearance_override is not None:
+        print(f"Scene appearance: {appearance_name}.")
+    if camera_randomization is not None:
+        print(
+            f"Camera randomization: {args.camera_randomization} (seed {args.camera_seed}) -> "
+            f"±{camera_randomization.position_mm:g} mm / ±{camera_randomization.rotation_deg:g}° "
+            f"/ ±{camera_randomization.focal_pct:g}% focal."
+        )
+    if background_randomization is not None:
+        print(
+            f"Background randomization: {args.background_randomization} "
+            f"(seed {args.background_seed}) -> fresh background/table texture per episode."
+        )
+
     episode_time_origin = data.time
 
     def offsets_rad_now() -> dict[str, float]:
@@ -483,9 +702,12 @@ def main() -> None:
         print(
             f"Policy chunks: predicts {controller.horizon_steps}, "
             f"executes {controller.act_steps} before re-query "
+            f"with {controller.cond_steps} time steps x 2 cameras "
             f"({controller.handshake['denoising_steps']} denoising steps, "
             f"epoch {controller.handshake['epoch']} checkpoint)."
         )
+    control_hz = controller.policy_hz if args.controller == "dppo" else CONTROL_HZ
+    print(f"Policy control rate: {control_hz:g} Hz.")
     controller.reset()
 
     renderer = mujoco.Renderer(
@@ -494,19 +716,23 @@ def main() -> None:
 
     def render(camera: str) -> np.ndarray:
         renderer.update_scene(data, camera=camera)
-        image = resize_and_center_crop(renderer.render(), hw[0], hw[1])
-        return randomizer.postprocess(image) if randomizer is not None else image
+        return downsample_through_recording(
+            renderer.render(),
+            recording_hw,
+            hw,
+            randomizer.postprocess if randomizer is not None else None,
+        )
 
-    substeps = max(1, round((1.0 / CONTROL_HZ) / model.opt.timestep))
-    period = 1.0 / CONTROL_HZ
+    substeps = max(1, round((1.0 / control_hz) / model.opt.timestep))
+    period = 1.0 / control_hz
 
     wrist_writer = overhead_writer = None
     if args.save_video is not None:
         import imageio.v2 as imageio
 
         args.save_video.mkdir(parents=True, exist_ok=True)
-        wrist_writer = imageio.get_writer(args.save_video / "wrist.mp4", fps=CONTROL_HZ)
-        overhead_writer = imageio.get_writer(args.save_video / "overhead.mp4", fps=CONTROL_HZ)
+        wrist_writer = imageio.get_writer(args.save_video / "wrist.mp4", fps=control_hz)
+        overhead_writer = imageio.get_writer(args.save_video / "overhead.mp4", fps=control_hz)
         print(f"Saving observation frames to {args.save_video}/{{wrist,overhead}}.mp4")
 
     if args.show:
@@ -535,6 +761,10 @@ def main() -> None:
                 if miscalibration_model is not None
                 else None
             )
+        apply_render_randomization(domain_episode, renderer)
+        # Reset all per-episode dynamic state (including velocities and actuator
+        # activation) before restoring the newly sampled scene.
+        mujoco.mj_resetData(model, data)
         episode_time_origin = data.time
         _set_neutral(model, data, offsets_rad_now())
         cube = sample_cube(rng)
@@ -543,16 +773,23 @@ def main() -> None:
         _place_cube(data, cube_qadr, cube_dofadr, cube)
         target = sample_target(rng)
         target_xy = (target.x, target.y)
+        target_yaw = sample_target_plate_yaw(
+            rng,
+            target.x,
+            target.y,
+            half_size=DROP_ZONE_HALF_SIZE,
+        )
         place_paper_target_marker(
             model,
             (target.x, target.y),
-            0.0,
+            target_yaw,
             (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
             usable=is_cube_drop_allowed(target.x, target.y),
             alpha=1.0,
         )
         if randomizer is not None:
             randomizer.tint_episode_markers()
+        apply_scene_appearance()
         mujoco.mj_forward(model, data)
         controller.reset()
         if draw is not None:
@@ -562,7 +799,7 @@ def main() -> None:
             print(f"Injected joint-zero offsets: {offsets}")
         print(
             f"Resampled: cube ({cube.x:.4f}, {cube.y:.4f}) yaw {cube.yaw:.3f}, "
-            f"drop zone ({target.x:.4f}, {target.y:.4f})"
+            f"drop zone ({target.x:.4f}, {target.y:.4f}) yaw {target_yaw:.3f}"
         )
 
     # Press Enter (in the viewer or a --show window) to resample the scene. Every
@@ -593,13 +830,20 @@ def main() -> None:
         )
         print(f"Injected joint-zero offsets: {offsets}")
     tick = 0
+    # One entry per control tick; `segment` increments on every resample so an
+    # analysis can treat each sampled scene as an independent rollout.
+    trajectory: list[dict] = []
+    segment = 0
     try:
         while viewer is None or viewer.is_running():
             tick_start = time.time()
 
+            if args.resample_every and tick and tick % args.resample_every == 0:
+                pending_resample["flag"] = True
             if pending_resample["flag"]:
                 pending_resample["flag"] = False
                 resample_scene()
+                segment += 1
 
             wrist_frame = render("wrist_camera")
             overhead_frame = render("overhead_camera")
@@ -622,6 +866,20 @@ def main() -> None:
                 if key in (13, 10):  # Enter / keypad Enter
                     pending_resample["flag"] = True
             action_real = controller.act(observation)
+            if args.trajectory_json is not None:
+                # Recorded before the step, so joints and cube pose are exactly
+                # the state the policy conditioned on for this tick.
+                cube_now = data.qpos[cube_qadr : cube_qadr + 3]
+                trajectory.append(
+                    {
+                        "tick": tick,
+                        "segment": segment,
+                        "state_real": [float(v) for v in observation[STATE_FEATURE]],
+                        "action_real": [float(v) for v in action_real],
+                        "cube_xyz": [float(v) for v in cube_now],
+                        "target_xy": [float(target_xy[0]), float(target_xy[1])],
+                    }
+                )
             ctrl = real_action_to_sim_ctrl(action_real)
             offsets = offsets_rad_now()
             offset_ctrl = np.array([offsets.get(name, 0.0) for name in JOINT_NAMES])
@@ -662,6 +920,24 @@ def main() -> None:
             cv2.destroyAllWindows()
         if viewer_ctx is not None:
             viewer_ctx.__exit__(None, None, None)
+    if args.trajectory_json is not None:
+        args.trajectory_json.parent.mkdir(parents=True, exist_ok=True)
+        with args.trajectory_json.open("w") as file:
+            json.dump(
+                {
+                    "checkpoint": str(args.checkpoint),
+                    "seed": args.seed,
+                    "act_steps": args.dppo_act_steps,
+                    "ddim_steps": args.dppo_ddim_steps,
+                    "scene_appearance": args.scene_appearance,
+                    "resample_every": args.resample_every,
+                    "segments": segment + 1,
+                    "ticks": trajectory,
+                },
+                file,
+            )
+        print(f"Wrote {len(trajectory)} ticks over {segment + 1} segments to {args.trajectory_json}")
+
     cube_xyz = data.qpos[cube_qadr : cube_qadr + 3]
     dist = math.hypot(cube_xyz[0] - target_xy[0], cube_xyz[1] - target_xy[1])
     print(

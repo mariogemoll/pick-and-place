@@ -1,0 +1,155 @@
+# SPDX-FileCopyrightText: 2026 Mario Gemoll
+# SPDX-License-Identifier: 0BSD
+
+# Throughput-oriented twin of pretrain_so101_unet_img.yaml. The model, loss,
+# EMA and LR schedule are identical; only the training loop is replaced (see
+# pick_and_place.dp_pretrain for what changes and why). Every field below that
+# differs from the stock config is marked.
+#
+# The two settings that change the optimization trajectory rather than just its
+# speed are train.batch_size and train.learning_rate. Keep them at 64 / 1e-4 to
+# reproduce dp_blue_cube_1000 step for step.
+defaults:
+  - _self_
+
+hydra:
+  run:
+    dir: ${logdir}
+
+# CHANGED: our training loop, DPPO's model.
+_target_: pick_and_place.dp_pretrain.FastTrainDiffusionAgent
+
+name: so101_pre_diffusion_unet_img_to${cond_steps}_ta${horizon_steps}_te${act_steps}_td${denoising_steps}
+logdir: ${oc.env:DPPO_LOG_DIR}/pretrain/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
+train_dataset_path: ${oc.env:DPPO_DATA_DIR}/train.npz
+
+seed: 42
+device: cuda:0
+obs_dim: 6
+action_dim: 6
+denoising_steps: 100
+# The training export is temporally synchronized at 10 Hz. Evaluation must use
+# the same cadence so observation history and action chunks remain aligned.
+policy_hz: 10
+cond_steps: 2
+img_cond_steps: 2
+horizon_steps: 16
+act_steps: 2
+
+wandb:
+  entity: null
+  project: pick-and-place
+  run: ${now:%H-%M-%S}_${name}
+
+shape_meta:
+  obs:
+    # RGB channels from overhead and wrist, in that order.
+    rgb:
+      shape: [6, 96, 96]
+    state:
+      shape: [6]
+  action:
+    shape: [6]
+
+train:
+  n_epochs: 1500
+  batch_size: 64
+  learning_rate: 1e-4
+  weight_decay: 1e-6
+  log_freq: 1
+  lr_scheduler:
+    first_cycle_steps: 1500
+    warmup_steps: 100
+    min_lr: 1e-5
+  save_model_freq: 50
+
+  # CHANGED: throughput switches, each independently attributable. Every one of
+  # these is a reformulation of the same training step, not a different one.
+  # These defaults were measured on an RTX 5090. This model is launch-bound, so
+  # a switch only helps if it reduces the number of kernel launches per epoch.
+  speed:
+    # MEASURED OFF. bf16 autocast costs 30% here (42.99 vs 33.89 s/epoch): it
+    # inserts a cast per operation, and the GPU was never the constraint. Turn
+    # it on only if a future model/batch makes the step compute-bound.
+    bf16: false
+    # MEASURED OFF, for the same reason (it only pays alongside bf16).
+    channels_last: false
+    # TF32 matmuls plus cudnn.benchmark.
+    tf32: true
+    compile: true
+    # MEASURED: reduce-overhead (CUDA graphs) replays the step as one
+    # submission instead of re-issuing every kernel. Worth 3.8x over the
+    # default mode at batch 64 -- 22.32 -> 5.88 s/epoch -- with the losses
+    # unchanged to four decimals. This is the single biggest win available and
+    # it alters nothing about the optimisation trajectory.
+    compile_mode: reduce-overhead
+    # MEASURED: one fused kernel for all 225 parameter tensors instead of
+    # several per tensor. Worth 31% on its own.
+    fused_optimizer: true
+    # Encode both cameras in one backbone call. Verified bit-identical by
+    # py/scripts/check_dp_pretrain_fast.py.
+    batched_vision: true
+    # Replace the deprecated sdp_kernel context manager, which graph-breaks
+    # under torch.compile.
+    plain_attention: true
+    # Static batch shapes for compile. Discards a sub-batch tail per epoch
+    # (~50 of 81,000 samples at batch 64), reshuffled every epoch.
+    drop_last: true
+    # Benchmark aid; null for a real run.
+    max_run_seconds: null
+
+model:
+  _target_: model.diffusion.diffusion.DiffusionModel
+  predict_epsilon: true
+  denoised_clip_value: 1.0
+  network:
+    _target_: model.diffusion.unet.VisionUnet1D
+    backbone:
+      _target_: model.common.vit.VitEncoder
+      obs_shape: ${shape_meta.obs.rgb.shape}
+      # Observation history is concatenated along the channels for each camera.
+      num_channel: ${eval:'3 * ${img_cond_steps}'}
+      img_h: ${shape_meta.obs.rgb.shape[1]}
+      img_w: ${shape_meta.obs.rgb.shape[2]}
+      cfg:
+        patch_size: 8
+        depth: 1
+        embed_dim: 128
+        num_heads: 4
+        embed_style: embed2
+        embed_norm: 0
+    num_img: 2
+    img_cond_steps: ${img_cond_steps}
+    augment: true
+    spatial_emb: 128
+    diffusion_step_embed_dim: 32
+    dim: 64
+    dim_mults: [1, 2, 4]
+    kernel_size: 5
+    n_groups: 8
+    smaller_encoder: false
+    cond_predict_scale: true
+    groupnorm_eps: 1e-4
+    action_dim: ${action_dim}
+    cond_dim: ${eval:'${obs_dim} * ${cond_steps}'}
+  horizon_steps: ${horizon_steps}
+  obs_dim: ${obs_dim}
+  action_dim: ${action_dim}
+  denoising_steps: ${denoising_steps}
+  device: ${device}
+
+ema:
+  decay: 0.995
+
+train_dataset:
+  _target_: agent.dataset.sequence.StitchedSequenceDataset
+  use_img: true
+  dataset_path: ${train_dataset_path}
+  horizon_steps: ${horizon_steps}
+  max_n_episodes: 1000
+  cond_steps: ${cond_steps}
+  img_cond_steps: ${img_cond_steps}
+  # CHANGED: the images live in VRAM for the whole run (5.3 GB of 32 GB on a
+  # 5090) and batches are gathered on-device, so there is no host transfer in
+  # the training loop at all.
+  device: cuda:0

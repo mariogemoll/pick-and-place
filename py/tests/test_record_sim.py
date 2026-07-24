@@ -12,7 +12,11 @@ import pandas as pd
 import pytest
 
 from pick_and_place import sim_dataset_staging as staging
-from pick_and_place.sim_recorder import resize_and_center_crop
+from pick_and_place.sim_recorder import (
+    configure_render_quality,
+    downsample_through_recording,
+    resize_and_center_crop,
+)
 
 
 RECORD_SIM_PATH = Path(__file__).parents[1] / "scripts" / "pick_and_place" / "record_sim.py"
@@ -265,7 +269,6 @@ def test_recording_defaults_supersample_saved_frames():
 
 
 def test_recording_render_quality_focuses_a_larger_shadow_map():
-    module = _record_sim_module()
     model = types.SimpleNamespace(
         vis=types.SimpleNamespace(
             quality=types.SimpleNamespace(shadowsize=4096, offsamples=4),
@@ -273,7 +276,7 @@ def test_recording_render_quality_focuses_a_larger_shadow_map():
         )
     )
 
-    module._configure_render_quality(model)
+    configure_render_quality(model)
 
     assert model.vis.quality.shadowsize == 8192
     assert model.vis.quality.offsamples == 8
@@ -289,6 +292,32 @@ def test_resize_and_center_crop_downsamples_then_removes_the_sides():
 
     assert result.shape == (48, 64, 3)
     assert result.max() == 0
+
+
+def test_downsample_through_recording_differs_from_going_straight_there():
+    rng = np.random.default_rng(0)
+    image = rng.integers(0, 256, (1080, 1920, 3), dtype=np.uint8)
+
+    through = downsample_through_recording(image, (720, 960), (96, 96))
+    direct = resize_and_center_crop(image, 96, 96)
+
+    assert through.shape == direct.shape == (96, 96, 3)
+    # Same field of view, different neighbourhood averaged into each pixel --
+    # the mismatch a policy sees when a rollout skips the recording resolution.
+    assert not np.array_equal(through, direct)
+
+
+def test_downsample_through_recording_postprocesses_at_the_recording_size():
+    image = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    seen: list[tuple[int, int]] = []
+
+    def record_shape(frame: np.ndarray) -> np.ndarray:
+        seen.append(frame.shape[:2])
+        return frame
+
+    downsample_through_recording(image, (720, 960), (96, 96), record_shape)
+
+    assert seen == [(720, 960)]
 
 
 def test_watchdog_flags_only_workers_past_the_deadline():

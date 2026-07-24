@@ -48,7 +48,6 @@ from __future__ import annotations
 import argparse
 import json
 import lzma
-import math
 from pathlib import Path
 
 import numpy as np
@@ -57,39 +56,14 @@ from pick_and_place.domain_randomization import (
     DomainRandomizationPreset,
     domain_seed,
 )
-from pick_and_place.episodes import (
-    CANONICAL_PICKUP_OVERLAY,
-    PAN_AXIS,
-    cube_quat_from_pose,
-    sample_cube,
-    sample_target,
-)
-from pick_and_place.paper_detection import DROP_ZONE_HALF_SIZE
+from pick_and_place.episodes import cube_quat_from_pose
 from pick_and_place.policy_evaluation import SCENARIO_MANIFEST_VERSION
-from pick_and_place.workspace_overlays import (
-    is_cube_drop_allowed,
-    is_cube_placement_allowed,
-    sample_target_plate_yaw,
-)
+from pick_and_place.scenario_sampling import sample_scene, workspace_region
 
 INITIAL_ROBOT_STATE_REAL = [0.0, 0.0, 0.0, 0.0, -90.0, 39.3]
 CONTROL_HZ = 30.0
 MAX_STEPS = 450
 FLOAT_DECIMALS = 6
-# Minimum cube-centre to target-centre distance. The plate is a 0.10 m square
-# (DROP_ZONE_HALF_SIZE = 0.05) and the cube is 0.03 m wide, so anything under
-# ~0.065 m puts the cube on the plate; 0.10 m clears it with margin.
-MIN_TARGET_SEPARATION_M = 0.10
-MAX_TARGET_ATTEMPTS = 1000
-# Keep the cube/target this far inside their zone boundary. The samplers only
-# check the true centre, but the scripted policy acts on the *localised* pose and
-# overhead localisation drifts up to ~1.5 cm; a pose nearer than this to the edge
-# can localise outside the zone (cube rejected by the planner) or fail to localise
-# at all (target). Screening against a box of this half-width keeps every scenario
-# reliably pickable and placeable.
-SOURCE_INTERIOR_MARGIN_M = 0.02
-TARGET_INTERIOR_MARGIN_M = 0.02
-MAX_SOURCE_ATTEMPTS = 1000
 
 
 def _round(values) -> list[float]:
@@ -104,16 +78,6 @@ def _round_sample(value):
     if isinstance(value, (list, tuple)):
         return [_round_sample(item) for item in value]
     return value
-
-
-def _comfortably_interior(x: float, y: float, margin: float, in_zone) -> bool:
-    """True when (x, y) and a box of +/- ``margin`` around it are all in-zone, so
-    localisation drift cannot push the pose across the boundary."""
-    return all(
-        in_zone(x + dx, y + dy)
-        for dx in (-margin, 0.0, margin)
-        for dy in (-margin, 0.0, margin)
-    )
 
 
 def _domain_layer(
@@ -163,17 +127,6 @@ def _write_payload(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, allow_nan=False) + "\n")
 
 
-def _region(radius_from_pan: float) -> str:
-    inner = CANONICAL_PICKUP_OVERLAY.inner_radius
-    outer = CANONICAL_PICKUP_OVERLAY.outer_radius
-    third = (outer - inner) / 3.0
-    if radius_from_pan < inner + third:
-        return "near"
-    if radius_from_pan < inner + 2.0 * third:
-        return "mid"
-    return "far"
-
-
 def _scenario(
     suite: str,
     index: int,
@@ -182,46 +135,15 @@ def _scenario(
     preset: DomainRandomizationPreset | None,
 ) -> dict:
     rng = np.random.default_rng(seed)
-    # Redraw the cube until it sits comfortably inside the pickup zone (not just
-    # its centre, per sample_cube). Scenarios whose first draw already clears the
-    # margin keep it, so only edge cubes change.
-    for _ in range(MAX_SOURCE_ATTEMPTS):
-        source = sample_cube(rng)
-        if _comfortably_interior(
-            source.x, source.y, SOURCE_INTERIOR_MARGIN_M, is_cube_placement_allowed
-        ):
-            break
-    else:
-        raise RuntimeError(
-            f"scenario {index}: no cube >= {SOURCE_INTERIOR_MARGIN_M} m inside the pickup "
-            f"zone after {MAX_SOURCE_ATTEMPTS} attempts"
-        )
-    # Redraw the target until it clears the cube and sits comfortably inside the
-    # drop zone. Scenarios whose first draw already satisfies both keep that draw
-    # (same RNG state), so only the offending ones change.
-    for _ in range(MAX_TARGET_ATTEMPTS):
-        target = sample_target(rng)
-        far_enough = (
-            math.hypot(source.x - target.x, source.y - target.y) >= MIN_TARGET_SEPARATION_M
-        )
-        if far_enough and _comfortably_interior(
-            target.x, target.y, TARGET_INTERIOR_MARGIN_M, is_cube_drop_allowed
-        ):
-            break
-    else:
-        raise RuntimeError(
-            f"scenario {index}: no target >= {MIN_TARGET_SEPARATION_M} m from the cube and "
-            f">= {TARGET_INTERIOR_MARGIN_M} m inside the drop zone after "
-            f"{MAX_TARGET_ATTEMPTS} attempts"
-        )
-    # Drawn last (like the recorder) so it does not perturb the pose stream: the
-    # source/target an index gets are unchanged by adding the plate yaw.
-    plate_yaw = sample_target_plate_yaw(rng, target.x, target.y, half_size=DROP_ZONE_HALF_SIZE)
-    radius = math.hypot(source.x - PAN_AXIS[0], source.y - PAN_AXIS[1])
+    try:
+        scene = sample_scene(rng)
+    except RuntimeError as error:
+        raise RuntimeError(f"scenario {index}: {error}") from error
+    source, target = scene.source, scene.target
     return {
         "scenario_id": f"{suite}-{index:03d}",
         "group": "canonical" if preset is None else "domain_randomized",
-        "workspace_region": _region(radius),
+        "workspace_region": workspace_region(source),
         "seed": seed,
         "source_position_m": _round([source.x, source.y, source.z]),
         "source_orientation_wxyz": _round(cube_quat_from_pose(source)),
@@ -230,7 +152,7 @@ def _scenario(
         **_domain_layer(preset, seed_base, index),
         "control_hz": CONTROL_HZ,
         "max_steps": MAX_STEPS,
-        "target_plate_yaw_rad": round(float(plate_yaw), FLOAT_DECIMALS),
+        "target_plate_yaw_rad": round(scene.plate_yaw_rad, FLOAT_DECIMALS),
     }
 
 

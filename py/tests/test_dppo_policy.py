@@ -15,7 +15,7 @@ import pytest
 
 from pick_and_place import dppo_policy
 from pick_and_place.diffusion_policy_dataset import normalize_min_max
-from pick_and_place.dppo_policy import DppoPolicyController
+from pick_and_place.dppo_policy import DppoPolicyController, resolve_recording_hw
 from pick_and_place.policy_controllers import (
     OVERHEAD_FEATURE,
     STATE_FEATURE,
@@ -71,7 +71,18 @@ def test_server_normalization_inverts_the_dataset_export() -> None:
     np.testing.assert_allclose(forward, normalized, atol=1e-6)
 
 
-FAKE_SERVER = '''
+def test_recording_resolution_comes_from_export_or_override(tmp_path: Path) -> None:
+    normalization = tmp_path / "normalization.npz"
+    normalization.touch()
+    (tmp_path / "export.json").write_text('{"source_video_hw": [720, 960]}')
+
+    assert resolve_recording_hw(normalization) == (720, 960)
+    assert resolve_recording_hw(normalization, (480, 640)) == (480, 640)
+    with pytest.raises(ValueError, match="positive"):
+        resolve_recording_hw(normalization, (0, 640))
+
+
+FAKE_SERVER = """
 import sys
 from pathlib import Path
 
@@ -83,6 +94,10 @@ from dppo_policy_server import read_message, write_message
 stdin, stdout = sys.stdin.buffer, sys.stdout.buffer
 write_message(stdout, {{
     "horizon_steps": np.asarray(4),
+    "act_steps": np.asarray(2),
+    "cond_steps": np.asarray(2),
+    "img_cond_steps": np.asarray(2),
+    "policy_hz": np.asarray(10.0),
     "obs_dim": np.asarray(6),
     "action_dim": np.asarray(6),
     "image_height": np.asarray(8),
@@ -99,11 +114,16 @@ while True:
     request = read_message(stdin)
     if request is None:
         break
+    assert request["state"].shape == (2, 6)
+    assert request["overhead"].shape == (2, 8, 8, 3)
+    assert request["wrist"].shape == (2, 8, 8, 3)
     queries += 1
     actions = np.full((4, 6), float(queries), dtype=np.float32)
     actions += np.arange(4, dtype=np.float32)[:, None] / 10.0
+    actions[0, 1] = request["state"][0, 0]
+    actions[0, 2] = request["state"][1, 0]
     write_message(stdout, {{"actions": actions}})
-'''
+"""
 
 
 @pytest.fixture
@@ -113,9 +133,9 @@ def fake_server_command(tmp_path: Path) -> list[str]:
     return [sys.executable, str(script)]
 
 
-def _observation() -> dict[str, np.ndarray]:
+def _observation(value: float = 0.0) -> dict[str, np.ndarray]:
     return {
-        STATE_FEATURE: np.zeros(6, dtype=np.float32),
+        STATE_FEATURE: np.full(6, value, dtype=np.float32),
         OVERHEAD_FEATURE: np.zeros((8, 8, 3), dtype=np.uint8),
         WRIST_FEATURE: np.zeros((8, 8, 3), dtype=np.uint8),
     }
@@ -125,11 +145,23 @@ def test_controller_serves_chunks_and_requeries(fake_server_command: list[str]) 
     controller = DppoPolicyController(fake_server_command, act_steps=2)
     try:
         assert controller.horizon_steps == 4
+        assert controller.cond_steps == 2
+        assert controller.policy_hz == 10.0
         assert controller.image_hw == (8, 8)
         assert controller.handshake["epoch"] == 500
         # Two actions per query: the integer part encodes the query count and
         # the fractional part the position within the returned horizon.
-        values = [controller.act(_observation())[0] for _ in range(4)]
+        first = controller.act(_observation())
+        assert controller.latest_prediction is not None
+        assert controller.latest_prediction.shape == (4, 6)
+        second = controller.act(_observation())
+        assert controller.latest_prediction is None
+        values = [
+            first[0],
+            second[0],
+            controller.act(_observation())[0],
+            controller.act(_observation())[0],
+        ]
         assert values == pytest.approx([1.0, 1.1, 2.0, 2.1])
     finally:
         controller.close()
@@ -138,11 +170,37 @@ def test_controller_serves_chunks_and_requeries(fake_server_command: list[str]) 
 def test_controller_reset_discards_queued_actions(fake_server_command: list[str]) -> None:
     controller = DppoPolicyController(fake_server_command)
     try:
-        assert controller.act_steps == 4
+        assert controller.act_steps == 2
         first = controller.act(_observation())[0]
         controller.reset()
         second = controller.act(_observation())[0]
         assert (first, second) == pytest.approx((1.0, 2.0))
+    finally:
+        controller.close()
+
+
+def test_controller_predict_horizon_uses_repeated_observation(
+    fake_server_command: list[str],
+) -> None:
+    controller = DppoPolicyController(fake_server_command)
+    try:
+        actions = controller.predict_horizon(_observation(7.0), sampling_seed=42)
+        assert actions.shape == (4, 6)
+        assert actions[0, 1:3].tolist() == pytest.approx([7.0, 7.0])
+    finally:
+        controller.close()
+
+
+def test_controller_tracks_observations_while_executing_queue(
+    fake_server_command: list[str],
+) -> None:
+    controller = DppoPolicyController(fake_server_command, act_steps=2)
+    try:
+        first = controller.act(_observation(10.0))
+        controller.act(_observation(20.0))
+        third = controller.act(_observation(30.0))
+        assert first[1:3].tolist() == pytest.approx([10.0, 10.0])
+        assert third[1:3].tolist() == pytest.approx([20.0, 30.0])
     finally:
         controller.close()
 

@@ -1,42 +1,25 @@
 {
-  "schema_version": 2,
-  "suite": "scripted_perturbation_smoke_v1",
   "scenarios": [
     {
-      "scenario_id": "scripted-perturbed-000",
-      "group": "joint-camera-perturbation",
-      "workspace_region": "mid",
-      "seed": 2701,
-      "source_position_m": [
-        0.212880144,
-        -0.160945783,
-        0.015
-      ],
-      "source_orientation_wxyz": [
-        0.972655477,
-        0.0,
-        0.0,
-        -0.232252713
-      ],
-      "target_position_m": [
-        0.099963453,
-        0.127271062,
-        0.015
-      ],
-      "initial_robot_state_real": [
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        -90.0,
-        39.3
-      ],
+      "control_hz": 30.0,
       "domain_randomization_preset": "act_mild_v1",
       "domain_randomization_sample": {
+        "appearance_blob_count": 10,
+        "appearance_blur_sigma": 13.371971249549764,
+        "appearance_mode": "realistic",
+        "appearance_seed": 1043191556463451350,
+        "background_rgb": [
+          0.698263238828553,
+          0.6890721494055999,
+          0.652450076046021
+        ],
+        "blur_sigma": 0.36235337226415265,
+        "cube_orientation_index": 17,
         "enabled": true,
-        "seed": 2701,
-        "light_intensity": 0.8648622811588204,
-        "light_warm_cool": 1.0918819779233897,
+        "exposure": 0.8560094534261319,
+        "fill_light_intensity": 0.2573283738222445,
+        "gamma": 0.9839789803780699,
+        "key_light_bulb_radius": 0.042731362699561626,
         "key_light_position": [
           -0.6864643317674061,
           0.4555465880626356,
@@ -47,43 +30,43 @@
           0.06887939741903444,
           0.0
         ],
-        "key_light_bulb_radius": 0.042731362699561626,
-        "fill_light_intensity": 0.2573283738222445,
+        "light_intensity": 0.8648622811588204,
+        "light_warm_cool": 1.0918819779233897,
         "material_factors": {
-          "plastic": [
-            1.0316485098744896,
-            0.9868052385581672,
-            0.9986619844157187
+          "camera": [
+            1.0591793477137603,
+            1.0281251922731267,
+            1.0449995173870625
+          ],
+          "cube": [
+            1.0790261096634062,
+            1.0667434869657313,
+            1.0606088355040508
           ],
           "environment_plastic": [
             0.9010477686212502,
             0.8695988998458726,
             0.8845808145233134
           ],
-          "motor": [
-            1.0616837628800149,
-            1.0821429874894084,
-            1.0532791584557906
-          ],
-          "camera": [
-            1.0591793477137603,
-            1.0281251922731267,
-            1.0449995173870625
+          "groundplane": [
+            1.0650243710911969,
+            1.0650207579015338,
+            1.060664791806811
           ],
           "mdf": [
             1.0256918858723651,
             1.0052121806283256,
             1.056786129648154
           ],
-          "groundplane": [
-            1.0650243710911969,
-            1.0650207579015338,
-            1.060664791806811
+          "motor": [
+            1.0616837628800149,
+            1.0821429874894084,
+            1.0532791584557906
           ],
-          "cube": [
-            1.0790261096634062,
-            1.0667434869657313,
-            1.0606088355040508
+          "plastic": [
+            1.0316485098744896,
+            0.9868052385581672,
+            0.9986619844157187
           ],
           "target": [
             1.1457274124183245,
@@ -91,6 +74,8 @@
             1.1027068469940962
           ]
         },
+        "noise_sigma": 1.5211382527810184,
+        "overhead_camera_focal_scale": 1.0,
         "overhead_camera_position_m": [
           0.0003059140793858339,
           0.004964060935279692,
@@ -101,6 +86,17 @@
           -0.8462139509607947,
           0.9365451866410814
         ],
+        "seed": 2701,
+        "table_rgb": [
+          0.674791230765497,
+          0.6737573208225465,
+          0.6725487859115249
+        ],
+        "white_balance": [
+          0.9805687720088084,
+          0.9834642129816055,
+          1.0087965624589323
+        ],
         "wrist_camera_position_m": [
           0.0013161460340904505,
           -0.0006871296628620815,
@@ -110,65 +106,9 @@
           -0.3792011329955265,
           -0.3718931314416214,
           0.8096905165821007
-        ],
-        "cube_orientation_index": 17,
-        "appearance_seed": 1043191556463451350,
-        "appearance_mode": "realistic",
-        "background_rgb": [
-          0.698263238828553,
-          0.6890721494055999,
-          0.652450076046021
-        ],
-        "table_rgb": [
-          0.674791230765497,
-          0.6737573208225465,
-          0.6725487859115249
-        ],
-        "appearance_blur_sigma": 13.371971249549764,
-        "appearance_blob_count": 10,
-        "exposure": 0.8560094534261319,
-        "gamma": 0.9839789803780699,
-        "white_balance": [
-          0.9805687720088084,
-          0.9834642129816055,
-          1.0087965624589323
-        ],
-        "noise_sigma": 1.5211382527810184,
-        "blur_sigma": 0.36235337226415265
+        ]
       },
-      "miscalibration_sample": {
-        "joint_offsets_deg": {
-          "shoulder_pan": 1.2,
-          "shoulder_lift": -0.7,
-          "elbow_flex": 0.35,
-          "wrist_flex": -1.0
-        }
-      },
-      "control_hz": 30.0,
-      "max_steps": 450,
-      "target_plate_yaw_rad": 0.0
-    },
-    {
-      "scenario_id": "scripted-perturbed-001",
       "group": "joint-camera-perturbation",
-      "workspace_region": "near",
-      "seed": 2702,
-      "source_position_m": [
-        0.143047688,
-        -0.042700817,
-        0.015
-      ],
-      "source_orientation_wxyz": [
-        0.942010574,
-        0.0,
-        0.0,
-        -0.335583191
-      ],
-      "target_position_m": [
-        0.167804672,
-        -0.180208106,
-        0.015
-      ],
       "initial_robot_state_real": [
         0.0,
         0.0,
@@ -177,12 +117,56 @@
         -90.0,
         39.3
       ],
+      "max_steps": 450,
+      "miscalibration_sample": {
+        "joint_offsets_deg": {
+          "elbow_flex": 0.35,
+          "shoulder_lift": -0.7,
+          "shoulder_pan": 1.2,
+          "wrist_flex": -1.0
+        }
+      },
+      "scenario_id": "scripted-perturbed-000",
+      "seed": 2701,
+      "source_orientation_wxyz": [
+        0.972655477,
+        0.0,
+        0.0,
+        -0.232252713
+      ],
+      "source_position_m": [
+        0.212880144,
+        -0.160945783,
+        0.015
+      ],
+      "target_plate_yaw_rad": 0.0,
+      "target_position_m": [
+        0.099963453,
+        0.127271062,
+        0.015
+      ],
+      "workspace_region": "mid"
+    },
+    {
+      "control_hz": 30.0,
       "domain_randomization_preset": "act_mild_v1",
       "domain_randomization_sample": {
+        "appearance_blob_count": 5,
+        "appearance_blur_sigma": 13.956110881360956,
+        "appearance_mode": "realistic",
+        "appearance_seed": 2590056065939150304,
+        "background_rgb": [
+          0.4501129310632845,
+          0.44570601839115664,
+          0.4397461935427554
+        ],
+        "blur_sigma": 0.2243598355812081,
+        "cube_orientation_index": 15,
         "enabled": true,
-        "seed": 2702,
-        "light_intensity": 1.1378059657392765,
-        "light_warm_cool": 1.0662238341412607,
+        "exposure": 1.0350735974249177,
+        "fill_light_intensity": 0.4933685398883708,
+        "gamma": 1.0459891102007286,
+        "key_light_bulb_radius": 0.4471966425650537,
         "key_light_position": [
           0.6111553509984097,
           0.2532503666036779,
@@ -193,43 +177,43 @@
           -0.04835636050920067,
           0.0
         ],
-        "key_light_bulb_radius": 0.4471966425650537,
-        "fill_light_intensity": 0.4933685398883708,
+        "light_intensity": 1.1378059657392765,
+        "light_warm_cool": 1.0662238341412607,
         "material_factors": {
-          "plastic": [
-            0.9153834241770478,
-            0.9015871242268833,
-            0.9085289976259561
+          "camera": [
+            0.9021788180695808,
+            0.8839911192522342,
+            0.9180602918531235
+          ],
+          "cube": [
+            0.9903143428067431,
+            0.9760294158620535,
+            0.9816087196111195
           ],
           "environment_plastic": [
             1.1208011772699042,
             1.1297349600423878,
             1.1353863611483082
           ],
-          "motor": [
-            0.9164917881074209,
-            0.9159829792038784,
-            0.9174505027136625
-          ],
-          "camera": [
-            0.9021788180695808,
-            0.8839911192522342,
-            0.9180602918531235
+          "groundplane": [
+            0.8905915554986567,
+            0.8528422470754937,
+            0.8820170110996438
           ],
           "mdf": [
             1.104527729423648,
             1.1151561919868493,
             1.1531026947223295
           ],
-          "groundplane": [
-            0.8905915554986567,
-            0.8528422470754937,
-            0.8820170110996438
+          "motor": [
+            0.9164917881074209,
+            0.9159829792038784,
+            0.9174505027136625
           ],
-          "cube": [
-            0.9903143428067431,
-            0.9760294158620535,
-            0.9816087196111195
+          "plastic": [
+            0.9153834241770478,
+            0.9015871242268833,
+            0.9085289976259561
           ],
           "target": [
             1.0161891162171408,
@@ -237,6 +221,8 @@
             1.0620193361953765
           ]
         },
+        "noise_sigma": 0.5541272413554157,
+        "overhead_camera_focal_scale": 1.0,
         "overhead_camera_position_m": [
           -0.0020733431869850304,
           -0.002317984220480031,
@@ -247,6 +233,17 @@
           0.21446354172408455,
           0.11305169877444343
         ],
+        "seed": 2702,
+        "table_rgb": [
+          0.6279284131825218,
+          0.6230455833703439,
+          0.619243032882312
+        ],
+        "white_balance": [
+          0.9933021356285767,
+          0.9625038708868822,
+          0.9551266860321156
+        ],
         "wrist_camera_position_m": [
           0.00022244763631997544,
           -0.0005484740189399289,
@@ -256,43 +253,48 @@
           0.5654512408952839,
           -0.5238940469675686,
           -0.0994659817986423
-        ],
-        "cube_orientation_index": 15,
-        "appearance_seed": 2590056065939150304,
-        "appearance_mode": "realistic",
-        "background_rgb": [
-          0.4501129310632845,
-          0.44570601839115664,
-          0.4397461935427554
-        ],
-        "table_rgb": [
-          0.6279284131825218,
-          0.6230455833703439,
-          0.619243032882312
-        ],
-        "appearance_blur_sigma": 13.956110881360956,
-        "appearance_blob_count": 5,
-        "exposure": 1.0350735974249177,
-        "gamma": 1.0459891102007286,
-        "white_balance": [
-          0.9933021356285767,
-          0.9625038708868822,
-          0.9551266860321156
-        ],
-        "noise_sigma": 0.5541272413554157,
-        "blur_sigma": 0.2243598355812081
+        ]
       },
+      "group": "joint-camera-perturbation",
+      "initial_robot_state_real": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -90.0,
+        39.3
+      ],
+      "max_steps": 450,
       "miscalibration_sample": {
         "joint_offsets_deg": {
-          "shoulder_pan": -1.4,
-          "shoulder_lift": 0.8,
           "elbow_flex": -0.4,
+          "shoulder_lift": 0.8,
+          "shoulder_pan": -1.4,
           "wrist_flex": 1.3
         }
       },
-      "control_hz": 30.0,
-      "max_steps": 450,
-      "target_plate_yaw_rad": 0.0
+      "scenario_id": "scripted-perturbed-001",
+      "seed": 2702,
+      "source_orientation_wxyz": [
+        0.942010574,
+        0.0,
+        0.0,
+        -0.335583191
+      ],
+      "source_position_m": [
+        0.143047688,
+        -0.042700817,
+        0.015
+      ],
+      "target_plate_yaw_rad": 0.0,
+      "target_position_m": [
+        0.167804672,
+        -0.180208106,
+        0.015
+      ],
+      "workspace_region": "near"
     }
-  ]
+  ],
+  "schema_version": 2,
+  "suite": "scripted_perturbation_smoke_v1"
 }

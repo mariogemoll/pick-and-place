@@ -10,7 +10,10 @@ import argparse
 import json
 from pathlib import Path
 
-from pick_and_place.diffusion_policy_dataset import export_diffusion_policy_dataset
+from pick_and_place.diffusion_policy_dataset import (
+    DEFAULT_POLICY_HZ,
+    export_diffusion_policy_dataset,
+)
 
 
 def main() -> None:
@@ -27,6 +30,12 @@ def main() -> None:
         type=int,
         default=96,
         help="square image size; must be a multiple of 8 (default: 96)",
+    )
+    parser.add_argument(
+        "--policy-hz",
+        type=int,
+        default=DEFAULT_POLICY_HZ,
+        help=f"output sampling rate; must divide the source FPS (default: {DEFAULT_POLICY_HZ})",
     )
     parser.add_argument(
         "--max-episodes",
@@ -46,6 +55,7 @@ def main() -> None:
         args.src,
         args.output,
         image_size=args.image_size,
+        policy_hz=args.policy_hz,
         max_episodes=args.max_episodes,
         workers=args.workers,
     )
