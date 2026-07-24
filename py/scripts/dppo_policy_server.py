@@ -240,8 +240,9 @@ def main() -> None:
     )
     print(
         f"dppo policy server: epoch {epoch} checkpoint on {device}, "
-        f"{cond_steps} observations, predicts {int(cfg.horizon_steps)} and "
-        f"executes {act_steps} actions at {policy_hz:g} Hz, "
+        f"{cond_steps} time steps x 2 cameras, "
+        f"predicts {int(cfg.horizon_steps)} actions, "
+        f"configured default is {act_steps} actions/query at {policy_hz:g} Hz, "
         f"{image_width}x{image_height} images, "
         f"{sampler} sampling",
         file=sys.stderr,

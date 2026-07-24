@@ -75,7 +75,7 @@ from pick_and_place.paper_detection import (
     place_paper_target_marker,
 )
 from pick_and_place.trajectory import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
-from pick_and_place.workspace_overlays import is_cube_drop_allowed
+from pick_and_place.workspace_overlays import is_cube_drop_allowed, sample_target_plate_yaw
 from pick_and_place.dppo_policy import DppoPolicyController
 from pick_and_place.policy import (
     DEFAULT_CHECKPOINT,
@@ -104,6 +104,7 @@ from pick_and_place.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 def _build_model(
     source: CubePose,
     target_xy: tuple[float, float],
+    target_yaw: float,
     render_h: int,
     render_w: int,
     background_panorama: Path | np.ndarray | None = None,
@@ -144,7 +145,7 @@ def _build_model(
     place_paper_target_marker(
         model,
         target_xy,
-        0.0,
+        target_yaw,
         (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
         usable=is_cube_drop_allowed(target_xy[0], target_xy[1]),
         alpha=1.0,
@@ -413,7 +414,16 @@ def main() -> None:
     else:
         sampled = sample_target(rng)
         target_xy = (sampled.x, sampled.y)
-    print(f"Drop zone at ({target_xy[0]:.4f}, {target_xy[1]:.4f})")
+    target_yaw = sample_target_plate_yaw(
+        rng,
+        target_xy[0],
+        target_xy[1],
+        half_size=DROP_ZONE_HALF_SIZE,
+    )
+    print(
+        f"Drop zone at ({target_xy[0]:.4f}, {target_xy[1]:.4f}), "
+        f"yaw {target_yaw:.3f}"
+    )
 
     source_pose = CubePose(
         x=float(args.source[0]),
@@ -433,6 +443,7 @@ def main() -> None:
     model, data = _build_model(
         source_pose,
         target_xy,
+        target_yaw,
         args.render_height,
         args.render_width,
         background_panorama=background_panorama,
@@ -483,7 +494,7 @@ def main() -> None:
         print(
             f"Policy chunks: predicts {controller.horizon_steps}, "
             f"executes {controller.act_steps} before re-query "
-            f"with {controller.cond_steps} observations "
+            f"with {controller.cond_steps} time steps x 2 cameras "
             f"({controller.handshake['denoising_steps']} denoising steps, "
             f"epoch {controller.handshake['epoch']} checkpoint)."
         )
@@ -549,10 +560,16 @@ def main() -> None:
         _place_cube(data, cube_qadr, cube_dofadr, cube)
         target = sample_target(rng)
         target_xy = (target.x, target.y)
+        target_yaw = sample_target_plate_yaw(
+            rng,
+            target.x,
+            target.y,
+            half_size=DROP_ZONE_HALF_SIZE,
+        )
         place_paper_target_marker(
             model,
             (target.x, target.y),
-            0.0,
+            target_yaw,
             (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
             usable=is_cube_drop_allowed(target.x, target.y),
             alpha=1.0,
@@ -568,7 +585,7 @@ def main() -> None:
             print(f"Injected joint-zero offsets: {offsets}")
         print(
             f"Resampled: cube ({cube.x:.4f}, {cube.y:.4f}) yaw {cube.yaw:.3f}, "
-            f"drop zone ({target.x:.4f}, {target.y:.4f})"
+            f"drop zone ({target.x:.4f}, {target.y:.4f}) yaw {target_yaw:.3f}"
         )
 
     # Press Enter (in the viewer or a --show window) to resample the scene. Every

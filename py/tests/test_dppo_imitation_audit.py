@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
+import importlib.util
 import json
 from pathlib import Path
 
@@ -22,6 +23,18 @@ from pick_and_place.dppo_imitation_audit import (
 )
 from pick_and_place.follower import JOINT_NAMES
 
+SWEEP_SCRIPT = Path(__file__).resolve().parents[1] / "scripts/sweep_dppo_imitation.py"
+
+
+def _load_sweep_module():
+    spec = importlib.util.spec_from_file_location("sweep_dppo_imitation", SWEEP_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+sweep = _load_sweep_module()
+
 
 def test_held_out_episode_contract_has_100_successes() -> None:
     names = held_out_episode_names()
@@ -30,6 +43,53 @@ def test_held_out_episode_contract_has_100_successes() -> None:
     assert names[0] == "ep001017"
     assert names[-1] == "ep001117"
     assert "ep001110" not in names
+
+
+def test_sweep_discovers_and_sorts_checkpoint_snapshot(tmp_path: Path) -> None:
+    for name in ("state_100.pt", "state_50.pt", "state_150.pt", "state_bad.pt"):
+        (tmp_path / name).write_bytes(b"checkpoint")
+    (tmp_path / "state_200.pt").touch()
+
+    checkpoints = sweep.discover_checkpoints(tmp_path, minimum_epoch=75)
+
+    assert [(epoch, path.name) for epoch, path in checkpoints] == [
+        (100, "state_100.pt"),
+        (150, "state_150.pt"),
+    ]
+
+
+def test_sweep_trend_rows_keep_splits_and_headline_steps_separate(tmp_path: Path) -> None:
+    output = tmp_path / "epoch-0050"
+    output.mkdir()
+    run = {"sampler": "ddim-10", "sampling_seed": 0, "example_seed": 42}
+    selected_steps = {
+        str(step): {"arm_vector_l2": {"mean": step + 1.0, "p95": step + 2.0}}
+        for step in (0, 1, 3, 7, 15)
+    }
+    split_summary = {
+        "num_examples": 100,
+        "all_steps": {
+            "arm_vector_l2": {"mean": 3.0, "median": 2.0, "p90": 5.0, "p95": 6.0},
+            "joint_absolute_error": {
+                joint: {"mean": index + 0.5} for index, joint in enumerate(JOINT_NAMES)
+            },
+        },
+        "selected_steps": selected_steps,
+    }
+    (output / "run.json").write_text(json.dumps(run))
+    (output / "summary.json").write_text(
+        json.dumps({"training": split_summary, "held_out": split_summary})
+    )
+
+    rows = sweep.trend_rows([(50, output)])
+
+    assert [(row["epoch"], row["split"]) for row in rows] == [
+        (50, "training"),
+        (50, "held_out"),
+    ]
+    assert rows[1]["arm_l2_mean"] == 3.0
+    assert rows[1]["step_15_arm_l2_p95"] == 17.0
+    assert rows[1]["gripper_mae"] == 5.5
 
 
 def test_sample_refs_is_deterministic_and_without_replacement() -> None:
