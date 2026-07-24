@@ -487,6 +487,8 @@ def main() -> None:
             f"({controller.handshake['denoising_steps']} denoising steps, "
             f"epoch {controller.handshake['epoch']} checkpoint)."
         )
+    control_hz = controller.policy_hz if args.controller == "dppo" else CONTROL_HZ
+    print(f"Policy control rate: {control_hz:g} Hz.")
     controller.reset()
 
     renderer = mujoco.Renderer(
@@ -498,16 +500,16 @@ def main() -> None:
         image = resize_and_center_crop(renderer.render(), hw[0], hw[1])
         return randomizer.postprocess(image) if randomizer is not None else image
 
-    substeps = max(1, round((1.0 / CONTROL_HZ) / model.opt.timestep))
-    period = 1.0 / CONTROL_HZ
+    substeps = max(1, round((1.0 / control_hz) / model.opt.timestep))
+    period = 1.0 / control_hz
 
     wrist_writer = overhead_writer = None
     if args.save_video is not None:
         import imageio.v2 as imageio
 
         args.save_video.mkdir(parents=True, exist_ok=True)
-        wrist_writer = imageio.get_writer(args.save_video / "wrist.mp4", fps=CONTROL_HZ)
-        overhead_writer = imageio.get_writer(args.save_video / "overhead.mp4", fps=CONTROL_HZ)
+        wrist_writer = imageio.get_writer(args.save_video / "wrist.mp4", fps=control_hz)
+        overhead_writer = imageio.get_writer(args.save_video / "overhead.mp4", fps=control_hz)
         print(f"Saving observation frames to {args.save_video}/{{wrist,overhead}}.mp4")
 
     if args.show:
@@ -536,6 +538,9 @@ def main() -> None:
                 if miscalibration_model is not None
                 else None
             )
+        # Reset all per-episode dynamic state (including velocities and actuator
+        # activation) before restoring the newly sampled scene.
+        mujoco.mj_resetData(model, data)
         episode_time_origin = data.time
         _set_neutral(model, data, offsets_rad_now())
         cube = sample_cube(rng)

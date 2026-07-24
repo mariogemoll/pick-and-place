@@ -35,6 +35,7 @@ from pick_and_place.follower import (
     real_frame_to_sim,
     sim_frame_to_real,
 )
+from pick_and_place.geometry import JAW_CONTACT_POSITION
 from pick_and_place.miscalibration import MiscalibrationDraw
 from pick_and_place.paper_detection import (
     DROP_ZONE_HALF_SIZE,
@@ -246,6 +247,11 @@ class PolicySimEnv(gym.Env):
         self._cube_geom_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_GEOM, "pick_cube"
         )
+        self._gripper_body_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, "gripper"
+        )
+        if self._gripper_body_id < 0:
+            raise ValueError("policy simulation model has no 'gripper' body")
         self._robot_geom_ids, self._env_geom_ids = build_geom_sets(self.model)
         self._oracle = TaskSuccessOracle()
         self._scenario: EvaluationScenario | None = None
@@ -255,6 +261,9 @@ class PolicySimEnv(gym.Env):
         self._step_count = 0
         self._substeps = 1
         self._last_task_state: TaskState | None = None
+        self._initial_tcp_to_cube_distance_m = math.nan
+        self._min_tcp_to_cube_distance_m = math.nan
+        self._time_to_min_tcp_to_cube_distance_s = math.nan
 
     @property
     def oracle(self) -> TaskSuccessOracle:
@@ -335,6 +344,9 @@ class PolicySimEnv(gym.Env):
         self._oracle.reset()
         mujoco.mj_forward(self.model, self.data)
         self._last_task_state = self._task_state()
+        self._initial_tcp_to_cube_distance_m = self._tcp_to_cube_distance_m()
+        self._min_tcp_to_cube_distance_m = self._initial_tcp_to_cube_distance_m
+        self._time_to_min_tcp_to_cube_distance_s = 0.0
         observation = self._observation()
         return observation, self._info(self._last_task_state)
 
@@ -410,6 +422,19 @@ class PolicySimEnv(gym.Env):
             out_of_bounds=out_of_bounds,
         )
 
+    def _tcp_to_cube_distance_m(self) -> float:
+        gripper_position = self.data.xpos[self._gripper_body_id]
+        gripper_rotation = self.data.xmat[self._gripper_body_id].reshape(3, 3)
+        tcp_position = gripper_position + gripper_rotation @ JAW_CONTACT_POSITION
+        cube_position = self.data.qpos[self._cube_qpos_adr : self._cube_qpos_adr + 3]
+        return float(np.linalg.norm(tcp_position - cube_position))
+
+    def _record_tcp_proximity(self) -> None:
+        distance_m = self._tcp_to_cube_distance_m()
+        if distance_m < self._min_tcp_to_cube_distance_m:
+            self._min_tcp_to_cube_distance_m = distance_m
+            self._time_to_min_tcp_to_cube_distance_s = self._step_count / self._scenario.control_hz
+
     def _info(self, task_state: TaskState) -> dict[str, Any]:
         return {
             "scenario_id": self._scenario.scenario_id,
@@ -434,6 +459,7 @@ class PolicySimEnv(gym.Env):
         self._step_count += 1
 
         self._last_task_state = self._task_state()
+        self._record_tcp_proximity()
         success = self._oracle.update(
             self._last_task_state,
             step_duration_s=1.0 / self._scenario.control_hz,
@@ -464,6 +490,12 @@ class PolicySimEnv(gym.Env):
             milestones=self._oracle.milestones,
             failures=self._oracle.failure_flags(timed_out=timed_out),
             final_xy_error_m=self._last_task_state.xy_error_m,
+            initial_tcp_to_cube_distance_m=self._initial_tcp_to_cube_distance_m,
+            min_tcp_to_cube_distance_m=self._min_tcp_to_cube_distance_m,
+            tcp_to_cube_distance_reduction_m=(
+                self._initial_tcp_to_cube_distance_m - self._min_tcp_to_cube_distance_m
+            ),
+            time_to_min_tcp_to_cube_distance_s=self._time_to_min_tcp_to_cube_distance_s,
             control_steps=self._step_count,
             simulated_time_s=self._step_count / self._scenario.control_hz,
             time_to_success_s=self._oracle.success_time_s,

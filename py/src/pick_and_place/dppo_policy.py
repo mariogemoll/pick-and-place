@@ -82,6 +82,10 @@ class DppoPolicyController:
         }
         self.horizon_steps = int(self.handshake["horizon_steps"])
         self.cond_steps = int(self.handshake["cond_steps"])
+        self.policy_hz = float(self.handshake["policy_hz"])
+        if self.policy_hz <= 0:
+            self.close()
+            raise ValueError(f"policy_hz must be positive, got {self.policy_hz}")
         self.obs_dim = int(self.handshake["obs_dim"])
         self.action_dim = int(self.handshake["action_dim"])
         self.image_hw = (
@@ -150,32 +154,75 @@ class DppoPolicyController:
         self._queue.clear()
         self._history.clear()
 
-    def act(self, observation: PolicyObservation) -> np.ndarray:
+    def _current_observation(self, observation: PolicyObservation) -> dict[str, np.ndarray]:
         for feature in (STATE_FEATURE, OVERHEAD_FEATURE, WRIST_FEATURE):
             if feature not in observation:
                 raise KeyError(f"observation is missing {feature!r}")
-        current = {
+        return {
             "state": np.asarray(observation[STATE_FEATURE], dtype=np.float32).copy(),
             "overhead": np.asarray(observation[OVERHEAD_FEATURE], dtype=np.uint8).copy(),
             "wrist": np.asarray(observation[WRIST_FEATURE], dtype=np.uint8).copy(),
         }
+
+    def _request_actions(
+        self,
+        history: list[dict[str, np.ndarray]],
+        *,
+        sampling_seed: int | None = None,
+    ) -> np.ndarray:
+        assert self._process.stdin is not None
+        request = {
+            key: np.stack([item[key] for item in history])
+            for key in ("state", "overhead", "wrist")
+        }
+        if sampling_seed is not None:
+            request["sampling_seed"] = np.asarray(sampling_seed, dtype=np.int64)
+        try:
+            write_message(self._process.stdin, request)
+        except BrokenPipeError:
+            raise self._server_exited() from None
+        return np.asarray(self._receive()["actions"], dtype=np.float32)
+
+    def predict_horizon(
+        self,
+        observation: PolicyObservation,
+        *,
+        sampling_seed: int | None = None,
+    ) -> np.ndarray:
+        """Predict a full action horizon from repeated copies of one observation.
+
+        ``sampling_seed`` makes diffusion sampling repeatable for counterfactual
+        diagnostics. It is intentionally separate from :meth:`act`, whose
+        history and queued-action behavior model closed-loop execution.
+        """
+        current = self._current_observation(observation)
+        actions = self._request_actions([current] * self.cond_steps, sampling_seed=sampling_seed)
+        if actions.shape != (self.horizon_steps, self.action_dim):
+            raise ValueError(f"server returned malformed actions with shape {actions.shape}")
+        return actions.copy()
+
+    def predict_horizon_from_history(
+        self,
+        observations: list[PolicyObservation],
+        *,
+        sampling_seed: int | None = None,
+    ) -> np.ndarray:
+        """Predict from an explicit observation history for diagnostics."""
+        if len(observations) != self.cond_steps:
+            raise ValueError(f"expected {self.cond_steps} observations, got {len(observations)}")
+        history = [self._current_observation(observation) for observation in observations]
+        actions = self._request_actions(history, sampling_seed=sampling_seed)
+        if actions.shape != (self.horizon_steps, self.action_dim):
+            raise ValueError(f"server returned malformed actions with shape {actions.shape}")
+        return actions.copy()
+
+    def act(self, observation: PolicyObservation) -> np.ndarray:
+        current = self._current_observation(observation)
         self._history.append(current)
         if not self._queue:
             history = [self._history[0]] * (self.cond_steps - len(self._history))
             history.extend(self._history)
-            assert self._process.stdin is not None
-            try:
-                write_message(
-                    self._process.stdin,
-                    {
-                        key: np.stack([item[key] for item in history])
-                        for key in ("state", "overhead", "wrist")
-                    },
-                )
-            except BrokenPipeError:
-                raise self._server_exited() from None
-            reply = self._receive()
-            actions = np.asarray(reply["actions"], dtype=np.float32)
+            actions = self._request_actions(history)
             if actions.ndim != 2 or actions.shape[0] < self.act_steps:
                 raise ValueError(f"server returned malformed actions with shape {actions.shape}")
             self._queue.extend(actions[: self.act_steps])

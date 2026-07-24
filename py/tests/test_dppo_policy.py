@@ -86,6 +86,7 @@ write_message(stdout, {{
     "act_steps": np.asarray(2),
     "cond_steps": np.asarray(2),
     "img_cond_steps": np.asarray(2),
+    "policy_hz": np.asarray(10.0),
     "obs_dim": np.asarray(6),
     "action_dim": np.asarray(6),
     "image_height": np.asarray(8),
@@ -134,6 +135,7 @@ def test_controller_serves_chunks_and_requeries(fake_server_command: list[str]) 
     try:
         assert controller.horizon_steps == 4
         assert controller.cond_steps == 2
+        assert controller.policy_hz == 10.0
         assert controller.image_hw == (8, 8)
         assert controller.handshake["epoch"] == 500
         # Two actions per query: the integer part encodes the query count and
@@ -152,6 +154,18 @@ def test_controller_reset_discards_queued_actions(fake_server_command: list[str]
         controller.reset()
         second = controller.act(_observation())[0]
         assert (first, second) == pytest.approx((1.0, 2.0))
+    finally:
+        controller.close()
+
+
+def test_controller_predict_horizon_uses_repeated_observation(
+    fake_server_command: list[str],
+) -> None:
+    controller = DppoPolicyController(fake_server_command)
+    try:
+        actions = controller.predict_horizon(_observation(7.0), sampling_seed=42)
+        assert actions.shape == (4, 6)
+        assert actions[0, 1:3].tolist() == pytest.approx([7.0, 7.0])
     finally:
         controller.close()
 

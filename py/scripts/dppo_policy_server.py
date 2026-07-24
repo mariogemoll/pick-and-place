@@ -203,6 +203,9 @@ def main() -> None:
 
     cond_steps = int(cfg.cond_steps)
     img_cond_steps = int(cfg.img_cond_steps)
+    policy_hz = float(cfg.policy_hz)
+    if policy_hz <= 0:
+        raise ValueError(f"policy_hz must be positive, got {policy_hz}")
     if not 1 <= img_cond_steps <= cond_steps:
         raise ValueError(
             f"img_cond_steps must be in [1, cond_steps], got {img_cond_steps}"
@@ -222,6 +225,7 @@ def main() -> None:
             "act_steps": np.asarray(act_steps),
             "cond_steps": np.asarray(cond_steps),
             "img_cond_steps": np.asarray(img_cond_steps),
+            "policy_hz": np.asarray(policy_hz),
             "obs_dim": np.asarray(obs_dim),
             "action_dim": np.asarray(action_dim),
             "image_height": np.asarray(image_height),
@@ -237,7 +241,8 @@ def main() -> None:
     print(
         f"dppo policy server: epoch {epoch} checkpoint on {device}, "
         f"{cond_steps} observations, predicts {int(cfg.horizon_steps)} and "
-        f"executes {act_steps} actions, {image_width}x{image_height} images, "
+        f"executes {act_steps} actions at {policy_hz:g} Hz, "
+        f"{image_width}x{image_height} images, "
         f"{sampler} sampling",
         file=sys.stderr,
         flush=True,
@@ -248,6 +253,11 @@ def main() -> None:
         request = read_message(stdin)
         if request is None:
             return
+        sampling_seed = request.get("sampling_seed")
+        if sampling_seed is not None:
+            if sampling_seed.shape != ():
+                raise ValueError("sampling_seed must be a scalar")
+            torch.manual_seed(int(sampling_seed.item()))
         state = np.asarray(request["state"], dtype=np.float32)
         if state.shape != (cond_steps, obs_dim):
             raise ValueError(

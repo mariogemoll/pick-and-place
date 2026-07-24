@@ -22,6 +22,9 @@ device: cuda:0
 obs_dim: 6
 action_dim: 6
 denoising_steps: 100
+# The training export is temporally synchronized at 10 Hz. Evaluation must use
+# the same cadence so observation history and action chunks remain aligned.
+policy_hz: 10
 cond_steps: 2
 img_cond_steps: 2
 horizon_steps: 16

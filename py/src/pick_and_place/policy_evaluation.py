@@ -371,6 +371,10 @@ class EpisodeResult:
     milestones: TaskMilestones
     failures: FailureFlags
     final_xy_error_m: float
+    initial_tcp_to_cube_distance_m: float
+    min_tcp_to_cube_distance_m: float
+    tcp_to_cube_distance_reduction_m: float
+    time_to_min_tcp_to_cube_distance_s: float
     control_steps: int
     simulated_time_s: float
     time_to_success_s: float | None
@@ -406,6 +410,9 @@ def _aggregate(results: Sequence[EpisodeResult], *, include_strata: bool) -> dic
     total = len(results)
     successes = sum(result.success for result in results)
     errors = [result.final_xy_error_m for result in results]
+    initial_approach_distances = [result.initial_tcp_to_cube_distance_m for result in results]
+    min_approach_distances = [result.min_tcp_to_cube_distance_m for result in results]
+    approach_reductions = [result.tcp_to_cube_distance_reduction_m for result in results]
     success_times = [
         result.time_to_success_s for result in results if result.time_to_success_s is not None
     ]
@@ -437,6 +444,23 @@ def _aggregate(results: Sequence[EpisodeResult], *, include_strata: bool) -> dic
             "median": median(errors) if errors else None,
             "p90": float(np.percentile(errors, 90)) if errors else None,
             "p95": float(np.percentile(errors, 95)) if errors else None,
+        },
+        "initial_approach": {
+            "initial_tcp_to_cube_distance_m_median": (
+                median(initial_approach_distances) if initial_approach_distances else None
+            ),
+            "min_tcp_to_cube_distance_m_median": (
+                median(min_approach_distances) if min_approach_distances else None
+            ),
+            "min_tcp_to_cube_distance_m_p90": (
+                float(np.percentile(min_approach_distances, 90)) if min_approach_distances else None
+            ),
+            "tcp_to_cube_distance_reduction_m_median": (
+                median(approach_reductions) if approach_reductions else None
+            ),
+            "tcp_to_cube_distance_reduction_m_p10": (
+                float(np.percentile(approach_reductions, 10)) if approach_reductions else None
+            ),
         },
         "control_steps_median": median(result.control_steps for result in results) if results else None,
         "time_to_success_s_median": median(success_times) if success_times else None,
