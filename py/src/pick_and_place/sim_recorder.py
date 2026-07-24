@@ -65,6 +65,7 @@ from pick_and_place.follower import (
     sim_frame_to_real,
 )
 from pick_and_place.image_rectify import SQUARE_SIZE
+from pick_and_place.task_phases import PhaseSpan
 from pick_and_place.trajectory import (
     DescentPhase,
     GRIPPER_OPEN,
@@ -85,6 +86,26 @@ from pick_and_place.visual_servo import (
 
 WRIST_CAMERA = "wrist_camera"
 OVERHEAD_CAMERA = "overhead_camera"
+
+# Per-frame privileged ground truth stored as observation.environment_state:
+# the true simulator cube pose, valid in every phase (including in-gripper).
+CUBE_POSE_STATE_NAMES = (
+    "cube_x",
+    "cube_y",
+    "cube_z",
+    "cube_qw",
+    "cube_qx",
+    "cube_qy",
+    "cube_qz",
+)
+
+
+@dataclasses.dataclass(frozen=True)
+class RecordEpisodeResult:
+    """Outcome of one episode playback plus its exact per-frame phase spans."""
+
+    status: str  # "success", "restart", or "stopped"
+    phase_spans: tuple[PhaseSpan, ...]
 
 
 def fovy_from_intrinsics(intrinsics: dict[str, Any]) -> float:
@@ -201,7 +222,7 @@ def record_episode(
     believed_wrist_camera_pose: tuple[np.ndarray, np.ndarray] | None = None,
     detector_crash_dump_dir: str | None = None,
     verbose: bool = True,
-) -> str:
+) -> RecordEpisodeResult:
     """Play ``episode``'s trajectory under physics and record every control tick.
 
     The arm is driven through the position-servo actuators exactly as in
@@ -223,7 +244,15 @@ def record_episode(
     of the true world, and completed phases replan the remainder from the
     believed readback. Returns ``"success"`` when the trajectory ran to
     completion or ``"restart"`` when the descent servo or a checkpoint replan
-    failed — the caller should then discard the recorded episode.
+    failed — the caller should then discard the recorded episode. The result
+    also carries the exact phase spans of the recorded frames: one entry per
+    contiguous run of ticks driven by the same named trajectory phase, taken
+    from the controller itself rather than reconstructed afterwards.
+
+    Each recorded frame additionally stores the true simulator cube pose as
+    ``observation.environment_state`` (position plus wxyz quaternion). This is
+    privileged ground truth for diagnostics and auxiliary supervision; the
+    policy inputs remain joints and cameras only.
 
     ``recording``/``rig`` may be omitted together to play the episode without
     capturing anything — the closed-loop path (offsets, wrist servo, replans)
@@ -266,7 +295,14 @@ def record_episode(
 
     if recording is not None and recording.dataset is None:
         image_shape = (rig.height, rig.width, 3)
-        recording.create_dataset(image_shape, image_shape)
+        recording.create_dataset(
+            image_shape, image_shape, environment_state_names=CUBE_POSE_STATE_NAMES
+        )
+
+    cube_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pick_cube")
+    cube_qpos_adr = int(model.jnt_qposadr[model.body_jntadr[cube_body_id]])
+    recorded_frames = 0
+    phase_spans: list[PhaseSpan] = []
 
     time_origin = data.time
 
@@ -357,24 +393,32 @@ def record_episode(
             model.cam_pos[wrist_cam_id] = true_pos
             model.cam_quat[wrist_cam_id] = true_quat
 
-    def record_tick(frame) -> None:
+    def record_tick(frame, phase_name: str) -> None:
+        nonlocal recorded_frames
         if recording is None:
             return
         measured_arm = {name: get_joint(model, data, name) for name in ARM_JOINT_NAMES}
         measured_gripper = get_joint(model, data, "gripper")
         state = sim_frame_to_real(measured_arm, measured_gripper, offsets_deg_now())
         action = sim_frame_to_real(frame.joints, frame.gripper)
+        cube_pose = np.asarray(
+            data.qpos[cube_qpos_adr : cube_qpos_adr + 7], dtype=np.float32
+        ).copy()
 
         wrist_rgb, overhead_rgb = rig.capture(data)
         recording.dataset.add_frame(
             {
                 "observation.state": state.astype(np.float32),
                 "action": action.astype(np.float32),
+                "observation.environment_state": cube_pose,
                 "observation.images.wrist": wrist_rgb,
                 "observation.images.overhead": overhead_rgb,
                 "task": recording.task,
             }
         )
+        if not phase_spans or phase_spans[-1].name != phase_name:
+            phase_spans.append(PhaseSpan(name=phase_name, start_frame=recorded_frames))
+        recorded_frames += 1
 
         # A dropped encoder frame would leave the video shorter than the recorded
         # rows; rather than write a corrupt episode, fail the moment it happens.
@@ -408,7 +452,7 @@ def record_episode(
 
             while True:
                 if should_stop is not None and should_stop():
-                    return "stopped"
+                    return RecordEpisodeResult("stopped", tuple(phase_spans))
                 tick_start = time.monotonic()
                 raw_phase_t = (data.time - playback_start) * speed
                 phase_t = (
@@ -546,7 +590,7 @@ def record_episode(
                     cv2.waitKey(1)
 
                 frame = phase.evaluate(min(phase_t, phase.duration))
-                record_tick(frame)
+                record_tick(frame, phase.name)
 
                 if is_descent:
                     if retry.is_backing_up():
@@ -577,7 +621,7 @@ def record_episode(
                                     "warning: descent visual servo hit "
                                     f"{max_duration:.1f}s cap without a cube detection"
                                 )
-                        return "restart"
+                        return RecordEpisodeResult("restart", tuple(phase_spans))
                     elif phase_t >= phase.duration and convergence.is_stable():
                         break
                 elif phase_t >= phase.duration:
@@ -709,7 +753,7 @@ def record_episode(
             if candidate_traj is None:
                 if verbose:
                     print(f"No clean replan after {completed}; aborting episode.")
-                return "restart"
+                return RecordEpisodeResult("restart", tuple(phase_spans))
             current_traj = candidate_traj
     finally:
         if servo_renderer is not None:
@@ -723,4 +767,6 @@ def record_episode(
 
     if verbose:
         print(placement_error(model, data, episode.target).summary())
-    return "success" if status == "success" else "restart"
+    return RecordEpisodeResult(
+        "success" if status == "success" else "restart", tuple(phase_spans)
+    )

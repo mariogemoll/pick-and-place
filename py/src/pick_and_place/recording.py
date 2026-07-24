@@ -71,6 +71,7 @@ class RecordingSession:
         wrist_shape: tuple,
         overhead_shape: tuple,
         workspace_shape: tuple | None = None,
+        environment_state_names: tuple[str, ...] | None = None,
     ) -> None:
         _silence_ffmpeg_encoder_reports()
         from lerobot.datasets.lerobot_dataset import LeRobotDataset
@@ -103,6 +104,15 @@ class RecordingSession:
                 "dtype": "video",
                 "shape": (workspace_shape[0], workspace_shape[1], 3),
                 "names": ["height", "width", "channels"],
+            }
+        if environment_state_names is not None:
+            # Privileged simulator ground truth (e.g. the true cube pose),
+            # recorded for diagnostics and auxiliary supervision — never fed to
+            # a deployed policy, which only sees joints and cameras.
+            features["observation.environment_state"] = {
+                "dtype": "float32",
+                "shape": (len(environment_state_names),),
+                "names": list(environment_state_names),
             }
         self.dataset = LeRobotDataset.create(
             repo_id=self.repo_id,

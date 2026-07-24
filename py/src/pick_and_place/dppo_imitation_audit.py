@@ -251,10 +251,23 @@ class _HeldOutEpisode:
 
 
 class HeldOutSplit:
-    """The standalone XPS episodes, downsampled with the artifact's contract."""
+    """Standalone LeRobot episodes, downsampled with the artifact's contract.
 
-    def __init__(self, root: Path, *, max_episodes: int | None = None) -> None:
-        names = held_out_episode_names()
+    Defaults to the audit's fixed 100 standalone XPS episodes; pass
+    ``episode_names`` to evaluate a different held-out recording batch with the
+    same loading contract.
+    """
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        max_episodes: int | None = None,
+        episode_names: tuple[str, ...] | None = None,
+    ) -> None:
+        names = held_out_episode_names() if episode_names is None else episode_names
+        if not names:
+            raise ValueError("episode_names must be nonempty")
         if max_episodes is not None:
             if not 1 <= max_episodes <= len(names):
                 raise ValueError(f"max_episodes must be in [1, {len(names)}]")

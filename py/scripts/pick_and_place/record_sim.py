@@ -76,6 +76,7 @@ from pick_and_place.recording import RecordingSession
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.paper_detection import DROP_ZONE_HALF_SIZE, place_paper_target_marker
 from pick_and_place.sim_recorder import SimCameraRig, record_episode
+from pick_and_place.task_phases import phase_spans_json
 from pick_and_place.sim_dataset_staging import (
     episode_index,
     episode_staging_root,
@@ -356,7 +357,7 @@ def run_recording(
             # before it snaps into place.
             mujoco.mj_forward(model, data)
 
-            status = record_episode(
+            result = record_episode(
                 episode,
                 recording=recording,
                 rig=rig,
@@ -368,7 +369,7 @@ def run_recording(
                 detector_crash_dump_dir=detector_crash_dump_dir,
                 verbose=False,
             )
-            if status != "success":
+            if result.status != "success":
                 if recording.has_pending_frames():
                     recording.discard_episode()
                 # An aborted episode leaves a dataset dir holding no episode;
@@ -382,6 +383,7 @@ def run_recording(
             metadata = cube_pose_metadata(episode.source, episode.target)
             metadata.update(placement_error_metadata(error, detected=True))
             metadata["target_plate_yaw"] = float(target_plate_yaw)
+            metadata["phase_spans"] = phase_spans_json(result.phase_spans)
             if draw is not None:
                 metadata.update(
                     {
