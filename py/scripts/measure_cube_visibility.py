@@ -23,16 +23,20 @@ import argparse
 import csv
 import json
 import shutil
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pyarrow.parquet as pq
 
-from pick_and_place.scene_visibility import OBJECT_COVERAGE, SceneMeasurer, contrast
+from pick_and_place.scene_visibility import (
+    OBJECT_COVERAGE,
+    SceneMeasurer,
+    contrast,
+    load_episode_truth,
+    video_render_hw,
+)
 from pick_and_place.sim_recorder import OVERHEAD_CAMERA, WRIST_CAMERA
-from pick_and_place.task_phases import PHASES, coarse_phase_labels, phase_spans_from_json
+from pick_and_place.task_phases import PHASES
 
 FRAME_STRIDE = 3  # 30 Hz source frames per 10 Hz policy tick
 CAMERAS = {"overhead": OVERHEAD_CAMERA, "wrist": WRIST_CAMERA}
@@ -61,60 +65,6 @@ def _parse_args() -> argparse.Namespace:
     if args.panels < 0:
         parser.error("--panels must be nonnegative")
     return args
-
-
-@dataclass(frozen=True)
-class EpisodeTruth:
-    name: str
-    states: np.ndarray  # (N, 6) hardware-frame observation.state
-    cube_poses: np.ndarray  # (N, 7) true cube position + wxyz quaternion
-    target_xy: tuple[float, float]
-    target_plate_yaw: float
-    coarse_phases: np.ndarray  # (N,) coarse phase name per 30 Hz frame
-
-
-def _load_episode(root: Path) -> EpisodeTruth:
-    meta_paths = sorted((root / "meta" / "episodes").glob("chunk-*/file-*.parquet"))
-    if len(meta_paths) != 1:
-        raise ValueError(f"{root.name} must contain one episode metadata parquet")
-    row = pq.read_table(meta_paths[0]).to_pylist()[0]
-    if "phase_spans" not in row or row["phase_spans"] is None:
-        raise ValueError(f"{root.name} has no phase_spans metadata; re-record with ground truth")
-    data_paths = sorted((root / "data").glob("chunk-*/file-*.parquet"))
-    if len(data_paths) != 1:
-        raise ValueError(f"{root.name} must contain one data parquet")
-    table = pq.read_table(
-        data_paths[0],
-        columns=["frame_index", "observation.state", "observation.environment_state"],
-    ).sort_by("frame_index")
-    states = np.asarray(table["observation.state"].to_pylist(), dtype=np.float32)
-    cube_poses = np.asarray(
-        table["observation.environment_state"].to_pylist(), dtype=np.float64
-    )
-    if cube_poses.shape != (len(states), 7):
-        raise ValueError(f"{root.name} environment_state must be (N, 7), got {cube_poses.shape}")
-    spans = phase_spans_from_json(row["phase_spans"])
-    return EpisodeTruth(
-        name=root.name,
-        states=states,
-        cube_poses=cube_poses,
-        target_xy=(float(row["target_x"]), float(row["target_y"])),
-        target_plate_yaw=float(row["target_plate_yaw"]),
-        coarse_phases=coarse_phase_labels(spans, len(states)),
-    )
-
-
-def _video_render_hw(root: Path) -> tuple[int, int]:
-    with (root / "meta" / "info.json").open() as file:
-        info = json.load(file)
-    shapes = {
-        tuple(feature["shape"][:2])
-        for feature in info["features"].values()
-        if feature.get("dtype") == "video"
-    }
-    if len(shapes) != 1:
-        raise ValueError(f"{root.name} cameras must share one resolution, got {shapes}")
-    return next(iter(shapes))
 
 
 def _distribution(values: list[float]) -> dict[str, float] | None:
@@ -165,7 +115,7 @@ def main() -> None:
     if not episode_roots:
         raise FileNotFoundError(f"no complete episodes under {args.episodes_root}")
 
-    render_hw = _video_render_hw(episode_roots[0])
+    render_hw = video_render_hw(episode_roots[0])
     measurer = SceneMeasurer(render_hw, args.image_size)
     building.mkdir(parents=True)
     (building / "panels").mkdir()
@@ -175,8 +125,8 @@ def main() -> None:
     panels_per_phase = args.panels // len(PHASES) if args.panels else 0
     try:
         for episode_root in episode_roots:
-            episode = _load_episode(episode_root)
-            if _video_render_hw(episode_root) != render_hw:
+            episode = load_episode_truth(episode_root)
+            if video_render_hw(episode_root) != render_hw:
                 raise ValueError(f"{episode.name} has a different camera resolution")
             measurer.set_target_plate(episode.target_xy, episode.target_plate_yaw)
             for source_index in range(0, len(episode.states), FRAME_STRIDE):

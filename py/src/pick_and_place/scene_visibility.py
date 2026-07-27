@@ -13,11 +13,15 @@ that exact transform, so they align with the images the policy actually sees.
 
 from __future__ import annotations
 
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
 import cv2
 import mujoco
 import numpy as np
+import pyarrow.parquet as pq
 
-from pick_and_place.episodes import build_geom_sets
 from pick_and_place.paper_detection import (
     DROP_ZONE_HALF_SIZE,
     PAPER_TARGET_MARKER_NAME,
@@ -29,6 +33,7 @@ from pick_and_place.policy_sim import (
     real_action_to_sim_ctrl,
 )
 from pick_and_place.sim_recorder import resize_and_center_crop
+from pick_and_place.task_phases import coarse_phase_labels, phase_spans_from_json
 from pick_and_place.workspace_overlays import is_cube_drop_allowed
 
 # Thresholds on the fractional pixel coverage after the exact 96x96 transform:
@@ -37,6 +42,62 @@ from pick_and_place.workspace_overlays import is_cube_drop_allowed
 OBJECT_COVERAGE = 0.5
 RING_EXCLUSION_COVERAGE = 0.1
 RING_DILATION_PX = 5
+
+
+@dataclass(frozen=True)
+class EpisodeTruth:
+    """Per-frame ground truth needed to re-render a recorded episode."""
+
+    name: str
+    states: np.ndarray  # (N, 6) hardware-frame observation.state
+    cube_poses: np.ndarray  # (N, 7) true cube position + wxyz quaternion
+    target_xy: tuple[float, float]
+    target_plate_yaw: float
+    coarse_phases: np.ndarray  # (N,) coarse phase name per 30 Hz frame
+
+
+def load_episode_truth(root: Path) -> EpisodeTruth:
+    """Load one staged episode's per-frame ground truth and phase labels."""
+    meta_paths = sorted((root / "meta" / "episodes").glob("chunk-*/file-*.parquet"))
+    if len(meta_paths) != 1:
+        raise ValueError(f"{root.name} must contain one episode metadata parquet")
+    row = pq.read_table(meta_paths[0]).to_pylist()[0]
+    if "phase_spans" not in row or row["phase_spans"] is None:
+        raise ValueError(f"{root.name} has no phase_spans metadata; re-record with ground truth")
+    data_paths = sorted((root / "data").glob("chunk-*/file-*.parquet"))
+    if len(data_paths) != 1:
+        raise ValueError(f"{root.name} must contain one data parquet")
+    table = pq.read_table(
+        data_paths[0],
+        columns=["frame_index", "observation.state", "observation.environment_state"],
+    ).sort_by("frame_index")
+    states = np.asarray(table["observation.state"].to_pylist(), dtype=np.float32)
+    cube_poses = np.asarray(table["observation.environment_state"].to_pylist(), dtype=np.float64)
+    if cube_poses.shape != (len(states), 7):
+        raise ValueError(f"{root.name} environment_state must be (N, 7), got {cube_poses.shape}")
+    spans = phase_spans_from_json(row["phase_spans"])
+    return EpisodeTruth(
+        name=root.name,
+        states=states,
+        cube_poses=cube_poses,
+        target_xy=(float(row["target_x"]), float(row["target_y"])),
+        target_plate_yaw=float(row["target_plate_yaw"]),
+        coarse_phases=coarse_phase_labels(spans, len(states)),
+    )
+
+
+def video_render_hw(root: Path) -> tuple[int, int]:
+    """Return the (height, width) the episode's camera videos were rendered at."""
+    with (root / "meta" / "info.json").open() as file:
+        info = json.load(file)
+    shapes = {
+        tuple(feature["shape"][:2])
+        for feature in info["features"].values()
+        if feature.get("dtype") == "video"
+    }
+    if len(shapes) != 1:
+        raise ValueError(f"{root.name} cameras must share one resolution, got {shapes}")
+    return next(iter(shapes))
 
 
 class SceneMeasurer:
@@ -58,7 +119,37 @@ class SceneMeasurer:
         )
         if min(self.cube_geom_id, self.plate_geom_id) < 0:
             raise ValueError("scene is missing the pick_cube or target plate geom")
-        self.robot_geom_ids, _ = build_geom_sets(self.model)
+        self.robot_geom_ids = self._subtree_geom_ids("base")
+        # The workspace frame's AprilTag calibration plates: white tagged squares
+        # at roughly the cube's apparent scale, and the scene's nearest visual
+        # confuser for it. They exist only to calibrate the overhead camera.
+        self.frame_tag_geom_ids = {
+            geom_id
+            for geom_id in range(self.model.ngeom)
+            if (mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, geom_id) or "").startswith(
+                "workspace_frame_tag_"
+            )
+        }
+
+    def _subtree_geom_ids(self, root_body: str) -> set[int]:
+        """Geom ids on the body named ``root_body`` or any of its descendants.
+
+        Walking the body tree is what distinguishes the arm from the workspace
+        frame: both hang off the worldbody, so a "not worldbody" test would sweep
+        the frame in with the robot.
+        """
+        root = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, root_body)
+        if root < 0:
+            raise ValueError(f"scene is missing the {root_body!r} body")
+        geom_ids: set[int] = set()
+        for geom_id in range(self.model.ngeom):
+            body_id = int(self.model.geom_bodyid[geom_id])
+            while body_id > 0:
+                if body_id == root:
+                    geom_ids.add(geom_id)
+                    break
+                body_id = int(self.model.body_parentid[body_id])
+        return geom_ids
 
     def set_target_plate(self, target_xy: tuple[float, float], yaw: float) -> None:
         place_paper_target_marker(
@@ -75,17 +166,39 @@ class SceneMeasurer:
         self.data.qpos[self._cube_qpos_adr : self._cube_qpos_adr + 7] = cube_pose
         mujoco.mj_forward(self.model, self.data)
 
-    def coverage_maps(self, camera: str) -> dict[str, np.ndarray]:
-        """Fractional cube/plate pixel coverage after the exact 96x96 transform."""
+    def coverage_maps(
+        self, camera: str, *, include_robot: bool = False, include_frame_tags: bool = False
+    ) -> dict[str, np.ndarray]:
+        """Fractional cube/plate pixel coverage after the exact 96x96 transform.
+
+        With ``include_robot`` the result also carries a ``robot`` map covering
+        every arm geom, for measuring how distinguishable the cube is from the
+        arm that reaches for it; ``include_frame_tags`` adds a ``frame_tags`` map
+        over the workspace frame's calibration plates. Segmentation ignores
+        transparency, so the ``frame_tags`` map still covers the plates' footprint
+        when they have been made invisible — the RGB there is then whatever the
+        frame shows underneath, which is what a peeled-off sticker looks like.
+        """
         self.seg_renderer.update_scene(self.data, camera=camera)
         seg = self.seg_renderer.render()
         geom_ids = np.where(seg[..., 1] == int(mujoco.mjtObj.mjOBJ_GEOM), seg[..., 0], -1)
-        return {
+        maps = {
             name: resize_and_center_crop(
                 (geom_ids == geom_id).astype(np.float32), self.image_size, self.image_size
             )
             for name, geom_id in (("cube", self.cube_geom_id), ("plate", self.plate_geom_id))
         }
+        for enabled, name, ids in (
+            (include_robot, "robot", self.robot_geom_ids),
+            (include_frame_tags, "frame_tags", self.frame_tag_geom_ids),
+        ):
+            if enabled:
+                maps[name] = resize_and_center_crop(
+                    np.isin(geom_ids, list(ids)).astype(np.float32),
+                    self.image_size,
+                    self.image_size,
+                )
+        return maps
 
     def render(self, camera: str) -> tuple[np.ndarray, dict[str, np.ndarray]]:
         """Return the transformed RGB image and per-object coverage maps."""
