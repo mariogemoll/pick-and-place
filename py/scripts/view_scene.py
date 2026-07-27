@@ -19,6 +19,12 @@ import mujoco
 import mujoco.viewer
 
 from pick_and_place import build_scene, export_scene
+from pick_and_place.camera_extrinsics import (
+    add_camera_extrinsics_markers,
+    apply_camera_extrinsics_to_spec,
+    camera_pose_delta_mm_deg,
+    load_local_camera_extrinsics,
+)
 
 
 def main() -> None:
@@ -53,6 +59,16 @@ def main() -> None:
             "the plain red cube; defaults to on with --environment, off otherwise"
         ),
     )
+    parser.add_argument(
+        "--camera-extrinsics",
+        action="store_true",
+        help=(
+            "apply the locally calibrated camera poses from config/camera_extrinsics "
+            "and mark both poses in the scene: red ball and sight line where the scene "
+            "authors the camera, green where it was measured. Toggle geom group 5 in "
+            "the viewer (key '5') to hide them"
+        ),
+    )
     args = parser.parse_args()
 
     if args.export_only and args.export is None:
@@ -68,11 +84,26 @@ def main() -> None:
         )
         print(f"Wrote {output}")
     if not args.export_only:
-        model = build_scene(
+        spec = build_scene(
             wrist_camera=wrist_camera,
             include_environment=args.environment,
             apriltag_cube=args.apriltag_cube,
-        ).compile()
+        )
+        if args.camera_extrinsics:
+            extrinsics = load_local_camera_extrinsics()
+            if not extrinsics:
+                print("no local camera extrinsics found in config/camera_extrinsics")
+            for camera in spec.cameras:
+                measured = extrinsics.get(camera.name)
+                if measured is None:
+                    continue
+                authored = (camera.pos, camera.quat)
+                millimetres, degrees = camera_pose_delta_mm_deg(authored, measured)
+                print(f"{camera.name}: measured pose is {millimetres:.2f} mm and "
+                      f"{degrees:.2f} deg from the authored one")
+            add_camera_extrinsics_markers(spec, extrinsics)
+            apply_camera_extrinsics_to_spec(spec, extrinsics)
+        model = spec.compile()
         data = mujoco.MjData(model)
 
         # Compensate for the physical 2.8° (0.0486795 rad) arm twist.

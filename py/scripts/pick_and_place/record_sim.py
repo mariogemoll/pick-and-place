@@ -50,10 +50,6 @@ import mujoco.viewer
 import numpy as np
 from tqdm import tqdm
 
-from pick_and_place.camera_extrinsics import (
-    apply_camera_extrinsics_to_model,
-    load_local_camera_extrinsics,
-)
 from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
 from pick_and_place.dataset_metadata import cube_pose_metadata, placement_error_metadata
 from pick_and_place.domain_randomization import (
@@ -65,17 +61,16 @@ from pick_and_place.domain_randomization import (
 )
 from pick_and_place.episodes import (
     EpisodeSamplingError,
-    _build_model,
     placement_error,
     prepare_episode,
     sample_cube,
 )
-from pick_and_place.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
+from pick_and_place.executor import CONTROL_HZ
 from pick_and_place.miscalibration import MiscalibrationDraw, MiscalibrationModel
 from pick_and_place.recording import RecordingSession
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.paper_detection import DROP_ZONE_HALF_SIZE, place_paper_target_marker
-from pick_and_place.sim_recorder import SimCameraRig, record_episode
+from pick_and_place.sim_recorder import SimCameraRig, build_recording_scene, record_episode
 from pick_and_place.task_phases import phase_spans_json
 from pick_and_place.sim_dataset_staging import (
     episode_index,
@@ -85,20 +80,13 @@ from pick_and_place.sim_dataset_staging import (
     next_episode_index,
     successful_episode_datasets,
 )
-from pick_and_place.workspace_overlays import (
-    PAN_AXIS,
-    is_cube_drop_allowed,
-    sample_target_plate_yaw,
-)
+from pick_and_place.workspace_overlays import is_cube_drop_allowed, sample_target_plate_yaw
 
 
 SAVED_IMAGE_WIDTH = 960
 SAVED_IMAGE_HEIGHT = 720
 RENDER_WIDTH = 1920
 RENDER_HEIGHT = 1080
-SHADOW_MAP_SIZE = 8192
-OFFSCREEN_SAMPLES = 8
-SHADOW_CONE_SCALE = 0.4
 # ~8.5x the ~35 s nominal episode under libx264, so an episode that burns many
 # trajectory resamples (up to --max-attempts) is not mistaken for a wedge.
 DEFAULT_EPISODE_TIMEOUT = 300.0
@@ -215,20 +203,13 @@ def run_recording(
 
     # One persistent scene reused across episodes. The environment is required for
     # the overhead camera; calibrated extrinsics place it where the real one sits.
-    dummy_source = CubePose(x=PAN_AXIS[0] + 0.1, y=PAN_AXIS[1], z=CUBE_HALF_SIZE)
-    model, data = _build_model(
-        dummy_source,
-        include_environment=True,
-        paper_target_marker=True,
+    # `rerender_episodes.py` replays recordings through this same builder.
+    model, data = build_recording_scene(
+        render_width=render_width,
+        render_height=render_height,
         background_panorama=background_panorama,
         table_texture=table_texture,
-        offwidth=render_width,
-        offheight=render_height,
     )
-    model.opt.timestep = 1.0 / HARDWARE_SIMULATION_HZ
-    _configure_render_quality(model)
-    apply_camera_extrinsics_to_model(model, load_local_camera_extrinsics())
-    mujoco.mj_forward(model, data)
 
     randomizer = DomainRandomizer(model) if preset is not None else None
     rig = SimCameraRig(
@@ -424,13 +405,6 @@ def run_recording(
         if recording is not None and recording.dataset is not None:
             recording.finalize()
     return recorded
-
-
-def _configure_render_quality(model: mujoco.MjModel) -> None:
-    """Use a dense, tightly focused shadow map for supersampled recordings."""
-    model.vis.quality.shadowsize = SHADOW_MAP_SIZE
-    model.vis.quality.offsamples = OFFSCREEN_SAMPLES
-    model.vis.map.shadowscale = SHADOW_CONE_SCALE
 
 
 def _worker(kwargs: dict, index_queue, status, worker_id: int) -> None:

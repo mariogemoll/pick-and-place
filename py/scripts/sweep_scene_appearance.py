@@ -31,13 +31,18 @@ import csv
 import itertools
 import json
 import shutil
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import mujoco
 import numpy as np
 
+from pick_and_place.scene_appearance import (
+    CUBE_COLOURS,
+    FLOOR_COLOURS,
+    TARGET_COLOURS,
+    SceneAppearance,
+    SceneAppearanceOverride,
+)
 from pick_and_place.scene_visibility import (
     OBJECT_COVERAGE,
     SceneMeasurer,
@@ -50,113 +55,6 @@ from pick_and_place.task_phases import PHASES
 
 FRAME_STRIDE = 3  # 30 Hz source frames per 10 Hz policy tick
 CAMERAS = {"overhead": OVERHEAD_CAMERA, "wrist": WRIST_CAMERA}
-
-FLOOR_GEOM = "floor"
-FLOOR_MATERIAL = "groundplane"
-
-#: Candidate floor colours. The floor must stay achromatic so it does not
-#: compete with a coloured target; ``tan`` is the current scene and the
-#: baseline every other row is measured against.
-FLOOR_COLOURS: dict[str, tuple[float, float, float]] = {
-    "tan": (0.82, 0.74, 0.60),
-    "mid-gray": (0.30, 0.30, 0.30),
-    "dark-gray": (0.15, 0.15, 0.15),
-    "black": (0.05, 0.05, 0.05),
-}
-
-#: Candidate drop-zone target colours. ``black`` is the current scene and the
-#: only colour the real detector finds by darkness; ``white`` is the one
-#: alternative ``detect_paper_target`` already supports. The saturated colours
-#: each need a new hue branch in that detector before they can be used on
-#: hardware.
-TARGET_COLOURS: dict[str, tuple[float, float, float]] = {
-    "black": (0.12, 0.12, 0.12),
-    "white": (0.95, 0.95, 0.95),
-    "yellow": (0.95, 0.80, 0.10),
-    "orange": (0.95, 0.45, 0.05),
-    "red": (0.85, 0.10, 0.08),
-}
-
-
-#: Candidate cube appearances. ``apriltag`` is the current cube and the only one
-#: the descent visual servo and the real-robot cube tracker can use, so a solid
-#: colour is only reachable by re-rendering episodes recorded with the tags.
-#: Under the scene's warm key light the blue and green channels are heavily
-#: attenuated, so those two render dark; red keeps its brightness.
-CUBE_COLOURS: dict[str, tuple[float, float, float] | None] = {
-    "apriltag": None,
-    "red": (0.82, 0.12, 0.08),
-    "orange": (0.95, 0.45, 0.05),
-    "yellow": (0.95, 0.80, 0.10),
-    "blue": (0.10, 0.20, 0.85),
-    "green": (0.10, 0.65, 0.20),
-}
-
-
-@dataclass(frozen=True)
-class Variant:
-    floor: str
-    target: str
-    cube: str
-    frame_tags: bool
-
-    @property
-    def name(self) -> str:
-        tags = "tags" if self.frame_tags else "notags"
-        return f"floor-{self.floor}_target-{self.target}_cube-{self.cube}_frame-{tags}"
-
-
-class AppearanceOverride:
-    """Recolour the floor and drop-zone target of an already compiled model.
-
-    The floor renders through the ``groundplane`` material, so both the material
-    and the geom-local RGBA are set; the target marker carries no material and is
-    recoloured by ``place_paper_target_marker`` on every episode, so its override
-    must be reapplied after each call to :meth:`SceneMeasurer.set_target_plate`.
-    """
-
-    def __init__(self, measurer: SceneMeasurer) -> None:
-        model = measurer.model
-        self._model = model
-        self._floor_geom = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, FLOOR_GEOM)
-        self._floor_material = mujoco.mj_name2id(
-            model, mujoco.mjtObj.mjOBJ_MATERIAL, FLOOR_MATERIAL
-        )
-        self._plate_geom = measurer.plate_geom_id
-        self._frame_tag_geoms = sorted(measurer.frame_tag_geom_ids)
-        self._frame_tag_rgba = {
-            geom_id: tuple(model.geom_rgba[geom_id]) for geom_id in self._frame_tag_geoms
-        }
-        self._cube_geom = measurer.cube_geom_id
-        self._cube_matid = int(model.geom_matid[self._cube_geom])
-        self._cube_rgba = tuple(model.geom_rgba[self._cube_geom])
-        if self._floor_geom < 0:
-            raise ValueError(f"scene is missing the {FLOOR_GEOM!r} geom")
-
-    def apply(self, variant: Variant) -> None:
-        floor = FLOOR_COLOURS[variant.floor]
-        target = TARGET_COLOURS[variant.target]
-        self._model.geom_rgba[self._floor_geom] = (*floor, 1.0)
-        if self._floor_material >= 0:
-            self._model.mat_rgba[self._floor_material] = (*floor, 1.0)
-        # Overrides the usable/not-usable black/orange signalling of
-        # place_paper_target_marker; recorded targets are inside the drop zone.
-        self._model.geom_rgba[self._plate_geom] = (*target, 1.0)
-        # Peeling the calibration stickers off the frame is modelled by making
-        # the plate geoms fully transparent, leaving the frame surface behind.
-        for geom_id in self._frame_tag_geoms:
-            rgba = self._frame_tag_rgba[geom_id]
-            self._model.geom_rgba[geom_id] = (*rgba[:3], rgba[3] if variant.frame_tags else 0.0)
-        # Detaching the AprilTag material is what turns the tagged cube into a
-        # solid colour; geom_rgba only governs once no material is bound.
-        cube = CUBE_COLOURS[variant.cube]
-        if cube is None:
-            self._model.geom_matid[self._cube_geom] = self._cube_matid
-            self._model.geom_rgba[self._cube_geom] = self._cube_rgba
-        else:
-            self._model.geom_matid[self._cube_geom] = -1
-            self._model.geom_rgba[self._cube_geom] = (*cube, 1.0)
-
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -383,14 +281,14 @@ def main() -> None:
         raise FileNotFoundError(f"no complete episodes under {args.episodes_root}")
 
     variants = [
-        Variant(floor, target, cube, tags == "on")
+        SceneAppearance(floor, target, cube, tags == "on")
         for floor, target, cube, tags in itertools.product(
             args.floors, args.targets, args.cubes, args.frame_tags
         )
     ]
     render_hw = video_render_hw(episode_roots[0])
     measurer = SceneMeasurer(render_hw, args.image_size)
-    override = AppearanceOverride(measurer)
+    override = SceneAppearanceOverride(measurer.model)
     building.mkdir(parents=True)
     for variant in variants:
         (building / "panels" / variant.name).mkdir(parents=True)
@@ -402,6 +300,8 @@ def main() -> None:
             if video_render_hw(episode_root) != render_hw:
                 raise ValueError(f"{episode.name} has a different camera resolution")
             measurer.set_target_plate(episode.target_xy, episode.target_plate_yaw)
+            # The marker placement decides this episode's plate colour.
+            override.refresh_plate_baseline()
             tick_indices = list(range(0, len(episode.states), FRAME_STRIDE * args.tick_stride))
             panel_ticks = {
                 tick_indices[round(fraction * (len(tick_indices) - 1))]

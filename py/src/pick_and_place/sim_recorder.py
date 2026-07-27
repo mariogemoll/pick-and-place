@@ -37,14 +37,20 @@ from __future__ import annotations
 import dataclasses
 import math
 import time
+from pathlib import Path
 from typing import Any, Callable
 
 import cv2
 import mujoco
 import numpy as np
 
+from pick_and_place.camera_extrinsics import (
+    apply_camera_extrinsics_to_model,
+    load_local_camera_extrinsics,
+)
 from pick_and_place.episodes import (
     Episode,
+    _build_model,
     _preflight,
     get_joint,
     is_unexpected,
@@ -83,9 +89,17 @@ from pick_and_place.visual_servo import (
     DescentServoConvergence,
     DescentServoRetryState,
 )
+from pick_and_place.workspace_overlays import PAN_AXIS
 
 WRIST_CAMERA = "wrist_camera"
 OVERHEAD_CAMERA = "overhead_camera"
+
+# Render quality of a recorded dataset: a dense, tightly focused shadow map and
+# multisampled offscreen buffers, so supersampled frames have clean silhouettes
+# and shadow edges.
+SHADOW_MAP_SIZE = 8192
+OFFSCREEN_SAMPLES = 8
+SHADOW_CONE_SCALE = 0.4
 
 # Per-frame privileged ground truth stored as observation.environment_state:
 # the true simulator cube pose, valid in every phase (including in-gripper).
@@ -207,6 +221,51 @@ def resize_and_center_crop(
     left = (resized_width - output_width) // 2
     top = (resized_height - output_height) // 2
     return image[top : top + output_height, left : left + output_width].copy()
+
+
+def configure_render_quality(model: mujoco.MjModel) -> None:
+    """Use a dense, tightly focused shadow map for supersampled recordings."""
+    model.vis.quality.shadowsize = SHADOW_MAP_SIZE
+    model.vis.quality.offsamples = OFFSCREEN_SAMPLES
+    model.vis.map.shadowscale = SHADOW_CONE_SCALE
+
+
+def build_recording_scene(
+    *,
+    render_width: int,
+    render_height: int,
+    background_panorama: Path | str | np.ndarray | None = None,
+    table_texture: Path | str | np.ndarray | None = None,
+) -> tuple[mujoco.MjModel, mujoco.MjData]:
+    """Compile the scene a sim recording is rendered from.
+
+    One persistent scene is reused across a run's episodes: the cube is a
+    freejoint body repositioned per episode, so where it compiles is irrelevant
+    and a fixed placeholder pose keeps the compiled model independent of which
+    episodes a worker happens to draw.
+
+    Anything that moves a pixel lives here rather than in the caller —
+    the environment and drop-zone marker, the offscreen buffer size, the
+    physics rate, the render-quality settings, and the locally calibrated
+    camera extrinsics. Recording and re-rendering both build through this
+    function so a recorded frame and a re-rendered one differ only where they
+    are meant to.
+    """
+    placeholder = CubePose(x=PAN_AXIS[0] + 0.1, y=PAN_AXIS[1], z=CUBE_HALF_SIZE)
+    model, data = _build_model(
+        placeholder,
+        include_environment=True,
+        paper_target_marker=True,
+        background_panorama=background_panorama,
+        table_texture=table_texture,
+        offwidth=render_width,
+        offheight=render_height,
+    )
+    model.opt.timestep = 1.0 / HARDWARE_SIMULATION_HZ
+    configure_render_quality(model)
+    apply_camera_extrinsics_to_model(model, load_local_camera_extrinsics())
+    mujoco.mj_forward(model, data)
+    return model, data
 
 
 def record_episode(

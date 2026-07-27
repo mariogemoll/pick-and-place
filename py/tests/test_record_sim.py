@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 
 from pick_and_place import sim_dataset_staging as staging
-from pick_and_place.sim_recorder import resize_and_center_crop
+from pick_and_place.sim_recorder import configure_render_quality, resize_and_center_crop
 
 
 RECORD_SIM_PATH = Path(__file__).parents[1] / "scripts" / "pick_and_place" / "record_sim.py"
@@ -265,7 +265,6 @@ def test_recording_defaults_supersample_saved_frames():
 
 
 def test_recording_render_quality_focuses_a_larger_shadow_map():
-    module = _record_sim_module()
     model = types.SimpleNamespace(
         vis=types.SimpleNamespace(
             quality=types.SimpleNamespace(shadowsize=4096, offsamples=4),
@@ -273,7 +272,7 @@ def test_recording_render_quality_focuses_a_larger_shadow_map():
         )
     )
 
-    module._configure_render_quality(model)
+    configure_render_quality(model)
 
     assert model.vis.quality.shadowsize == 8192
     assert model.vis.quality.offsamples == 8
