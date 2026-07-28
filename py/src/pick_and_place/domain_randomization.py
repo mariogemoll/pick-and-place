@@ -19,6 +19,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from pick_and_place.background_panorama import equirect_to_skybox
+from pick_and_place.camera_pose_envelope import apply_camera_jitter, camera_module_geoms
 from pick_and_place.geometry import CubePose
 from pick_and_place.miscalibration import MiscalibrationDraw, MiscalibrationModel
 
@@ -64,6 +65,7 @@ _SCALAR_FIELDS = {
     "key_light_target_jitter_m",
     "overhead_camera_position_mm",
     "overhead_camera_rotation_deg",
+    "overhead_camera_frame_tag_margin_px",
     "wrist_camera_position_mm",
     "wrist_camera_rotation_deg",
     "colorful_appearance_probability",
@@ -76,15 +78,13 @@ def domain_seed(root_seed: int | None, episode_index: int) -> int:
     if root_seed is None:
         return int(np.random.default_rng().integers(2**63))
     return int(
-        np.random.default_rng(
-            np.random.SeedSequence([root_seed, episode_index, 0xD0A1])
-        ).integers(2**63)
+        np.random.default_rng(np.random.SeedSequence([root_seed, episode_index, 0xD0A1])).integers(
+            2**63
+        )
     )
 
 
-def reload_renderer_textures(
-    renderer: mujoco.Renderer, texture_ids: tuple[int, ...]
-) -> None:
+def reload_renderer_textures(renderer: mujoco.Renderer, texture_ids: tuple[int, ...]) -> None:
     """Upload changed ``model.tex_data`` into one renderer's GL context."""
     if not texture_ids:
         return
@@ -152,6 +152,43 @@ class DomainRandomizationPreset:
             ),
         )
 
+    #: Redraws allowed before giving up on finding a solvable overhead pose. A
+    #: box sized so that a few percent of draws are rejected exhausts this only
+    #: if the box is far too wide for the constraint, which is worth an error
+    #: rather than a silently truncated distribution.
+    MAX_OVERHEAD_CAMERA_ATTEMPTS = 100
+
+    def _draw_overhead_camera(
+        self, camera_jitter: Any
+    ) -> tuple[tuple[float, ...], tuple[float, ...]]:
+        """Draw an overhead-camera jitter the real rig could be calibrated at.
+
+        With ``overhead_camera_frame_tag_margin_px`` above zero, poses that would
+        lose a workspace-frame tag off the real sensor are rejected and redrawn.
+        The constraint is not a box (see :mod:`pick_and_place.camera_pose_envelope`),
+        so rejection is what lets the box stay wide enough to reach the poses the
+        real camera actually takes without also generating ones it cannot.
+        """
+        margin = self.scalars["overhead_camera_frame_tag_margin_px"]
+        if margin <= 0.0:
+            return camera_jitter("overhead")
+
+        from pick_and_place.camera_pose_envelope import overhead_pose_filter
+
+        visibility = overhead_pose_filter()
+        for _ in range(self.MAX_OVERHEAD_CAMERA_ATTEMPTS):
+            position, rotation = camera_jitter("overhead")
+            if visibility.accepts(np.array(position), np.array(rotation), margin):
+                return position, rotation
+        raise RuntimeError(
+            "no overhead camera pose gave a clear view with all four frame tags in "
+            f"{self.MAX_OVERHEAD_CAMERA_ATTEMPTS} draws; "
+            f"overhead_camera_position_mm={self.scalars['overhead_camera_position_mm']:g} / "
+            f"overhead_camera_rotation_deg={self.scalars['overhead_camera_rotation_deg']:g} "
+            "is far too wide for the tag constraint. Shrink it, or lower "
+            "overhead_camera_frame_tag_margin_px."
+        )
+
     def sample(self, episode_seed: int) -> "DomainSample":
         rng = np.random.default_rng(episode_seed)
 
@@ -159,11 +196,14 @@ class DomainRandomizationPreset:
             return float(rng.uniform(*self.ranges[name]))
 
         def camera_jitter(prefix: str) -> tuple[tuple[float, ...], tuple[float, ...]]:
-            position = rng.uniform(
-                -self.scalars[f"{prefix}_camera_position_mm"],
-                self.scalars[f"{prefix}_camera_position_mm"],
-                size=3,
-            ) / 1000.0
+            position = (
+                rng.uniform(
+                    -self.scalars[f"{prefix}_camera_position_mm"],
+                    self.scalars[f"{prefix}_camera_position_mm"],
+                    size=3,
+                )
+                / 1000.0
+            )
             rotation = rng.uniform(
                 -self.scalars[f"{prefix}_camera_rotation_deg"],
                 self.scalars[f"{prefix}_camera_rotation_deg"],
@@ -171,7 +211,7 @@ class DomainRandomizationPreset:
             )
             return tuple(float(x) for x in position), tuple(float(x) for x in rotation)
 
-        overhead_position, overhead_rotation = camera_jitter("overhead")
+        overhead_position, overhead_rotation = self._draw_overhead_camera(camera_jitter)
         wrist_position, wrist_rotation = camera_jitter("wrist")
 
         target = rng.uniform(
@@ -207,9 +247,7 @@ class DomainRandomizationPreset:
             light_warm_cool=draw("light_warm_cool"),
             key_light_position=tuple(float(x) for x in key_position),
             key_light_target=tuple(float(x) for x in key_target),
-            key_light_bulb_radius=_draw_log_uniform(
-                rng, self.ranges["key_light_bulb_radius_m"]
-            ),
+            key_light_bulb_radius=_draw_log_uniform(rng, self.ranges["key_light_bulb_radius_m"]),
             fill_light_intensity=draw("fill_light_intensity"),
             material_factors=factors,
             overhead_camera_position_m=overhead_position,
@@ -254,16 +292,11 @@ def _sample_color(
 ) -> tuple[float, float, float]:
     hue = rng.uniform(*hue_deg) / 360.0
     return tuple(
-        float(x)
-        for x in colorsys.hsv_to_rgb(
-            hue, rng.uniform(*saturation), rng.uniform(*value)
-        )
+        float(x) for x in colorsys.hsv_to_rgb(hue, rng.uniform(*saturation), rng.uniform(*value))
     )
 
 
-def _draw_log_uniform(
-    rng: np.random.Generator, bounds: tuple[float, float]
-) -> float:
+def _draw_log_uniform(rng: np.random.Generator, bounds: tuple[float, float]) -> float:
     low, high = bounds
     if low <= 0.0:
         raise ValueError("log-uniform bounds must be positive")
@@ -415,6 +448,12 @@ class DomainRandomizer:
         self._geom_rgba = model.geom_rgba.copy()
         self._cam_pos = model.cam_pos.copy()
         self._cam_quat = model.cam_quat.copy()
+        # A camera jitter carries its lens and board with it, so those geom poses
+        # are randomized state and need restoring like everything else.
+        self._geom_pos = model.geom_pos.copy()
+        self._geom_quat = model.geom_quat.copy()
+        self._geom_sameframe = model.geom_sameframe.copy()
+        self._camera_modules: dict[int, dict[int, tuple[np.ndarray, np.ndarray]]] = {}
         self._tex_data = model.tex_data.copy()
         self._texture_ids = tuple(
             ident
@@ -450,6 +489,9 @@ class DomainRandomizer:
         model.geom_rgba[:] = self._geom_rgba
         model.cam_pos[:] = self._cam_pos
         model.cam_quat[:] = self._cam_quat
+        model.geom_pos[:] = self._geom_pos
+        model.geom_quat[:] = self._geom_quat
+        model.geom_sameframe[:] = self._geom_sameframe
         model.tex_data[:] = self._tex_data
         self._sample = None
         self._frame = 0
@@ -517,11 +559,24 @@ class DomainRandomizer:
         camera = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, name)
         if camera < 0:
             return
-        self.model.cam_pos[camera] += position
-        base = Rotation.from_quat(self.model.cam_quat[camera][[1, 2, 3, 0]])
-        delta = Rotation.from_euler("xyz", rotation_deg, degrees=True)
-        quat = (delta * base).as_quat()
-        self.model.cam_quat[camera] = quat[[3, 0, 1, 2]]
+        apply_camera_jitter(
+            self.model,
+            camera,
+            self._cam_pos[camera],
+            self._cam_quat[camera],
+            self._camera_module_base(camera),
+            np.asarray(position, float),
+            np.asarray(rotation_deg, float),
+        )
+
+    def _camera_module_base(self, camera: int) -> dict[int, tuple[np.ndarray, np.ndarray]]:
+        """Canonical geom poses of a camera's own hardware, from the reset snapshot."""
+        if camera not in self._camera_modules:
+            self._camera_modules[camera] = {
+                geom: (self._geom_pos[geom].copy(), self._geom_quat[geom].copy())
+                for geom in camera_module_geoms(self.model, camera)
+            }
+        return self._camera_modules[camera]
 
     def _apply_procedural_textures(self, sample: DomainSample) -> None:
         appearance = generate_procedural_appearance(sample)
@@ -532,7 +587,9 @@ class DomainRandomizer:
             channels = int(self.model.tex_nchannel[texture_id])
             address = int(self.model.tex_adr[texture_id])
             if name == "table_texture":
-                rgb = cv2.resize(appearance.table_rgb, (width, height), interpolation=cv2.INTER_CUBIC)
+                rgb = cv2.resize(
+                    appearance.table_rgb, (width, height), interpolation=cv2.INTER_CUBIC
+                )
                 rgb = np.rot90(rgb, k=-1).copy()
             else:
                 rgb = equirect_to_skybox(appearance.background_rgb, width)
