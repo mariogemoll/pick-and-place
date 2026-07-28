@@ -66,6 +66,7 @@ _SCALAR_FIELDS = {
     "overhead_camera_position_mm",
     "overhead_camera_rotation_deg",
     "overhead_camera_frame_tag_margin_px",
+    "overhead_camera_focal_pct",
     "wrist_camera_position_mm",
     "wrist_camera_rotation_deg",
     "colorful_appearance_probability",
@@ -159,7 +160,7 @@ class DomainRandomizationPreset:
     MAX_OVERHEAD_CAMERA_ATTEMPTS = 100
 
     def _draw_overhead_camera(
-        self, camera_jitter: Any
+        self, camera_jitter: Any, focal_scale: float = 1.0
     ) -> tuple[tuple[float, ...], tuple[float, ...]]:
         """Draw an overhead-camera jitter the real rig could be calibrated at.
 
@@ -178,7 +179,9 @@ class DomainRandomizationPreset:
         visibility = overhead_pose_filter()
         for _ in range(self.MAX_OVERHEAD_CAMERA_ATTEMPTS):
             position, rotation = camera_jitter("overhead")
-            if visibility.accepts(np.array(position), np.array(rotation), margin):
+            if visibility.accepts(
+                np.array(position), np.array(rotation), margin, focal_scale=focal_scale
+            ):
                 return position, rotation
         raise RuntimeError(
             "no overhead camera pose gave a clear view with all four frame tags in "
@@ -211,7 +214,13 @@ class DomainRandomizationPreset:
             )
             return tuple(float(x) for x in position), tuple(float(x) for x in rotation)
 
-        overhead_position, overhead_rotation = self._draw_overhead_camera(camera_jitter)
+        # Drawn before the pose, because a narrower field of view pulls the
+        # workspace-frame tags outward and so changes which poses are solvable.
+        focal_pct = self.scalars["overhead_camera_focal_pct"]
+        overhead_focal_scale = float(rng.uniform(1.0 - focal_pct / 100.0, 1.0 + focal_pct / 100.0))
+        overhead_position, overhead_rotation = self._draw_overhead_camera(
+            camera_jitter, overhead_focal_scale
+        )
         wrist_position, wrist_rotation = camera_jitter("wrist")
 
         target = rng.uniform(
@@ -252,6 +261,7 @@ class DomainRandomizationPreset:
             material_factors=factors,
             overhead_camera_position_m=overhead_position,
             overhead_camera_rotation_deg=overhead_rotation,
+            overhead_camera_focal_scale=overhead_focal_scale,
             wrist_camera_position_m=wrist_position,
             wrist_camera_rotation_deg=wrist_rotation,
             cube_orientation_index=int(rng.integers(24)),
@@ -315,6 +325,7 @@ class DomainSample:
     material_factors: dict[str, tuple[float, float, float]]
     overhead_camera_position_m: tuple[float, float, float]
     overhead_camera_rotation_deg: tuple[float, float, float]
+    overhead_camera_focal_scale: float
     wrist_camera_position_m: tuple[float, float, float]
     wrist_camera_rotation_deg: tuple[float, float, float]
     cube_orientation_index: int
@@ -454,6 +465,11 @@ class DomainRandomizer:
         self._geom_quat = model.geom_quat.copy()
         self._geom_sameframe = model.geom_sameframe.copy()
         self._camera_modules: dict[int, dict[int, tuple[np.ndarray, np.ndarray]]] = {}
+        # cam_fovy is captured on first use, not here: SimCameraRig overrides it
+        # from the calibrated intrinsics *after* this randomizer is constructed
+        # (record_sim.py builds them in that order), so snapshotting now would
+        # bank the authored value and reset() would quietly undo the calibration.
+        self._cam_fovy: np.ndarray | None = None
         self._tex_data = model.tex_data.copy()
         self._texture_ids = tuple(
             ident
@@ -489,6 +505,8 @@ class DomainRandomizer:
         model.geom_rgba[:] = self._geom_rgba
         model.cam_pos[:] = self._cam_pos
         model.cam_quat[:] = self._cam_quat
+        if self._cam_fovy is not None:
+            model.cam_fovy[:] = self._cam_fovy
         model.geom_pos[:] = self._geom_pos
         model.geom_quat[:] = self._geom_quat
         model.geom_sameframe[:] = self._geom_sameframe
@@ -542,6 +560,7 @@ class DomainRandomizer:
             sample.overhead_camera_position_m,
             sample.overhead_camera_rotation_deg,
         )
+        self._apply_camera_focal("overhead_camera", sample.overhead_camera_focal_scale)
         self._apply_camera(
             "wrist_camera", sample.wrist_camera_position_m, sample.wrist_camera_rotation_deg
         )
@@ -568,6 +587,23 @@ class DomainRandomizer:
             np.asarray(position, float),
             np.asarray(rotation_deg, float),
         )
+
+    def _apply_camera_focal(self, name: str, focal_scale: float) -> None:
+        """Scale a camera's focal length, expressed through ``cam_fovy``.
+
+        Focal length is the only intrinsic that survives into a recorded frame:
+        both pipelines store rectified images, and the rectification pins the
+        principal point to the image centre and removes the distortion. The real
+        camera's focal length varies ~1.5% between sessions, so this is the one
+        intrinsic worth randomizing.
+        """
+        camera = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, name)
+        if camera < 0:
+            return
+        if self._cam_fovy is None:
+            self._cam_fovy = self.model.cam_fovy.copy()
+        half = math.radians(self._cam_fovy[camera]) / 2.0
+        self.model.cam_fovy[camera] = math.degrees(2.0 * math.atan(math.tan(half) / focal_scale))
 
     def _camera_module_base(self, camera: int) -> dict[int, tuple[np.ndarray, np.ndarray]]:
         """Canonical geom poses of a camera's own hardware, from the reset snapshot."""

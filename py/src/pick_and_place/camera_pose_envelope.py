@@ -236,19 +236,24 @@ class OverheadPoseFilter:
             self._data.cam_xmat[self.camera].reshape(3, 3).copy(),
         )
 
-    def margin_px(self, position_m: np.ndarray, rotation_deg: np.ndarray) -> float:
+    def margin_px(
+        self, position_m: np.ndarray, rotation_deg: np.ndarray, focal_scale: float = 1.0
+    ) -> float:
         """Clearance of the worst tag corner from the usable image, in pixels.
 
         Negative means at least one corner has left the sensor or the radius the
         lens calibration covers, either of which makes the pose unsolvable.
+        ``focal_scale`` narrows or widens the field of view, which pushes the
+        tags outward or inward, so a focal draw and a pose draw have to be judged
+        together rather than one at a time.
         """
+        matrix = self.matrix.copy()
+        matrix[:2, :2] *= focal_scale
         center, rotation = self._camera_frame(position_m, rotation_deg)
         # MuJoCo camera (x right, y up, z back) -> OpenCV (x right, y down, z fwd).
         rotation_cv = np.diag([1.0, -1.0, -1.0]) @ rotation.T
         rvec, _ = cv2.Rodrigues(rotation_cv)
-        pixels, _ = cv2.projectPoints(
-            self.corners, rvec, -rotation_cv @ center, self.matrix, self.dist
-        )
+        pixels, _ = cv2.projectPoints(self.corners, rvec, -rotation_cv @ center, matrix, self.dist)
         pixels = pixels.reshape(-1, 2)
         depth = (self.corners - center) @ rotation_cv[2]
         if np.any(depth <= 0):
@@ -256,11 +261,15 @@ class OverheadPoseFilter:
         border = np.minimum.reduce(
             [pixels[:, 0], pixels[:, 1], SENSOR_W - pixels[:, 0], SENSOR_H - pixels[:, 1]]
         )
-        calibrated = self.radius - np.linalg.norm(pixels - self.matrix[:2, 2], axis=1)
+        calibrated = self.radius - np.linalg.norm(pixels - matrix[:2, 2], axis=1)
         return float(np.minimum(border, calibrated).min())
 
     def sees_own_hardware(
-        self, position_m: np.ndarray, rotation_deg: np.ndarray, aspect: float = OUT_W / OUT_H
+        self,
+        position_m: np.ndarray,
+        rotation_deg: np.ndarray,
+        aspect: float = OUT_W / OUT_H,
+        focal_scale: float = 1.0,
     ) -> bool:
         """Whether the camera's own lens or board falls inside the recorded frame.
 
@@ -273,7 +282,7 @@ class OverheadPoseFilter:
         self._camera_frame(position_m, rotation_deg)
         center = self._data.cam_xpos[self.camera]
         rotation = self._data.cam_xmat[self.camera].reshape(3, 3)
-        tan_y = math.tan(math.radians(self.fovy) / 2.0)
+        tan_y = math.tan(math.radians(self.fovy) / 2.0) / focal_scale
         tan_x = tan_y * aspect
         for geom, local in self._own_geoms.items():
             world = self._data.geom_xpos[geom] + local @ self._data.geom_xmat[geom].reshape(3, 3).T
@@ -293,11 +302,12 @@ class OverheadPoseFilter:
         position_m: np.ndarray,
         rotation_deg: np.ndarray,
         min_margin_px: float = DEFAULT_TAG_MARGIN_PX,
+        focal_scale: float = 1.0,
     ) -> bool:
         """Whether this pose yields a usable frame the real rig could solve from."""
-        if self.sees_own_hardware(position_m, rotation_deg):
+        if self.sees_own_hardware(position_m, rotation_deg, focal_scale=focal_scale):
             return False
-        return self.margin_px(position_m, rotation_deg) >= min_margin_px
+        return self.margin_px(position_m, rotation_deg, focal_scale) >= min_margin_px
 
 
 @functools.lru_cache(maxsize=4)

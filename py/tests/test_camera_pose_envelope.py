@@ -67,6 +67,7 @@ def test_every_sampled_episode_keeps_the_frame_tags():
             visibility.margin_px(
                 np.array(sample.overhead_camera_position_m),
                 np.array(sample.overhead_camera_rotation_deg),
+                sample.overhead_camera_focal_scale,
             )
             >= margin
         )
@@ -150,6 +151,7 @@ def test_rejection_changes_the_draw():
             visibility.margin_px(
                 np.array(sample.overhead_camera_position_m),
                 np.array(sample.overhead_camera_rotation_deg),
+                sample.overhead_camera_focal_scale,
             )
             < margin
             for sample in (candidate.sample(seed) for seed in range(300))
@@ -157,6 +159,27 @@ def test_rejection_changes_the_draw():
 
     assert failures(unfiltered) > 0
     assert failures(preset) == 0
+
+
+@needs_intrinsics
+def test_focal_jitter_is_drawn_and_bounded():
+    """Focal length is the one intrinsic that survives into a rectified frame."""
+    preset = DomainRandomizationPreset.load(PRESET)
+    span = preset.scalars["overhead_camera_focal_pct"] / 100.0
+    assert span > 0.0, "the shipped preset should randomize focal length"
+    scales = np.array([preset.sample(seed).overhead_camera_focal_scale for seed in range(300)])
+    assert np.all(np.abs(scales - 1.0) <= span + 1e-12)
+    assert np.ptp(scales) > span, "the draw should cover most of the range"
+
+
+@needs_intrinsics
+def test_a_long_enough_lens_pushes_the_tags_out_of_reach():
+    """Narrowing the field of view moves tags outward, so it must be judged with the pose."""
+    visibility = overhead_pose_filter()
+    wide = visibility.margin_px(np.zeros(3), np.zeros(3), 1.0)
+    narrow = visibility.margin_px(np.zeros(3), np.zeros(3), 1.5)
+    assert narrow < wide
+    assert not visibility.accepts(np.zeros(3), np.zeros(3), focal_scale=3.0)
 
 
 def test_sampling_stays_deterministic():
