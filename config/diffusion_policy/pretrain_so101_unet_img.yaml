@@ -46,14 +46,14 @@ shape_meta:
     shape: [6]
 
 train:
-  n_epochs: 3000
+  n_epochs: 1500
   batch_size: 64
   num_workers: 4
   learning_rate: 1e-4
   weight_decay: 1e-6
   log_freq: 1
   lr_scheduler:
-    first_cycle_steps: 3000
+    first_cycle_steps: 1500
     warmup_steps: 100
     min_lr: 1e-5
   save_model_freq: 50

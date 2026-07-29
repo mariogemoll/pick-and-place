@@ -76,7 +76,7 @@ if [ ! -x "$venv/bin/python" ]; then
   uv venv --python /venv/main/bin/python "$venv"
 fi
 uv pip install --python "$venv/bin/python" \
-  -r config/diffusion_policy/torch-rtx5090.txt \
+  --overrides config/diffusion_policy/torch-rtx5090.txt \
   -e third_party/dppo
 
 mkdir -p "$archive_dir" "$(dirname "$dataset_root")"

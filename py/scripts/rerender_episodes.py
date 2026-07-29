@@ -62,15 +62,8 @@ from typing import Any
 
 import numpy as np
 
-from pick_and_place.camera_pose_envelope import draw_overhead_camera_jitter
-from pick_and_place.domain_randomization import (
-    DomainRandomizationPreset,
-    domain_seed,
-    generate_procedural_appearance,
-)
 from pick_and_place.episode_rerender import (
     CAMERA_FEATURES,
-    CameraJitter,
     EpisodeRenderer,
     FrameDiff,
     ImageStatsAccumulator,
@@ -89,7 +82,12 @@ from pick_and_place.episode_rerender import (
     video_frame_count,
     x264_settings,
 )
-from pick_and_place.scene_appearance import SceneAppearance
+from pick_and_place.render_randomization import BackgroundRandomization, CameraRandomization
+from pick_and_place.scene_appearance import (
+    APPEARANCE_PRESETS,
+    SceneAppearance,
+    parse_appearance,
+)
 from pick_and_place.scene_visibility import load_episode_truth, video_render_hw
 from pick_and_place.sim_dataset_staging import (
     COLLECTION_CONFIG_FILENAME,
@@ -97,23 +95,6 @@ from pick_and_place.sim_dataset_staging import (
     episode_staging_root,
     find_episode_datasets,
 )
-
-#: Named appearances. ``as-recorded`` changes nothing and is what ``--verify``
-#: measures. The rest come from ``docs/SCENE_APPEARANCE_SWEEP.md``: recolouring
-#: the cube, or darkening the floor instead. A dark floor needs the white
-#: target — the black one is found by local darkness and all but vanishes
-#: against it (plate contrast 0.24 on black, against 0.64 with a white target).
-#:
-#: Overhead cube contrast during acquisition, medians over 3 episodes:
-#: as-recorded 0.159, blue-cube 0.528, gray-floor 0.379, black-floor 0.598.
-#: The floor variants keep the tagged cube, so they inherit its poor
-#: separability from the white arm (~49 against the blue cube's ~196).
-VARIANT_PRESETS: dict[str, SceneAppearance] = {
-    "as-recorded": SceneAppearance(),
-    "blue-cube": SceneAppearance(cube="blue"),
-    "black-floor": SceneAppearance(floor="black", target="white"),
-    "gray-floor": SceneAppearance(floor="dark-gray", target="white"),
-}
 
 VERIFICATION_FILENAME = "verification.json"
 MANIFEST_FILENAME = "rerender.json"
@@ -141,101 +122,12 @@ class Variant:
         return episode_staging_root(output / self.name)
 
 
-@dataclass(frozen=True)
-class CameraRandomization:
-    """Overhead-camera jitter parameters and root seed for a re-render pass.
-
-    Draws a fresh pose+focal jitter per episode rather than replaying one from
-    the recording: nothing reads the overhead image back into control, so the
-    jitter is purely a rendering matter and does not need to have existed when
-    the episode was recorded. Reuses a domain-randomization preset file just for
-    its overhead-camera scalars; the rest of the preset (lighting, materials,
-    miscalibration, ...) is ignored.
-    """
-
-    position_mm: float
-    rotation_deg: float
-    focal_pct: float
-    margin_px: float
-    seed: int
-
-    @classmethod
-    def from_preset(cls, path: Path, *, seed: int) -> "CameraRandomization":
-        preset = DomainRandomizationPreset.load(path)
-        return cls(
-            position_mm=preset.scalars["overhead_camera_position_mm"],
-            rotation_deg=preset.scalars["overhead_camera_rotation_deg"],
-            focal_pct=preset.scalars["overhead_camera_focal_pct"],
-            margin_px=preset.scalars["overhead_camera_frame_tag_margin_px"],
-            seed=seed,
-        )
-
-    def draw(self, episode_idx: int) -> CameraJitter:
-        rng = np.random.default_rng(domain_seed(self.seed, episode_idx))
-        position, rotation, focal_scale = draw_overhead_camera_jitter(
-            rng,
-            position_mm=self.position_mm,
-            rotation_deg=self.rotation_deg,
-            focal_pct=self.focal_pct,
-            margin_px=self.margin_px,
-        )
-        return CameraJitter(position, rotation, focal_scale)
-
-
-@dataclass(frozen=True)
-class BackgroundRandomization:
-    """A domain-randomization preset's background/table draw, applied per episode.
-
-    Only meaningful together with ``--background-panorama``/``--table-texture``,
-    since those are what put the scene into the finite-floor mode with a
-    separate skybox to vary. Reuses ``DomainRandomizationPreset.sample`` and
-    ``generate_procedural_appearance`` wholesale rather than re-deriving the
-    colour/blur/blob-count draw: the unused fields of the sample (lighting,
-    camera jitter, cube orientation, miscalibration) cost nothing to compute
-    and ignoring them is simpler than a second, narrower sampler.
-    """
-
-    preset_path: Path
-    preset: DomainRandomizationPreset
-    seed: int
-
-    @classmethod
-    def from_preset(cls, path: Path, *, seed: int) -> "BackgroundRandomization":
-        return cls(preset_path=path, preset=DomainRandomizationPreset.load(path), seed=seed)
-
-    def draw(self, episode_idx: int):  # -> ProceduralAppearance
-        sample = self.preset.sample(domain_seed(self.seed, episode_idx))
-        return generate_procedural_appearance(sample)
-
-
 def parse_variant(token: str) -> Variant:
-    """Parse ``NAME`` from the preset table, or an ad-hoc ``key=value,...`` spec."""
-    if "=" not in token:
-        if token not in VARIANT_PRESETS:
-            raise argparse.ArgumentTypeError(
-                f"unknown variant {token!r}; expected one of {sorted(VARIANT_PRESETS)} "
-                "or a spec like 'cube=blue,floor=dark-gray'"
-            )
-        return Variant(token, VARIANT_PRESETS[token])
-
-    fields: dict[str, Any] = {}
-    for item in token.split(","):
-        key, _, value = item.partition("=")
-        key, value = key.strip(), value.strip()
-        if key == "frame_tags":
-            fields[key] = value.lower() in ("1", "true", "on", "yes")
-        elif key in ("floor", "target", "cube"):
-            fields[key] = value
-        else:
-            raise argparse.ArgumentTypeError(
-                f"unknown appearance field {key!r} in {token!r}; "
-                "expected floor, target, cube or frame_tags"
-            )
+    """Parse a named appearance preset or an ad-hoc ``key=value,...`` spec."""
     try:
-        appearance = SceneAppearance(**fields)
+        name, appearance = parse_appearance(token)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(str(exc)) from exc
-    name = "_".join(f"{key}-{fields[key]}" for key in sorted(fields))
     return Variant(name, appearance)
 
 
@@ -265,7 +157,7 @@ def _parse_args() -> argparse.Namespace:
         metavar="NAME",
         help=(
             "appearances to render, either a preset "
-            f"({', '.join(sorted(VARIANT_PRESETS))}) or an ad-hoc spec such as "
+            f"({', '.join(sorted(APPEARANCE_PRESETS))}) or an ad-hoc spec such as "
             "'cube=blue,floor=dark-gray'. Rendering several in one run replays each "
             "frame once, so the variants are trajectory-identical (default: blue-cube)"
         ),

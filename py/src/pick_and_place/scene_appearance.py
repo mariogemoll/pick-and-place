@@ -147,6 +147,55 @@ class SceneAppearance:
 
 AS_RECORDED = SceneAppearance()
 
+#: Named appearances. ``as-recorded`` changes nothing. The rest come from
+#: ``docs/SCENE_APPEARANCE_SWEEP.md``: recolouring the cube, or darkening the
+#: floor instead. A dark floor needs the white target — the black one is found by
+#: local darkness and all but vanishes against it (plate contrast 0.24 on black,
+#: against 0.64 with a white target).
+#:
+#: Overhead cube contrast during acquisition, medians over 3 episodes:
+#: as-recorded 0.159, blue-cube 0.528, gray-floor 0.379, black-floor 0.598.
+#: The floor variants keep the tagged cube, so they inherit its poor
+#: separability from the white arm (~49 against the blue cube's ~196).
+APPEARANCE_PRESETS: dict[str, SceneAppearance] = {
+    "as-recorded": AS_RECORDED,
+    "blue-cube": SceneAppearance(cube="blue"),
+    "black-floor": SceneAppearance(floor="black", target="white"),
+    "gray-floor": SceneAppearance(floor="dark-gray", target="white"),
+}
+
+
+def parse_appearance(token: str) -> tuple[str, SceneAppearance]:
+    """Parse ``NAME`` from :data:`APPEARANCE_PRESETS`, or a ``key=value,...`` spec.
+
+    Returns the appearance together with a stable label for it, which is the
+    preset name for a preset and a field summary for an ad-hoc spec. Raises
+    ``ValueError`` on an unknown name, field or colour.
+    """
+    if "=" not in token:
+        if token not in APPEARANCE_PRESETS:
+            raise ValueError(
+                f"unknown appearance {token!r}; expected one of {sorted(APPEARANCE_PRESETS)} "
+                "or a spec like 'cube=blue,floor=dark-gray'"
+            )
+        return token, APPEARANCE_PRESETS[token]
+
+    fields: dict[str, str | bool] = {}
+    for item in token.split(","):
+        key, _, value = item.partition("=")
+        key, value = key.strip(), value.strip()
+        if key == "frame_tags":
+            fields[key] = value.lower() in ("1", "true", "on", "yes")
+        elif key in ("floor", "target", "cube"):
+            fields[key] = value
+        else:
+            raise ValueError(
+                f"unknown appearance field {key!r} in {token!r}; "
+                "expected floor, target, cube or frame_tags"
+            )
+    name = "_".join(f"{key}-{fields[key]}" for key in sorted(fields))
+    return name, SceneAppearance(**fields)  # type: ignore[arg-type]
+
 
 class SceneAppearanceOverride:
     """Repaint an already compiled model's floor, target, cube and frame tags.
