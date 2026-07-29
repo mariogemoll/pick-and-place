@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: 2026 Mario Gemoll
+# SPDX-License-Identifier: 0BSD
+
+# Prepare a provisioned Vast.ai pod and launch SO-101 visual Diffusion Policy
+# pretraining. The dataset transport archive contains the canonical ZIP_STORED
+# train.npz; extraction restores that file unchanged for memory-mapped access.
+
+set -euo pipefail
+
+usage="usage: $(basename "$0") <ssh-host>"
+host="${1:?$usage}"
+: "${DP_DATASET_S3_PREFIX:?set DP_DATASET_S3_PREFIX to the parent of the dataset archive}"
+: "${DP_OUTPUT_S3_PREFIX:?set DP_OUTPUT_S3_PREFIX to the parent for training outputs}"
+
+dataset_name="blue-cube-96x96"
+archive_name="${dataset_name}.tar.zst"
+run_name="dp_blue_cube_unet"
+remote_root="/workspace/pick-and-place"
+
+for path in ~/.aws/credentials ~/.aws/config ~/.netrc; do
+  if [ ! -f "$path" ]; then
+    echo "required credential file is missing: $path" >&2
+    exit 1
+  fi
+done
+
+ssh "$host" 'mkdir -p ~/.aws /workspace && chmod 700 ~/.aws'
+scp -q ~/.aws/credentials ~/.aws/config "$host:/root/.aws/"
+scp -q ~/.netrc "$host:/root/.netrc"
+ssh "$host" 'chmod 600 ~/.aws/credentials ~/.netrc && chmod 644 ~/.aws/config'
+
+ssh "$host" 'bash -s' -- \
+  "$dataset_name" "$DP_DATASET_S3_PREFIX" "$DP_OUTPUT_S3_PREFIX" \
+  "$archive_name" "$run_name" "$remote_root" <<'REMOTE'
+set -euo pipefail
+
+dataset_name="$1"
+dataset_prefix="${2%/}"
+output_prefix="${3%/}"
+archive_name="$4"
+run_name="$5"
+remote_root="$6"
+dataset_root="/workspace/datasets/$dataset_name"
+archive_dir="/workspace/dataset-archives"
+archive_path="$archive_dir/$archive_name"
+checksum_path="$archive_path.sha256"
+venv="/workspace/venvs/dppo"
+output_root="/workspace/outputs/$run_name"
+session="$run_name"
+
+for command in aws git tar tmux uv zstd; do
+  command -v "$command" >/dev/null || {
+    echo "required command is missing on pod: $command" >&2
+    exit 1
+  }
+done
+test -x /venv/main/bin/python || {
+  echo "Vast PyTorch environment is missing: /venv/main/bin/python" >&2
+  exit 1
+}
+aws sts get-caller-identity --query Account --output text >/dev/null
+grep -q 'machine api.wandb.ai' ~/.netrc || {
+  echo "W&B credentials are missing from ~/.netrc" >&2
+  exit 1
+}
+
+if [ ! -d "$remote_root/.git" ]; then
+  git clone --recurse-submodules https://github.com/mariogemoll/pick-and-place.git "$remote_root"
+fi
+cd "$remote_root"
+git submodule update --init --recursive
+
+if [ ! -x "$venv/bin/python" ]; then
+  uv venv --python /venv/main/bin/python "$venv"
+fi
+uv pip install --python "$venv/bin/python" \
+  -r config/diffusion_policy/torch-rtx5090.txt \
+  -e third_party/dppo
+
+mkdir -p "$archive_dir" "$(dirname "$dataset_root")"
+aws s3 cp "$dataset_prefix/$archive_name" "$archive_path" --only-show-errors
+aws s3 cp "$dataset_prefix/$archive_name.sha256" "$checksum_path" --only-show-errors
+(
+  cd "$archive_dir"
+  sha256sum --check "${archive_name}.sha256"
+)
+
+if [ -e "$dataset_root" ]; then
+  echo "dataset extraction target already exists: $dataset_root" >&2
+  exit 1
+fi
+tar --use-compress-program=unzstd -xf "$archive_path" -C "$(dirname "$dataset_root")"
+for path in train.npz normalization.npz export.json; do
+  test -f "$dataset_root/$path" || {
+    echo "archive is missing required dataset file: $path" >&2
+    exit 1
+  }
+done
+"$venv/bin/python" - "$dataset_root" <<'PY'
+import json
+import sys
+import zipfile
+from pathlib import Path
+
+dataset_root = Path(sys.argv[1])
+with zipfile.ZipFile(dataset_root / "train.npz") as archive:
+    expected = {"states.npy", "actions.npy", "images.npy", "traj_lengths.npy"}
+    if set(archive.namelist()) != expected:
+        raise ValueError(f"unexpected train.npz members: {archive.namelist()}")
+    compressed = [item.filename for item in archive.infolist() if item.compress_type]
+    if compressed:
+        raise ValueError(f"train.npz members must use ZIP_STORED: {compressed}")
+manifest = json.loads((dataset_root / "export.json").read_text())
+if manifest["image_size"] != [96, 96] or manifest["image_dtype"] != "uint8":
+    raise ValueError("dataset image contract does not match the training configuration")
+PY
+
+if tmux has-session -t "$session" 2>/dev/null; then
+  echo "tmux session already exists: $session" >&2
+  exit 1
+fi
+if [ -e "$output_root" ]; then
+  echo "training output already exists: $output_root" >&2
+  exit 1
+fi
+mkdir -p "$output_root"
+
+tmux new-session -d -s "$session" "
+  set -o pipefail
+  export DPPO_DATA_DIR='$dataset_root'
+  export DPPO_LOG_DIR='$output_root'
+  export PYTHONPATH='$remote_root/third_party/dppo'
+  cd '$remote_root/third_party/dppo'
+  ( while sleep 900; do
+      aws s3 sync '$output_root' \
+        '$output_prefix/$run_name' --only-show-errors
+    done ) &
+  sync_pid=\$!
+  '$venv/bin/python' script/run.py \
+    --config-path '$remote_root/config/diffusion_policy' \
+    --config-name pretrain_so101_unet_img \
+    2>&1 | tee '$output_root/console.log'
+  status=\${PIPESTATUS[0]}
+  kill \$sync_pid 2>/dev/null || true
+  aws s3 sync '$output_root' \
+    '$output_prefix/$run_name' --only-show-errors
+  exit \$status
+"
+
+echo "started tmux session $session"
+echo "watch: tmux attach -t $session"
+echo "log:   tail -f $output_root/console.log"
+REMOTE
+
+echo
+echo "Training launched on $host."
+echo "Watch: ssh -t $host tmux attach -t $run_name"
