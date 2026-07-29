@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import math
 import os
 import platform
 import re
@@ -45,6 +46,7 @@ import pyarrow.parquet as pq
 
 from pick_and_place.camera_extrinsics import load_local_camera_extrinsics
 from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
+from pick_and_place.camera_pose_envelope import apply_camera_jitter, camera_module_geoms
 from pick_and_place.episodes import set_joint
 from pick_and_place.follower import ARM_JOINT_NAMES, real_frame_to_sim
 from pick_and_place.paper_detection import DROP_ZONE_HALF_SIZE, place_paper_target_marker
@@ -239,6 +241,21 @@ def encode_decode(
     return decoded
 
 
+@dataclass(frozen=True)
+class CameraJitter:
+    """One overhead-camera pose+focal draw, as a rigid transform from the authored pose.
+
+    Camera pose and focal length are purely a rendering matter -- nothing reads
+    the overhead image back into control during recording -- so a re-render can
+    draw its own jitter independently of how (or whether) the source episode was
+    recorded with one. See :func:`pick_and_place.camera_pose_envelope.draw_overhead_camera_jitter`.
+    """
+
+    position_m: tuple[float, float, float]
+    rotation_deg: tuple[float, float, float]
+    focal_scale: float = 1.0
+
+
 class EpisodeRenderer:
     """Re-render recorded ground truth through the recording camera pipeline."""
 
@@ -260,8 +277,51 @@ class EpisodeRenderer:
         cube_body = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "pick_cube")
         self._cube_qpos_adr = int(self.model.jnt_qposadr[self.model.body_jntadr[cube_body]])
 
-    def set_episode(self, target_xy: tuple[float, float], target_plate_yaw: float) -> None:
-        """Place the drop-zone marker at this episode's target, as recorded."""
+        # Authored overhead camera pose/focal and its hardware geoms' base poses,
+        # snapshotted once so a jittered episode can be restored to it exactly.
+        self._overhead_camera = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_CAMERA, OVERHEAD_CAMERA
+        )
+        self._overhead_cam_pos = self.model.cam_pos[self._overhead_camera].copy()
+        self._overhead_cam_quat = self.model.cam_quat[self._overhead_camera].copy()
+        self._overhead_cam_fovy = float(self.model.cam_fovy[self._overhead_camera])
+        self._overhead_geom_base = {
+            geom: (self.model.geom_pos[geom].copy(), self.model.geom_quat[geom].copy())
+            for geom in camera_module_geoms(self.model, self._overhead_camera)
+        }
+
+    def set_camera_jitter(self, jitter: CameraJitter | None) -> None:
+        """Apply an overhead-camera pose+focal jitter, or restore the authored pose."""
+        if jitter is None:
+            self.model.cam_pos[self._overhead_camera] = self._overhead_cam_pos
+            self.model.cam_quat[self._overhead_camera] = self._overhead_cam_quat
+            self.model.cam_fovy[self._overhead_camera] = self._overhead_cam_fovy
+            for geom, (geom_pos, geom_quat) in self._overhead_geom_base.items():
+                self.model.geom_pos[geom] = geom_pos
+                self.model.geom_quat[geom] = geom_quat
+            return
+        apply_camera_jitter(
+            self.model,
+            self._overhead_camera,
+            self._overhead_cam_pos,
+            self._overhead_cam_quat,
+            self._overhead_geom_base,
+            np.asarray(jitter.position_m, float),
+            np.asarray(jitter.rotation_deg, float),
+        )
+        half = math.radians(self._overhead_cam_fovy) / 2.0
+        self.model.cam_fovy[self._overhead_camera] = math.degrees(
+            2.0 * math.atan(math.tan(half) / jitter.focal_scale)
+        )
+
+    def set_episode(
+        self,
+        target_xy: tuple[float, float],
+        target_plate_yaw: float,
+        *,
+        camera_jitter: CameraJitter | None = None,
+    ) -> None:
+        """Place the drop-zone marker and overhead camera for this episode."""
         place_paper_target_marker(
             self.model,
             target_xy,
@@ -270,6 +330,7 @@ class EpisodeRenderer:
             usable=is_cube_drop_allowed(*target_xy),
             alpha=1.0,
         )
+        self.set_camera_jitter(camera_jitter)
         mujoco.mj_forward(self.model, self.data)
         # The placement decides this episode's plate colour, which is what an
         # appearance leaving the target unset must restore.

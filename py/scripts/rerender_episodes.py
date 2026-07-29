@@ -62,8 +62,11 @@ from typing import Any
 
 import numpy as np
 
+from pick_and_place.camera_pose_envelope import draw_overhead_camera_jitter
+from pick_and_place.domain_randomization import DomainRandomizationPreset, domain_seed
 from pick_and_place.episode_rerender import (
     CAMERA_FEATURES,
+    CameraJitter,
     EpisodeRenderer,
     FrameDiff,
     ImageStatsAccumulator,
@@ -134,6 +137,47 @@ class Variant:
         return episode_staging_root(output / self.name)
 
 
+@dataclass(frozen=True)
+class CameraRandomization:
+    """Overhead-camera jitter parameters and root seed for a re-render pass.
+
+    Draws a fresh pose+focal jitter per episode rather than replaying one from
+    the recording: nothing reads the overhead image back into control, so the
+    jitter is purely a rendering matter and does not need to have existed when
+    the episode was recorded. Reuses a domain-randomization preset file just for
+    its overhead-camera scalars; the rest of the preset (lighting, materials,
+    miscalibration, ...) is ignored.
+    """
+
+    position_mm: float
+    rotation_deg: float
+    focal_pct: float
+    margin_px: float
+    seed: int
+
+    @classmethod
+    def from_preset(cls, path: Path, *, seed: int) -> "CameraRandomization":
+        preset = DomainRandomizationPreset.load(path)
+        return cls(
+            position_mm=preset.scalars["overhead_camera_position_mm"],
+            rotation_deg=preset.scalars["overhead_camera_rotation_deg"],
+            focal_pct=preset.scalars["overhead_camera_focal_pct"],
+            margin_px=preset.scalars["overhead_camera_frame_tag_margin_px"],
+            seed=seed,
+        )
+
+    def draw(self, episode_idx: int) -> CameraJitter:
+        rng = np.random.default_rng(domain_seed(self.seed, episode_idx))
+        position, rotation, focal_scale = draw_overhead_camera_jitter(
+            rng,
+            position_mm=self.position_mm,
+            rotation_deg=self.rotation_deg,
+            focal_pct=self.focal_pct,
+            margin_px=self.margin_px,
+        )
+        return CameraJitter(position, rotation, focal_scale)
+
+
 def parse_variant(token: str) -> Variant:
     """Parse ``NAME`` from the preset table, or an ad-hoc ``key=value,...`` spec."""
     if "=" not in token:
@@ -195,6 +239,23 @@ def _parse_args() -> argparse.Namespace:
             "'cube=blue,floor=dark-gray'. Rendering several in one run replays each "
             "frame once, so the variants are trajectory-identical (default: blue-cube)"
         ),
+    )
+    parser.add_argument(
+        "--camera-randomization",
+        type=Path,
+        default=None,
+        help=(
+            "domain-randomization preset (e.g. config/domain_randomization/act_mild_v1.json) "
+            "whose overhead_camera_* scalars are used to draw a fresh per-episode overhead "
+            "camera pose+focal jitter at render time, independent of how the source episode "
+            "was recorded. Omit for the authored, unjittered camera (default)."
+        ),
+    )
+    parser.add_argument(
+        "--camera-seed",
+        type=int,
+        default=0,
+        help="root seed for --camera-randomization's per-episode draw (default: 0)",
     )
     parser.add_argument(
         "--first-episode",
@@ -337,6 +398,7 @@ def rerender_episode(
     output: Path,
     *,
     fps: int,
+    camera_randomization: CameraRandomization | None = None,
 ) -> int:
     """Write every variant of one episode; return the frames rendered per variant."""
     assert_rerenderable(source)
@@ -373,8 +435,13 @@ def rerender_episode(
             )
             stats[(variant.name, feature)] = ImageStatsAccumulator()
 
+    camera_jitter = (
+        camera_randomization.draw(episode_index(source))
+        if camera_randomization is not None
+        else None
+    )
     try:
-        renderer.set_episode(truth.target_xy, truth.target_plate_yaw)
+        renderer.set_episode(truth.target_xy, truth.target_plate_yaw, camera_jitter=camera_jitter)
         for index in range(frames):
             renderer.set_frame(truth.states[index], truth.cube_poses[index])
             for variant in variants:
@@ -414,6 +481,7 @@ def render_episodes(
     render_hw: tuple[int, int],
     image_hw: tuple[int, int],
     fps: int,
+    camera_randomization: CameraRandomization | None = None,
     label: str = "",
 ) -> tuple[int, int]:
     """Re-render a list of episodes; return ``(written, skipped)`` counts."""
@@ -436,7 +504,14 @@ def render_episodes(
     try:
         for position, episode in enumerate(pending, start=1):
             started = time.monotonic()
-            frames = rerender_episode(renderer, episode, variants, output, fps=fps)
+            frames = rerender_episode(
+                renderer,
+                episode,
+                variants,
+                output,
+                fps=fps,
+                camera_randomization=camera_randomization,
+            )
             written += 1
             elapsed = time.monotonic() - started
             print(
@@ -451,6 +526,11 @@ def render_episodes(
 
 def _worker(payload: dict[str, Any]) -> None:
     """multiprocessing entry point: re-render one shard of the episode list."""
+    camera_randomization = (
+        CameraRandomization(**payload["camera_randomization"])
+        if payload["camera_randomization"] is not None
+        else None
+    )
     render_episodes(
         [Path(path) for path in payload["episodes"]],
         [Variant(name, SceneAppearance(**fields)) for name, fields in payload["variants"]],
@@ -458,6 +538,7 @@ def _worker(payload: dict[str, Any]) -> None:
         render_hw=tuple(payload["render_hw"]),
         image_hw=tuple(payload["image_hw"]),
         fps=payload["fps"],
+        camera_randomization=camera_randomization,
         label=payload["label"],
     )
 
@@ -471,6 +552,7 @@ def render_in_pool(
     image_hw: tuple[int, int],
     fps: int,
     workers: int,
+    camera_randomization: CameraRandomization | None = None,
 ) -> None:
     """Shard the episodes across worker processes, each with its own GL context."""
     # Spawn rather than fork: a MuJoCo GL context does not survive a fork.
@@ -479,6 +561,9 @@ def render_in_pool(
     serialized_variants = [
         (variant.name, dataclasses.asdict(variant.appearance)) for variant in variants
     ]
+    serialized_camera_randomization = (
+        dataclasses.asdict(camera_randomization) if camera_randomization is not None else None
+    )
     processes = []
     for worker_id, shard in enumerate(shards):
         if not shard:
@@ -490,6 +575,7 @@ def render_in_pool(
             "render_hw": list(render_hw),
             "image_hw": list(image_hw),
             "fps": fps,
+            "camera_randomization": serialized_camera_randomization,
             "label": f"[w{worker_id}] ",
         }
         process = ctx.Process(target=_worker, args=(payload,))
@@ -685,6 +771,7 @@ def write_manifest(
     fingerprint: dict[str, Any],
     config: dict[str, Any],
     verification: dict[str, Any] | None,
+    camera_randomization: CameraRandomization | None = None,
 ) -> None:
     """Record what this staged root is, next to the collection config it inherits."""
     staging_root.mkdir(parents=True, exist_ok=True)
@@ -713,6 +800,9 @@ def write_manifest(
             }
             if verification is not None
             else None
+        ),
+        "camera_randomization": (
+            dataclasses.asdict(camera_randomization) if camera_randomization is not None else None
         ),
         "notes": (
             "Videos were re-rendered from the recorded per-frame ground truth; parquet "
@@ -801,6 +891,18 @@ def main() -> None:
     names = [variant.name for variant in variants]
     if len(set(names)) != len(names):
         raise SystemExit(f"duplicate variant name(s) in {names}")
+    camera_randomization = (
+        CameraRandomization.from_preset(args.camera_randomization, seed=args.camera_seed)
+        if args.camera_randomization is not None
+        else None
+    )
+    if camera_randomization is not None:
+        print(
+            f"Camera randomization: {args.camera_randomization} (seed {args.camera_seed}) -> "
+            f"±{camera_randomization.position_mm:g} mm / ±{camera_randomization.rotation_deg:g}° "
+            f"/ ±{camera_randomization.focal_pct:g}% focal, "
+            f"margin {camera_randomization.margin_px:g} px."
+        )
     verification = None
     if not args.skip_verification_check:
         report_path = args.verification or (output / VERIFICATION_FILENAME)
@@ -817,6 +919,7 @@ def main() -> None:
             fingerprint=fingerprint,
             config=config,
             verification=verification,
+            camera_randomization=camera_randomization,
         )
         print(f"{variant.name}: {variant.appearance.name} -> {variant.staging_root(output)}")
 
@@ -830,6 +933,7 @@ def main() -> None:
             image_hw=image_hw,
             fps=fps,
             workers=args.workers,
+            camera_randomization=camera_randomization,
         )
     else:
         render_episodes(
@@ -839,6 +943,7 @@ def main() -> None:
             render_hw=render_hw,
             image_hw=image_hw,
             fps=fps,
+            camera_randomization=camera_randomization,
         )
     elapsed = time.monotonic() - started
     print(f"\nFinished {len(episodes)} selected episode(s) in {elapsed / 60:.1f} min.")

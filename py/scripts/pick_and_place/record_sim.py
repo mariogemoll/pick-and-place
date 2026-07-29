@@ -289,13 +289,18 @@ def run_recording(
             if sample is not None:
                 randomizer.apply(sample)
                 rig.reload_textures(randomizer.texture_ids)
+            # Every recording draws one of the cube's 24 rotational orientations,
+            # not just its yaw -- a DR preset's own draw when one is active,
+            # otherwise a fresh one from this episode's RNG, so a plain recording
+            # still trains on cubes resting on any face rather than always the
+            # same one.
+            orientation_index = (
+                sample.cube_orientation_index if sample is not None else int(rng.integers(24))
+            )
             try:
-                episode_source = source
-                if sample is not None:
-                    episode_source = orient_cube(
-                        source if source is not None else sample_cube(rng),
-                        sample.cube_orientation_index,
-                    )
+                episode_source = orient_cube(
+                    source if source is not None else sample_cube(rng), orientation_index
+                )
                 episode = prepare_episode(
                     rng,
                     episode_source,
@@ -365,6 +370,9 @@ def run_recording(
             metadata.update(placement_error_metadata(error, detected=True))
             metadata["target_plate_yaw"] = float(target_plate_yaw)
             metadata["phase_spans"] = phase_spans_json(result.phase_spans)
+            metadata["cube_start_roll"] = float(episode.source.roll)
+            metadata["cube_start_pitch"] = float(episode.source.pitch)
+            metadata["cube_orientation_index"] = orientation_index
             if draw is not None:
                 metadata.update(
                     {
@@ -383,9 +391,6 @@ def run_recording(
                         "domain_preset": preset.name,
                         "domain_seed": domain_seed,
                         "domain_sample_json": sample.metadata_json(),
-                        "cube_start_roll": float(episode.source.roll),
-                        "cube_start_pitch": float(episode.source.pitch),
-                        "cube_orientation_index": sample.cube_orientation_index,
                     }
                 )
             recording.save_episode(metadata)

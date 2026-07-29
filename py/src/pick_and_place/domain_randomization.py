@@ -19,7 +19,12 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from pick_and_place.background_panorama import equirect_to_skybox
-from pick_and_place.camera_pose_envelope import apply_camera_jitter, camera_module_geoms
+from pick_and_place.camera_pose_envelope import (
+    apply_camera_jitter,
+    camera_module_geoms,
+    draw_camera_jitter,
+    draw_overhead_camera_jitter,
+)
 from pick_and_place.geometry import CubePose
 from pick_and_place.miscalibration import MiscalibrationDraw, MiscalibrationModel
 
@@ -153,75 +158,25 @@ class DomainRandomizationPreset:
             ),
         )
 
-    #: Redraws allowed before giving up on finding a solvable overhead pose. A
-    #: box sized so that a few percent of draws are rejected exhausts this only
-    #: if the box is far too wide for the constraint, which is worth an error
-    #: rather than a silently truncated distribution.
-    MAX_OVERHEAD_CAMERA_ATTEMPTS = 100
-
-    def _draw_overhead_camera(
-        self, camera_jitter: Any, focal_scale: float = 1.0
-    ) -> tuple[tuple[float, ...], tuple[float, ...]]:
-        """Draw an overhead-camera jitter the real rig could be calibrated at.
-
-        With ``overhead_camera_frame_tag_margin_px`` above zero, poses that would
-        lose a workspace-frame tag off the real sensor are rejected and redrawn.
-        The constraint is not a box (see :mod:`pick_and_place.camera_pose_envelope`),
-        so rejection is what lets the box stay wide enough to reach the poses the
-        real camera actually takes without also generating ones it cannot.
-        """
-        margin = self.scalars["overhead_camera_frame_tag_margin_px"]
-        if margin <= 0.0:
-            return camera_jitter("overhead")
-
-        from pick_and_place.camera_pose_envelope import overhead_pose_filter
-
-        visibility = overhead_pose_filter()
-        for _ in range(self.MAX_OVERHEAD_CAMERA_ATTEMPTS):
-            position, rotation = camera_jitter("overhead")
-            if visibility.accepts(
-                np.array(position), np.array(rotation), margin, focal_scale=focal_scale
-            ):
-                return position, rotation
-        raise RuntimeError(
-            "no overhead camera pose gave a clear view with all four frame tags in "
-            f"{self.MAX_OVERHEAD_CAMERA_ATTEMPTS} draws; "
-            f"overhead_camera_position_mm={self.scalars['overhead_camera_position_mm']:g} / "
-            f"overhead_camera_rotation_deg={self.scalars['overhead_camera_rotation_deg']:g} "
-            "is far too wide for the tag constraint. Shrink it, or lower "
-            "overhead_camera_frame_tag_margin_px."
-        )
-
     def sample(self, episode_seed: int) -> "DomainSample":
         rng = np.random.default_rng(episode_seed)
 
         def draw(name: str) -> float:
             return float(rng.uniform(*self.ranges[name]))
 
-        def camera_jitter(prefix: str) -> tuple[tuple[float, ...], tuple[float, ...]]:
-            position = (
-                rng.uniform(
-                    -self.scalars[f"{prefix}_camera_position_mm"],
-                    self.scalars[f"{prefix}_camera_position_mm"],
-                    size=3,
-                )
-                / 1000.0
-            )
-            rotation = rng.uniform(
-                -self.scalars[f"{prefix}_camera_rotation_deg"],
-                self.scalars[f"{prefix}_camera_rotation_deg"],
-                size=3,
-            )
-            return tuple(float(x) for x in position), tuple(float(x) for x in rotation)
-
-        # Drawn before the pose, because a narrower field of view pulls the
-        # workspace-frame tags outward and so changes which poses are solvable.
-        focal_pct = self.scalars["overhead_camera_focal_pct"]
-        overhead_focal_scale = float(rng.uniform(1.0 - focal_pct / 100.0, 1.0 + focal_pct / 100.0))
-        overhead_position, overhead_rotation = self._draw_overhead_camera(
-            camera_jitter, overhead_focal_scale
+        # Focal length is drawn before the pose, because a narrower field of
+        # view pulls the workspace-frame tags outward and so changes which
+        # poses are solvable.
+        overhead_position, overhead_rotation, overhead_focal_scale = draw_overhead_camera_jitter(
+            rng,
+            position_mm=self.scalars["overhead_camera_position_mm"],
+            rotation_deg=self.scalars["overhead_camera_rotation_deg"],
+            focal_pct=self.scalars["overhead_camera_focal_pct"],
+            margin_px=self.scalars["overhead_camera_frame_tag_margin_px"],
         )
-        wrist_position, wrist_rotation = camera_jitter("wrist")
+        wrist_position, wrist_rotation = draw_camera_jitter(
+            rng, self.scalars["wrist_camera_position_mm"], self.scalars["wrist_camera_rotation_deg"]
+        )
 
         target = rng.uniform(
             -self.scalars["key_light_target_jitter_m"],

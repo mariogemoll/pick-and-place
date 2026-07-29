@@ -314,3 +314,59 @@ class OverheadPoseFilter:
 def overhead_pose_filter(camera_name: str = CAMERA_NAME) -> OverheadPoseFilter:
     """Cached :class:`OverheadPoseFilter`; building one compiles the scene."""
     return OverheadPoseFilter(camera_name=camera_name)
+
+
+#: Redraws allowed before giving up on finding a solvable overhead pose. A box
+#: sized so that a few percent of draws are rejected exhausts this only if the
+#: box is far too wide for the constraint, which is worth an error rather than
+#: a silently truncated distribution.
+MAX_OVERHEAD_CAMERA_ATTEMPTS = 100
+
+
+def draw_camera_jitter(
+    rng: np.random.Generator, position_mm: float, rotation_deg: float
+) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    """Draw a camera pose jitter uniformly from a box, with no visibility check."""
+    position = rng.uniform(-position_mm, position_mm, size=3) / 1000.0
+    rotation = rng.uniform(-rotation_deg, rotation_deg, size=3)
+    return tuple(float(x) for x in position), tuple(float(x) for x in rotation)
+
+
+def draw_overhead_camera_jitter(
+    rng: np.random.Generator,
+    *,
+    position_mm: float,
+    rotation_deg: float,
+    focal_pct: float,
+    margin_px: float = DEFAULT_TAG_MARGIN_PX,
+    max_attempts: int = MAX_OVERHEAD_CAMERA_ATTEMPTS,
+) -> tuple[tuple[float, float, float], tuple[float, float, float], float]:
+    """Draw an overhead-camera jitter the real rig could be calibrated at.
+
+    Shared by :class:`~pick_and_place.domain_randomization.DomainRandomizationPreset`
+    (drawn at record time, alongside the rest of a domain sample) and by anything
+    that wants overhead-camera variety on its own -- the pose and focal length are
+    purely a rendering matter (nothing reads the overhead image back into control),
+    so a re-render can draw a fresh one independently of how the episode was
+    recorded. With ``margin_px`` above zero, poses that would lose a workspace-frame
+    tag off the real sensor are rejected and redrawn, which is what lets the box
+    stay wide enough to reach the poses the real camera actually takes without also
+    generating ones it cannot; see :mod:`pick_and_place.camera_pose_envelope`.
+    """
+    focal_scale = float(rng.uniform(1.0 - focal_pct / 100.0, 1.0 + focal_pct / 100.0))
+    if margin_px <= 0.0:
+        position, rotation = draw_camera_jitter(rng, position_mm, rotation_deg)
+        return position, rotation, focal_scale
+
+    visibility = overhead_pose_filter()
+    for _ in range(max_attempts):
+        position, rotation = draw_camera_jitter(rng, position_mm, rotation_deg)
+        if visibility.accepts(
+            np.array(position), np.array(rotation), margin_px, focal_scale=focal_scale
+        ):
+            return position, rotation, focal_scale
+    raise RuntimeError(
+        "no overhead camera pose gave a clear view with all four frame tags in "
+        f"{max_attempts} draws; position_mm={position_mm:g} / rotation_deg={rotation_deg:g} "
+        f"is far too wide for the tag constraint. Shrink it, or lower margin_px."
+    )

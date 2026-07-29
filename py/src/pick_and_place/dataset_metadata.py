@@ -24,10 +24,11 @@ def driver_metadata(driver: str) -> dict[str, str]:
 def cube_pose_metadata(source: CubePose, target: CubePose) -> dict[str, float]:
     """Return the planar pick pose and target point for one pick-and-place episode.
 
-    The cube always rests flat on the table, so its z and roll/pitch are
-    constants and only the ``(x, y, yaw)`` of the pick pose carries
-    information. The target is the centre of the black-square marker, a bare
-    ``(x, y)`` point with no meaningful orientation.
+    Only the ``(x, y, yaw)`` of the pick pose; the cube's roll/pitch (which
+    face is resting down) is recorded separately as ``cube_start_roll``/
+    ``cube_start_pitch``/``cube_orientation_index`` by the caller. The target
+    is the centre of the black-square marker, a bare ``(x, y)`` point with no
+    meaningful orientation.
     """
     return {
         "cube_start_x": float(source.x),
