@@ -12,6 +12,8 @@ import pytest
 from pick_and_place import diffusion_policy_dataset
 from pick_and_place.diffusion_policy_dataset import (
     CAMERA_FEATURES,
+    _decimated_indices,
+    decimated_length,
     export_diffusion_policy_dataset,
     normalize_min_max,
 )
@@ -26,6 +28,11 @@ def test_normalize_min_max_uses_policy_range_and_preserves_constant_columns():
     np.testing.assert_allclose(normalized[:, 1], [-1.0, -1.0], atol=1e-6)
     np.testing.assert_array_equal(minimum, [1.0, 5.0])
     np.testing.assert_array_equal(maximum, [3.0, 5.0])
+
+
+def test_decimation_restarts_at_each_episode_boundary():
+    assert decimated_length(5, 3) == 2
+    np.testing.assert_array_equal(_decimated_indices([5, 4], 3), [0, 3, 5, 8])
 
 
 def _write_tiny_dataset(root: Path) -> None:
@@ -50,7 +57,7 @@ def _write_tiny_dataset(root: Path) -> None:
 
     episode = {
         "episode_index": [0],
-        "length": [2],
+        "length": [4],
         "data/chunk_index": [0],
         "data/file_index": [0],
     }
@@ -69,10 +76,15 @@ def _write_tiny_dataset(root: Path) -> None:
     pq.write_table(
         pa.table(
             {
-                "index": [0, 1],
-                "episode_index": [0, 0],
-                "observation.state": [[0.0, 10.0], [2.0, 14.0]],
-                "action": [[-2.0, 1.0], [2.0, 5.0]],
+                "index": [0, 1, 2, 3],
+                "episode_index": [0, 0, 0, 0],
+                "observation.state": [
+                    [0.0, 10.0],
+                    [100.0, 100.0],
+                    [200.0, 200.0],
+                    [2.0, 14.0],
+                ],
+                "action": [[-2.0, 1.0], [100.0, 100.0], [200.0, 200.0], [2.0, 5.0]],
             }
         ),
         root / "data" / "chunk-000" / "file-000.parquet",
@@ -85,11 +97,13 @@ def test_export_writes_policy_arrays_normalization_and_camera_order(tmp_path, mo
     second_output = tmp_path / "diffusion-policy-second"
     _write_tiny_dataset(source)
 
-    def fake_write_images(destination, *, channel_offset, rows, **kwargs):
+    def fake_write_images(destination, *, channel_offset, rows, frame_stride, **kwargs):
         del kwargs
         value = 20 if channel_offset == 0 else 40
         destination[:, channel_offset : channel_offset + 3] = value
-        assert sum(int(row["length"]) for row in rows) == len(destination)
+        assert sum(decimated_length(int(row["length"]), frame_stride) for row in rows) == len(
+            destination
+        )
         feature = CAMERA_FEATURES[channel_offset // 3]
         return [source / "videos" / feature / "chunk-000" / "file-000.mp4"]
 
@@ -111,6 +125,9 @@ def test_export_writes_policy_arrays_normalization_and_camera_order(tmp_path, mo
         np.testing.assert_array_equal(normalization["action_min"], [-2.0, 1.0])
         np.testing.assert_array_equal(normalization["action_max"], [2.0, 5.0])
     assert manifest["camera_features"] == list(CAMERA_FEATURES)
+    assert manifest["fps"] == 10
+    assert manifest["source_fps"] == 30
+    assert manifest["frame_stride"] == 3
     assert json.loads((output / "export.json").read_text()) == manifest
     assert not output.with_name("diffusion-policy.building").exists()
 
@@ -121,3 +138,11 @@ def test_export_writes_policy_arrays_normalization_and_camera_order(tmp_path, mo
 def test_export_rejects_nonpositive_worker_count(tmp_path):
     with pytest.raises(ValueError, match="workers must be positive"):
         export_diffusion_policy_dataset(tmp_path / "source", tmp_path / "output", workers=0)
+
+
+def test_export_rejects_policy_rate_that_does_not_divide_source_fps(tmp_path):
+    source = tmp_path / "source"
+    _write_tiny_dataset(source)
+
+    with pytest.raises(ValueError, match="not an integer multiple"):
+        export_diffusion_policy_dataset(source, tmp_path / "output", policy_hz=11)
