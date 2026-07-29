@@ -313,6 +313,32 @@ class ProceduralAppearance:
     table_rgb: np.ndarray
 
 
+def write_procedural_textures(
+    model: mujoco.MjModel, texture_ids: tuple[int, ...], appearance: ProceduralAppearance
+) -> None:
+    """Write a procedural background/table appearance into ``model.tex_data``.
+
+    Shared by :class:`DomainRandomizer` (recording) and
+    :class:`~pick_and_place.episode_rerender.EpisodeRenderer` (re-rendering with
+    the finite-floor + skybox scene), so both draw the same texture pipeline.
+    The caller still has to push the change into a live GL context, e.g. via
+    :func:`reload_renderer_textures`.
+    """
+    for texture_id in texture_ids:
+        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_TEXTURE, texture_id)
+        width = int(model.tex_width[texture_id])
+        height = int(model.tex_height[texture_id])
+        channels = int(model.tex_nchannel[texture_id])
+        address = int(model.tex_adr[texture_id])
+        if name == "table_texture":
+            rgb = cv2.resize(appearance.table_rgb, (width, height), interpolation=cv2.INTER_CUBIC)
+            rgb = np.rot90(rgb, k=-1).copy()
+        else:
+            rgb = equirect_to_skybox(appearance.background_rgb, width)
+        flat = rgb[..., :channels].reshape(-1)
+        model.tex_data[address : address + flat.size] = flat
+
+
 def generate_procedural_appearance(
     sample: DomainSample,
     *,
@@ -570,22 +596,9 @@ class DomainRandomizer:
         return self._camera_modules[camera]
 
     def _apply_procedural_textures(self, sample: DomainSample) -> None:
-        appearance = generate_procedural_appearance(sample)
-        for texture_id in self._texture_ids:
-            name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_TEXTURE, texture_id)
-            width = int(self.model.tex_width[texture_id])
-            height = int(self.model.tex_height[texture_id])
-            channels = int(self.model.tex_nchannel[texture_id])
-            address = int(self.model.tex_adr[texture_id])
-            if name == "table_texture":
-                rgb = cv2.resize(
-                    appearance.table_rgb, (width, height), interpolation=cv2.INTER_CUBIC
-                )
-                rgb = np.rot90(rgb, k=-1).copy()
-            else:
-                rgb = equirect_to_skybox(appearance.background_rgb, width)
-            flat = rgb[..., :channels].reshape(-1)
-            self.model.tex_data[address : address + flat.size] = flat
+        write_procedural_textures(
+            self.model, self._texture_ids, generate_procedural_appearance(sample)
+        )
 
     def tint_episode_markers(self) -> None:
         sample = getattr(self, "_sample", None)

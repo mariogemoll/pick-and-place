@@ -41,7 +41,13 @@ FLOOR_COLOURS: dict[str, tuple[float, float, float]] = {
     "tan": (0.82, 0.74, 0.60),
     "mid-gray": (0.30, 0.30, 0.30),
     "dark-gray": (0.15, 0.15, 0.15),
-    "black": (0.05, 0.05, 0.05),
+    # Dark enough to read as black, but not so close to zero reflectance that
+    # the scene's lighting gradient (visible on every other floor colour)
+    # disappears into a flat, unlit-looking void -- multiplied against a
+    # table texture, an even darker value reads as solid black regardless.
+    # Lighter than "dark-gray" in raw albedo, which looks odd on paper but not
+    # in the rendered image: the two are named for how they read, not ranked.
+    "black": (0.20, 0.20, 0.20),
 }
 
 #: Candidate drop-zone target colours. ``black`` is the current scene and the

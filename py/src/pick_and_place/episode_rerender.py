@@ -47,6 +47,7 @@ import pyarrow.parquet as pq
 from pick_and_place.camera_extrinsics import load_local_camera_extrinsics
 from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
 from pick_and_place.camera_pose_envelope import apply_camera_jitter, camera_module_geoms
+from pick_and_place.domain_randomization import ProceduralAppearance, write_procedural_textures
 from pick_and_place.episodes import set_joint
 from pick_and_place.follower import ARM_JOINT_NAMES, real_frame_to_sim
 from pick_and_place.paper_detection import DROP_ZONE_HALF_SIZE, place_paper_target_marker
@@ -259,11 +260,21 @@ class CameraJitter:
 class EpisodeRenderer:
     """Re-render recorded ground truth through the recording camera pipeline."""
 
-    def __init__(self, *, render_hw: tuple[int, int], image_hw: tuple[int, int]) -> None:
+    def __init__(
+        self,
+        *,
+        render_hw: tuple[int, int],
+        image_hw: tuple[int, int],
+        background_panorama: Path | str | np.ndarray | None = None,
+        table_texture: Path | str | np.ndarray | None = None,
+    ) -> None:
         render_height, render_width = render_hw
         image_height, image_width = image_hw
         self.model, self.data = build_recording_scene(
-            render_width=render_width, render_height=render_height
+            render_width=render_width,
+            render_height=render_height,
+            background_panorama=background_panorama,
+            table_texture=table_texture,
         )
         self.rig = SimCameraRig(
             self.model,
@@ -290,6 +301,15 @@ class EpisodeRenderer:
             for geom in camera_module_geoms(self.model, self._overhead_camera)
         }
 
+        # Present only when built with the finite-floor scene (background_panorama
+        # or table_texture given); empty otherwise, making set_scene_texture a no-op.
+        self._scene_texture_ids = tuple(
+            ident
+            for name in ("table_texture", "background_panorama")
+            if (ident := mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_TEXTURE, name)) >= 0
+        )
+        self._scene_tex_data_base = self.model.tex_data.copy()
+
     def set_camera_jitter(self, jitter: CameraJitter | None) -> None:
         """Apply an overhead-camera pose+focal jitter, or restore the authored pose."""
         if jitter is None:
@@ -314,14 +334,30 @@ class EpisodeRenderer:
             2.0 * math.atan(math.tan(half) / jitter.focal_scale)
         )
 
+    def set_scene_texture(self, appearance: ProceduralAppearance | None) -> None:
+        """Apply a background/table appearance, or restore the one built at construction.
+
+        A no-op unless the renderer was built with ``background_panorama`` or
+        ``table_texture`` (the finite-floor scene) -- there is nothing to vary
+        under the infinite groundplane every plain recording has used so far.
+        """
+        if not self._scene_texture_ids:
+            return
+        if appearance is None:
+            self.model.tex_data[:] = self._scene_tex_data_base
+        else:
+            write_procedural_textures(self.model, self._scene_texture_ids, appearance)
+        self.rig.reload_textures(self._scene_texture_ids)
+
     def set_episode(
         self,
         target_xy: tuple[float, float],
         target_plate_yaw: float,
         *,
         camera_jitter: CameraJitter | None = None,
+        scene_texture: ProceduralAppearance | None = None,
     ) -> None:
-        """Place the drop-zone marker and overhead camera for this episode."""
+        """Place the drop-zone marker, overhead camera and scene texture for this episode."""
         place_paper_target_marker(
             self.model,
             target_xy,
@@ -331,6 +367,7 @@ class EpisodeRenderer:
             alpha=1.0,
         )
         self.set_camera_jitter(camera_jitter)
+        self.set_scene_texture(scene_texture)
         mujoco.mj_forward(self.model, self.data)
         # The placement decides this episode's plate colour, which is what an
         # appearance leaving the target unset must restore.

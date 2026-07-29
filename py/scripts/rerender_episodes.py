@@ -63,7 +63,11 @@ from typing import Any
 import numpy as np
 
 from pick_and_place.camera_pose_envelope import draw_overhead_camera_jitter
-from pick_and_place.domain_randomization import DomainRandomizationPreset, domain_seed
+from pick_and_place.domain_randomization import (
+    DomainRandomizationPreset,
+    domain_seed,
+    generate_procedural_appearance,
+)
 from pick_and_place.episode_rerender import (
     CAMERA_FEATURES,
     CameraJitter,
@@ -178,6 +182,32 @@ class CameraRandomization:
         return CameraJitter(position, rotation, focal_scale)
 
 
+@dataclass(frozen=True)
+class BackgroundRandomization:
+    """A domain-randomization preset's background/table draw, applied per episode.
+
+    Only meaningful together with ``--background-panorama``/``--table-texture``,
+    since those are what put the scene into the finite-floor mode with a
+    separate skybox to vary. Reuses ``DomainRandomizationPreset.sample`` and
+    ``generate_procedural_appearance`` wholesale rather than re-deriving the
+    colour/blur/blob-count draw: the unused fields of the sample (lighting,
+    camera jitter, cube orientation, miscalibration) cost nothing to compute
+    and ignoring them is simpler than a second, narrower sampler.
+    """
+
+    preset_path: Path
+    preset: DomainRandomizationPreset
+    seed: int
+
+    @classmethod
+    def from_preset(cls, path: Path, *, seed: int) -> "BackgroundRandomization":
+        return cls(preset_path=path, preset=DomainRandomizationPreset.load(path), seed=seed)
+
+    def draw(self, episode_idx: int):  # -> ProceduralAppearance
+        sample = self.preset.sample(domain_seed(self.seed, episode_idx))
+        return generate_procedural_appearance(sample)
+
+
 def parse_variant(token: str) -> Variant:
     """Parse ``NAME`` from the preset table, or an ad-hoc ``key=value,...`` spec."""
     if "=" not in token:
@@ -241,6 +271,26 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--background-panorama",
+        type=Path,
+        default=None,
+        help=(
+            "equirectangular image; switches the scene from the infinite groundplane "
+            "to a finite workspace floor (flush with the frame) plus this skybox beyond "
+            "it, so a floor-colour variant stays scoped to the workspace interior. "
+            "Omit for the groundplane scene every recording so far has used (default)."
+        ),
+    )
+    parser.add_argument(
+        "--table-texture",
+        type=Path,
+        default=None,
+        help=(
+            "top-down table-surface image for the finite workspace floor. Implies the "
+            "same finite-floor scene as --background-panorama even without one."
+        ),
+    )
+    parser.add_argument(
         "--camera-randomization",
         type=Path,
         default=None,
@@ -256,6 +306,24 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="root seed for --camera-randomization's per-episode draw (default: 0)",
+    )
+    parser.add_argument(
+        "--background-randomization",
+        type=Path,
+        default=None,
+        help=(
+            "domain-randomization preset whose background/table colour, blur and blob-count "
+            "ranges draw a fresh procedural background+table texture per episode. Only takes "
+            "effect together with --background-panorama/--table-texture (the finite-floor "
+            "scene); without it there is no separate skybox to vary. Omit to keep the same "
+            "static image for every episode (default)."
+        ),
+    )
+    parser.add_argument(
+        "--background-seed",
+        type=int,
+        default=0,
+        help="root seed for --background-randomization's per-episode draw (default: 0)",
     )
     parser.add_argument(
         "--first-episode",
@@ -399,6 +467,7 @@ def rerender_episode(
     *,
     fps: int,
     camera_randomization: CameraRandomization | None = None,
+    background_randomization: BackgroundRandomization | None = None,
 ) -> int:
     """Write every variant of one episode; return the frames rendered per variant."""
     assert_rerenderable(source)
@@ -440,8 +509,18 @@ def rerender_episode(
         if camera_randomization is not None
         else None
     )
+    scene_texture = (
+        background_randomization.draw(episode_index(source))
+        if background_randomization is not None
+        else None
+    )
     try:
-        renderer.set_episode(truth.target_xy, truth.target_plate_yaw, camera_jitter=camera_jitter)
+        renderer.set_episode(
+            truth.target_xy,
+            truth.target_plate_yaw,
+            camera_jitter=camera_jitter,
+            scene_texture=scene_texture,
+        )
         for index in range(frames):
             renderer.set_frame(truth.states[index], truth.cube_poses[index])
             for variant in variants:
@@ -482,6 +561,9 @@ def render_episodes(
     image_hw: tuple[int, int],
     fps: int,
     camera_randomization: CameraRandomization | None = None,
+    background_randomization: BackgroundRandomization | None = None,
+    background_panorama: Path | None = None,
+    table_texture: Path | None = None,
     label: str = "",
 ) -> tuple[int, int]:
     """Re-render a list of episodes; return ``(written, skipped)`` counts."""
@@ -499,7 +581,12 @@ def render_episodes(
     if not pending:
         return 0, skipped
 
-    renderer = EpisodeRenderer(render_hw=render_hw, image_hw=image_hw)
+    renderer = EpisodeRenderer(
+        render_hw=render_hw,
+        image_hw=image_hw,
+        background_panorama=background_panorama,
+        table_texture=table_texture,
+    )
     written = 0
     try:
         for position, episode in enumerate(pending, start=1):
@@ -511,6 +598,7 @@ def render_episodes(
                 output,
                 fps=fps,
                 camera_randomization=camera_randomization,
+                background_randomization=background_randomization,
             )
             written += 1
             elapsed = time.monotonic() - started
@@ -531,6 +619,14 @@ def _worker(payload: dict[str, Any]) -> None:
         if payload["camera_randomization"] is not None
         else None
     )
+    background_randomization = (
+        BackgroundRandomization.from_preset(
+            Path(payload["background_randomization"]["preset_path"]),
+            seed=payload["background_randomization"]["seed"],
+        )
+        if payload["background_randomization"] is not None
+        else None
+    )
     render_episodes(
         [Path(path) for path in payload["episodes"]],
         [Variant(name, SceneAppearance(**fields)) for name, fields in payload["variants"]],
@@ -539,6 +635,11 @@ def _worker(payload: dict[str, Any]) -> None:
         image_hw=tuple(payload["image_hw"]),
         fps=payload["fps"],
         camera_randomization=camera_randomization,
+        background_randomization=background_randomization,
+        background_panorama=(
+            Path(payload["background_panorama"]) if payload["background_panorama"] else None
+        ),
+        table_texture=Path(payload["table_texture"]) if payload["table_texture"] else None,
         label=payload["label"],
     )
 
@@ -553,6 +654,9 @@ def render_in_pool(
     fps: int,
     workers: int,
     camera_randomization: CameraRandomization | None = None,
+    background_randomization: BackgroundRandomization | None = None,
+    background_panorama: Path | None = None,
+    table_texture: Path | None = None,
 ) -> None:
     """Shard the episodes across worker processes, each with its own GL context."""
     # Spawn rather than fork: a MuJoCo GL context does not survive a fork.
@@ -563,6 +667,11 @@ def render_in_pool(
     ]
     serialized_camera_randomization = (
         dataclasses.asdict(camera_randomization) if camera_randomization is not None else None
+    )
+    serialized_background_randomization = (
+        {"preset_path": str(background_randomization.preset_path), "seed": background_randomization.seed}
+        if background_randomization is not None
+        else None
     )
     processes = []
     for worker_id, shard in enumerate(shards):
@@ -576,6 +685,9 @@ def render_in_pool(
             "image_hw": list(image_hw),
             "fps": fps,
             "camera_randomization": serialized_camera_randomization,
+            "background_randomization": serialized_background_randomization,
+            "background_panorama": str(background_panorama) if background_panorama else None,
+            "table_texture": str(table_texture) if table_texture else None,
             "label": f"[w{worker_id}] ",
         }
         process = ctx.Process(target=_worker, args=(payload,))
@@ -598,6 +710,8 @@ def verify_episodes(
     fps: int,
     verify_frames: int,
     panel_dir: Path,
+    background_panorama: Path | None = None,
+    table_texture: Path | None = None,
 ) -> dict[str, Any]:
     """Re-render the recorded appearance and diff it against the recorded videos.
 
@@ -614,7 +728,12 @@ def verify_episodes(
         the re-encoded re-render against the recorded video: what a consumer
         that reads both datasets would actually see.
     """
-    renderer = EpisodeRenderer(render_hw=render_hw, image_hw=image_hw)
+    renderer = EpisodeRenderer(
+        render_hw=render_hw,
+        image_hw=image_hw,
+        background_panorama=background_panorama,
+        table_texture=table_texture,
+    )
     per_camera: dict[str, dict[str, Any]] = {
         feature: {"diffs": [], "floors": [], "end_to_end": [], "worst": None}
         for feature in CAMERA_FEATURES
@@ -772,6 +891,7 @@ def write_manifest(
     config: dict[str, Any],
     verification: dict[str, Any] | None,
     camera_randomization: CameraRandomization | None = None,
+    background_randomization: BackgroundRandomization | None = None,
 ) -> None:
     """Record what this staged root is, next to the collection config it inherits."""
     staging_root.mkdir(parents=True, exist_ok=True)
@@ -803,6 +923,15 @@ def write_manifest(
         ),
         "camera_randomization": (
             dataclasses.asdict(camera_randomization) if camera_randomization is not None else None
+        ),
+        "background_randomization": (
+            {
+                "preset_path": str(background_randomization.preset_path),
+                "preset_name": background_randomization.preset.name,
+                "seed": background_randomization.seed,
+            }
+            if background_randomization is not None
+            else None
         ),
         "notes": (
             "Videos were re-rendered from the recorded per-frame ground truth; parquet "
@@ -841,6 +970,8 @@ def main() -> None:
             fps=fps,
             verify_frames=args.verify_frames,
             panel_dir=output / "verify_panels",
+            background_panorama=args.background_panorama,
+            table_texture=args.table_texture,
         )
         failures = []
         for feature in CAMERA_FEATURES:
@@ -903,6 +1034,22 @@ def main() -> None:
             f"/ ±{camera_randomization.focal_pct:g}% focal, "
             f"margin {camera_randomization.margin_px:g} px."
         )
+    background_randomization = (
+        BackgroundRandomization.from_preset(args.background_randomization, seed=args.background_seed)
+        if args.background_randomization is not None
+        else None
+    )
+    if background_randomization is not None:
+        if args.background_panorama is None and args.table_texture is None:
+            raise SystemExit(
+                "--background-randomization needs --background-panorama and/or "
+                "--table-texture to put the scene in finite-floor mode; without one, "
+                "there is no separate skybox/table texture to vary."
+            )
+        print(
+            f"Background randomization: {args.background_randomization} "
+            f"(seed {args.background_seed}) -> fresh background/table texture per episode."
+        )
     verification = None
     if not args.skip_verification_check:
         report_path = args.verification or (output / VERIFICATION_FILENAME)
@@ -920,6 +1067,7 @@ def main() -> None:
             config=config,
             verification=verification,
             camera_randomization=camera_randomization,
+            background_randomization=background_randomization,
         )
         print(f"{variant.name}: {variant.appearance.name} -> {variant.staging_root(output)}")
 
@@ -934,6 +1082,9 @@ def main() -> None:
             fps=fps,
             workers=args.workers,
             camera_randomization=camera_randomization,
+            background_randomization=background_randomization,
+            background_panorama=args.background_panorama,
+            table_texture=args.table_texture,
         )
     else:
         render_episodes(
@@ -944,6 +1095,9 @@ def main() -> None:
             image_hw=image_hw,
             fps=fps,
             camera_randomization=camera_randomization,
+            background_randomization=background_randomization,
+            background_panorama=args.background_panorama,
+            table_texture=args.table_texture,
         )
     elapsed = time.monotonic() - started
     print(f"\nFinished {len(episodes)} selected episode(s) in {elapsed / 60:.1f} min.")
