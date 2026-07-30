@@ -485,6 +485,12 @@ def export_diffusion_policy_dataset(
     source_fps = int(info.get("fps", 0))
     if source_fps <= 0:
         raise ValueError("dataset fps must be positive")
+    # The resolution the videos were written at, which every camera shares. A
+    # live rollout has to downsample through it to land on this export's images.
+    video_shapes = {tuple(features[feature]["shape"][:2]) for feature in CAMERA_FEATURES}
+    if len(video_shapes) != 1:
+        raise ValueError(f"dataset cameras must share one resolution, got {video_shapes}")
+    source_video_hw = [int(value) for value in next(iter(video_shapes))]
     if policy_hz < 1:
         raise ValueError("policy_hz must be positive")
     if source_fps % policy_hz:
@@ -578,6 +584,7 @@ def export_diffusion_policy_dataset(
         "image_layout": "NCHW; RGB cameras concatenated in camera_features order",
         "image_dtype": "uint8",
         "image_size": [image_size, image_size],
+        "source_video_hw": source_video_hw,
         "image_transform": "aspect-fill resize followed by center crop",
         "state_action_normalization": "per-dimension min-max to [-1, 1]",
         "state_dim": int(states.shape[1]),

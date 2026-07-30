@@ -36,6 +36,7 @@ only re-running the network after ``n_action_steps`` queued actions.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import time
 from pathlib import Path
@@ -81,7 +82,7 @@ from pick_and_place.scene_appearance import (
     SceneAppearanceOverride,
     parse_appearance,
 )
-from pick_and_place.sim_recorder import OVERHEAD_CAMERA, resize_and_center_crop
+from pick_and_place.sim_recorder import OVERHEAD_CAMERA, downsample_through_recording
 from pick_and_place.paper_detection import (
     DROP_ZONE_HALF_SIZE,
     add_paper_target_marker,
@@ -112,6 +113,36 @@ from pick_and_place.policy_sim import (
 # at the model timestep in between. The rate matches the real rig's control loop
 # (and the dataset fps), so a chunked policy's action spacing plays back true.
 from pick_and_place.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
+
+
+def _resolve_recording_hw(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> tuple[int, int]:
+    """Resolve the resolution observations are downsampled through.
+
+    Taking it from the export that produced the checkpoint's training images
+    keeps the rollout tied to its own dataset rather than to a constant that
+    can drift; exports predating that field have to say so on the command line.
+    """
+    if args.recording_hw is not None:
+        height, width = args.recording_hw
+        if height < 1 or width < 1:
+            parser.error("--recording-hw must be positive")
+        return (height, width)
+    if args.dppo_normalization is None:
+        parser.error("--recording-hw is required without --dppo-normalization to read it from")
+    export_path = args.dppo_normalization.parent / "export.json"
+    if not export_path.exists():
+        parser.error(f"no export.json beside {args.dppo_normalization}; pass --recording-hw")
+    with export_path.open() as file:
+        export = json.load(file)
+    if "source_video_hw" not in export:
+        parser.error(
+            f"{export_path} predates source_video_hw; pass --recording-hw with the "
+            "resolution its source dataset's videos were recorded at"
+        )
+    height, width = export["source_video_hw"]
+    return (int(height), int(width))
 
 
 def _build_model(
@@ -233,6 +264,19 @@ def main() -> None:
         "--dppo-normalization",
         type=Path,
         help="normalization.npz written by the Diffusion Policy dataset export",
+    )
+    parser.add_argument(
+        "--recording-hw",
+        type=int,
+        nargs=2,
+        default=None,
+        metavar=("HEIGHT", "WIDTH"),
+        help=(
+            "resolution the training videos were recorded at, which observations are "
+            "downsampled through on the way to the policy's input size. Defaults to "
+            "the source_video_hw recorded by the dataset export, read from export.json "
+            "beside --dppo-normalization"
+        ),
     )
     parser.add_argument(
         "--dppo-act-steps",
@@ -471,7 +515,14 @@ def main() -> None:
     if args.render_width < image_hw[1] or args.render_height < image_hw[0]:
         parser.error("--render-width and --render-height must be at least the policy image size")
 
-    print(f"Feeding {image_hw[1]}x{image_hw[0]} (WxH) overhead and wrist frames.")
+    recording_hw = _resolve_recording_hw(parser, args)
+    if args.render_width < recording_hw[1] or args.render_height < recording_hw[0]:
+        parser.error("--render-width and --render-height must be at least the recording resolution")
+
+    print(
+        f"Feeding {image_hw[1]}x{image_hw[0]} (WxH) overhead and wrist frames, "
+        f"downsampled through the {recording_hw[1]}x{recording_hw[0]} recording resolution."
+    )
 
     rng = np.random.default_rng(args.seed)
     preset = (
@@ -647,8 +698,12 @@ def main() -> None:
 
     def render(camera: str) -> np.ndarray:
         renderer.update_scene(data, camera=camera)
-        image = resize_and_center_crop(renderer.render(), hw[0], hw[1])
-        return randomizer.postprocess(image) if randomizer is not None else image
+        return downsample_through_recording(
+            renderer.render(),
+            recording_hw,
+            hw,
+            randomizer.postprocess if randomizer is not None else None,
+        )
 
     substeps = max(1, round((1.0 / control_hz) / model.opt.timestep))
     period = 1.0 / control_hz
