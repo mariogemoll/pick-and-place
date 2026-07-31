@@ -15,7 +15,7 @@ import pytest
 
 from pick_and_place import dppo_policy
 from pick_and_place.diffusion_policy_dataset import normalize_min_max
-from pick_and_place.dppo_policy import DppoPolicyController
+from pick_and_place.dppo_policy import DppoPolicyController, resolve_recording_hw
 from pick_and_place.policy_controllers import (
     OVERHEAD_FEATURE,
     STATE_FEATURE,
@@ -71,7 +71,18 @@ def test_server_normalization_inverts_the_dataset_export() -> None:
     np.testing.assert_allclose(forward, normalized, atol=1e-6)
 
 
-FAKE_SERVER = '''
+def test_recording_resolution_comes_from_export_or_override(tmp_path: Path) -> None:
+    normalization = tmp_path / "normalization.npz"
+    normalization.touch()
+    (tmp_path / "export.json").write_text('{"source_video_hw": [720, 960]}')
+
+    assert resolve_recording_hw(normalization) == (720, 960)
+    assert resolve_recording_hw(normalization, (480, 640)) == (480, 640)
+    with pytest.raises(ValueError, match="positive"):
+        resolve_recording_hw(normalization, (0, 640))
+
+
+FAKE_SERVER = """
 import sys
 from pathlib import Path
 
@@ -112,7 +123,7 @@ while True:
     actions[0, 1] = request["state"][0, 0]
     actions[0, 2] = request["state"][1, 0]
     write_message(stdout, {{"actions": actions}})
-'''
+"""
 
 
 @pytest.fixture
@@ -140,7 +151,17 @@ def test_controller_serves_chunks_and_requeries(fake_server_command: list[str]) 
         assert controller.handshake["epoch"] == 500
         # Two actions per query: the integer part encodes the query count and
         # the fractional part the position within the returned horizon.
-        values = [controller.act(_observation())[0] for _ in range(4)]
+        first = controller.act(_observation())
+        assert controller.latest_prediction is not None
+        assert controller.latest_prediction.shape == (4, 6)
+        second = controller.act(_observation())
+        assert controller.latest_prediction is None
+        values = [
+            first[0],
+            second[0],
+            controller.act(_observation())[0],
+            controller.act(_observation())[0],
+        ]
         assert values == pytest.approx([1.0, 1.1, 2.0, 2.1])
     finally:
         controller.close()

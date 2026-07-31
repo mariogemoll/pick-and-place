@@ -2,18 +2,24 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Run a LeRobot policy (ACT, SmolVLA, ...) on the physical SO-101, closed-loop.
+"""Run a learned policy on the physical SO-101, closed-loop.
+
+``--controller lerobot`` (the default) runs ACT, SmolVLA, or another LeRobot
+checkpoint. ``--controller dppo`` runs the same out-of-process DPPO controller
+as ``run_policy_sim.py``. DPPO observations are sampled at the policy's trained
+rate and live camera frames are reduced through the dataset export's recorded
+video resolution before reaching the model's input resolution.
 
 The hardware counterpart to ``run_policy_sim.py``. Where the sim run renders MuJoCo
 cameras and integrates physics, this reads two real cameras and a real arm: each
 control tick it snapshots the latest overhead and wrist frames, reads the
-follower's joints, runs ``select_action``, and streams the predicted joints back
+follower's joints, asks the selected controller for an action, and streams it back
 to the arm as position targets.
 
 It is *simpler* than the sim run on the proprioception side because no frame
 conversion is needed. The follower already reports and accepts the exact real
 frame the dataset was recorded in — arm joints in degrees, gripper as a 0-100
-position — which is the frame SmolVLA's state and action live in. So the
+position — which is the frame the learned state and action live in. So the
 follower's reading is the observation state verbatim, and the predicted action
 is sent verbatim (clamped to the joint limits). There are no sim→real offsets
 and no radians anywhere on the policy path; MuJoCo is loaded only to derive
@@ -30,45 +36,16 @@ pixel-geometry. The resolution defaults to whatever the checkpoint was trained o
 un-finetuned plumbing spike (the arm moves but does not solve the task). A
 checkpoint fine-tuned on the project's dataset is the real use case.
 
-Two recording modes exist. ``--save-video`` writes the exact per-tick frames fed
-to the policy (cropped and resized). ``--record-video`` instead records the whole
-run continuously at each camera's native rate and resolution — undistorted but
-never cropped — on one shared clock, optionally including a third
-``--workspace-camera`` view and, with ``--record-audio``, the audio input muxed
-into every video. That is the mode for watchable footage of the policy performing.
-``--action-log`` additionally writes one .npz per attempt with the per-tick
-measured state, the action the policy returned (the ensembled one when temporal
-ensembling is on), the command actually sent, and every raw action chunk the
-model predicted — all in the real frame — so the freshest prediction can be
-compared offline against the ensembled/executed motion.
+``--save-video`` records policy inputs, ``--record-video`` captures continuous
+native camera footage, and ``--action-log`` stores measured states, predicted
+actions, sent commands, and raw prediction chunks for each attempt.
 
-The run is organised as a sequence of attempts. Each attempt locates the
-drop-zone square (the success target) and the cube on the overhead camera —
-panning the arm through random search poses to clear the view if either is
-hidden, and asking the operator only if that dance comes up empty — then homes
-the arm to a fresh randomish near-neutral start and runs the policy while
-repeatedly scanning the overhead camera for the cube. During an attempt the
-operator can press Enter to declare it failed and skip straight to the next one.
-A timed-out or abandoned attempt returns the arm to neutral before the next one
-begins. The cube counts as placed only once it sits at
-the target both in xy (``--success-tolerance``) and near its resting height
-(``--place-height-tolerance``) — i.e. actually set down, not just carried above
-the target. From the moment it is first seen placed, two things run in parallel:
-the placement is confirmed after ``--success-dwell`` seconds, and the arm's
-slow-down is watched over the same window. The placement is the success; the
-slow-down is soft — success fires as soon as the cube has held for the dwell and
-the arm has slowed, or at ``--settle-timeout`` regardless, so the policy never
-lingers in post-placement, off-distribution territory. If the cube moves again
-the placement resets. If no placement happens within ``--attempt-timeout``, the
-attempt is abandoned and retried from a new start (the policy is strongest early
-on, especially with temporal ensembling). On success the run exits by default; with ``--loop`` it
-instead alerts the operator to reset the cube and target (audibly and via an
-Enter prompt) and continues with the next attempt. This needs the overhead
-camera plus its calibrated intrinsics. By default the overhead extrinsics are
-solved live from the workspace-frame AprilTags at startup (so the success scan
-reads the cube against where the camera actually is) and re-checked periodically
-between attempts, stopping the run if the camera has drifted; ``--no-recalibrate``
-uses the saved sidecar extrinsics instead.
+Each attempt finds the target and cube, moves to a fresh near-neutral pose, and
+runs until placement succeeds, the timeout expires, or the operator presses
+Enter. The overhead camera verifies that the cube was set down at the target;
+camera extrinsics are solved at startup and checked for drift between attempts.
+Timed-out attempts return to neutral and retry. ``--loop`` continues after a
+success instead of exiting.
 
 Safety: the arm ramps smoothly from wherever it is parked onto each start pose
 before the policy takes over, and on exit (success, Ctrl-C or step budget) it
@@ -100,9 +77,8 @@ from pick_and_place.camera_intrinsics import (
     load_camera_intrinsics,
     load_local_camera_intrinsics,
 )
+from pick_and_place.dppo_policy import DppoPolicyController, add_dppo_arguments
 from pick_and_place.episodes import sample_hunt_pose, sample_near_neutral
-from pick_and_place.geometry import CUBE_HALF_SIZE
-from pick_and_place.overhead_detection import DEFAULT_ALERT_SOUND, OperatorNotifier
 from pick_and_place.executor import (
     CONTROL_HZ,
     RAMP_DURATION,
@@ -117,20 +93,31 @@ from pick_and_place.follower import (
     make_so101_follower,
     sim_frame_to_real,
 )
-from pick_and_place.image_rectify import build_undistort_map, transform_frame
-from pick_and_place.kinematics import derive_kinematics
-from pick_and_place.trajectory import (
-    NEUTRAL_ARM_JOINTS,
-    NEUTRAL_GRIPPER,
-    REST_ARM_JOINTS,
-    REST_GRIPPER,
+from pick_and_place.geometry import CUBE_HALF_SIZE
+from pick_and_place.image_rectify import (
+    build_undistort_map,
+    center_crop_and_resize,
+    transform_frame,
 )
+from pick_and_place.kinematics import derive_kinematics
+from pick_and_place.overhead_detection import DEFAULT_ALERT_SOUND, OperatorNotifier
 from pick_and_place.policy import (
     DEFAULT_CHECKPOINT,
     DEFAULT_INSTRUCTION,
     make_policy,
     resolve_checkpoint_cameras,
     select_device,
+)
+from pick_and_place.policy_controllers import (
+    OVERHEAD_FEATURE,
+    STATE_FEATURE,
+    WRIST_FEATURE,
+)
+from pick_and_place.trajectory import (
+    NEUTRAL_ARM_JOINTS,
+    NEUTRAL_GRIPPER,
+    REST_ARM_JOINTS,
+    REST_GRIPPER,
 )
 
 # During the settle phase the arm's peak joint speed must stay below
@@ -317,8 +304,19 @@ def _ramp_follower(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--controller",
+        choices=("lerobot", "dppo"),
+        default="lerobot",
+        help="policy implementation (default: lerobot)",
+    )
     parser.add_argument("--instruction", default=DEFAULT_INSTRUCTION, help="language task string")
-    parser.add_argument("--checkpoint", default=DEFAULT_CHECKPOINT, help="HF policy checkpoint")
+    parser.add_argument(
+        "--checkpoint",
+        default=DEFAULT_CHECKPOINT,
+        help="HF policy checkpoint, or a DPPO state_*.pt file",
+    )
+    add_dppo_arguments(parser)
     parser.add_argument("--device", default="auto", help="auto | cpu | mps | cuda")
     parser.add_argument("--follower-port", required=True, help="serial port of the SO-101 follower")
     parser.add_argument(
@@ -557,18 +555,44 @@ def main() -> None:
     override = (args.image_height, args.image_width)
     if any(override) and not all(override):
         parser.error("pass both --image-height and --image-width, or neither")
-    (img_h, img_w), (overhead_key, wrist_key) = resolve_checkpoint_cameras(
-        args.checkpoint, override_hw=(args.image_height, args.image_width) if all(override) else None
-    )
+    override_hw = (args.image_height, args.image_width) if all(override) else None
+
+    dppo_controller = None
+    recording_hw = None
+    if args.controller == "dppo":
+        dppo_controller, recording_hw = DppoPolicyController.launch_from_args(
+            parser,
+            args,
+            override_hw=override_hw,
+            default_checkpoint=DEFAULT_CHECKPOINT,
+        )
+        img_h, img_w = dppo_controller.image_hw
+        overhead_key, wrist_key = OVERHEAD_FEATURE, WRIST_FEATURE
+        control_hz = dppo_controller.policy_hz
+    else:
+        if args.recording_hw is not None:
+            parser.error("--recording-hw only applies to the dppo controller")
+        (img_h, img_w), (overhead_key, wrist_key) = resolve_checkpoint_cameras(
+            args.checkpoint, override_hw=override_hw
+        )
+        control_hz = CONTROL_HZ
 
     import cv2
 
-    device = select_device(args.device)
-    print(f"Loading {args.checkpoint} on {device} (first run downloads the weights)...")
+    device = None
+    if args.controller == "lerobot":
+        device = select_device(args.device)
+        print(f"Loading {args.checkpoint} on {device} (first run downloads the weights)...")
     print(
         f"Feeding {img_w}x{img_h} (WxH) frames as {overhead_key!r} (overhead) "
         f"and {wrist_key!r} (wrist)."
     )
+    if recording_hw is not None:
+        print(
+            f"Downsampling live frames through the DPPO dataset's "
+            f"{recording_hw[1]}x{recording_hw[0]} recording resolution."
+        )
+    print(f"Policy control rate: {control_hz:g} Hz.")
 
     # MuJoCo is used only for the joint limits (to clamp commands) and to map the
     # neutral sim pose into the real frame for the start ramp — never stepped.
@@ -579,7 +603,9 @@ def main() -> None:
     neutral_real = sim_frame_to_real(NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER)
     rest_real = sim_frame_to_real(REST_ARM_JOINTS, REST_GRIPPER)
 
-    from lerobot.utils.control_utils import predict_action
+    predict_action = None
+    if args.controller == "lerobot":
+        from lerobot.utils.control_utils import predict_action
 
     intrinsics_by_camera = load_local_camera_intrinsics()
     missing = [cam for cam in ("overhead_camera", "wrist_camera") if cam not in intrinsics_by_camera]
@@ -614,21 +640,48 @@ def main() -> None:
         intrinsics_by_camera["wrist_camera"], first_wrist.shape[1], first_wrist.shape[0], cv2
     )
 
-    policy, preprocessor, postprocessor = make_policy(
-        args.checkpoint,
-        (img_h, img_w),
-        (overhead_key, wrist_key),
-        device,
-        n_action_steps=args.n_action_steps,
-        temporal_ensemble_coeff=args.temporal_ensemble_coeff,
-    )
+    def policy_frame(rgb, undistort_map):
+        if recording_hw is None:
+            return transform_frame(rgb, undistort_map, img_w, img_h, cv2)
+        recorded = transform_frame(
+            rgb,
+            undistort_map,
+            recording_hw[1],
+            recording_hw[0],
+            cv2,
+        )
+        return center_crop_and_resize(recorded, img_w, img_h, cv2)
+
+    if dppo_controller is None:
+        policy, preprocessor, postprocessor = make_policy(
+            args.checkpoint,
+            (img_h, img_w),
+            (overhead_key, wrist_key),
+            device,
+            n_action_steps=args.n_action_steps,
+            temporal_ensemble_coeff=args.temporal_ensemble_coeff,
+        )
+    else:
+        policy = dppo_controller
+        preprocessor = postprocessor = None
     policy.reset()
-    if hasattr(policy.config, "chunk_size") and hasattr(policy.config, "n_action_steps"):
+    if dppo_controller is not None:
+        print(
+            f"Policy chunks: predicts {policy.horizon_steps}, "
+            f"executes {policy.act_steps} before re-query "
+            f"with {policy.cond_steps} observation steps "
+            f"({policy.handshake['denoising_steps']} denoising steps, "
+            f"epoch {policy.handshake['epoch']} checkpoint)."
+        )
+    elif hasattr(policy.config, "chunk_size") and hasattr(policy.config, "n_action_steps"):
         print(
             f"Policy chunks: predicts {policy.config.chunk_size}, "
             f"executes {policy.config.n_action_steps} before re-query."
         )
-    if getattr(policy.config, "temporal_ensemble_coeff", None) is not None:
+    if (
+        dppo_controller is None
+        and getattr(policy.config, "temporal_ensemble_coeff", None) is not None
+    ):
         print(f"Temporal ensembling coeff: {policy.config.temporal_ensemble_coeff}")
 
     # Action logging: capture every raw chunk the model predicts by wrapping
@@ -645,7 +698,9 @@ def main() -> None:
         log_dir = args.action_log / datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         action_log = ActionLog(log_dir)
         print(f"Logging per-attempt actions and raw chunks to {log_dir}")
-        if hasattr(policy, "predict_action_chunk"):
+        if dppo_controller is not None:
+            print("DPPO action logs include every raw predicted horizon.")
+        elif hasattr(policy, "predict_action_chunk"):
             _predict_action_chunk = policy.predict_action_chunk
 
             def _capture_predict_action_chunk(batch):
@@ -672,8 +727,8 @@ def main() -> None:
         import imageio.v2 as imageio
 
         args.save_video.mkdir(parents=True, exist_ok=True)
-        wrist_writer = imageio.get_writer(args.save_video / "wrist.mp4", fps=CONTROL_HZ)
-        overhead_writer = imageio.get_writer(args.save_video / "overhead.mp4", fps=CONTROL_HZ)
+        wrist_writer = imageio.get_writer(args.save_video / "wrist.mp4", fps=control_hz)
+        overhead_writer = imageio.get_writer(args.save_video / "overhead.mp4", fps=control_hz)
         print(f"Saving observation frames to {args.save_video}/{{wrist,overhead}}.mp4")
 
     # Continuous run recording: every camera's full native-rate, undistorted
@@ -711,9 +766,9 @@ def main() -> None:
         audio_note = " with audio" if args.record_audio else ""
         print(f"Recording the {cams} cameras{audio_note} to {record_dir}")
 
-    # Overhead detection: the success scan reads the cube in world coordinates and
-    # the drop-zone square gives the target. Attempts (timeout + retry, and the
-    # success check) are the default run mode, so this is always built.
+    # ACT uses the tagged cube for automatic attempt setup and success checks.
+    # DPPO's plain blue cube has no measurable pose, so its rollout is unmeasured.
+    measure_scene = args.controller == "lerobot"
     rng = np.random.default_rng()
     from pick_and_place.camera_compare import load_intrinsics
     from pick_and_place.cam_align_solve import (
@@ -759,7 +814,7 @@ def main() -> None:
     if not det_intrinsics.exists():
         raise SystemExit(f"Missing {args.camera_name} intrinsics at {det_intrinsics}.")
     det_matrix, det_map = load_intrinsics(det_intrinsics, 1920, 1080, cv2)
-    detector = make_cube_detector()
+    detector = make_cube_detector() if measure_scene else None
     drop_zone_tracker = PaperTracker()
     notifier = OperatorNotifier(enabled=args.operator_alerts, sound_path=args.alert_sound)
 
@@ -787,13 +842,14 @@ def main() -> None:
         _, pos = cube_pose_to_world(estimate, cam_pos, cam_rot)
         return float(pos[0]), float(pos[1]), float(pos[2])
 
-    print(f"Instruction: {args.instruction!r}")
+    if args.controller == "lerobot":
+        print(f"Instruction: {args.instruction!r}")
     if args.checkpoint == DEFAULT_CHECKPOINT:
         print("Running closed-loop. Actions are NOT task-calibrated (un-finetuned base).")
     else:
         print(f"Running closed-loop with fine-tuned checkpoint {args.checkpoint!r}.")
 
-    period = 1.0 / CONTROL_HZ
+    period = 1.0 / control_hz
     tick = 0
     parked = False
 
@@ -815,7 +871,7 @@ def main() -> None:
         # Discard any stale lines typed during the ramp/hunt so an old Enter
         # press cannot instantly abandon the attempt that is just starting.
         _drain_stdin_lines()
-        print("Press Enter at any time to abandon this attempt and retry from neutral.")
+        print("Press Enter at any time to stop this attempt.")
         attempt_start = time.monotonic()
         next_tick = time.monotonic()
         report_time, report_tick, infer_seconds = next_tick, tick, 0.0
@@ -858,8 +914,10 @@ def main() -> None:
                 else:
                     placement.since = None
 
-        scanner = threading.Thread(target=scan_loop, daemon=True)
-        scanner.start()
+        scanner = None
+        if target_xy is not None:
+            scanner = threading.Thread(target=scan_loop, daemon=True)
+            scanner.start()
         if action_log is not None:
             action_log.start_attempt()
         outcome = "error"
@@ -869,7 +927,8 @@ def main() -> None:
             return outcome
         finally:
             stop_scan.set()
-            scanner.join(timeout=2.0)
+            if scanner is not None:
+                scanner.join(timeout=2.0)
             if action_log is not None:
                 action_log.end_attempt(outcome)
 
@@ -892,34 +951,41 @@ def main() -> None:
             wrist_bgr = wrist.latest()
             overhead_rgb = cv2.cvtColor(overhead_bgr, cv2.COLOR_BGR2RGB)
             wrist_rgb = cv2.cvtColor(wrist_bgr, cv2.COLOR_BGR2RGB)
-            overhead_rgb = transform_frame(
-                overhead_rgb, overhead_undistort_map, img_w, img_h, cv2
-            )
-            wrist_rgb = transform_frame(wrist_rgb, wrist_undistort_map, img_w, img_h, cv2)
+            overhead_rgb = policy_frame(overhead_rgb, overhead_undistort_map)
+            wrist_rgb = policy_frame(wrist_rgb, wrist_undistort_map)
 
             state = action_to_joints(follower.get_observation(), neutral_real).astype(np.float32)
             observation = {
-                "observation.state": state,
-                overhead_key: overhead_rgb,
-                wrist_key: wrist_rgb,
+                STATE_FEATURE: state,
+                OVERHEAD_FEATURE: overhead_rgb,
+                WRIST_FEATURE: wrist_rgb,
             }
             if wrist_writer is not None:
                 wrist_writer.append_data(wrist_rgb)
                 overhead_writer.append_data(overhead_rgb)
 
             infer_start = time.monotonic()
-            action = predict_action(
-                observation,
-                policy,
-                device,
-                preprocessor,
-                postprocessor,
-                use_amp=False,
-                task=args.instruction,
-                robot_type="so101",
-            )
+            if dppo_controller is None:
+                assert predict_action is not None
+                lerobot_observation = {
+                    STATE_FEATURE: state,
+                    overhead_key: overhead_rgb,
+                    wrist_key: wrist_rgb,
+                }
+                action = predict_action(
+                    lerobot_observation,
+                    policy,
+                    device,
+                    preprocessor,
+                    postprocessor,
+                    use_amp=False,
+                    task=args.instruction,
+                    robot_type="so101",
+                )
+                action_real = action.to("cpu").numpy().reshape(-1)[: len(JOINT_NAMES)]
+            else:
+                action_real = policy.act(observation)
             infer_seconds += time.monotonic() - infer_start
-            action_real = action.to("cpu").numpy().reshape(-1)[: len(JOINT_NAMES)]
             target = clamp_and_warn(action_real, clamp_low, clamp_high, clip_warned)
             # Velocity cap: never command an arm joint more than one tick's worth
             # of travel beyond where the arm actually is. This bounds both speed
@@ -927,7 +993,7 @@ def main() -> None:
             # for. The gripper passes through (open/close should stay timely).
             commanded = target.copy()
             if args.max_joint_speed > 0:
-                max_step = args.max_joint_speed / CONTROL_HZ
+                max_step = args.max_joint_speed / control_hz
                 arm_delta = target[:GRIPPER_INDEX] - state[:GRIPPER_INDEX]
                 commanded[:GRIPPER_INDEX] = state[:GRIPPER_INDEX] + np.clip(
                     arm_delta, -max_step, max_step
@@ -940,7 +1006,12 @@ def main() -> None:
             # model's freshest prediction for this very tick, so its gap to the
             # returned (ensembled) action is the ensemble lag.
             chunk_real = None
-            if captured_chunk[0] is not None:
+            if dppo_controller is not None and policy.latest_prediction is not None:
+                chunk_real = policy.latest_prediction.copy()
+                raw_lag = float(
+                    np.max(np.abs(chunk_real[0, :GRIPPER_INDEX] - action_real[:GRIPPER_INDEX]))
+                )
+            elif captured_chunk[0] is not None:
                 chunk_real = (
                     postprocessor(captured_chunk[0].squeeze(0))
                     .to("cpu")
@@ -1161,7 +1232,7 @@ def main() -> None:
     try:
         print("Homing to the neutral pose...")
         go_neutral()
-        if args.recalibrate:
+        if args.recalibrate and measure_scene:
             solve_startup_extrinsics()
         attempt = 0
         while True:
@@ -1169,24 +1240,24 @@ def main() -> None:
             budget = f"timeout {args.attempt_timeout:.0f}s" if args.attempt_timeout > 0 else "no timeout"
             print(f"\n=== Attempt {attempt} ({budget}) ===")
 
-            # The arm is at neutral here (homed on entry and after every attempt), so
-            # the tags are unoccluded — a good moment for the periodic drift check.
-            check_overhead_drift()
-
-            target = find_or_prompt(
-                "drop-zone square", detect_target, "Drop-zone square not visible."
-            )
-            if target is None:
-                break
-            target_xy = (float(target.x), float(target.y))
-            print(f"Target drop zone at ({target_xy[0]:.3f}, {target_xy[1]:.3f}).")
-
-            cube = find_or_prompt(
-                "cube", detect_cube, "Cube not visible in the pickup zone. Please reset it."
-            )
-            if cube is None:
-                break
-            print(f"Cube at ({cube.x:.3f}, {cube.y:.3f}).")
+            target_xy = None
+            if measure_scene:
+                check_overhead_drift()
+                target = find_or_prompt(
+                    "drop-zone square", detect_target, "Drop-zone square not visible."
+                )
+                if target is None:
+                    break
+                target_xy = (float(target.x), float(target.y))
+                print(f"Target drop zone at ({target_xy[0]:.3f}, {target_xy[1]:.3f}).")
+                cube = find_or_prompt(
+                    "cube", detect_cube, "Cube not visible in the pickup zone. Please reset it."
+                )
+                if cube is None:
+                    break
+                print(f"Cube at ({cube.x:.3f}, {cube.y:.3f}).")
+            else:
+                print("Running without cube/target measurement or automatic success detection.")
 
             # Each attempt starts from a fresh randomish near-neutral pose: the
             # policy is strongest early on, so a timed-out attempt is abandoned and
@@ -1202,6 +1273,9 @@ def main() -> None:
             outcome = run_attempt(target_xy)
 
             if outcome == "steps":
+                break
+            if not measure_scene:
+                print(f"Unmeasured rollout ended: {outcome}.")
                 break
             if outcome == "timeout":
                 print(f"TIMEOUT — no success within {args.attempt_timeout:.0f}s. "
@@ -1259,6 +1333,8 @@ def main() -> None:
                 print(f"Warning: could not release torque: {exc}")
         print("Disconnecting hardware...")
         follower.disconnect()
+        if dppo_controller is not None:
+            dppo_controller.close()
     print(f"Ran {tick} control ticks.")
 
 

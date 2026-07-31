@@ -18,7 +18,10 @@ every control tick, including while queued actions are being executed.
 
 from __future__ import annotations
 
+import argparse
 import io
+import json
+import os
 import struct
 import subprocess
 from collections import deque
@@ -35,6 +38,92 @@ from pick_and_place.policy_controllers import (
 )
 
 SERVER_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "dppo_policy_server.py"
+DEFAULT_CONFIG = (
+    Path(__file__).resolve().parents[3]
+    / "config"
+    / "diffusion_policy"
+    / "pretrain_so101_unet_img.yaml"
+)
+
+
+def add_dppo_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add the common DPPO policy-server arguments to a runner CLI."""
+    parser.add_argument(
+        "--dppo-python",
+        type=Path,
+        default=os.environ.get("DPPO_PYTHON"),
+        help="interpreter of the DPPO virtual environment (default: $DPPO_PYTHON)",
+    )
+    parser.add_argument(
+        "--dppo-config",
+        type=Path,
+        default=DEFAULT_CONFIG,
+        help="DPPO training configuration YAML (default: the pretraining configuration)",
+    )
+    parser.add_argument(
+        "--dppo-normalization",
+        type=Path,
+        help="normalization.npz written by the Diffusion Policy dataset export",
+    )
+    parser.add_argument(
+        "--recording-hw",
+        type=int,
+        nargs=2,
+        default=None,
+        metavar=("HEIGHT", "WIDTH"),
+        help=(
+            "resolution the DPPO training videos were recorded at; defaults to "
+            "source_video_hw in export.json beside --dppo-normalization"
+        ),
+    )
+    parser.add_argument(
+        "--dppo-act-steps",
+        type=int,
+        default=None,
+        help="executed actions per policy query (default: the training configuration)",
+    )
+    parser.add_argument(
+        "--dppo-seed",
+        type=int,
+        default=0,
+        help="Torch seed for DDPM action sampling (default: 0)",
+    )
+    parser.add_argument(
+        "--dppo-ddim-steps",
+        type=int,
+        default=None,
+        help=(
+            "sample with DDIM using this many steps instead of the trained DDPM "
+            "schedule (try 10 for live control)"
+        ),
+    )
+
+
+def resolve_recording_hw(
+    normalization: str | Path,
+    override: tuple[int, int] | None = None,
+) -> tuple[int, int]:
+    """Resolve the intermediate video size used by a DPPO dataset export."""
+    if override is not None:
+        height, width = override
+        if height < 1 or width < 1:
+            raise ValueError("recording height and width must be positive")
+        return (height, width)
+
+    export_path = Path(normalization).parent / "export.json"
+    if not export_path.exists():
+        raise FileNotFoundError(
+            f"no export.json beside {normalization}; pass the recording height and width"
+        )
+    with export_path.open() as file:
+        export = json.load(file)
+    if "source_video_hw" not in export:
+        raise ValueError(
+            f"{export_path} predates source_video_hw; pass the resolution its source "
+            "dataset's videos were recorded at"
+        )
+    height, width = export["source_video_hw"]
+    return (int(height), int(width))
 
 
 def write_message(stream: BinaryIO, arrays: dict[str, np.ndarray]) -> None:
@@ -77,9 +166,7 @@ class DppoPolicyController:
         except Exception:
             self.close()
             raise
-        self.handshake: dict[str, Any] = {
-            key: value.item() for key, value in handshake.items()
-        }
+        self.handshake: dict[str, Any] = {key: value.item() for key, value in handshake.items()}
         self.horizon_steps = int(self.handshake["horizon_steps"])
         self.cond_steps = int(self.handshake["cond_steps"])
         self.policy_hz = float(self.handshake["policy_hz"])
@@ -96,12 +183,11 @@ class DppoPolicyController:
             act_steps = int(self.handshake["act_steps"])
         if not 1 <= act_steps <= self.horizon_steps:
             self.close()
-            raise ValueError(
-                f"act_steps must be in [1, {self.horizon_steps}], got {act_steps}"
-            )
+            raise ValueError(f"act_steps must be in [1, {self.horizon_steps}], got {act_steps}")
         self.act_steps = act_steps
         self._queue: deque[np.ndarray] = deque()
         self._history: deque[dict[str, np.ndarray]] = deque(maxlen=self.cond_steps)
+        self.latest_prediction: np.ndarray | None = None
 
     @classmethod
     def launch(
@@ -116,7 +202,7 @@ class DppoPolicyController:
         act_steps: int | None = None,
         ddim_steps: int | None = None,
         server_script: str | Path = SERVER_SCRIPT,
-    ) -> "DppoPolicyController":
+    ) -> DppoPolicyController:
         """Start the server with the DPPO environment's interpreter."""
         command = [
             str(python),
@@ -136,6 +222,47 @@ class DppoPolicyController:
             command += ["--ddim-steps", str(ddim_steps)]
         return cls(command, act_steps=act_steps)
 
+    @classmethod
+    def launch_from_args(
+        cls,
+        parser: argparse.ArgumentParser,
+        args: argparse.Namespace,
+        *,
+        override_hw: tuple[int, int] | None,
+        default_checkpoint: str,
+    ) -> tuple[DppoPolicyController, tuple[int, int]]:
+        """Validate common runner arguments and start a configured controller."""
+        if args.checkpoint == default_checkpoint:
+            parser.error("--checkpoint (a DPPO state_*.pt file) is required for dppo")
+        if args.dppo_python is None:
+            parser.error("--dppo-python (or $DPPO_PYTHON) is required for dppo")
+        if args.dppo_normalization is None:
+            parser.error("--dppo-normalization is required for dppo")
+        try:
+            recording_hw = resolve_recording_hw(args.dppo_normalization, args.recording_hw)
+        except (FileNotFoundError, ValueError) as exc:
+            parser.error(str(exc))
+
+        print(f"Starting the DPPO policy server for {args.checkpoint}...")
+        controller = cls.launch(
+            python=args.dppo_python,
+            checkpoint=args.checkpoint,
+            config=args.dppo_config,
+            normalization=args.dppo_normalization,
+            device=args.device,
+            seed=args.dppo_seed,
+            act_steps=args.dppo_act_steps,
+            ddim_steps=args.dppo_ddim_steps,
+        )
+        if override_hw is not None and override_hw != controller.image_hw:
+            trained_hw = controller.image_hw
+            controller.close()
+            parser.error(
+                f"--image-height/--image-width {override_hw} do not match the "
+                f"model's trained image size {trained_hw}"
+            )
+        return controller, recording_hw
+
     def _server_exited(self) -> RuntimeError:
         code = self._process.poll()
         return RuntimeError(
@@ -153,6 +280,7 @@ class DppoPolicyController:
     def reset(self) -> None:
         self._queue.clear()
         self._history.clear()
+        self.latest_prediction = None
 
     def _current_observation(self, observation: PolicyObservation) -> dict[str, np.ndarray]:
         for feature in (STATE_FEATURE, OVERHEAD_FEATURE, WRIST_FEATURE):
@@ -172,8 +300,7 @@ class DppoPolicyController:
     ) -> np.ndarray:
         assert self._process.stdin is not None
         request = {
-            key: np.stack([item[key] for item in history])
-            for key in ("state", "overhead", "wrist")
+            key: np.stack([item[key] for item in history]) for key in ("state", "overhead", "wrist")
         }
         if sampling_seed is not None:
             request["sampling_seed"] = np.asarray(sampling_seed, dtype=np.int64)
@@ -217,6 +344,7 @@ class DppoPolicyController:
         return actions.copy()
 
     def act(self, observation: PolicyObservation) -> np.ndarray:
+        self.latest_prediction = None
         current = self._current_observation(observation)
         self._history.append(current)
         if not self._queue:
@@ -225,6 +353,7 @@ class DppoPolicyController:
             actions = self._request_actions(history)
             if actions.ndim != 2 or actions.shape[0] < self.act_steps:
                 raise ValueError(f"server returned malformed actions with shape {actions.shape}")
+            self.latest_prediction = actions.copy()
             self._queue.extend(actions[: self.act_steps])
         return self._queue.popleft().copy()
 
