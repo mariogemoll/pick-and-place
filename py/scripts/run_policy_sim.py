@@ -434,6 +434,24 @@ def main() -> None:
     )
     parser.add_argument("--headless", action="store_true", help="no viewer; render only for the policy")
     parser.add_argument(
+        "--resample-every",
+        type=int,
+        default=None,
+        help=(
+            "resample the cube and drop zone every N control ticks; the headless "
+            "equivalent of pressing Enter, for sweeping many scenes in one run"
+        ),
+    )
+    parser.add_argument(
+        "--trajectory-json",
+        type=Path,
+        default=None,
+        help=(
+            "write a per-tick record of joints, cube pose and drop-zone pose to this "
+            "path, for offline analysis of where the arm aims"
+        ),
+    )
+    parser.add_argument(
         "--save-video",
         type=Path,
         default=None,
@@ -812,13 +830,20 @@ def main() -> None:
         )
         print(f"Injected joint-zero offsets: {offsets}")
     tick = 0
+    # One entry per control tick; `segment` increments on every resample so an
+    # analysis can treat each sampled scene as an independent rollout.
+    trajectory: list[dict] = []
+    segment = 0
     try:
         while viewer is None or viewer.is_running():
             tick_start = time.time()
 
+            if args.resample_every and tick and tick % args.resample_every == 0:
+                pending_resample["flag"] = True
             if pending_resample["flag"]:
                 pending_resample["flag"] = False
                 resample_scene()
+                segment += 1
 
             wrist_frame = render("wrist_camera")
             overhead_frame = render("overhead_camera")
@@ -841,6 +866,20 @@ def main() -> None:
                 if key in (13, 10):  # Enter / keypad Enter
                     pending_resample["flag"] = True
             action_real = controller.act(observation)
+            if args.trajectory_json is not None:
+                # Recorded before the step, so joints and cube pose are exactly
+                # the state the policy conditioned on for this tick.
+                cube_now = data.qpos[cube_qadr : cube_qadr + 3]
+                trajectory.append(
+                    {
+                        "tick": tick,
+                        "segment": segment,
+                        "state_real": [float(v) for v in observation[STATE_FEATURE]],
+                        "action_real": [float(v) for v in action_real],
+                        "cube_xyz": [float(v) for v in cube_now],
+                        "target_xy": [float(target_xy[0]), float(target_xy[1])],
+                    }
+                )
             ctrl = real_action_to_sim_ctrl(action_real)
             offsets = offsets_rad_now()
             offset_ctrl = np.array([offsets.get(name, 0.0) for name in JOINT_NAMES])
@@ -881,6 +920,24 @@ def main() -> None:
             cv2.destroyAllWindows()
         if viewer_ctx is not None:
             viewer_ctx.__exit__(None, None, None)
+    if args.trajectory_json is not None:
+        args.trajectory_json.parent.mkdir(parents=True, exist_ok=True)
+        with args.trajectory_json.open("w") as file:
+            json.dump(
+                {
+                    "checkpoint": str(args.checkpoint),
+                    "seed": args.seed,
+                    "act_steps": args.dppo_act_steps,
+                    "ddim_steps": args.dppo_ddim_steps,
+                    "scene_appearance": args.scene_appearance,
+                    "resample_every": args.resample_every,
+                    "segments": segment + 1,
+                    "ticks": trajectory,
+                },
+                file,
+            )
+        print(f"Wrote {len(trajectory)} ticks over {segment + 1} segments to {args.trajectory_json}")
+
     cube_xyz = data.qpos[cube_qadr : cube_qadr + 3]
     dist = math.hypot(cube_xyz[0] - target_xy[0], cube_xyz[1] - target_xy[1])
     print(
