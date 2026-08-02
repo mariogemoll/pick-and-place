@@ -56,6 +56,7 @@ from pick_and_place.policy_evaluation import (
     TaskSuccessOracle,
 )
 from pick_and_place.robot_dynamics import set_actuator_activation
+from pick_and_place.scene_appearance import SceneAppearance, SceneAppearanceOverride
 from pick_and_place.sim_recorder import resize_and_center_crop
 from pick_and_place.workspace_overlays import is_cube_drop_allowed
 
@@ -192,6 +193,7 @@ class PolicySimEnv(gym.Env):
         image_hw: tuple[int, int],
         render_hw: tuple[int, int] = (1080, 1920),
         renderer_factory: RendererFactory = mujoco.Renderer,
+        scene_appearance: SceneAppearance | None = None,
     ) -> None:
         super().__init__()
         image_height, image_width = image_hw
@@ -206,6 +208,13 @@ class PolicySimEnv(gym.Env):
         self._renderer_factory = renderer_factory
         self._renderer: Any | None = None
         self._randomizer = DomainRandomizer(self.model)
+        # A policy must be rolled out in the appearance it was trained on: the
+        # blue-cube checkpoints see a recoloured cube that the compiled scene,
+        # which carries the physical rig's AprilTag cube, does not have.
+        self.scene_appearance = scene_appearance
+        self._appearance_override = (
+            SceneAppearanceOverride(self.model) if scene_appearance is not None else None
+        )
 
         self._joint_qpos_adr = joint_qpos_addresses(self.model)
         actuator_ids = {
@@ -337,6 +346,12 @@ class PolicySimEnv(gym.Env):
         )
         if self._domain_sample is not None:
             self._randomizer.tint_episode_markers()
+        if self._appearance_override is not None:
+            # Ordered as the interactive runner does it: the marker placement
+            # above decides this episode's plate colour, which is the baseline an
+            # unset target field restores.
+            self._appearance_override.refresh_plate_baseline()
+            self._appearance_override.apply(self.scene_appearance)
         self._substeps = max(
             1,
             round((1.0 / scenario.control_hz) / float(self.model.opt.timestep)),
@@ -421,6 +436,14 @@ class PolicySimEnv(gym.Env):
             unexpected_collision=unexpected_collision,
             out_of_bounds=out_of_bounds,
         )
+
+    def tcp_to_cube_distance_m(self) -> float:
+        """Distance from the jaw contact point to the cube, in metres.
+
+        Privileged: available for reward shaping and diagnostics, never part of
+        the controller observation.
+        """
+        return self._tcp_to_cube_distance_m()
 
     def _tcp_to_cube_distance_m(self) -> float:
         gripper_position = self.data.xpos[self._gripper_body_id]
