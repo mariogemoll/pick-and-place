@@ -47,6 +47,7 @@ from pick_and_place.scripted_policy import (
 )
 from pick_and_place.cube_detection import CubeTracker
 from pick_and_place.detector_process import DetectorProcess
+from pick_and_place.scene_appearance import APPEARANCE_PRESETS, parse_appearance
 from pick_and_place.workspace_overlays import workspace_interior_corners_world
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -133,10 +134,32 @@ def _parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--scene-appearance",
+        type=str,
+        default=None,
+        metavar="NAME",
+        help=(
+            "render the scene the way the checkpoint's training data was rendered, either a "
+            f"preset ({', '.join(sorted(APPEARANCE_PRESETS))}) or an ad-hoc spec such as "
+            "'cube=blue,floor=dark-gray' (default: the scene as compiled, which carries the "
+            "rig's AprilTag cube)"
+        ),
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=None,
         help="run only the first N scenarios for a non-headline wiring check",
+    )
+    parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help=(
+            "skip the first N scenarios, applied before --limit. Together the two shard one "
+            "suite across concurrent workers; the shards stay comparable because each scenario "
+            "is independent and carries its own seed"
+        ),
     )
     parser.add_argument(
         "--max-episode-seconds",
@@ -161,6 +184,13 @@ def _parse_args() -> argparse.Namespace:
         parser.error("render dimensions must be positive")
     if args.limit is not None and args.limit < 1:
         parser.error("--limit must be at least 1")
+    if args.offset < 0:
+        parser.error("--offset must not be negative")
+    if args.scene_appearance is not None:
+        try:
+            parse_appearance(args.scene_appearance)
+        except ValueError as exc:
+            parser.error(str(exc))
     if args.max_episode_seconds is not None and (
         not math.isfinite(args.max_episode_seconds) or args.max_episode_seconds <= 0.0
     ):
@@ -383,7 +413,12 @@ def main() -> None:
     args = _parse_args()
     started_at = dt.datetime.now(dt.UTC)
     manifest = ScenarioManifest.load(args.manifest)
-    scenarios = manifest.scenarios[: args.limit] if args.limit is not None else manifest.scenarios
+    if args.offset >= len(manifest.scenarios):
+        raise SystemExit(
+            f"--offset {args.offset} skips the whole {len(manifest.scenarios)}-scenario suite"
+        )
+    selected = manifest.scenarios[args.offset :]
+    scenarios = selected[: args.limit] if args.limit is not None else selected
     override_hw = (
         (args.image_height, args.image_width) if args.image_height is not None else None
     )
@@ -468,12 +503,19 @@ def main() -> None:
     print(
         f"Evaluating {len(scenarios)}/{len(manifest.scenarios)} {manifest.suite!r} scenarios "
         f"with {args.controller} "
-        f"at {image_hw[1]}x{image_hw[0]} and {next(iter(control_hz_values)):g} Hz."
+        f"at {image_hw[1]}x{image_hw[0]} and {next(iter(control_hz_values)):g} Hz, "
+        f"scene appearance {args.scene_appearance or 'as-compiled'}."
     )
 
+    appearance_name, scene_appearance = (
+        parse_appearance(args.scene_appearance)
+        if args.scene_appearance is not None
+        else (None, None)
+    )
     env = PolicySimEnv(
         image_hw=image_hw,
         render_hw=(args.render_height, args.render_width),
+        scene_appearance=scene_appearance,
     )
     results = []
     try:
@@ -547,6 +589,10 @@ def main() -> None:
             "domain_randomization_presets": sorted({
                 scenario.domain_randomization_preset or "none" for scenario in scenarios
             }),
+            "scene_appearance": appearance_name,
+            "scene_appearance_fields": (
+                asdict(scene_appearance) if scene_appearance is not None else None
+            ),
             "oracle": asdict(TaskOracleConfig()),
             "state_frame": "hardware (arm degrees, gripper position 0-100)",
             "action_frame": "hardware (arm degrees, gripper position 0-100)",
