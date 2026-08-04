@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 
-from pick_and_place.follower import JOINT_NAMES
+from pick_and_place.spec.robot import JOINT_NAMES
 
 
 def _silence_ffmpeg_encoder_reports() -> None:

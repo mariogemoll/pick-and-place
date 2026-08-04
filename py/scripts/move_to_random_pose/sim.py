@@ -30,7 +30,7 @@ import numpy as np
 
 from pick_and_place import build_scene
 from pick_and_place.episode_loop import episode_loop
-from pick_and_place.follower import ARM_JOINT_NAMES
+from pick_and_place.spec.robot import ARM_JOINT_NAMES
 from pick_and_place.move_to_random_pose import (
     current_pose,
     joint_qpos_adr as compute_joint_qpos_adr,

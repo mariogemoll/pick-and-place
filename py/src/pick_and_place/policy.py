@@ -23,7 +23,7 @@ stats, and the dataset stays in raw physical units.
 
 from __future__ import annotations
 
-from pick_and_place.follower import JOINT_NAMES
+from pick_and_place.spec.robot import JOINT_NAMES
 
 # Camera keys used only as a fallback for an un-finetuned base checkpoint, which
 # pins none of its own. A fine-tune's own keys (e.g. SmolVLA's camera1/camera2)

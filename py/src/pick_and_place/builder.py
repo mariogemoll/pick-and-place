@@ -21,7 +21,7 @@ from pick_and_place.collision_boxes import (
     GRIP_SOLIMP,
     GRIP_SOLREF,
 )
-from pick_and_place.follower import JOINT_NAMES
+from pick_and_place.spec.robot import JOINT_NAMES
 from pick_and_place.materials import MaterialConfig, apply_materials
 from pick_and_place.robot_dynamics import DEFAULT_ROBOT_DYNAMICS_PATH, load_robot_dynamics_config
 from pick_and_place.wrist_camera import add_wrist_camera

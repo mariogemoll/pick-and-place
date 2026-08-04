@@ -13,10 +13,9 @@ import numpy as np
 
 from pick_and_place.background_panorama import add_background_panorama
 from pick_and_place.builder import STOCK_ASSETS_DIR, build_robot
-from pick_and_place.spec.workspace import WORKSPACE_FRAME_POS
+from pick_and_place.spec.workspace import CUBE_APRILTAG_IDS, CUBE_HALF_SIZE, WORKSPACE_FRAME_POS
 from pick_and_place.environment import APRILTAG_TEXTURE_DIR, add_overhead_camera_mount, add_workspace_frame, add_workspace_frame_apriltags
 from pick_and_place.materials import MaterialConfig, apply_materials
-from pick_and_place.spec.workspace import CUBE_APRILTAG_IDS, CUBE_HALF_SIZE
 from pick_and_place.workspace_overlays import add_workspace_overlays
 
 # Plain pick cube colour, used when the AprilTag faces are not requested.

@@ -23,7 +23,7 @@ import cv2
 import mujoco
 import numpy as np
 
-from pick_and_place.camera_compare import RealSource, load_intrinsics, draw_hud
+from pick_and_place.camera_compare import draw_hud, draw_tag_detections, load_intrinsics, RealSource
 from pick_and_place.camera_extrinsics import (
     apply_camera_extrinsics_to_model,
     load_local_camera_extrinsics,
@@ -35,19 +35,14 @@ from pick_and_place.cube_detection import (
     CubeTracker,
     detect_tags,
 )
-from pick_and_place.paper_detection import PaperTracker, add_paper_target_marker, detect_paper_target, draw_paper_target, set_paper_target_marker
+from pick_and_place.paper_target_marker import add_paper_target_marker, place_paper_target_marker
+from pick_and_place.paper_detection import PaperTracker, detect_paper_target, draw_paper_target
 from pick_and_place.scene import build_scene
-from pick_and_place.workspace_overlays import (
-    is_cube_drop_allowed,
-    workspace_interior_corners_world,
-)
-from pick_and_place.follower import (
-    JOINT_NAMES,
-    action_to_joints,
-    make_so101_follower,
-)
+from pick_and_place.workspace_bounds import is_cube_drop_allowed, workspace_interior_corners_world
+from pick_and_place.spec.robot import JOINT_NAMES
+from pick_and_place.joint_frames import action_to_joints
+from pick_and_place.follower import make_so101_follower
 
-from pick_and_place.camera_compare import draw_tag_detections
 
 WINDOW_TITLE = "view_mixed  (m mode  , . alpha  q quit)"
 
@@ -416,7 +411,14 @@ def main() -> None:
                         drop_zone_status = "drop zone: not seen"
                     else:
                         usable = is_cube_drop_allowed(*drop_zone_target.xy)
-                        set_paper_target_marker(model, data, drop_zone_target, usable=usable)
+                        place_paper_target_marker(
+                            model,
+                            drop_zone_target.xy,
+                            drop_zone_target.yaw,
+                            drop_zone_target.half_extent,
+                            usable=usable,
+                        )
+                        mujoco.mj_forward(model, data)
                         drop_zone_status = (
                             f"drop zone: xy=({drop_zone_target.xy[0]:.3f}, {drop_zone_target.xy[1]:.3f}) "
                             f"yaw={np.degrees(drop_zone_target.yaw):.1f}deg "

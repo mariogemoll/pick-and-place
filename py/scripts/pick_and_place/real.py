@@ -32,17 +32,18 @@ from pick_and_place.camera_intrinsics import (
 )
 from pick_and_place.dataset_metadata import cube_pose_metadata, driver_metadata
 from pick_and_place.episode_loop import episode_loop
-from pick_and_place.episodes import _build_model, sample_recovery_cube, set_cube_pose, set_joint
+from pick_and_place.episode_sampling import sample_recovery_cube
+from pick_and_place.episodes import _build_model, set_cube_pose, set_joint
 from pick_and_place.executor import CONTROL_HZ, follower_clamp_limits
-from pick_and_place.follower import (
-    GRIPPER_INDEX,
+from pick_and_place.spec.robot import GRIPPER_INDEX
+from pick_and_place.joint_frames import (
     GRIPPER_READBACK_CLOSED,
     action_to_joints,
     joints_to_action,
-    make_so101_follower,
     real_frame_to_sim,
     sim_frame_to_real,
 )
+from pick_and_place.follower import make_so101_follower
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.geometry import CubePose
 from pick_and_place.image_rectify import (
@@ -50,10 +51,10 @@ from pick_and_place.image_rectify import (
     rectified_camera_matrix,
     transform_frame,
 )
-from pick_and_place.kinematics import derive_kinematics
+from pick_and_place.derive_kinematics import derive_kinematics
 from pick_and_place.overhead_localization import OverheadLocalizer
 from pick_and_place.overhead_detection import DEFAULT_ALERT_SOUND, OperatorNotifier
-from pick_and_place.paper_detection import set_paper_target_marker
+from pick_and_place.paper_target_marker import place_paper_target_marker
 from pick_and_place.policy import DEFAULT_IMAGE_HW
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
 from pick_and_place.physical_rig import PhysicalRig, require_joint_zero_offsets
@@ -82,7 +83,7 @@ from pick_and_place.trajectory import (
     REST_ARM_JOINTS,
     REST_GRIPPER,
 )
-from pick_and_place.workspace_overlays import (
+from pick_and_place.workspace_bounds import (
     PAN_AXIS,
     is_cube_recovery_target_allowed,
     workspace_interior_corners_world,
@@ -663,10 +664,11 @@ def main() -> None:
             if controller.cube_pose is not None:
                 set_cube_pose(model, data, controller.cube_pose)
             if controller.drop_target is not None:
-                set_paper_target_marker(
+                place_paper_target_marker(
                     model,
-                    data,
-                    controller.drop_target,
+                    controller.drop_target.xy,
+                    controller.drop_target.yaw,
+                    controller.drop_target.half_extent,
                     usable=True,
                 )
             mujoco.mj_forward(model, data)

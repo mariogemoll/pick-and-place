@@ -7,10 +7,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import cv2
 import numpy as np
 from numpy.typing import NDArray
 
-PAPER_TARGET_MARKER_NAME = "paper_target_marker"
+from pick_and_place.camera_projection import pixel_to_world_plane, project_to_pixel
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,16 @@ class PaperTarget:
         """Yaw angle (radians) of the square's first edge in world XY."""
         edge = self.corners_world[1] - self.corners_world[0]
         return float(np.arctan2(edge[1], edge[0]))
+
+    @property
+    def half_extent(self) -> tuple[float, float]:
+        """Half side lengths (metres) along the square's own two edge directions."""
+        edge_x = self.corners_world[1] - self.corners_world[0]
+        edge_y = self.corners_world[2] - self.corners_world[1]
+        return (
+            float(np.linalg.norm(edge_x[:2])) / 2.0,
+            float(np.linalg.norm(edge_y[:2])) / 2.0,
+        )
 
 
 class PaperTracker:
@@ -57,9 +68,7 @@ class PaperTracker:
         if target is None:
             return self._last_target
 
-        edge_x = target.corners_world[1] - target.corners_world[0]
-        edge_y = target.corners_world[2] - target.corners_world[1]
-        size = np.array([np.linalg.norm(edge_x[:2]), np.linalg.norm(edge_y[:2])])
+        size = np.array(target.half_extent) * 2.0
         yaw = target.yaw
 
         if self._smoothed_center is None or self.alpha <= 0.0:
@@ -96,8 +105,6 @@ class PaperTracker:
 
 def draw_paper_target(bgr: NDArray, target: PaperTarget, scale_x: float, scale_y: float) -> None:
     """Outline the drop-zone target and its orientation on a BGR frame."""
-    import cv2
-
     scale = np.array([scale_x, scale_y])
     corners = (target.corners_px * scale).astype(int)
     cv2.polylines(bgr, [corners.reshape(-1, 1, 2)], True, (255, 255, 0), 2, cv2.LINE_AA)
@@ -107,116 +114,6 @@ def draw_paper_target(bgr: NDArray, target: PaperTarget, scale_x: float, scale_y
     cv2.circle(bgr, tuple(center), 4, (0, 0, 255), -1)
     mid_first = ((corners[0] + corners[1]) / 2).astype(int)
     cv2.line(bgr, tuple(center), tuple(mid_first), (0, 0, 255), 2, cv2.LINE_AA)
-
-
-def pixel_to_world_plane(
-    pixel: NDArray,
-    camera_matrix: NDArray,
-    camera_position: NDArray,
-    camera_rotation: NDArray,
-    *,
-    plane_z: float = 0.0,
-) -> NDArray | None:
-    """Intersect an undistorted image pixel's camera ray with ``z=plane_z``."""
-    pixel_h = np.array((float(pixel[0]), float(pixel[1]), 1.0))
-    ray_cv = np.linalg.inv(np.asarray(camera_matrix, dtype=float)) @ pixel_h
-    ray_mj = np.array((ray_cv[0], -ray_cv[1], -ray_cv[2]))
-    ray_world = np.asarray(camera_rotation, dtype=float) @ ray_mj
-    origin = np.asarray(camera_position, dtype=float)
-    if abs(ray_world[2]) < 1e-9:
-        return None
-    distance = (float(plane_z) - origin[2]) / ray_world[2]
-    if distance <= 0.0:
-        return None
-    return origin + distance * ray_world
-
-
-def project_to_pixel(
-    points_world: NDArray,
-    camera_matrix: NDArray,
-    camera_position: NDArray,
-    camera_rotation: NDArray,
-) -> NDArray:
-    """Project world points onto the image plane (inverse of ``pixel_to_world_plane``)."""
-    points = np.asarray(points_world, dtype=float).reshape(-1, 3)
-    rays_mj = (points - np.asarray(camera_position, dtype=float)) @ np.asarray(
-        camera_rotation, dtype=float
-    )
-    rays_cv = rays_mj * np.array((1.0, -1.0, -1.0))
-    projected = rays_cv @ np.asarray(camera_matrix, dtype=float).T
-    return projected[:, :2] / projected[:, 2:3]
-
-
-def add_paper_target_marker(spec) -> None:
-    """Add a hidden, non-colliding drop-zone marker to an ``MjSpec`` before compile."""
-    import mujoco
-
-    body = spec.worldbody.add_body(name=PAPER_TARGET_MARKER_NAME, pos=(0.0, 0.0, 0.0))
-    body.add_geom(
-        name=PAPER_TARGET_MARKER_NAME + "_geom",
-        type=mujoco.mjtGeom.mjGEOM_BOX,
-        pos=(0.0, 0.0, 0.002),
-        size=(0.05, 0.05, 0.001),
-        rgba=(1.0, 1.0, 1.0, 0.0),
-        contype=0,
-        conaffinity=0,
-        group=1,
-    )
-
-
-def place_paper_target_marker(
-    model,
-    center_xy: tuple[float, float],
-    yaw: float,
-    half_extent: tuple[float, float],
-    *,
-    usable: bool,
-    alpha: float = 0.72,
-) -> None:
-    """Position and show the drop-zone marker square in an already compiled model.
-
-    ``half_extent`` is the half side length (metres) along the marker's local x/y
-    axes. ``usable`` colours the square the standard black when the drop is allowed
-    and orange when it falls outside the permitted drop zone. ``alpha`` is the
-    opacity: the live viewer overlays a translucent square, while a sim recording
-    uses a fully opaque square to look like real black paper on the table.
-    """
-    import math
-    import mujoco
-
-    body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, PAPER_TARGET_MARKER_NAME)
-    geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, PAPER_TARGET_MARKER_NAME + "_geom")
-    if body_id < 0 or geom_id < 0:
-        return
-
-    model.body_pos[body_id] = (center_xy[0], center_xy[1], 0.0)
-    model.body_quat[body_id] = (math.cos(yaw / 2.0), 0.0, 0.0, math.sin(yaw / 2.0))
-    model.geom_size[geom_id] = (
-        max(half_extent[0], 0.001),
-        max(half_extent[1], 0.001),
-        0.001,
-    )
-    rgb = (0.12, 0.12, 0.12) if usable else (1.0, 0.45, 0.05)
-    model.geom_rgba[geom_id] = (*rgb, alpha)
-
-
-def set_paper_target_marker(model, data, target: PaperTarget, *, usable: bool) -> None:
-    """Show a detected ``target`` as a translucent square in a compiled model."""
-    import mujoco
-
-    edge_x = target.corners_world[1] - target.corners_world[0]
-    edge_y = target.corners_world[2] - target.corners_world[1]
-    place_paper_target_marker(
-        model,
-        (float(target.center_world[0]), float(target.center_world[1])),
-        target.yaw,
-        (
-            float(np.linalg.norm(edge_x[:2])) / 2.0,
-            float(np.linalg.norm(edge_y[:2])) / 2.0,
-        ),
-        usable=usable,
-    )
-    mujoco.mj_forward(model, data)
 
 
 def detect_paper_target(
@@ -237,8 +134,6 @@ def detect_paper_target(
     world-space quad projected into the image, so off-table clutter cannot be
     mistaken for or merged into the target.
     """
-    import cv2
-
     image = np.asarray(frame_rgb)
     if image.ndim != 3 or image.shape[2] != 3:
         raise ValueError("frame_rgb must have shape (height, width, 3)")

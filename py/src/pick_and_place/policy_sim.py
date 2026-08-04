@@ -28,17 +28,12 @@ from pick_and_place.domain_randomization import (
 )
 from pick_and_place.episodes import build_geom_sets, is_unexpected, scan_contacts
 from pick_and_place.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
-from pick_and_place.follower import (
-    ARM_JOINT_NAMES,
-    GRIPPER_INDEX,
-    JOINT_NAMES,
-    real_frame_to_sim,
-    sim_frame_to_real,
-)
+from pick_and_place.spec.robot import ARM_JOINT_NAMES, GRIPPER_INDEX, JOINT_NAMES
+from pick_and_place.joint_frames import real_frame_to_sim, sim_frame_to_real
 from pick_and_place.geometry import JAW_CONTACT_POSITION
 from pick_and_place.miscalibration import MiscalibrationDraw
 from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
-from pick_and_place.paper_detection import add_paper_target_marker, place_paper_target_marker
+from pick_and_place.paper_target_marker import add_paper_target_marker, place_paper_target_marker
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, PolicyController, PolicyObservation, STATE_FEATURE, WRIST_FEATURE
 from pick_and_place.policy_evaluation import (
     EpisodeResult,
@@ -49,7 +44,7 @@ from pick_and_place.policy_evaluation import (
 from pick_and_place.robot_dynamics import set_actuator_activation
 from pick_and_place.scene_appearance import SceneAppearance, SceneAppearanceOverride
 from pick_and_place.sim_recorder import resize_and_center_crop
-from pick_and_place.workspace_overlays import is_cube_drop_allowed
+from pick_and_place.workspace_bounds import is_cube_drop_allowed
 
 _MAX_CUBE_RADIUS_M = 0.8
 _MIN_CUBE_HEIGHT_M = -0.05

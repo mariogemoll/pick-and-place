@@ -1,83 +1,51 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Sample and prepare random pick-and-carry episodes under live physics.
+"""Prepare random pick-and-carry episodes and vet them under live physics.
 
 Shared by ``pick_and_place/sim.py`` (sim-only viewer), ``pick_and_place/real.py``
 (the hardware path) and ``record_episodes`` (batch dataset generation). All need
-to draw random source/target cube poses
-and near-neutral start/end arm poses, build the scene with a dynamic cube, and
-search ``pick_and_carry_candidates`` (vetting each with a collision preflight)
-for a trajectory that runs clean — resampling the poses until one is found.
+to build the scene with a dynamic cube and search
+``pick_and_carry_candidates`` (vetting each with a collision preflight) for a
+trajectory that runs clean — resampling the poses drawn by
+:mod:`pick_and_place.episode_sampling` until one is found.
 """
 
 from __future__ import annotations
 
+import json
 import math
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
-import json
 from pathlib import Path
 
 import mujoco
 import numpy as np
 
 from pick_and_place import build_scene
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.geometry import CubePose
-from pick_and_place.kinematics import ARM_JOINT_NAMES, So101Kinematics, derive_kinematics
+from pick_and_place.derive_kinematics import derive_kinematics
+from pick_and_place.episode_sampling import sample_cube, sample_near_neutral, sample_target
+from pick_and_place.geometry import CubePose, PlacementError, cube_quat_from_pose
+from pick_and_place.kinematics import So101Kinematics
 from pick_and_place.miscalibration import MiscalibrationDraw
-from pick_and_place.paper_detection import add_paper_target_marker
+from pick_and_place.paper_target_marker import add_paper_target_marker
 from pick_and_place.robot_dynamics import set_actuator_activation
+from pick_and_place.spec.robot import ARM_JOINT_NAMES
 from pick_and_place.trajectory import (
-    GRIPPER_OPEN,
-    NEUTRAL_ARM_JOINTS,
     GraspChoice,
     Trajectory,
     free_grasp_candidates,
     grasp_candidates,
     trajectory_candidates_for_grasp,
 )
-from pick_and_place.workspace_overlays import (
-    AZIMUTH_MAX,
-    AZIMUTH_MIN,
-    CANONICAL_PICKUP_OVERLAY,
-    PAN_AXIS,
-    CUBE_PLACEMENT_OVERLAY,
-    is_cube_drop_allowed,
-    is_cube_placement_allowed,
-    is_cube_recovery_target_allowed,
-    is_target_plate_position_allowed,
-)
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.workspace_bounds import is_cube_drop_allowed, is_cube_pickup_allowed
 
-# ±radians of random joint perturbation applied to the neutral start/end pose.
-_NEAR_NEUTRAL_JOINT_SCALE = 0.4
-# Per-joint overrides of the perturbation scale. ``shoulder_lift``, ``elbow_flex``
-# and ``wrist_flex`` are held tighter than the rest because they are the levers
-# that tilt the gripper down toward the floor: a full ±0.4 swing on them is what
-# drives the near-neutral start/end pose down toward the ground. Tightening them to
-# ±0.2 keeps almost every sampled pose above the clearance gate below (≈99% pass),
-# so the gate rarely has to resample while still guaranteeing the floor margin.
-_JOINT_SCALE_OVERRIDES: dict[str, float] = {
-    "shoulder_lift": 0.2,
-    "elbow_flex": 0.2,
-    "wrist_flex": 0.2,
-}
-# Shoulder-pan half-range for look-around search poses. Near the ±1.92 rad pan
-# limit (with a small margin) so the search sweeps the arm across nearly its full
-# lateral travel to clear the overhead view, rather than the tight start jitter.
-_HUNT_PAN_SCALE = 1.7
 # Minimum height (m) the lowest gripper-jaw corner must clear the floor by for a
 # sampled start pose to be accepted, so the arm begins well up in the air rather
 # than skimming (or buried in) the ground.
 MIN_START_CLEARANCE = 0.10
-PICKUP_YAW_DEVIATION = math.pi / 4.0
-
-
-def pickup_yaw_from_azimuth(azimuth: float, deviation: float = 0.0) -> float:
-    """Return cube yaw relative to the local pickup azimuth frame."""
-    return azimuth + deviation
 
 
 class EpisodeSamplingError(RuntimeError):
@@ -99,98 +67,6 @@ class PreflightCollision:
     position: tuple[float, float, float]
 
 
-@dataclass(frozen=True)
-class PlacementError:
-    """Final cube placement error relative to an episode target."""
-
-    cube_xyz: tuple[float, float, float]
-    target_xyz: tuple[float, float, float]
-    dx: float
-    dy: float
-    dz: float
-    xy: float
-
-    def summary(self) -> str:
-        return (
-            f"placement error: xy={self.xy * 1000:.1f} mm "
-            f"(dx={self.dx * 1000:+.1f}, dy={self.dy * 1000:+.1f}), "
-            f"z={self.dz * 1000:+.1f} mm"
-        )
-
-
-def sample_cube(rng: np.random.Generator) -> CubePose:
-    """Sample a cube pose in the canonical pick-lift sector."""
-    r_inner = CANONICAL_PICKUP_OVERLAY.inner_radius
-    r_outer = CANONICAL_PICKUP_OVERLAY.outer_radius
-    while True:
-        # Uniform radial sampling to prevent points bunching up at the outer edge.
-        r = rng.uniform(r_inner, r_outer)
-        theta = rng.uniform(AZIMUTH_MIN, AZIMUTH_MAX)
-        x = PAN_AXIS[0] + r * math.cos(theta)
-        y = PAN_AXIS[1] + r * math.sin(theta)
-        if is_cube_placement_allowed(x, y):
-            break
-    yaw = pickup_yaw_from_azimuth(
-        theta,
-        rng.uniform(-PICKUP_YAW_DEVIATION, PICKUP_YAW_DEVIATION),
-    )
-    return CubePose(
-        x=x,
-        y=y,
-        z=CUBE_HALF_SIZE,
-        yaw=yaw,
-    )
-
-
-def sample_recovery_cube(rng: np.random.Generator) -> CubePose:
-    """Sample a conservative pickup-zone target for unrecorded cube recovery."""
-    while True:
-        pose = sample_cube(rng)
-        if is_cube_recovery_target_allowed(pose.x, pose.y):
-            return pose
-
-
-def sample_target(rng: np.random.Generator) -> CubePose:
-    """Sample a target in the broader drop sector with room for the plate."""
-    r_inner = CUBE_PLACEMENT_OVERLAY.inner_radius
-    r_outer = CUBE_PLACEMENT_OVERLAY.outer_radius
-    while True:
-        r = rng.uniform(r_inner, r_outer)
-        theta = rng.uniform(AZIMUTH_MIN, AZIMUTH_MAX)
-        x = PAN_AXIS[0] + r * math.cos(theta)
-        y = PAN_AXIS[1] + r * math.sin(theta)
-        if is_cube_drop_allowed(x, y) and is_target_plate_position_allowed(x, y):
-            return CubePose(x=x, y=y, z=CUBE_HALF_SIZE)
-
-
-def sample_near_neutral(rng: np.random.Generator) -> tuple[dict[str, float], float]:
-    """Return arm joints and gripper perturbed slightly from the neutral pose.
-
-    Each joint is perturbed by ±its scale (``_JOINT_SCALE_OVERRIDES`` for the
-    tightened joints, else ``_NEAR_NEUTRAL_JOINT_SCALE``).
-    """
-    joints = {}
-    for name, value in NEUTRAL_ARM_JOINTS.items():
-        scale = _JOINT_SCALE_OVERRIDES.get(name, _NEAR_NEUTRAL_JOINT_SCALE)
-        joints[name] = value + rng.uniform(-scale, scale)
-    gripper = float(rng.uniform(0.0, GRIPPER_OPEN))
-    return joints, gripper
-
-
-def sample_hunt_pose(rng: np.random.Generator) -> tuple[dict[str, float], float]:
-    """Return a search pose: a wide shoulder-pan swing, the rest near neutral.
-
-    The arm itself can sit between the fixed overhead camera and the cube or
-    drop-zone square, so the look-around search swings the pan far wider than the
-    near-neutral start jitter to clear the view from a range of angles. The tilt
-    joints stay near neutral, keeping the gripper well above the floor."""
-    joints, gripper = sample_near_neutral(rng)
-    joints["shoulder_pan"] = NEUTRAL_ARM_JOINTS["shoulder_pan"] + rng.uniform(
-        -_HUNT_PAN_SCALE, _HUNT_PAN_SCALE
-    )
-    return joints, gripper
-
-
 def set_joint(model: mujoco.MjModel, data: mujoco.MjData, name: str, value: float) -> None:
     jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
     data.qpos[model.jnt_qposadr[jid]] = value
@@ -199,22 +75,6 @@ def set_joint(model: mujoco.MjModel, data: mujoco.MjData, name: str, value: floa
 def get_joint(model: mujoco.MjModel, data: mujoco.MjData, name: str) -> float:
     jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)
     return float(data.qpos[model.jnt_qposadr[jid]])
-
-
-def cube_quat_from_pose(pose: CubePose) -> tuple[float, float, float, float]:
-    """MuJoCo ``w, x, y, z`` quaternion for ``pose``'s intrinsic ZYX rotation."""
-    half_roll = pose.roll / 2.0
-    half_pitch = pose.pitch / 2.0
-    half_yaw = pose.yaw / 2.0
-    cr, sr = math.cos(half_roll), math.sin(half_roll)
-    cp, sp = math.cos(half_pitch), math.sin(half_pitch)
-    cy, sy = math.cos(half_yaw), math.sin(half_yaw)
-    return (
-        cr * cp * cy + sr * sp * sy,
-        sr * cp * cy - cr * sp * sy,
-        cr * sp * cy + sr * cp * sy,
-        cr * cp * sy - sr * sp * cy,
-    )
 
 
 def set_cube_pose(model: mujoco.MjModel, data: mujoco.MjData, source: CubePose) -> None:
@@ -754,7 +614,7 @@ def prepare_episode(
     if failed_trajectory_dir is not None:
         failed_trajectory_dir.mkdir(parents=True, exist_ok=True)
 
-    source_allowed = is_cube_drop_allowed if free_grasp else is_cube_placement_allowed
+    source_allowed = is_cube_drop_allowed if free_grasp else is_cube_pickup_allowed
     if fixed_source and not source_allowed(source.x, source.y):
         zone = "allowed drop zone" if free_grasp else "allowed pickup zone"
         reason = f"source ({source.x:.4f}, {source.y:.4f}) is outside the {zone}"

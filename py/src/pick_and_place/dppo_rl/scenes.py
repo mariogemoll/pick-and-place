@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from pick_and_place.episodes import cube_quat_from_pose
+from pick_and_place.geometry import cube_quat_from_pose
 from pick_and_place.policy_evaluation import EvaluationScenario
 from pick_and_place.scenario_sampling import sample_scene, workspace_region
 

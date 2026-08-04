@@ -19,6 +19,7 @@ and the at-cube pose is the *grasp* pose.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -73,9 +74,44 @@ class CubePose:
     yaw: float = 0.0
 
 
+@dataclass(frozen=True)
+class PlacementError:
+    """How far a placed cube ended up from where it was meant to go."""
+
+    cube_xyz: tuple[float, float, float]
+    target_xyz: tuple[float, float, float]
+    dx: float
+    dy: float
+    dz: float
+    xy: float
+
+    def summary(self) -> str:
+        return (
+            f"placement error: xy={self.xy * 1000:.1f} mm "
+            f"(dx={self.dx * 1000:+.1f}, dy={self.dy * 1000:+.1f}), "
+            f"z={self.dz * 1000:+.1f} mm"
+        )
+
+
 def world_from_cube(pose: CubePose) -> Mat4:
     return tf.translation(pose.x, pose.y, pose.z) @ tf.rotation_zyx(
         pose.roll, pose.pitch, pose.yaw
+    )
+
+
+def cube_quat_from_pose(pose: CubePose) -> tuple[float, float, float, float]:
+    """MuJoCo ``w, x, y, z`` quaternion for ``pose``'s intrinsic ZYX rotation."""
+    half_roll = pose.roll / 2.0
+    half_pitch = pose.pitch / 2.0
+    half_yaw = pose.yaw / 2.0
+    cr, sr = math.cos(half_roll), math.sin(half_roll)
+    cp, sp = math.cos(half_pitch), math.sin(half_pitch)
+    cy, sy = math.cos(half_yaw), math.sin(half_yaw)
+    return (
+        cr * cp * cy + sr * sp * sy,
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
     )
 
 

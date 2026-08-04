@@ -79,28 +79,23 @@ from pick_and_place.camera_intrinsics import (
     load_local_camera_intrinsics,
 )
 from pick_and_place.diffusion_policy_client import DiffusionPolicyController, add_diffusion_policy_arguments
-from pick_and_place.episodes import sample_hunt_pose, sample_near_neutral
+from pick_and_place.episode_sampling import sample_hunt_pose, sample_near_neutral
 from pick_and_place.executor import (
     CONTROL_HZ,
     RAMP_DURATION,
     clamp_and_warn,
     follower_clamp_limits,
 )
-from pick_and_place.follower import (
-    GRIPPER_INDEX,
-    JOINT_NAMES,
-    action_to_joints,
-    joints_to_action,
-    make_so101_follower,
-    sim_frame_to_real,
-)
+from pick_and_place.spec.robot import GRIPPER_INDEX, JOINT_NAMES
+from pick_and_place.joint_frames import action_to_joints, joints_to_action, sim_frame_to_real
+from pick_and_place.follower import make_so101_follower
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.image_rectify import (
     build_undistort_map,
     center_crop_and_resize,
     transform_frame,
 )
-from pick_and_place.kinematics import derive_kinematics
+from pick_and_place.derive_kinematics import derive_kinematics
 from pick_and_place.overhead_detection import DEFAULT_ALERT_SOUND, OperatorNotifier
 from pick_and_place.policy import (
     DEFAULT_CHECKPOINT,

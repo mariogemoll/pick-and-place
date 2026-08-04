@@ -47,11 +47,9 @@ from pick_and_place.episodes import (
     scan_contacts,
     set_joint,
 )
-from pick_and_place.follower import (
-    ARM_JOINT_NAMES,
-    GRIPPER_INDEX,
+from pick_and_place.spec.robot import ARM_JOINT_NAMES, GRIPPER_INDEX, JOINT_NAMES
+from pick_and_place.joint_frames import (
     GRIPPER_READBACK_CLOSED,
-    JOINT_NAMES,
     action_to_joints,
     clamp_joints,
     joints_to_action,

@@ -35,12 +35,10 @@ from pick_and_place.camera_compare import RealSource, load_intrinsics
 from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
 from pick_and_place.cube_detection import CUBE_TAG_IDS, CubeTracker
 from pick_and_place.paths import outputs_root
-from pick_and_place.paper_detection import PaperTracker, add_paper_target_marker, detect_paper_target, draw_paper_target, set_paper_target_marker
+from pick_and_place.paper_target_marker import add_paper_target_marker, place_paper_target_marker
+from pick_and_place.paper_detection import PaperTracker, detect_paper_target, draw_paper_target
 from pick_and_place.scene import build_environment
-from pick_and_place.workspace_overlays import (
-    is_cube_drop_allowed,
-    workspace_interior_corners_world,
-)
+from pick_and_place.workspace_bounds import is_cube_drop_allowed, workspace_interior_corners_world
 
 WINDOW_TITLE = "workspace camera  (f freeze, +/- overlay, s save, q / Esc quit)"
 OVERHEAD_WINDOW_TITLE = "overhead camera  (f freeze, +/- overlay, s save, q / Esc quit)"
@@ -418,9 +416,14 @@ def main() -> None:
                 )
                 target = target_tracker.update(raw_target)
                 if target is not None:
-                    set_paper_target_marker(
-                        model, data, target, usable=is_cube_drop_allowed(*target.xy)
+                    place_paper_target_marker(
+                        model,
+                        target.xy,
+                        target.yaw,
+                        target.half_extent,
+                        usable=is_cube_drop_allowed(*target.xy),
                     )
+                    mujoco.mj_forward(model, data)
                 elif cube_pose is not None and not cube_pose.held:
                     mujoco.mj_forward(model, data)
                 overhead_view_rgb = cv2.resize(

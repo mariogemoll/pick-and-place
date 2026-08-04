@@ -27,7 +27,7 @@ from pick_and_place.camera_extrinsics import (
 )
 from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.workspace_overlays import is_cube_drop_allowed, is_vertical_grip_allowed
+from pick_and_place.workspace_bounds import is_cube_drop_allowed, is_cube_pickup_allowed
 
 
 def _add_target_marker(spec: mujoco.MjSpec, target: np.ndarray | None) -> None:
@@ -212,7 +212,7 @@ def main() -> None:
         x, y = float(target[0]), float(target[1])
         print(
             f"target=({x:.4f}, {y:.4f}) "
-            f"vertical_grip_allowed={is_vertical_grip_allowed(x, y)} "
+            f"vertical_grip_allowed={is_cube_pickup_allowed(x, y)} "
             f"drop_allowed={is_cube_drop_allowed(x, y)}"
         )
     collision_events = record["collision_events"] if "collision_events" in record else None

@@ -43,7 +43,7 @@ from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.geometry import CubePose
 from pick_and_place.paths import ENV_VAR, datasets_root
 from pick_and_place.paper_detection import detect_paper_target
-from pick_and_place.workspace_overlays import PAN_AXIS, workspace_interior_corners_world
+from pick_and_place.workspace_bounds import PAN_AXIS, workspace_interior_corners_world
 
 
 POSE_COLUMNS = ("cube_start_x", "cube_start_y", "cube_start_yaw", "target_x", "target_y")

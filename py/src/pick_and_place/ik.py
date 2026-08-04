@@ -15,7 +15,8 @@ import numpy as np
 
 from pick_and_place import transforms as tf
 from pick_and_place.geometry import GRIPPER_TARGET_POSITION
-from pick_and_place.kinematics import ARM_JOINT_NAMES, So101Kinematics
+from pick_and_place.kinematics import So101Kinematics
+from pick_and_place.spec.robot import ARM_JOINT_NAMES
 from pick_and_place.transforms import Mat4
 
 

@@ -38,11 +38,11 @@ from pick_and_place.cube_detection import (
     make_cube_detector,
 )
 from pick_and_place.dataset_metadata import placement_error_metadata
-from pick_and_place.episodes import PlacementError, _build_model
+from pick_and_place.episodes import _build_model
+from pick_and_place.geometry import CubePose, PlacementError
 from pick_and_place.paths import ENV_VAR, datasets_root
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.geometry import CubePose
-from pick_and_place.workspace_overlays import PAN_AXIS
+from pick_and_place.workspace_bounds import PAN_AXIS
 
 
 PLACEMENT_COLUMNS = (

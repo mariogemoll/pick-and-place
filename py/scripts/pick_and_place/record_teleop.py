@@ -88,18 +88,17 @@ from pick_and_place.executor import (
     follower_clamp_limits,
 )
 from pick_and_place.recording import RecordingSession
-from pick_and_place.follower import (
-    GRIPPER_INDEX,
+from pick_and_place.spec.robot import GRIPPER_INDEX
+from pick_and_place.joint_frames import (
     GRIPPER_READBACK_CLOSED,
     GRIPPER_READBACK_OPEN,
     action_to_joints,
     joints_to_action,
-    make_so101_follower,
-    make_so101_leader,
 )
+from pick_and_place.follower import make_so101_follower, make_so101_leader
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.geometry import CubePose
-from pick_and_place.kinematics import derive_kinematics
+from pick_and_place.derive_kinematics import derive_kinematics
 from pick_and_place.overhead_detection import (
     DEFAULT_ALERT_SOUND,
     OperatorNotifier,
@@ -112,6 +111,7 @@ from pick_and_place.overhead_detection import (
 )
 from pick_and_place.paper_detection import PaperTracker
 from pick_and_place.paths import datasets_root
+from pick_and_place.workspace_bounds import PAN_AXIS
 
 # Seconds each detection attempt stares at the overhead feed before giving up.
 DETECT_TIMEOUT = 2.0
@@ -696,7 +696,6 @@ def main() -> None:
         load_local_camera_extrinsics,
     )
     from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
-    from pick_and_place.workspace_overlays import PAN_AXIS
 
     def require_intrinsics(camera_name: str, override) -> None:
         path = (

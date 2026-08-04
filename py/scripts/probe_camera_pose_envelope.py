@@ -87,7 +87,7 @@ from pick_and_place.camera_pose_envelope import (
     camera_module_geoms,
     overhead_pose_filter,
 )
-from pick_and_place.episodes import sample_cube, sample_target
+from pick_and_place.episode_sampling import sample_cube, sample_target
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.scene import build_environment
 from pick_and_place.sim_recorder import (
@@ -95,12 +95,12 @@ from pick_and_place.sim_recorder import (
     fovy_from_intrinsics,
     resize_and_center_crop,
 )
-from pick_and_place.workspace_overlays import (
-    CANONICAL_PICKUP_OVERLAY,
-    CUBE_PLACEMENT_OVERLAY,
+from pick_and_place.workspace_bounds import (
+    CANONICAL_PICKUP_SECTOR,
+    CUBE_PLACEMENT_SECTOR,
     PAN_AXIS,
     is_cube_drop_allowed,
-    is_cube_placement_allowed,
+    is_cube_pickup_allowed,
 )
 
 CAMERA_NAME = "overhead_camera"
@@ -238,13 +238,13 @@ def sector_points() -> np.ndarray:
     A margin computed on these says the cube is *wholly* inside the recorded
     image anywhere the episode sampler could put it.
     """
-    radius = max(CANONICAL_PICKUP_OVERLAY.outer_radius, CUBE_PLACEMENT_OVERLAY.outer_radius)
+    radius = max(CANONICAL_PICKUP_SECTOR.outer_radius, CUBE_PLACEMENT_SECTOR.outer_radius)
     step = 0.01
     axis = np.arange(-radius, radius + step, step)
     grid_x, grid_y = np.meshgrid(PAN_AXIS[0] + axis, PAN_AXIS[1] + axis)
     flat = np.column_stack([grid_x.ravel(), grid_y.ravel()])
     allowed = np.array(
-        [is_cube_placement_allowed(x, y) or is_cube_drop_allowed(x, y) for x, y in flat]
+        [is_cube_pickup_allowed(x, y) or is_cube_drop_allowed(x, y) for x, y in flat]
     )
     centers = flat[allowed]
     offsets = CUBE_HALF_SIZE * np.array(

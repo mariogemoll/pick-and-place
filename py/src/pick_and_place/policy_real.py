@@ -14,7 +14,8 @@ from typing import Any, Protocol
 
 import numpy as np
 
-from pick_and_place.follower import ARM_JOINT_NAMES, JOINT_NAMES, action_to_joints, joints_to_action
+from pick_and_place.spec.robot import ARM_JOINT_NAMES, JOINT_NAMES
+from pick_and_place.joint_frames import action_to_joints, joints_to_action
 from pick_and_place.spec.controller import ControllerFailure, OVERHEAD_FEATURE, PolicyController, PolicyObservation, STATE_FEATURE, WRIST_FEATURE
 
 

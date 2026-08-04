@@ -37,6 +37,8 @@ from pathlib import Path
 
 import numpy as np
 
+from pick_and_place.workspace_bounds import PAN_AXIS
+
 # Milestones in the order the task passes through them, so "where did it stop"
 # is the first one that is False.
 MILESTONE_ORDER = (
@@ -80,8 +82,6 @@ def scene_features(scenario) -> dict[str, float]:
     Everything here is known at reset, which is the point: a feature that
     separates hard from easy scenes is difficulty the policy cannot influence.
     """
-    from pick_and_place.workspace_overlays import PAN_AXIS
-
     cube_x, cube_y, _ = scenario.source_position_m
     target_x, target_y, _ = scenario.target_position_m
     cube_yaw = yaw_from_quat(*scenario.source_orientation_wxyz)

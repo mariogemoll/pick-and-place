@@ -33,7 +33,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from pick_and_place.executor import CONTROL_HZ
-from pick_and_place.follower import GRIPPER_INDEX, JOINT_NAMES
+from pick_and_place.spec.robot import GRIPPER_INDEX, JOINT_NAMES
 
 
 @dataclass(frozen=True)

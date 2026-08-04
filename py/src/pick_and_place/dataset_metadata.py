@@ -7,8 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pick_and_place.episodes import PlacementError
-from pick_and_place.geometry import CubePose
+from pick_and_place.geometry import CubePose, PlacementError
 
 
 def driver_metadata(driver: str) -> dict[str, str]:

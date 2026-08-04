@@ -34,14 +34,9 @@ import numpy as np
 from pick_and_place.camera_extrinsics import LOCAL_CAMERA_EXTRINSICS_DIR, save_camera_extrinsics
 from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
 from pick_and_place.scene import build_scene
-from pick_and_place.follower import (
-    ARM_JOINT_NAMES,
-    action_to_joints,
-    joints_to_action,
-    make_so101_leader,
-    make_so101_follower,
-    real_frame_to_sim,
-)
+from pick_and_place.spec.robot import ARM_JOINT_NAMES
+from pick_and_place.joint_frames import action_to_joints, joints_to_action, real_frame_to_sim
+from pick_and_place.follower import make_so101_follower, make_so101_leader
 from pick_and_place.cam_align_solve import (
     parse_index_or_path,
     camera_matrix_from_intrinsics,

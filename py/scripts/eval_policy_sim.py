@@ -34,8 +34,7 @@ from pick_and_place.policy_evaluation import (
     package_versions,
     write_evaluation_artifacts,
 )
-from pick_and_place.policy_sim import PolicySimEnv, evaluate_policy_episode
-from pick_and_place.policy_sim import build_policy_sim_model
+from pick_and_place.policy_sim import build_policy_sim_model, evaluate_policy_episode, PolicySimEnv
 from pick_and_place.overhead_localization import OverheadLocalizer
 from pick_and_place.scripted_policy import (
     AsyncWristLocalization,
@@ -45,7 +44,7 @@ from pick_and_place.scripted_policy import (
 from pick_and_place.cube_detection import CubeTracker
 from pick_and_place.detector_process import DetectorProcess
 from pick_and_place.scene_appearance import APPEARANCE_PRESETS, parse_appearance
-from pick_and_place.workspace_overlays import workspace_interior_corners_world
+from pick_and_place.workspace_bounds import workspace_interior_corners_world
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST = REPOSITORY_ROOT / "config" / "evaluation" / "smoke_v1.json"

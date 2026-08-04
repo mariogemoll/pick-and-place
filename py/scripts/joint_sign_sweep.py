@@ -28,17 +28,15 @@ import mujoco
 import numpy as np
 
 from pick_and_place.episodes import _build_model
-from pick_and_place.follower import (
-    ARM_JOINT_NAMES,
-    make_so101_follower,
-    sim_frame_to_real,
-)
+from pick_and_place.spec.robot import ARM_JOINT_NAMES
+from pick_and_place.joint_frames import sim_frame_to_real
+from pick_and_place.follower import make_so101_follower
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.geometry import CubePose
 from pick_and_place.overhead_detection import MockViewer
 from pick_and_place.session_calibration import CalibrationConfig, _move_arm_to
 from pick_and_place.trajectory import GRIPPER_OPEN
-from pick_and_place.workspace_overlays import PAN_AXIS
+from pick_and_place.workspace_bounds import PAN_AXIS
 
 # A clear, mid-range pose: arm lifted, forearm angled up, wrist camera upright.
 INSPECTION_POSE = {

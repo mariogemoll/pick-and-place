@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 import mujoco
 
-from pick_and_place.paper_detection import PAPER_TARGET_MARKER_NAME
+from pick_and_place.paper_target_marker import PAPER_TARGET_MARKER_NAME
 
 FLOOR_GEOM = "floor"
 FLOOR_MATERIAL = "groundplane"

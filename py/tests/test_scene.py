@@ -6,12 +6,12 @@ import numpy as np
 
 from pick_and_place import build_environment, build_scene, export_scene
 from pick_and_place.scene import BACKDROP_WALL_DISTANCE, BACKDROP_WALL_THICKNESS, TABLE_BACKGROUND_RGBA, TABLE_EAST_EDGE_Y, TABLE_HEIGHT, TABLE_LENGTH, TABLE_NORTH_EDGE_X, TABLE_THICKNESS, TABLE_WEST_EDGE_Y, TABLE_WIDTH
-from pick_and_place.spec.workspace import WORKSPACE_FRAME_APRILTAG_PLATES
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE, WORKSPACE_FRAME_APRILTAG_PLATES
 from pick_and_place.episodes import _build_model
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.geometry import CubePose
-from pick_and_place.paper_detection import PAPER_TARGET_MARKER_NAME
-from pick_and_place.workspace_overlays import WORKSPACE_OVERLAY_GROUP, WORKSPACE_OVERLAYS
+from pick_and_place.paper_target_marker import PAPER_TARGET_MARKER_NAME
+from pick_and_place.workspace_bounds import REACH_SECTORS
+from pick_and_place.workspace_overlays import WORKSPACE_OVERLAY_GROUP
 
 
 def test_scene_contains_robot_floor_light_and_cube():
@@ -102,7 +102,7 @@ def test_robot_visual_geoms_are_visible():
 def test_scene_contains_non_colliding_workspace_overlays():
     model = build_scene().compile()
 
-    for overlay in WORKSPACE_OVERLAYS:
+    for overlay in REACH_SECTORS:
         geom = model.geom(overlay.name).id
         assert model.geom_type[geom] == mujoco.mjtGeom.mjGEOM_MESH
         assert model.geom_group[geom] == WORKSPACE_OVERLAY_GROUP
@@ -122,7 +122,7 @@ def test_workspace_overlays_stay_on_worldbody_floor():
     data = mujoco.MjData(model)
     mujoco.mj_forward(model, data)
 
-    for overlay in WORKSPACE_OVERLAYS:
+    for overlay in REACH_SECTORS:
         geom = model.geom(overlay.name).id
         assert model.geom_bodyid[geom] == 0
         np.testing.assert_allclose(data.geom_xpos[geom][2], overlay.z, atol=1e-7)

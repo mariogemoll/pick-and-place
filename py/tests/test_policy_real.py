@@ -4,9 +4,13 @@
 import numpy as np
 import pytest
 
-from pick_and_place.follower import JOINT_NAMES
-from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
-from pick_and_place.spec.controller import ControllerFailure
+from pick_and_place.spec.robot import JOINT_NAMES
+from pick_and_place.spec.controller import (
+    ControllerFailure,
+    OVERHEAD_FEATURE,
+    STATE_FEATURE,
+    WRIST_FEATURE,
+)
 from pick_and_place.policy_real import (
     PhysicalEpisodeOutcome,
     calibrated_state,

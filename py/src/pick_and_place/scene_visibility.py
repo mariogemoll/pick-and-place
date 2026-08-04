@@ -23,7 +23,7 @@ import numpy as np
 import pyarrow.parquet as pq
 
 from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
-from pick_and_place.paper_detection import PAPER_TARGET_MARKER_NAME, place_paper_target_marker
+from pick_and_place.paper_target_marker import PAPER_TARGET_MARKER_NAME, place_paper_target_marker
 from pick_and_place.policy_sim import (
     build_policy_sim_model,
     joint_qpos_addresses,
@@ -31,7 +31,7 @@ from pick_and_place.policy_sim import (
 )
 from pick_and_place.sim_recorder import resize_and_center_crop
 from pick_and_place.task_phases import coarse_phase_labels, phase_spans_from_json
-from pick_and_place.workspace_overlays import is_cube_drop_allowed
+from pick_and_place.workspace_bounds import is_cube_drop_allowed
 
 # Thresholds on the fractional pixel coverage after the exact 96x96 transform:
 # >= 0.5 counts as an object pixel, > 0.1 is excluded from background rings so

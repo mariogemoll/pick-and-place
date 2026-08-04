@@ -43,14 +43,10 @@ from pick_and_place.cube_detection import (
     estimate_cube_pose,
     make_cube_detector,
 )
-from pick_and_place.episodes import (
-    build_geom_sets,
-    make_carry_collision_checker,
-    sample_hunt_pose,
-)
-from pick_and_place.follower import (
-    ARM_JOINT_NAMES,
-    JOINT_NAMES,
+from pick_and_place.episode_sampling import sample_hunt_pose
+from pick_and_place.episodes import build_geom_sets, make_carry_collision_checker
+from pick_and_place.spec.robot import ARM_JOINT_NAMES, JOINT_NAMES
+from pick_and_place.joint_frames import (
     action_to_joints,
     joints_to_action,
     real_frame_to_sim,
@@ -71,8 +67,8 @@ from pick_and_place.joint_zero_fit import (
 from pick_and_place.kinematics import So101Kinematics
 from pick_and_place.overhead_detection import track_cube
 from pick_and_place.trajectory import GRIPPER_OPEN
-from pick_and_place.workspace_overlays import (
-    CANONICAL_PICKUP_OVERLAY as PICKUP,
+from pick_and_place.workspace_bounds import (
+    CANONICAL_PICKUP_SECTOR as PICKUP,
     is_cube_pickup_allowed,
 )
 

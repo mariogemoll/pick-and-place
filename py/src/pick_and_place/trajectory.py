@@ -26,12 +26,13 @@ from functools import cached_property
 import numpy as np
 from pick_and_place.geometry import CANONICAL_PREGRASP_DISTANCE, CubeFace, CubePose, WORLD_UP, canonical_grasp_matrix, canonical_pregrasp_matrix
 from pick_and_place.ik import solve_simple_grasp_ik
-from pick_and_place.kinematics import ARM_JOINT_NAMES, So101Kinematics
+from pick_and_place.kinematics import So101Kinematics
+from pick_and_place.spec.robot import ARM_JOINT_NAMES
 from pick_and_place import transforms as tf
 from pick_and_place.transforms import Mat4, Vec3
-from pick_and_place.workspace_overlays import (
-    CANONICAL_PICKUP_OVERLAY,
-    CUBE_PLACEMENT_OVERLAY,
+from pick_and_place.workspace_bounds import (
+    CANONICAL_PICKUP_SECTOR,
+    CUBE_PLACEMENT_SECTOR,
     PAN_AXIS,
     is_cube_drop_allowed,
 )
@@ -64,11 +65,11 @@ FAR_DROP_CUBE_CENTER_Z = DROP_CUBE_CENTER_Z + 0.01
 POSTDROP_LIFT_Z = 0.04
 
 # Full-range canonical grasp limits and search order.
-MIN_CANONICAL_GRASP_RADIUS = CANONICAL_PICKUP_OVERLAY.inner_radius
-MAX_CANONICAL_GRASP_RADIUS = CANONICAL_PICKUP_OVERLAY.outer_radius
-MAX_RECOVERY_GRASP_RADIUS = CUBE_PLACEMENT_OVERLAY.outer_radius
-MIN_CANONICAL_AZIMUTH = CANONICAL_PICKUP_OVERLAY.azimuth_min
-MAX_CANONICAL_AZIMUTH = CANONICAL_PICKUP_OVERLAY.azimuth_max
+MIN_CANONICAL_GRASP_RADIUS = CANONICAL_PICKUP_SECTOR.inner_radius
+MAX_CANONICAL_GRASP_RADIUS = CANONICAL_PICKUP_SECTOR.outer_radius
+MAX_RECOVERY_GRASP_RADIUS = CUBE_PLACEMENT_SECTOR.outer_radius
+MIN_CANONICAL_AZIMUTH = CANONICAL_PICKUP_SECTOR.azimuth_min
+MAX_CANONICAL_AZIMUTH = CANONICAL_PICKUP_SECTOR.azimuth_max
 # Lift the canonical side grip slightly above the cube center. At the far edge of
 # the pickup sector, the tilted jaw would otherwise put its low collision box a
 # few millimetres through the floor while still being IK-feasible.
@@ -613,8 +614,8 @@ def nominal_drop_center_z(target: CubePose) -> float:
     ``FAR_DROP_CUBE_CENTER_Z`` at its outer radius, clamped outside that band.
     """
     radius = math.hypot(target.x - PAN_AXIS[0], target.y - PAN_AXIS[1])
-    r_near = CUBE_PLACEMENT_OVERLAY.inner_radius
-    r_far = CUBE_PLACEMENT_OVERLAY.outer_radius
+    r_near = CUBE_PLACEMENT_SECTOR.inner_radius
+    r_far = CUBE_PLACEMENT_SECTOR.outer_radius
     frac = min(1.0, max(0.0, (radius - r_near) / (r_far - r_near)))
     return NEAR_DROP_CUBE_CENTER_Z + frac * (FAR_DROP_CUBE_CENTER_Z - NEAR_DROP_CUBE_CENTER_Z)
 

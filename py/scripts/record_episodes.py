@@ -30,13 +30,13 @@ import numpy as np
 from tqdm import tqdm
 
 from pick_and_place.episodes import (
-    EpisodeSamplingError,
     Episode,
+    EpisodeSamplingError,
     is_unexpected,
     prepare_episode,
     scan_contacts,
 )
-from pick_and_place.follower import JOINT_NAMES
+from pick_and_place.spec.robot import JOINT_NAMES
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.geometry import CubePose
 from pick_and_place.recorder import EpisodeRecorder

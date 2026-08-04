@@ -24,10 +24,16 @@ import mujoco
 import numpy as np
 
 from pick_and_place.dataset_metadata import placement_error_metadata
-from pick_and_place.episodes import PlacementError
+from pick_and_place.geometry import CubePose, PlacementError
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.geometry import CubePose
-from pick_and_place.paper_detection import PaperTarget, PaperTracker, project_to_pixel, set_paper_target_marker
+from pick_and_place.camera_projection import project_to_pixel
+from pick_and_place.paper_target_marker import place_paper_target_marker
+from pick_and_place.paper_detection import PaperTarget, PaperTracker
+from pick_and_place.workspace_bounds import (
+    is_cube_drop_allowed,
+    is_cube_pickup_allowed,
+    workspace_interior_corners_world,
+)
 
 # How long a single look attempt stares at the camera feed before giving up.
 CUBE_LOOK_TIMEOUT = 2.0
@@ -261,7 +267,6 @@ def track_cube(
     from pick_and_place.camera_compare import load_intrinsics
     from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
     from pick_and_place.overhead_localization import OverheadLocalizer
-    from pick_and_place.workspace_overlays import is_cube_pickup_allowed
 
     camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
     cam_pos = data.cam_xpos[camera_id].copy()
@@ -331,10 +336,6 @@ def track_drop_zone_square(
     from pick_and_place.camera_compare import load_intrinsics
     from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
     from pick_and_place.overhead_localization import OverheadLocalizer
-    from pick_and_place.workspace_overlays import (
-        is_cube_drop_allowed,
-        workspace_interior_corners_world,
-    )
 
     workspace_corners = workspace_interior_corners_world()
 
@@ -375,7 +376,10 @@ def track_drop_zone_square(
             continue
 
         usable = is_cube_drop_allowed(*target.xy)
-        set_paper_target_marker(model, data, target, usable=usable)
+        place_paper_target_marker(
+            model, target.xy, target.yaw, target.half_extent, usable=usable
+        )
+        mujoco.mj_forward(model, data)
         if not usable:
             print(
                 f"Drop zone seen at ({target.xy[0]:.3f}, {target.xy[1]:.3f}) "

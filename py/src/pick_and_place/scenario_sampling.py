@@ -21,19 +21,16 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from pick_and_place.episodes import (
-    CANONICAL_PICKUP_OVERLAY,
-    PAN_AXIS,
-    CubePose,
-    sample_cube,
-    sample_target,
-)
-from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
-from pick_and_place.workspace_overlays import (
+from pick_and_place.episode_sampling import sample_cube, sample_target
+from pick_and_place.geometry import CubePose
+from pick_and_place.workspace_bounds import (
+    CANONICAL_PICKUP_SECTOR,
     is_cube_drop_allowed,
-    is_cube_placement_allowed,
+    is_cube_pickup_allowed,
+    PAN_AXIS,
     sample_target_plate_yaw,
 )
+from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
 
 # Minimum cube-centre to target-centre distance. The plate is a 0.10 m square
 # (DROP_ZONE_HALF_SIZE = 0.05) and the cube is 0.03 m wide, so anything under
@@ -80,7 +77,7 @@ def sample_scene(rng: np.random.Generator) -> SceneDraw:
     for _ in range(MAX_SOURCE_ATTEMPTS):
         source = sample_cube(rng)
         if comfortably_interior(
-            source.x, source.y, SOURCE_INTERIOR_MARGIN_M, is_cube_placement_allowed
+            source.x, source.y, SOURCE_INTERIOR_MARGIN_M, is_cube_pickup_allowed
         ):
             break
     else:
@@ -115,8 +112,8 @@ def sample_scene(rng: np.random.Generator) -> SceneDraw:
 def workspace_region(source: CubePose) -> str:
     """Name the third of the pickup zone the cube starts in."""
     radius = math.hypot(source.x - PAN_AXIS[0], source.y - PAN_AXIS[1])
-    inner = CANONICAL_PICKUP_OVERLAY.inner_radius
-    outer = CANONICAL_PICKUP_OVERLAY.outer_radius
+    inner = CANONICAL_PICKUP_SECTOR.inner_radius
+    outer = CANONICAL_PICKUP_SECTOR.outer_radius
     third = (outer - inner) / 3.0
     if radius < inner + third:
         return "near"

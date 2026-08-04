@@ -67,10 +67,8 @@ from pick_and_place.executor import (
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.geometry import CubePose
 from pick_and_place.recording import RecordingSession
-from pick_and_place.follower import (
-    ARM_JOINT_NAMES,
-    sim_frame_to_real,
-)
+from pick_and_place.spec.robot import ARM_JOINT_NAMES
+from pick_and_place.joint_frames import sim_frame_to_real
 from pick_and_place.image_rectify import SQUARE_SIZE
 from pick_and_place.task_phases import PhaseSpan
 from pick_and_place.trajectory import (
@@ -90,7 +88,7 @@ from pick_and_place.visual_servo import (
     DescentServoConvergence,
     DescentServoRetryState,
 )
-from pick_and_place.workspace_overlays import PAN_AXIS
+from pick_and_place.workspace_bounds import PAN_AXIS
 
 WRIST_CAMERA = "wrist_camera"
 OVERHEAD_CAMERA = "overhead_camera"

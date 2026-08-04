@@ -35,14 +35,10 @@ import numpy as np
 from pick_and_place import build_scene
 from pick_and_place.episode_loop import episode_loop
 from pick_and_place.executor import clamp_and_warn, follower_clamp_limits
-from pick_and_place.follower import (
-    JOINT_NAMES,
-    action_to_joints,
-    joints_to_action,
-    make_so101_follower,
-    sim_frame_to_real,
-)
-from pick_and_place.kinematics import derive_kinematics
+from pick_and_place.spec.robot import JOINT_NAMES
+from pick_and_place.joint_frames import action_to_joints, joints_to_action, sim_frame_to_real
+from pick_and_place.follower import make_so101_follower
+from pick_and_place.derive_kinematics import derive_kinematics
 from pick_and_place.move_to_random_pose import sample_reachable_pose, smoothstep
 from pick_and_place.recorder import EpisodeRecorder
 from pick_and_place.safety import recover_on

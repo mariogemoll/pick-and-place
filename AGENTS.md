@@ -125,7 +125,7 @@ the exporter and deletes the `.xml` afterwards, leaving the `.json` behind.
 | Directory | Contents |
 | --- | --- |
 | `SO-ARM100/` | Vendored hardware submodule: CAD, STL, URDF, MJCF, BOM. |
-| `py/` | The `pick_and_place` package (74 modules), 84 CLI scripts, 42 test files. Simulation, real-robot control, calibration, datasets, policies. |
+| `py/` | The `pick_and_place` package (85 modules), 84 CLI scripts, 42 test files. Simulation, real-robot control, calibration, datasets, policies. |
 | `ts/` | Vite + Three.js browser app: the visualizations embedded in the web page. |
 | `mesh_optimization/` | Standalone Python subproject that decimates high-poly STL into web-ready GLB. |
 | `scripts/` | Repository-level shell/TS tooling: license headers, file-size check, mesh pipeline, remote-GPU job scripts. |
@@ -136,17 +136,24 @@ the exporter and deletes the `.xml` afterwards, leaving the `.json` behind.
 
 ### What the Python package does
 
-Ten strands, roughly in dependency order:
+`spec/` sits under all of it: the physical facts and contracts every strand
+has to agree on — the cube's size and face tag ids, the drop-zone and corner
+plate sizes, the workspace frame pose, the joint names and their order, and
+the `PolicyController` boundary. It imports nothing else in the package and
+needs no heavy dependency, which is what lets the simulator and the detector
+agree by construction instead of by importing into each other's internals.
+Then ten strands, roughly in dependency order:
 
 1. **Model composition** — `builder`, `scene`, `materials`, `collision_boxes`,
-   `wrist_camera`, `camera_module`, `workspace_overlays`, `export`. Loads the
+   `wrist_camera`, `camera_module`, `workspace_overlays`, `paper_target_marker`,
+   `derive_kinematics`, `export`. Loads the
    stock MJCF from `SO-ARM100/` with `MjSpec` and replaces full-mesh collision
    geoms with the hand-tuned box model. `python -m pick_and_place.export`
    writes standalone MJCF plus a web manifest for the browser app and external
    consumers.
 2. **Scripted policy** — `trajectory`, `task_phases`, `scripted_policy`,
-   `geometry`, `ik`, `kinematics`, `transforms`, `episodes`,
-   `scenario_sampling`. The analytic planner: grasp-pose search, an 8-phase
+   `geometry`, `ik`, `kinematics`, `transforms`, `workspace_bounds`,
+   `episode_sampling`, `episodes`, `scenario_sampling`. The analytic planner: grasp-pose search, an 8-phase
    trajectory, preflight validation. Generates every demonstration and is the
    expert baseline.
 3. **Policy evaluation** — `policy_evaluation`, `policy_controllers`,
@@ -162,12 +169,13 @@ Ten strands, roughly in dependency order:
    `diffusion_policy_dataset`, `diffusion_policy_client`. Trains and serves the
    current best policy. ACT and SmolVLA are *evaluated* here but trained
    externally via the `lerobot` CLI.
-6. **Real-robot control** — `executor`, `follower`, `physical_rig`,
+6. **Real-robot control** — `executor`, `follower`, `joint_frames`, `physical_rig`,
    `physical_collection`, `safety`, `session_calibration`, `episode_loop`,
    `recording`, `recorder`, `episode_video`, `policy_real`, `policy_recording`.
    Hardware lifecycle, control loop, recording, and recovery.
 7. **Perception** — `cube_detection`, `detector_process`, `overhead_detection`,
-   `overhead_localization`, `paper_detection`, `visual_servo`, `image_rectify`.
+   `overhead_localization`, `paper_detection`, `camera_projection`,
+   `visual_servo`, `image_rectify`.
    AprilTag-based cube and target localization, plus the wrist-camera descent
    servo that absorbs residual sim/real mismatch.
 8. **Camera calibration** — `camera_intrinsics`, `camera_extrinsics`,

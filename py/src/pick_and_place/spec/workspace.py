@@ -28,6 +28,9 @@ DROP_ZONE_HALF_SIZE = 0.05
 WORKSPACE_FRAME_POS = (0.279579, 0.0000305, 0.0)
 WORKSPACE_FRAME_QUAT = (-0.707107, 0.0, 0.0, -0.707107)
 
+# Half-edge of a square corner plate; the 60 mm plate carries a 40 mm tag.
+WORKSPACE_FRAME_APRILTAG_PLATE_HALF_SIZE = 0.03
+
 # Corner plates bolted to the workspace frame, as (tag id, compass name,
 # position in the frame's local coordinates).
 WORKSPACE_FRAME_APRILTAG_PLATES: tuple[tuple[int, str, tuple[float, float, float]], ...] = (

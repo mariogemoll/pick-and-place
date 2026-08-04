@@ -12,7 +12,7 @@ from typing import Any, Protocol
 
 import numpy as np
 
-from pick_and_place.follower import load_joint_zero_offsets
+from pick_and_place.joint_frames import load_joint_zero_offsets
 
 
 class CameraStream(Protocol):

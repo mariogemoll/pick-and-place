@@ -12,6 +12,7 @@ import mujoco
 from pick_and_place.camera_module import add_camera_module
 from pick_and_place.camera_intrinsics import OVERHEAD_CAMERA_INTRINSICS
 from pick_and_place.spec.workspace import (
+    WORKSPACE_FRAME_APRILTAG_PLATE_HALF_SIZE,
     WORKSPACE_FRAME_APRILTAG_PLATES,
     WORKSPACE_FRAME_POS,
     WORKSPACE_FRAME_QUAT,
@@ -42,7 +43,6 @@ FRAME_PLASTIC_WHITE = (0.85, 0.86, 0.88, 1.0)
 # The overhead camera mount is white 3D-printed plastic.
 MOUNT_PLASTIC_WHITE = (0.85, 0.86, 0.88, 1.0)
 
-_APRILTAG_PLATE_HALF_SIZE = 0.03
 _APRILTAG_PLATE_HALF_THICKNESS = 0.0025
 _APRILTAG_SURFACE_OFFSET = 0.00001
 _APRILTAG_PLATE_RGBA = (0.12, 0.12, 0.12, 1.0)
@@ -216,8 +216,8 @@ def add_workspace_frame_apriltags(spec: mujoco.MjSpec) -> None:
             name=f"workspace_frame_tag_{corner_name}",
             type=mujoco.mjtGeom.mjGEOM_BOX,
             size=(
-                _APRILTAG_PLATE_HALF_SIZE,
-                _APRILTAG_PLATE_HALF_SIZE,
+                WORKSPACE_FRAME_APRILTAG_PLATE_HALF_SIZE,
+                WORKSPACE_FRAME_APRILTAG_PLATE_HALF_SIZE,
                 _APRILTAG_PLATE_HALF_THICKNESS,
             ),
             pos=pos,
@@ -230,9 +230,9 @@ def add_workspace_frame_apriltags(spec: mujoco.MjSpec) -> None:
             name=f"workspace_frame_tag_{corner_name}_top",
             type=mujoco.mjtGeom.mjGEOM_PLANE,
             size=(
-                _APRILTAG_PLATE_HALF_SIZE,
-                _APRILTAG_PLATE_HALF_SIZE,
-                _APRILTAG_PLATE_HALF_SIZE,
+                WORKSPACE_FRAME_APRILTAG_PLATE_HALF_SIZE,
+                WORKSPACE_FRAME_APRILTAG_PLATE_HALF_SIZE,
+                WORKSPACE_FRAME_APRILTAG_PLATE_HALF_SIZE,
             ),
             pos=(
                 pos[0],

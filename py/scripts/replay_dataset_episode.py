@@ -38,18 +38,13 @@ from pick_and_place.camera_extrinsics import (
 )
 from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
 from pick_and_place.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
-from pick_and_place.follower import (
-    ARM_JOINT_NAMES,
-    JOINT_NAMES,
-    real_frame_to_sim,
-    sim_frame_to_real,
-)
+from pick_and_place.spec.robot import ARM_JOINT_NAMES, JOINT_NAMES
+from pick_and_place.joint_frames import real_frame_to_sim, sim_frame_to_real
 from pick_and_place.paths import outputs_root
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
-from pick_and_place.paper_detection import add_paper_target_marker, place_paper_target_marker
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
+from pick_and_place.paper_target_marker import add_paper_target_marker, place_paper_target_marker
 from pick_and_place.robot_dynamics import set_actuator_activation
-from pick_and_place.workspace_overlays import is_cube_drop_allowed
+from pick_and_place.workspace_bounds import is_cube_drop_allowed
 
 Mode = Literal["action", "state"]
 

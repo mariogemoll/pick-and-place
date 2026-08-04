@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-from pick_and_place.follower import JOINT_NAMES
+from pick_and_place.spec.robot import JOINT_NAMES
 from pick_and_place.policy import DEFAULT_INSTRUCTION, make_policy, resolve_checkpoint_cameras
 from pick_and_place.spec.controller import (
     OVERHEAD_FEATURE,

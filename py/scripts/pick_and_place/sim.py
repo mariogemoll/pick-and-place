@@ -35,6 +35,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
+from pick_and_place.episode_sampling import sample_target
 from pick_and_place.episodes import (
     Episode,
     EpisodeSamplingError,
@@ -42,17 +43,15 @@ from pick_and_place.episodes import (
     is_unexpected,
     placement_error,
     prepare_episode,
-    sample_target,
     scan_contacts,
 )
 from pick_and_place.executor import HARDWARE_SIMULATION_HZ
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
 from pick_and_place.geometry import CubePose
 from pick_and_place.miscalibration import MiscalibrationModel
 from pick_and_place.sim_recorder import record_episode
-from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
-from pick_and_place.paper_detection import place_paper_target_marker
-from pick_and_place.workspace_overlays import (
+from pick_and_place.paper_target_marker import place_paper_target_marker
+from pick_and_place.workspace_bounds import (
     PAN_AXIS,
     is_cube_drop_allowed,
     is_target_plate_allowed,

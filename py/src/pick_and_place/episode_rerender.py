@@ -47,9 +47,10 @@ from pick_and_place.camera_extrinsics import load_local_camera_extrinsics
 from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
 from pick_and_place.domain_randomization import ProceduralAppearance
 from pick_and_place.episodes import set_joint
-from pick_and_place.follower import ARM_JOINT_NAMES, real_frame_to_sim
+from pick_and_place.spec.robot import ARM_JOINT_NAMES
+from pick_and_place.joint_frames import real_frame_to_sim
 from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
-from pick_and_place.paper_detection import place_paper_target_marker
+from pick_and_place.paper_target_marker import place_paper_target_marker
 from pick_and_place.render_randomization import (
     CameraJitter,
     scene_texture_ids,
@@ -64,7 +65,7 @@ from pick_and_place.sim_recorder import (
     SimCameraRig,
     build_recording_scene,
 )
-from pick_and_place.workspace_overlays import is_cube_drop_allowed
+from pick_and_place.workspace_bounds import is_cube_drop_allowed
 
 #: Dataset feature name of each camera, and the MuJoCo camera it renders from.
 CAMERA_FEATURES: dict[str, str] = {

@@ -8,18 +8,18 @@ import numpy as np
 import pytest
 
 import pick_and_place.episodes as episodes
+from pick_and_place.episode_sampling import sample_recovery_cube
 from pick_and_place.episodes import (
     EpisodeSamplingError,
     _build_model,
     placement_error,
     prepare_episode,
-    sample_recovery_cube,
     set_cube_pose,
 )
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.geometry import CANONICAL_PREGRASP_DISTANCE, CubePose
 from pick_and_place.ik import solve_simple_grasp_ik
-from pick_and_place.kinematics import derive_kinematics
+from pick_and_place.derive_kinematics import derive_kinematics
 from pick_and_place.trajectory import (
     DROP_CUBE_CENTER_Z,
     GRASP_CLOSE_DURATION,
@@ -30,10 +30,10 @@ from pick_and_place.trajectory import (
     grasp_candidates,
     plan_carry_candidates,
 )
-from pick_and_place.workspace_overlays import (
+from pick_and_place.workspace_bounds import (
     RECOVERY_TARGET_FRAME_BORDER_MARGIN,
     WORKSPACE_FRAME_INNER_HALF_EXTENT,
-    _world_to_frame_xy,
+    world_to_frame_xy,
     is_cube_pickup_allowed,
     is_cube_recovery_target_allowed,
 )
@@ -110,7 +110,7 @@ def test_recovery_cube_sampler_stays_away_from_workspace_frame_border():
     assert all(is_cube_pickup_allowed(pose.x, pose.y) for pose in poses)
     assert all(is_cube_recovery_target_allowed(pose.x, pose.y) for pose in poses)
     for pose in poses:
-        local_x, local_y = _world_to_frame_xy(pose.x, pose.y)
+        local_x, local_y = world_to_frame_xy(pose.x, pose.y)
         assert abs(local_x) <= half_extent
         assert abs(local_y) <= half_extent
 

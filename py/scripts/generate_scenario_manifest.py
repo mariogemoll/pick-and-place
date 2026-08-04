@@ -56,7 +56,7 @@ from pick_and_place.domain_randomization import (
     DomainRandomizationPreset,
     domain_seed,
 )
-from pick_and_place.episodes import cube_quat_from_pose
+from pick_and_place.geometry import cube_quat_from_pose
 from pick_and_place.policy_evaluation import SCENARIO_MANIFEST_VERSION
 from pick_and_place.scenario_sampling import sample_scene, workspace_region
 

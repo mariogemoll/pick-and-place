@@ -32,14 +32,11 @@ import mujoco.viewer
 import numpy as np
 
 from pick_and_place.episodes import _build_model
-from pick_and_place.follower import (
-    action_to_joints,
-    make_so101_follower,
-    real_frame_to_sim,
-)
+from pick_and_place.joint_frames import action_to_joints, real_frame_to_sim
+from pick_and_place.follower import make_so101_follower
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.geometry import CubePose
-from pick_and_place.kinematics import derive_kinematics
+from pick_and_place.derive_kinematics import derive_kinematics
 from pick_and_place.cam_align_solve import parse_index_or_path
 from pick_and_place.overhead_detection import MockViewer
 from pick_and_place.session_calibration import (
@@ -47,7 +44,7 @@ from pick_and_place.session_calibration import (
     run_session_calibration,
 )
 from pick_and_place.trajectory import REST_ARM_JOINTS, REST_GRIPPER
-from pick_and_place.workspace_overlays import PAN_AXIS
+from pick_and_place.workspace_bounds import PAN_AXIS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT = REPO_ROOT / "config" / "joint_zeros.json"

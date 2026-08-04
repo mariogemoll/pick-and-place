@@ -12,14 +12,9 @@ import mujoco.viewer
 import numpy as np
 
 from pick_and_place import build_scene
-from pick_and_place.follower import (
-    ARM_JOINT_NAMES,
-    action_to_joints,
-    joints_to_action,
-    make_so101_leader,
-    make_so101_follower,
-    real_frame_to_sim,
-)
+from pick_and_place.spec.robot import ARM_JOINT_NAMES
+from pick_and_place.joint_frames import action_to_joints, joints_to_action, real_frame_to_sim
+from pick_and_place.follower import make_so101_follower, make_so101_leader
 
 def _smoothstep(t: float) -> float:
     c = min(1.0, max(0.0, t))

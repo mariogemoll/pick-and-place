@@ -11,11 +11,8 @@ import numpy as np
 # Add py/src to path so we can import pick_and_place
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
-from pick_and_place.follower import (
-    action_to_joints,
-    make_so101_follower,
-    real_frame_to_sim,
-)
+from pick_and_place.joint_frames import action_to_joints, real_frame_to_sim
+from pick_and_place.follower import make_so101_follower
 
 def main():
     parser = argparse.ArgumentParser(description="Capture the current robot pose as the rest position.")

@@ -26,12 +26,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from pick_and_place.episodes import sample_cube, sample_target
+from pick_and_place.episode_sampling import sample_cube, sample_target
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.workspace_overlays import (
-    CANONICAL_PICKUP_OVERLAY,
+from pick_and_place.workspace_bounds import (
+    CANONICAL_PICKUP_SECTOR,
     CUBE_PLACEMENT_BOUNDS,
-    CUBE_PLACEMENT_OVERLAY,
+    CUBE_PLACEMENT_SECTOR,
     PAN_AXIS,
     is_cube_drop_allowed,
     is_cube_pickup_allowed,
@@ -324,7 +324,7 @@ def main() -> None:
         axes[0, 2],
         rs,
         nrs,
-        value_range=(CANONICAL_PICKUP_OVERLAY.inner_radius, CANONICAL_PICKUP_OVERLAY.outer_radius),
+        value_range=(CANONICAL_PICKUP_SECTOR.inner_radius, CANONICAL_PICKUP_SECTOR.outer_radius),
         bins=args.bins,
         color="tab:blue",
         xlabel="radius from pan axis (m)",
@@ -355,7 +355,7 @@ def main() -> None:
         axes[1, 2],
         rt,
         nrt,
-        value_range=(CUBE_PLACEMENT_OVERLAY.inner_radius, CUBE_PLACEMENT_OVERLAY.outer_radius),
+        value_range=(CUBE_PLACEMENT_SECTOR.inner_radius, CUBE_PLACEMENT_SECTOR.outer_radius),
         bins=args.bins,
         color="tab:red",
         xlabel="radius from pan axis (m)",

@@ -14,17 +14,14 @@ from pathlib import Path
 
 import numpy as np
 
-from pick_and_place.episodes import (
-    PICKUP_YAW_DEVIATION,
-    _build_model,
-    pickup_yaw_from_azimuth,
-)
+from pick_and_place.episode_sampling import PICKUP_YAW_DEVIATION, pickup_yaw_from_azimuth
+from pick_and_place.episodes import _build_model
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.geometry import CubePose
-from pick_and_place.kinematics import derive_kinematics
+from pick_and_place.derive_kinematics import derive_kinematics
 from pick_and_place.trajectory import grasp_candidates
-from pick_and_place.workspace_overlays import (
-    CANONICAL_PICKUP_OVERLAY,
+from pick_and_place.workspace_bounds import (
+    CANONICAL_PICKUP_SECTOR,
     PAN_AXIS,
     is_cube_pickup_allowed,
 )
@@ -222,22 +219,22 @@ def main() -> int:
         parser.error("--yaw-count must be at least 1")
 
     radius_min = (
-        CANONICAL_PICKUP_OVERLAY.inner_radius
+        CANONICAL_PICKUP_SECTOR.inner_radius
         if args.radius_min_mm is None
         else args.radius_min_mm / 1000.0
     )
     radius_max = (
-        CANONICAL_PICKUP_OVERLAY.outer_radius
+        CANONICAL_PICKUP_SECTOR.outer_radius
         if args.radius_max_mm is None
         else args.radius_max_mm / 1000.0
     )
     azimuth_min = (
-        CANONICAL_PICKUP_OVERLAY.azimuth_min
+        CANONICAL_PICKUP_SECTOR.azimuth_min
         if args.azimuth_min_deg is None
         else math.radians(args.azimuth_min_deg)
     )
     azimuth_max = (
-        CANONICAL_PICKUP_OVERLAY.azimuth_max
+        CANONICAL_PICKUP_SECTOR.azimuth_max
         if args.azimuth_max_deg is None
         else math.radians(args.azimuth_max_deg)
     )

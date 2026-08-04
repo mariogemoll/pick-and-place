@@ -57,10 +57,10 @@ from pick_and_place.camera_extrinsics import (
     load_local_camera_extrinsics,
 )
 from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
-from pick_and_place.follower import JOINT_NAMES
-from pick_and_place.episodes import cube_quat_from_pose, sample_cube, sample_target
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.geometry import CubePose
+from pick_and_place.spec.robot import JOINT_NAMES
+from pick_and_place.episode_sampling import sample_cube, sample_target
+from pick_and_place.geometry import cube_quat_from_pose, CubePose
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
 from pick_and_place.domain_randomization import (
     DomainRandomizationPreset,
     DomainRandomizer,
@@ -84,10 +84,9 @@ from pick_and_place.scene_appearance import (
     parse_appearance,
 )
 from pick_and_place.sim_recorder import OVERHEAD_CAMERA, downsample_through_recording
-from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
-from pick_and_place.paper_detection import add_paper_target_marker, place_paper_target_marker
+from pick_and_place.paper_target_marker import add_paper_target_marker, place_paper_target_marker
 from pick_and_place.trajectory import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
-from pick_and_place.workspace_overlays import is_cube_drop_allowed, sample_target_plate_yaw
+from pick_and_place.workspace_bounds import is_cube_drop_allowed, sample_target_plate_yaw
 from pick_and_place.diffusion_policy_client import DiffusionPolicyController
 from pick_and_place.policy import (
     DEFAULT_CHECKPOINT,

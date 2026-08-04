@@ -57,20 +57,22 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from pick_and_place.episodes import (
-    EpisodeSamplingError,
-    is_unexpected,
+from pick_and_place.episode_sampling import (
     pickup_yaw_from_azimuth,
-    prepare_episode,
     sample_cube,
     sample_near_neutral,
     sample_target,
+)
+from pick_and_place.episodes import (
+    EpisodeSamplingError,
+    is_unexpected,
+    prepare_episode,
     scan_contacts,
 )
-from pick_and_place.follower import ARM_JOINT_NAMES
+from pick_and_place.spec.robot import ARM_JOINT_NAMES
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.geometry import CubePose
-from pick_and_place.workspace_overlays import (
+from pick_and_place.workspace_bounds import (
     CUBE_PLACEMENT_BOUNDS,
     PAN_AXIS,
     is_cube_drop_allowed,

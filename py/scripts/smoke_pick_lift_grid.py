@@ -16,19 +16,18 @@ import mujoco.viewer
 import numpy as np
 
 from pick_and_place import build_scene
+from pick_and_place.episode_sampling import PICKUP_YAW_DEVIATION, pickup_yaw_from_azimuth
 from pick_and_place.episodes import (
-    PICKUP_YAW_DEVIATION,
     _build_model,
     build_geom_sets,
     is_unexpected,
-    pickup_yaw_from_azimuth,
     scan_contacts,
     set_cube_pose,
     set_joint,
 )
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.geometry import CubePose
-from pick_and_place.kinematics import derive_kinematics
+from pick_and_place.derive_kinematics import derive_kinematics
 from pick_and_place.trajectory import (
     ApproachPhase,
     DescentPhase,
@@ -41,9 +40,9 @@ from pick_and_place.trajectory import (
     Trajectory,
     grasp_candidates,
 )
-from pick_and_place.workspace_overlays import (
-    CANONICAL_PICKUP_OVERLAY,
-    CUBE_PLACEMENT_OVERLAY,
+from pick_and_place.workspace_bounds import (
+    CANONICAL_PICKUP_SECTOR,
+    CUBE_PLACEMENT_SECTOR,
     PAN_AXIS,
     is_cube_drop_allowed,
     is_cube_pickup_allowed,
@@ -108,16 +107,16 @@ def _grid_poses(
     if yaw_count < 1:
         raise ValueError("yaw_count must be at least 1")
     if placement_edges:
-        r_min = CUBE_PLACEMENT_OVERLAY.inner_radius
-        r_max = CUBE_PLACEMENT_OVERLAY.outer_radius
-        az_min = CUBE_PLACEMENT_OVERLAY.azimuth_min
-        az_max = CUBE_PLACEMENT_OVERLAY.azimuth_max
+        r_min = CUBE_PLACEMENT_SECTOR.inner_radius
+        r_max = CUBE_PLACEMENT_SECTOR.outer_radius
+        az_min = CUBE_PLACEMENT_SECTOR.azimuth_min
+        az_max = CUBE_PLACEMENT_SECTOR.azimuth_max
         is_allowed = is_cube_drop_allowed
     else:
         r_min = MIN_CANONICAL_GRASP_RADIUS
         r_max = MAX_CANONICAL_GRASP_RADIUS
-        az_min = CANONICAL_PICKUP_OVERLAY.azimuth_min
-        az_max = CANONICAL_PICKUP_OVERLAY.azimuth_max
+        az_min = CANONICAL_PICKUP_SECTOR.azimuth_min
+        az_max = CANONICAL_PICKUP_SECTOR.azimuth_max
         is_allowed = is_cube_pickup_allowed
     r_min = max(0.0, r_min - radius_margin)
     r_max += radius_margin

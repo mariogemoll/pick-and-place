@@ -31,7 +31,7 @@ import mujoco.viewer
 import numpy as np
 
 from pick_and_place import build_scene
-from pick_and_place.follower import JOINT_NAMES
+from pick_and_place.spec.robot import JOINT_NAMES
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 
 # GLFW key codes the viewer reports for Return / keypad-Enter.
