@@ -12,12 +12,15 @@ MAX_BYTES=$((40 * 1024))
 # at the ceiling that path once needed.
 exception_limit() {
   case "$1" in
-    py/scripts/pick_and_place/real.py) printf '%s\n' $((62 * 1024)) ;;
-    py/scripts/run_policy_real.py) printf '%s\n' $((80 * 1024)) ;;
-    py/src/pick_and_place/runtime/executor.py) printf '%s\n' $((62 * 1024)) ;;
-    py/src/pick_and_place/planning/trajectory.py) printf '%s\n' $((51 * 1024)) ;;
-    py/src/pick_and_place/executor.py) printf '%s\n' $((63 * 1024)) ;;
-    py/src/pick_and_place/trajectory.py) printf '%s\n' $((58 * 1024)) ;;
+    # Oversized in the current tree, each at a ceiling just above its size.
+    py/scripts/run_policy_real.py) printf '%s\n' $((57 * 1024)) ;;
+    py/src/pick_and_place/runtime/executor.py) printf '%s\n' $((61 * 1024)) ;;
+    # No longer oversized, or no longer at this path, but the history still
+    # holds a large blob there. These go away only if history is rewritten.
+    py/scripts/pick_and_place/real.py) printf '%s\n' $((60 * 1024)) ;;
+    py/src/pick_and_place/executor.py) printf '%s\n' $((61 * 1024)) ;;
+    py/src/pick_and_place/planning/trajectory.py) printf '%s\n' $((50 * 1024)) ;;
+    py/src/pick_and_place/trajectory.py) printf '%s\n' $((56 * 1024)) ;;
     *) printf '%s\n' "$MAX_BYTES" ;;
   esac
 }

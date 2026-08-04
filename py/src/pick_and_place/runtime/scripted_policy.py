@@ -29,16 +29,15 @@ from pick_and_place.core.geometry import CubePose
 from pick_and_place.perception.overhead_localization import OverheadLocalizer
 from pick_and_place.perception.paper_detection import PaperTarget
 from pick_and_place.spec.controller import ControllerFailure, OVERHEAD_FEATURE, PolicyObservation, STATE_FEATURE, WRIST_FEATURE
+from pick_and_place.planning.grasp import fold_cube_yaw, grasp_candidates
+from pick_and_place.planning.motion import shortest_delta
+from pick_and_place.planning.replan import replan_remaining_candidates
 from pick_and_place.planning.trajectory import (
     DescentPhase,
     GraspPhase,
     LiftPhase,
     RecoveryLiftPhase,
     Trajectory,
-    _shortest_delta,
-    fold_cube_yaw,
-    grasp_candidates,
-    replan_remaining_candidates,
 )
 from pick_and_place.spec.robot import GRIPPER_OPEN
 from pick_and_place.planning.visual_servo import (
@@ -416,7 +415,7 @@ class ScriptedPolicy:
             x=self._dynamic_source.x * (1.0 - alpha) + estimate.x * alpha,
             y=self._dynamic_source.y * (1.0 - alpha) + estimate.y * alpha,
             yaw=self._dynamic_source.yaw
-            + _shortest_delta(self._dynamic_source.yaw, estimate.yaw) * alpha,
+            + shortest_delta(self._dynamic_source.yaw, estimate.yaw) * alpha,
         )
         if phase.grasp.face != "free":
             updated_grasp = next(

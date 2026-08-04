@@ -18,7 +18,9 @@ from pick_and_place.runtime.scripted_policy import (
     ScriptedPolicy,
     ScriptedPolicyState,
 )
-from pick_and_place.planning.trajectory import DescentPhase, Frame, GraspChoice, Trajectory
+from pick_and_place.planning.grasp import GraspChoice
+from pick_and_place.planning.motion import Frame
+from pick_and_place.planning.trajectory import DescentPhase, Trajectory
 
 
 class StubLocalizer:

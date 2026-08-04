@@ -22,15 +22,17 @@ from pick_and_place.sim.model import build_model, set_cube_pose, set_joint
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.sim.derive_kinematics import derive_kinematics
+from pick_and_place.planning.grasp import (
+    MAX_CANONICAL_GRASP_RADIUS,
+    MIN_CANONICAL_GRASP_RADIUS,
+    grasp_candidates,
+)
 from pick_and_place.planning.trajectory import (
     ApproachPhase,
     DescentPhase,
     GraspPhase,
     LiftPhase,
-    MAX_CANONICAL_GRASP_RADIUS,
-    MIN_CANONICAL_GRASP_RADIUS,
     Trajectory,
-    grasp_candidates,
 )
 from pick_and_place.spec.robot import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
 from pick_and_place.core.workspace_bounds import (

@@ -27,13 +27,8 @@ from pick_and_place.core.miscalibration import MiscalibrationDraw
 from pick_and_place.core.robot_dynamics import set_actuator_activation
 from pick_and_place.core.workspace_bounds import is_cube_drop_allowed, is_cube_pickup_allowed
 from pick_and_place.planning.episode_sampling import sample_cube, sample_near_neutral, sample_target
-from pick_and_place.planning.trajectory import (
-    GraspChoice,
-    Trajectory,
-    free_grasp_candidates,
-    grasp_candidates,
-    trajectory_candidates_for_grasp,
-)
+from pick_and_place.planning.grasp import GraspChoice, free_grasp_candidates, grasp_candidates
+from pick_and_place.planning.trajectory import Trajectory, trajectory_candidates_for_grasp
 from pick_and_place.runtime.preflight import (
     preflight,
     preflight_collision_is_unexpected,

@@ -68,15 +68,14 @@ from pick_and_place.spec.robot import ARM_JOINT_NAMES
 from pick_and_place.core.joint_frames import sim_frame_to_real
 from pick_and_place.perception.image_rectify import SQUARE_SIZE
 from pick_and_place.core.task_phases import PhaseSpan
+from pick_and_place.planning.grasp import fold_cube_yaw, grasp_candidates
+from pick_and_place.planning.motion import shortest_delta
+from pick_and_place.planning.replan import replan_remaining_candidates
 from pick_and_place.planning.trajectory import (
     DescentPhase,
     GraspPhase,
     LiftPhase,
     RecoveryLiftPhase,
-    _shortest_delta,
-    fold_cube_yaw,
-    grasp_candidates,
-    replan_remaining_candidates,
 )
 from pick_and_place.spec.robot import GRIPPER_OPEN
 from pick_and_place.planning.visual_servo import (
@@ -550,7 +549,7 @@ def record_episode(
                             x=dynamic_source.x * (1 - alpha) + new_source.x * alpha,
                             y=dynamic_source.y * (1 - alpha) + new_source.y * alpha,
                             yaw=dynamic_source.yaw
-                            + _shortest_delta(dynamic_source.yaw, new_source.yaw) * alpha,
+                            + shortest_delta(dynamic_source.yaw, new_source.yaw) * alpha,
                         )
                         if phase.grasp.face != "free":
                             updated_grasp = next(

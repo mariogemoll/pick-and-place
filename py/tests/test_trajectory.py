@@ -15,13 +15,12 @@ from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CANONICAL_PREGRASP_DISTANCE, CubePose
 from pick_and_place.core.ik import solve_simple_grasp_ik
 from pick_and_place.sim.derive_kinematics import derive_kinematics
+from pick_and_place.planning.carry import DROP_CUBE_CENTER_Z, plan_carry_candidates
+from pick_and_place.planning.grasp import grasp_candidates
 from pick_and_place.planning.trajectory import (
-    DROP_CUBE_CENTER_Z,
     GRASP_CLOSE_DURATION,
     GRASP_SETTLE_DURATION,
     GraspPhase,
-    grasp_candidates,
-    plan_carry_candidates,
 )
 from pick_and_place.spec.robot import GRIPPER_GRASP, GRIPPER_OPEN
 from pick_and_place.core.workspace_bounds import (

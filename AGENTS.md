@@ -29,11 +29,12 @@ These are non-negotiable and override convenience.
   - `SPDX-FileCopyrightText: 2026 Mario Gemoll`
   - `SPDX-License-Identifier: 0BSD`
 - **No large files.** `scripts/check_files_in_repo.sh` fails the build above
-  40 KB per file, with documented exceptions for `runtime/executor.py`,
-  `planning/trajectory.py`, `scripts/pick_and_place/real.py` and
-  `scripts/run_policy_real.py`. Those ceilings are a ratchet — do not raise
-  them to land new code. The check walks the whole history, so a file that
-  moves keeps its old path listed at the ceiling that path once needed.
+  40 KB per file. Two files in the tree are still over it —
+  `runtime/executor.py` and `scripts/run_policy_real.py` — and are listed at
+  ceilings just above their current size. Those ceilings are a ratchet: lower
+  them as the files shrink, never raise them to land new code. The check walks
+  the whole history, so paths that have since shrunk or moved stay listed at
+  the ceiling their largest historical blob needs.
 - **Never commit datasets, checkpoints, renders, or recordings.** See
   [Local and generated data](#local-and-generated-data).
 
@@ -128,7 +129,7 @@ the exporter and deletes the `.xml` afterwards, leaving the `.json` behind.
 | Directory | Contents |
 | --- | --- |
 | `SO-ARM100/` | Vendored hardware submodule: CAD, STL, URDF, MJCF, BOM. |
-| `py/` | The `pick_and_place` package (89 modules in 12 subpackages), 85 CLI scripts, 45 test files. Simulation, real-robot control, calibration, datasets, policies. |
+| `py/` | The `pick_and_place` package (93 modules in 12 subpackages), 85 CLI scripts, 46 test files. Simulation, real-robot control, calibration, datasets, policies. |
 | `ts/` | Vite + Three.js browser app: the visualizations embedded in the web page. |
 | `mesh_optimization/` | Standalone Python subproject that decimates high-poly STL into web-ready GLB. |
 | `scripts/` | Repository-level shell/TS tooling: license headers, file-size check, mesh pipeline, remote-GPU job scripts. |
@@ -165,10 +166,12 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   `rotations`, `ik`, `kinematics`, `workspace_bounds`, `joint_frames`,
   `image_ops`, `miscalibration`, `robot_dynamics`, `camera_calibration` (the
   rig's measured calibration files), `paths`.
-- **`planning/`** — the analytic planner: `trajectory` (grasp-pose search and
-  the 8-phase trajectory), `visual_servo`, and the declared reset distribution
-  (`episode_sampling`, `scenario_sampling`). Generates every demonstration and
-  is the expert baseline.
+- **`planning/`** — the analytic planner, which generates every demonstration
+  and is the expert baseline: `motion` (interpolation, easing, how long a move
+  takes), `grasp` (where to take hold), `carry` (getting the cube across),
+  `trajectory` (the eight phases assembled), `replan` (resuming from a
+  checkpoint), `visual_servo`, and the declared reset distribution
+  (`episode_sampling`, `scenario_sampling`).
 - **`perception/`** — AprilTag cube and drop-zone localization:
   `cube_detection`, `paper_detection`, `overhead_localization`,
   `detector_process`, `image_rectify`.
@@ -292,9 +295,8 @@ surface in `git status`, not because they are still a valid place to write.
 
 Recorded here so they are not mistaken for intentional design:
 
-- `runtime/executor.py`, `planning/trajectory.py`, `scripts/pick_and_place/real.py`
-  and `scripts/run_policy_real.py` are oversized and combine too many
-  responsibilities.
+- `runtime/executor.py` and `scripts/run_policy_real.py` are oversized and
+  combine too many responsibilities.
 - Scripts hold more code than the package (~27k lines against ~22k).
 - No dependency lockfiles are committed for either language.
 - Python and TypeScript reimplement the same kinematics, grasp selection, and

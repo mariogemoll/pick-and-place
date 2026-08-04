@@ -60,7 +60,7 @@ from pick_and_place.core.joint_frames import (
 )
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
-from pick_and_place.planning.trajectory import replan_remaining_candidates
+from pick_and_place.planning.replan import replan_remaining_candidates
 from pick_and_place.spec.robot import REST_ARM_JOINTS, REST_GRIPPER
 from pick_and_place.core.kinematics import So101Kinematics
 from pick_and_place.data.recorder import EpisodeRecorder
@@ -814,12 +814,9 @@ def execute_episode(
             next_tick = time.monotonic()
 
             # Setup PBVS dynamically updating current source
-            from pick_and_place.planning.trajectory import (
-                DescentPhase,
-                _shortest_delta,
-                fold_cube_yaw,
-                grasp_candidates,
-            )
+            from pick_and_place.planning.grasp import fold_cube_yaw, grasp_candidates
+            from pick_and_place.planning.motion import shortest_delta
+            from pick_and_place.planning.trajectory import DescentPhase
             import dataclasses
             import cv2
 
@@ -878,7 +875,7 @@ def execute_episode(
                             smoothed_y = dynamic_source.y * (1 - alpha) + new_source.y * alpha
                             smoothed_yaw = (
                                 dynamic_source.yaw
-                                + _shortest_delta(dynamic_source.yaw, new_source.yaw) * alpha
+                                + shortest_delta(dynamic_source.yaw, new_source.yaw) * alpha
                             )
 
                             smoothed_source = dataclasses.replace(
@@ -1139,7 +1136,7 @@ def execute_episode(
                 if free_grasp:
                     dynamic_grasp = phase.grasp
                 else:
-                    from pick_and_place.planning.trajectory import grasp_candidates
+                    from pick_and_place.planning.grasp import grasp_candidates
 
                     for g in grasp_candidates(kinematics, dynamic_source):
                         if g.face == phase.face and g.elbow == phase.elbow:
