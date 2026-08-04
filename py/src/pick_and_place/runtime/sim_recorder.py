@@ -70,7 +70,6 @@ from pick_and_place.perception.image_rectify import SQUARE_SIZE
 from pick_and_place.core.task_phases import PhaseSpan
 from pick_and_place.planning.trajectory import (
     DescentPhase,
-    GRIPPER_OPEN,
     GraspPhase,
     LiftPhase,
     RecoveryLiftPhase,
@@ -79,6 +78,7 @@ from pick_and_place.planning.trajectory import (
     grasp_candidates,
     replan_remaining_candidates,
 )
+from pick_and_place.spec.robot import GRIPPER_OPEN
 from pick_and_place.planning.visual_servo import (
     DESCENT_SERVO_MAX_DURATION,
     DESCENT_SERVO_STABLE_FRAMES,

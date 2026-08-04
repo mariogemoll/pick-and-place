@@ -25,15 +25,14 @@ from pick_and_place.sim.derive_kinematics import derive_kinematics
 from pick_and_place.planning.trajectory import (
     ApproachPhase,
     DescentPhase,
-    GRIPPER_OPEN,
     GraspPhase,
     LiftPhase,
     MAX_CANONICAL_GRASP_RADIUS,
     MIN_CANONICAL_GRASP_RADIUS,
-    NEUTRAL_ARM_JOINTS,
     Trajectory,
     grasp_candidates,
 )
+from pick_and_place.spec.robot import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
 from pick_and_place.core.workspace_bounds import (
     CANONICAL_PICKUP_SECTOR,
     CUBE_PLACEMENT_SECTOR,

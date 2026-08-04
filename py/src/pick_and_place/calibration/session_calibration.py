@@ -66,7 +66,7 @@ from pick_and_place.hardware.joint_zero_fit import (
 )
 from pick_and_place.core.kinematics import So101Kinematics
 from pick_and_place.runtime.overhead_detection import track_cube
-from pick_and_place.planning.trajectory import GRIPPER_OPEN
+from pick_and_place.spec.robot import GRIPPER_OPEN
 from pick_and_place.core.workspace_bounds import (
     CANONICAL_PICKUP_SECTOR as PICKUP,
     is_cube_pickup_allowed,

@@ -35,7 +35,7 @@ from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.runtime.overhead_detection import MockViewer
 from pick_and_place.calibration.session_calibration import CalibrationConfig, _move_arm_to
-from pick_and_place.planning.trajectory import GRIPPER_OPEN
+from pick_and_place.spec.robot import GRIPPER_OPEN
 from pick_and_place.core.workspace_bounds import PAN_AXIS
 
 # A clear, mid-range pose: arm lifted, forearm angled up, wrist camera upright.

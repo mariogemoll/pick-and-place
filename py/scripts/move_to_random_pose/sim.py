@@ -40,7 +40,7 @@ from pick_and_place.runtime.move_to_random_pose import (
 )
 from pick_and_place.data.recorder import EpisodeRecorder
 from pick_and_place.core.safety import recover_on
-from pick_and_place.planning.trajectory import NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER
+from pick_and_place.spec.robot import NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER
 
 
 def move_to(

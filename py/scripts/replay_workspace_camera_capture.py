@@ -37,7 +37,7 @@ import numpy as np
 from pick_and_place.calibration.camera_compare import load_intrinsics
 from pick_and_place.sim.paper_target_marker import add_paper_target_marker, place_paper_target_marker
 from pick_and_place.sim.scene import build_scene
-from pick_and_place.planning.trajectory import REST_ARM_JOINTS
+from pick_and_place.spec.robot import REST_ARM_JOINTS
 from pick_and_place.core.workspace_bounds import is_cube_drop_allowed
 
 WINDOW_TITLE = "workspace capture replay  (+/- overlay, q / Esc quit)"

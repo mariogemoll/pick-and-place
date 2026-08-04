@@ -105,7 +105,7 @@ from pick_and_place.policies.policy import (
     select_device,
 )
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
-from pick_and_place.planning.trajectory import (
+from pick_and_place.spec.robot import (
     NEUTRAL_ARM_JOINTS,
     NEUTRAL_GRIPPER,
     REST_ARM_JOINTS,

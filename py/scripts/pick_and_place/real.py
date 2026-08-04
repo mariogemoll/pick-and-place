@@ -72,7 +72,7 @@ from pick_and_place.runtime.scripted_policy import (
     ScriptedPolicy,
     WristCameraLocalizer,
 )
-from pick_and_place.planning.trajectory import (
+from pick_and_place.spec.robot import (
     NEUTRAL_ARM_JOINTS,
     NEUTRAL_GRIPPER,
     REST_ARM_JOINTS,

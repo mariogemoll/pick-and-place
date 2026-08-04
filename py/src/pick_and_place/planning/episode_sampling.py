@@ -18,7 +18,7 @@ import numpy as np
 
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.planning.trajectory import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
+from pick_and_place.spec.robot import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
 from pick_and_place.core.workspace_bounds import (
     AZIMUTH_MAX,
     AZIMUTH_MIN,

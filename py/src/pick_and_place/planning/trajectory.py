@@ -27,7 +27,13 @@ import numpy as np
 from pick_and_place.core.geometry import CANONICAL_PREGRASP_DISTANCE, CubeFace, CubePose, WORLD_UP, canonical_grasp_matrix, canonical_pregrasp_matrix
 from pick_and_place.core.ik import solve_simple_grasp_ik
 from pick_and_place.core.kinematics import So101Kinematics
-from pick_and_place.spec.robot import ARM_JOINT_NAMES
+from pick_and_place.spec.robot import (
+    ARM_JOINT_NAMES,
+    GRIPPER_GRASP,
+    GRIPPER_OPEN,
+    NEUTRAL_ARM_JOINTS,
+    NEUTRAL_GRIPPER,
+)
 from pick_and_place.core import transforms as tf
 from pick_and_place.core.transforms import Mat4, Vec3
 from pick_and_place.core.workspace_bounds import (
@@ -111,39 +117,6 @@ def _roll_grasp_about_tool_axis(grasp: Mat4, roll_offset: float) -> Mat4:
     out[:3, :3] = grasp[:3, :3] @ tf.rot_z(roll_offset)[:3, :3]
     return out
 
-# Gripper joint angle at the hover grasp: 40 deg open.
-GRIPPER_OPEN = math.radians(40.0)
-# Gripper joint angle commanded during the grasp.
-GRIPPER_GRASP = 0.10
-
-NEUTRAL_ARM_JOINTS: dict[str, float] = {
-    "shoulder_pan": 0.0,
-    "shoulder_lift": 0.0,
-    "elbow_flex": 0.0,
-    "wrist_flex": 0.0,
-    "wrist_roll": -math.pi / 2,
-}
-NEUTRAL_GRIPPER = 0.0
-
-REST_ARM_JOINTS: dict[str, float] = {
-    "shoulder_pan": math.radians(4.967032967032967),
-    "shoulder_lift": math.radians(-95.16483516483517),
-    "elbow_flex": math.radians(96.13186813186813),
-    "wrist_flex": math.radians(73.71428571428571),
-    "wrist_roll": math.radians(-86.46153846153847),
-}
-REST_GRIPPER = math.radians((10.5 - 2.3) / 96.2 * 130 - 10)
-
-
-# --- Phase timing -----------------------------------------------------------
-# Travel phases (approach, carry, retreat) derive their duration from the
-# distance they cover, so the arm holds a roughly constant speed and longer
-# moves simply take longer. Contact phases (descent onto the cube, gripper
-# close, release dwell) keep fixed, gentle durations — there's no meaningful
-# distance to scale and slowing them is what makes the grasp/release reliable.
-
-# Angular speed of the fastest-moving joint through a joint-space move, rad/s.
-# Governs phase 1 (approach) and the phase 5 retreat.
 JOINT_SPEED = 1.5
 # Cartesian speed of the gripper/cube tip along the carry, m/s. Governs phase 4.
 CARTESIAN_SPEED = 0.45

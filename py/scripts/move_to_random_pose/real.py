@@ -42,7 +42,7 @@ from pick_and_place.sim.derive_kinematics import derive_kinematics
 from pick_and_place.runtime.move_to_random_pose import sample_reachable_pose, smoothstep
 from pick_and_place.data.recorder import EpisodeRecorder
 from pick_and_place.core.safety import recover_on
-from pick_and_place.planning.trajectory import (
+from pick_and_place.spec.robot import (
     NEUTRAL_ARM_JOINTS,
     NEUTRAL_GRIPPER,
     REST_ARM_JOINTS,

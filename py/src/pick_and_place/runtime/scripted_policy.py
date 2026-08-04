@@ -30,7 +30,6 @@ from pick_and_place.perception.overhead_localization import OverheadLocalizer
 from pick_and_place.perception.paper_detection import PaperTarget
 from pick_and_place.spec.controller import ControllerFailure, OVERHEAD_FEATURE, PolicyObservation, STATE_FEATURE, WRIST_FEATURE
 from pick_and_place.planning.trajectory import (
-    GRIPPER_OPEN,
     DescentPhase,
     GraspPhase,
     LiftPhase,
@@ -41,6 +40,7 @@ from pick_and_place.planning.trajectory import (
     grasp_candidates,
     replan_remaining_candidates,
 )
+from pick_and_place.spec.robot import GRIPPER_OPEN
 from pick_and_place.planning.visual_servo import (
     DESCENT_SERVO_MAX_DURATION,
     DescentServoConvergence,

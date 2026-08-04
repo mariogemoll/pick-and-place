@@ -9,12 +9,10 @@ from pick_and_place.core.geometry import CubePose
 from pick_and_place.sim.derive_kinematics import derive_kinematics
 from pick_and_place.planning.trajectory import (
     DROP_DWELL_DURATION,
-    GRIPPER_GRASP,
-    GRIPPER_OPEN,
-    NEUTRAL_ARM_JOINTS,
     ReleasePhase,
     replan_remaining_candidates,
 )
+from pick_and_place.spec.robot import GRIPPER_GRASP, GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
 
 
 def test_release_lifts_from_locked_predrop_before_using_readback():

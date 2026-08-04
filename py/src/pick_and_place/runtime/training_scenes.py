@@ -20,8 +20,10 @@ from dataclasses import dataclass
 import numpy as np
 
 from pick_and_place.core.geometry import cube_quat_from_pose
+from pick_and_place.core.joint_frames import sim_frame_to_real
 from pick_and_place.policies.policy_evaluation import EvaluationScenario
 from pick_and_place.planning.scenario_sampling import sample_scene, workspace_region
+from pick_and_place.spec.robot import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
 
 # Far above every manifest seed base in config/evaluation/, so a training scene
 # can never coincide with a benchmark scene.
@@ -31,8 +33,12 @@ TRAINING_SEED_BASE = 5_000_000
 # steps), so a training episode is neither longer nor shorter than an eval one.
 TRAINING_CONTROL_HZ = 10.0
 TRAINING_MAX_STEPS = 150
-# The neutral start every recorded episode and closed-loop rollout begins from.
-NEUTRAL_ROBOT_STATE_REAL = (0.0, 0.0, 0.0, 0.0, -90.0, 39.3)
+# The neutral start every recorded episode and closed-loop rollout begins from,
+# in the real frame the scenario records: the spec's neutral arm pose with the
+# gripper already open, which is where a trajectory's approach phase begins.
+NEUTRAL_ROBOT_STATE_REAL = tuple(
+    float(v) for v in sim_frame_to_real(NEUTRAL_ARM_JOINTS, GRIPPER_OPEN)
+)
 
 
 def training_scenario(

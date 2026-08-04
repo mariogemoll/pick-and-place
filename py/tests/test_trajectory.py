@@ -19,12 +19,11 @@ from pick_and_place.planning.trajectory import (
     DROP_CUBE_CENTER_Z,
     GRASP_CLOSE_DURATION,
     GRASP_SETTLE_DURATION,
-    GRIPPER_GRASP,
-    GRIPPER_OPEN,
     GraspPhase,
     grasp_candidates,
     plan_carry_candidates,
 )
+from pick_and_place.spec.robot import GRIPPER_GRASP, GRIPPER_OPEN
 from pick_and_place.core.workspace_bounds import (
     RECOVERY_TARGET_FRAME_BORDER_MARGIN,
     WORKSPACE_FRAME_INNER_HALF_EXTENT,

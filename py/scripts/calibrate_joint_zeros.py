@@ -43,7 +43,7 @@ from pick_and_place.calibration.session_calibration import (
     CalibrationConfig,
     run_session_calibration,
 )
-from pick_and_place.planning.trajectory import REST_ARM_JOINTS, REST_GRIPPER
+from pick_and_place.spec.robot import REST_ARM_JOINTS, REST_GRIPPER
 from pick_and_place.core.workspace_bounds import PAN_AXIS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

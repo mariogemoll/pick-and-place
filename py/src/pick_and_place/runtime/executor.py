@@ -60,11 +60,8 @@ from pick_and_place.core.joint_frames import (
 )
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
-from pick_and_place.planning.trajectory import (
-    REST_ARM_JOINTS,
-    REST_GRIPPER,
-    replan_remaining_candidates,
-)
+from pick_and_place.planning.trajectory import replan_remaining_candidates
+from pick_and_place.spec.robot import REST_ARM_JOINTS, REST_GRIPPER
 from pick_and_place.core.kinematics import So101Kinematics
 from pick_and_place.data.recorder import EpisodeRecorder
 from pick_and_place.data.recording import RecordingSession
@@ -1156,11 +1153,11 @@ def execute_episode(
                 # replanned from measured state after the lift, so there is no
                 # need to enumerate it here.
                 from pick_and_place.planning.trajectory import (
-                    GRIPPER_OPEN,
                     GraspPhase,
                     LiftPhase,
                     RecoveryLiftPhase,
                 )
+                from pick_and_place.spec.robot import GRIPPER_OPEN
 
                 lift_cls = RecoveryLiftPhase if free_grasp else LiftPhase
                 grasp_phase = GraspPhase(dynamic_grasp.grasp_joints, start_gripper=GRIPPER_OPEN)

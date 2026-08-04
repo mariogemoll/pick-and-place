@@ -17,7 +17,7 @@ import mujoco
 import numpy as np
 
 from pick_and_place.spec.robot import ARM_JOINT_NAMES, JOINT_NAMES
-from pick_and_place.planning.trajectory import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
+from pick_and_place.spec.robot import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
 
 # ±radians of random perturbation from neutral used to sample a reachable pose.
 # Tighter on the joints that tilt the gripper toward the floor, so a sampled
