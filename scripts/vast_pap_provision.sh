@@ -10,8 +10,8 @@
 #   scp scripts/vast_pap_provision.sh overlay.tar.gz <ssh-host>:/workspace/
 #   ssh <ssh-host> 'bash /workspace/vast_pap_provision.sh'
 #
-# vast_dp_train_fast.sh starts from this state and does not create it. Every
-# step is idempotent, so re-running after a partial failure is safe.
+# vast_diffusion_policy_train_fast.sh starts from this state and does not create
+# it. Every step is idempotent, so re-running after a partial failure is safe.
 
 set -euo pipefail
 

@@ -3,6 +3,10 @@
 
 """A throughput-oriented replacement for DPPO's diffusion pre-training agent.
 
+Only DPPO's *pre-training* half is used here: it supplies the diffusion model,
+loss, LR schedule and EMA that produce the Diffusion Policy this project runs.
+Its reinforcement-learning half is a separate, unrelated path (``dppo_rl``).
+
 The vendored :class:`agent.pretrain.train_diffusion_agent.TrainDiffusionAgent`
 is correct but leaves an RTX 5090 mostly idle: it builds every training sample
 in Python (:meth:`StitchedSequenceDataset.__getitem__` runs a ``torch.stack``
@@ -19,8 +23,8 @@ the upstream agent and replaces everything around them:
   two index tensors precomputed from ``StitchedSequenceDataset.indices``. There
   is no ``DataLoader``, no worker process and no per-sample Python.
   :func:`build_gather_indices` is derived from the upstream ``__getitem__``
-  arithmetic and ``scripts/check_dp_pretrain_fast.py`` asserts the batches match
-  element for element.
+  arithmetic and ``scripts/check_diffusion_policy_pretrain_fast.py`` asserts the
+  batches match element for element.
 * **The two camera encoders run as one batched forward.** The backbone is
   shared and every op in it is per-sample, so stacking the two images into one
   ``(2B, C, H, W)`` call is arithmetically the same work in half the launches.
@@ -37,8 +41,8 @@ walked, so it is configured explicitly and never scaled implicitly.
 Checkpoints are written in the upstream format — ``epoch``/``model``/``ema``
 plus the optimizer, scheduler and RNG state needed to resume — with any
 ``torch.compile`` wrapper prefixes stripped, so
-``scripts/dppo_policy_server.py`` and the DPPO fine-tuning configs consume them
-unchanged.
+``scripts/diffusion_policy_server.py`` and the DPPO fine-tuning configs consume
+them unchanged.
 """
 
 from __future__ import annotations
@@ -446,7 +450,7 @@ def _build_agent_class() -> type:
 
         def save_model(self) -> None:
             # Everything stored here must survive `torch.load(weights_only=True)`,
-            # because scripts/dppo_policy_server.py loads checkpoints that way.
+            # because scripts/diffusion_policy_server.py loads checkpoints that way.
             # That rules out numpy's and Python's RNG state, whose pickles pull in
             # globals the safe unpickler rejects -- storing them turns a
             # checkpoint into one the policy server cannot open. `rng` is a plain

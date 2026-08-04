@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Tests for the DPPO policy client, its server protocol, and normalization."""
+"""Tests for the Diffusion Policy client, its server protocol, and normalization."""
 
 from __future__ import annotations
 
@@ -13,20 +13,20 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pick_and_place import dppo_policy
+from pick_and_place import diffusion_policy_client
 from pick_and_place.diffusion_policy_dataset import normalize_min_max
-from pick_and_place.dppo_policy import DppoPolicyController, resolve_recording_hw
+from pick_and_place.diffusion_policy_client import DiffusionPolicyController, resolve_recording_hw
 from pick_and_place.policy_controllers import (
     OVERHEAD_FEATURE,
     STATE_FEATURE,
     WRIST_FEATURE,
 )
 
-SERVER_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "dppo_policy_server.py"
+SERVER_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "diffusion_policy_server.py"
 
 
 def _load_server_module():
-    spec = importlib.util.spec_from_file_location("dppo_policy_server", SERVER_SCRIPT)
+    spec = importlib.util.spec_from_file_location("diffusion_policy_server", SERVER_SCRIPT)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -41,7 +41,7 @@ def test_client_and_server_framing_are_interoperable() -> None:
         "overhead": np.zeros((4, 4, 3), dtype=np.uint8),
         "label": np.asarray("hello"),
     }
-    for writer, reader in ((dppo_policy, server), (server, dppo_policy)):
+    for writer, reader in ((diffusion_policy_client, server), (server, diffusion_policy_client)):
         buffer = io.BytesIO()
         writer.write_message(buffer, arrays)
         buffer.seek(0)
@@ -55,10 +55,10 @@ def test_client_and_server_framing_are_interoperable() -> None:
 
 def test_read_message_rejects_truncation() -> None:
     buffer = io.BytesIO()
-    dppo_policy.write_message(buffer, {"x": np.zeros(3)})
+    diffusion_policy_client.write_message(buffer, {"x": np.zeros(3)})
     truncated = io.BytesIO(buffer.getvalue()[:-1])
     with pytest.raises(EOFError):
-        dppo_policy.read_message(truncated)
+        diffusion_policy_client.read_message(truncated)
 
 
 def test_server_normalization_inverts_the_dataset_export() -> None:
@@ -89,7 +89,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, {server_dir!r})
-from dppo_policy_server import read_message, write_message
+from diffusion_policy_server import read_message, write_message
 
 stdin, stdout = sys.stdin.buffer, sys.stdout.buffer
 write_message(stdout, {{
@@ -142,7 +142,7 @@ def _observation(value: float = 0.0) -> dict[str, np.ndarray]:
 
 
 def test_controller_serves_chunks_and_requeries(fake_server_command: list[str]) -> None:
-    controller = DppoPolicyController(fake_server_command, act_steps=2)
+    controller = DiffusionPolicyController(fake_server_command, act_steps=2)
     try:
         assert controller.horizon_steps == 4
         assert controller.cond_steps == 2
@@ -168,7 +168,7 @@ def test_controller_serves_chunks_and_requeries(fake_server_command: list[str]) 
 
 
 def test_controller_reset_discards_queued_actions(fake_server_command: list[str]) -> None:
-    controller = DppoPolicyController(fake_server_command)
+    controller = DiffusionPolicyController(fake_server_command)
     try:
         assert controller.act_steps == 2
         first = controller.act(_observation())[0]
@@ -182,7 +182,7 @@ def test_controller_reset_discards_queued_actions(fake_server_command: list[str]
 def test_controller_predict_horizon_uses_repeated_observation(
     fake_server_command: list[str],
 ) -> None:
-    controller = DppoPolicyController(fake_server_command)
+    controller = DiffusionPolicyController(fake_server_command)
     try:
         actions = controller.predict_horizon(_observation(7.0), sampling_seed=42)
         assert actions.shape == (4, 6)
@@ -194,7 +194,7 @@ def test_controller_predict_horizon_uses_repeated_observation(
 def test_controller_tracks_observations_while_executing_queue(
     fake_server_command: list[str],
 ) -> None:
-    controller = DppoPolicyController(fake_server_command, act_steps=2)
+    controller = DiffusionPolicyController(fake_server_command, act_steps=2)
     try:
         first = controller.act(_observation(10.0))
         controller.act(_observation(20.0))
@@ -207,11 +207,11 @@ def test_controller_tracks_observations_while_executing_queue(
 
 def test_controller_rejects_invalid_act_steps(fake_server_command: list[str]) -> None:
     with pytest.raises(ValueError, match="act_steps"):
-        DppoPolicyController(fake_server_command, act_steps=5)
+        DiffusionPolicyController(fake_server_command, act_steps=5)
 
 
 def test_controller_reports_server_death(fake_server_command: list[str]) -> None:
-    controller = DppoPolicyController(fake_server_command)
+    controller = DiffusionPolicyController(fake_server_command)
     try:
         controller._process.terminate()
         controller._process.wait()
@@ -222,7 +222,7 @@ def test_controller_reports_server_death(fake_server_command: list[str]) -> None
 
 
 def test_controller_requires_all_observation_features(fake_server_command: list[str]) -> None:
-    controller = DppoPolicyController(fake_server_command)
+    controller = DiffusionPolicyController(fake_server_command)
     try:
         observation = _observation()
         del observation[WRIST_FEATURE]

@@ -3,7 +3,7 @@
 
 # Throughput-oriented twin of pretrain_so101_unet_img.yaml. The model, loss,
 # EMA and LR schedule are identical; only the training loop is replaced (see
-# pick_and_place.dp_pretrain for what changes and why). Every field below that
+# pick_and_place.diffusion_policy_pretrain for what changes and why). Every field below that
 # differs from the stock config is marked.
 #
 # The two settings that change the optimization trajectory rather than just its
@@ -17,7 +17,7 @@ hydra:
     dir: ${logdir}
 
 # CHANGED: our training loop, DPPO's model.
-_target_: pick_and_place.dp_pretrain.FastTrainDiffusionAgent
+_target_: pick_and_place.diffusion_policy_pretrain.FastTrainDiffusionAgent
 
 name: so101_pre_diffusion_unet_img_to${cond_steps}_ta${horizon_steps}_te${act_steps}_td${denoising_steps}
 logdir: ${oc.env:DPPO_LOG_DIR}/pretrain/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
@@ -87,7 +87,7 @@ train:
     # several per tensor. Worth 31% on its own.
     fused_optimizer: true
     # Encode both cameras in one backbone call. Verified bit-identical by
-    # py/scripts/check_dp_pretrain_fast.py.
+    # py/scripts/check_diffusion_policy_pretrain_fast.py.
     batched_vision: true
     # Replace the deprecated sdp_kernel context manager, which graph-breaks
     # under torch.compile.

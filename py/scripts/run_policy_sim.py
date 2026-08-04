@@ -11,10 +11,10 @@ SmolVLA, ...); pass ``--checkpoint`` to evaluate a fine-tune, else the base
 actions are not meaningful (the arm moves but does not solve the task). A policy
 fine-tuned on the project's dataset is the real use case.
 
-``--controller dppo`` runs a DPPO diffusion-policy checkpoint (``state_*.pt``)
+``--controller diffusion-policy`` runs a Diffusion Policy checkpoint (``state_*.pt``)
 instead. Its incompatible dependency stack lives in its own virtual
 environment, so inference happens in a policy-server subprocess
-(``dppo_policy_server.py``) reached through ``DppoPolicyController``.
+(``diffusion_policy_server.py``) reached through ``DiffusionPolicyController``.
 
 Either way the loop is the same: render the sim cameras, build the observation
 (two images + proprio state), ask the controller for the next hardware-frame
@@ -90,7 +90,7 @@ from pick_and_place.paper_detection import (
 )
 from pick_and_place.trajectory import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
 from pick_and_place.workspace_overlays import is_cube_drop_allowed, sample_target_plate_yaw
-from pick_and_place.dppo_policy import DppoPolicyController
+from pick_and_place.diffusion_policy_client import DiffusionPolicyController
 from pick_and_place.policy import (
     DEFAULT_CHECKPOINT,
     DEFAULT_INSTRUCTION,
@@ -129,11 +129,11 @@ def _resolve_recording_hw(
         if height < 1 or width < 1:
             parser.error("--recording-hw must be positive")
         return (height, width)
-    if args.dppo_normalization is None:
-        parser.error("--recording-hw is required without --dppo-normalization to read it from")
-    export_path = args.dppo_normalization.parent / "export.json"
+    if args.diffusion_policy_normalization is None:
+        parser.error("--recording-hw is required without --diffusion-policy-normalization to read it from")
+    export_path = args.diffusion_policy_normalization.parent / "export.json"
     if not export_path.exists():
-        parser.error(f"no export.json beside {args.dppo_normalization}; pass --recording-hw")
+        parser.error(f"no export.json beside {args.diffusion_policy_normalization}; pass --recording-hw")
     with export_path.open() as file:
         export = json.load(file)
     if "source_video_hw" not in export:
@@ -235,7 +235,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--controller",
-        choices=("lerobot", "dppo"),
+        choices=("lerobot", "diffusion-policy"),
         default="lerobot",
         help="policy implementation (default: lerobot)",
     )
@@ -243,25 +243,25 @@ def main() -> None:
     parser.add_argument(
         "--checkpoint",
         default=DEFAULT_CHECKPOINT,
-        help="HF policy checkpoint, or a DPPO state_*.pt file",
+        help="HF policy checkpoint, or a Diffusion Policy state_*.pt file",
     )
     parser.add_argument(
-        "--dppo-python",
+        "--diffusion-policy-python",
         type=Path,
-        default=os.environ.get("DPPO_PYTHON"),
-        help="interpreter of the DPPO virtual environment (default: $DPPO_PYTHON)",
+        default=os.environ.get("DIFFUSION_POLICY_PYTHON"),
+        help="interpreter of the DPPO virtual environment (default: $DIFFUSION_POLICY_PYTHON)",
     )
     parser.add_argument(
-        "--dppo-config",
+        "--diffusion-policy-config",
         type=Path,
         default=Path(__file__).resolve().parents[2]
         / "config"
         / "diffusion_policy"
         / "pretrain_so101_unet_img.yaml",
-        help="DPPO training configuration YAML (default: the pretraining configuration)",
+        help="training configuration YAML (default: the pretraining configuration)",
     )
     parser.add_argument(
-        "--dppo-normalization",
+        "--diffusion-policy-normalization",
         type=Path,
         help="normalization.npz written by the Diffusion Policy dataset export",
     )
@@ -275,23 +275,23 @@ def main() -> None:
             "resolution the training videos were recorded at, which observations are "
             "downsampled through on the way to the policy's input size. Defaults to "
             "the source_video_hw recorded by the dataset export, read from export.json "
-            "beside --dppo-normalization"
+            "beside --diffusion-policy-normalization"
         ),
     )
     parser.add_argument(
-        "--dppo-act-steps",
+        "--diffusion-policy-act-steps",
         type=int,
         default=None,
         help="executed actions per policy query (default: the training configuration)",
     )
     parser.add_argument(
-        "--dppo-seed",
+        "--diffusion-policy-seed",
         type=int,
         default=0,
         help="Torch seed for DDPM action sampling (default: 0)",
     )
     parser.add_argument(
-        "--dppo-ddim-steps",
+        "--diffusion-policy-ddim-steps",
         type=int,
         default=None,
         help=(
@@ -504,23 +504,32 @@ def main() -> None:
     override_hw = (args.image_height, args.image_width) if all(override) else None
 
     controller = None
-    if args.controller == "dppo":
+    if args.controller == "diffusion-policy":
         if args.checkpoint == DEFAULT_CHECKPOINT:
-            parser.error("--checkpoint (a DPPO state_*.pt file) is required for the dppo controller")
-        if args.dppo_python is None:
-            parser.error("--dppo-python (or $DPPO_PYTHON) is required for the dppo controller")
-        if args.dppo_normalization is None:
-            parser.error("--dppo-normalization is required for the dppo controller")
-        print(f"Starting the DPPO policy server for {args.checkpoint}...")
-        controller = DppoPolicyController.launch(
-            python=args.dppo_python,
+            parser.error(
+                "--checkpoint (a state_*.pt file) is required for the "
+                "diffusion-policy controller"
+            )
+        if args.diffusion_policy_python is None:
+            parser.error(
+                "--diffusion-policy-python (or $DIFFUSION_POLICY_PYTHON) is required "
+                "for the diffusion-policy controller"
+            )
+        if args.diffusion_policy_normalization is None:
+            parser.error(
+                "--diffusion-policy-normalization is required for the "
+                "diffusion-policy controller"
+            )
+        print(f"Starting the Diffusion Policy server for {args.checkpoint}...")
+        controller = DiffusionPolicyController.launch(
+            python=args.diffusion_policy_python,
             checkpoint=args.checkpoint,
-            config=args.dppo_config,
-            normalization=args.dppo_normalization,
+            config=args.diffusion_policy_config,
+            normalization=args.diffusion_policy_normalization,
             device=args.device,
-            seed=args.dppo_seed,
-            act_steps=args.dppo_act_steps,
-            ddim_steps=args.dppo_ddim_steps,
+            seed=args.diffusion_policy_seed,
+            act_steps=args.diffusion_policy_act_steps,
+            ddim_steps=args.diffusion_policy_ddim_steps,
         )
         if override_hw is not None and override_hw != controller.image_hw:
             parser.error(
@@ -706,7 +715,7 @@ def main() -> None:
             f"({controller.handshake['denoising_steps']} denoising steps, "
             f"epoch {controller.handshake['epoch']} checkpoint)."
         )
-    control_hz = controller.policy_hz if args.controller == "dppo" else CONTROL_HZ
+    control_hz = controller.policy_hz if args.controller == "diffusion-policy" else CONTROL_HZ
     print(f"Policy control rate: {control_hz:g} Hz.")
     controller.reset()
 
@@ -927,8 +936,8 @@ def main() -> None:
                 {
                     "checkpoint": str(args.checkpoint),
                     "seed": args.seed,
-                    "act_steps": args.dppo_act_steps,
-                    "ddim_steps": args.dppo_ddim_steps,
+                    "act_steps": args.diffusion_policy_act_steps,
+                    "ddim_steps": args.diffusion_policy_ddim_steps,
                     "scene_appearance": args.scene_appearance,
                     "resample_every": args.resample_every,
                     "segments": segment + 1,

@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Serve a pretrained DPPO diffusion policy over stdin/stdout.
+"""Serve a pretrained Diffusion Policy checkpoint over stdin/stdout.
 
 This script runs inside the DPPO virtual environment (the one holding the
 ``third_party/dppo`` install with its pinned Torch stack) and speaks a small
@@ -80,7 +80,7 @@ def unnormalize_actions(
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint", type=Path, required=True, help="DPPO state_*.pt file")
+    parser.add_argument("--checkpoint", type=Path, required=True, help="Diffusion Policy state_*.pt checkpoint")
     parser.add_argument(
         "--config", type=Path, required=True, help="the training configuration YAML"
     )
@@ -239,7 +239,7 @@ def main() -> None:
         },
     )
     print(
-        f"dppo policy server: epoch {epoch} checkpoint on {device}, "
+        f"diffusion policy server: epoch {epoch} checkpoint on {device}, "
         f"{cond_steps} time steps x 2 cameras, "
         f"predicts {int(cfg.horizon_steps)} actions, "
         f"configured default is {act_steps} actions/query at {policy_hz:g} Hz, "

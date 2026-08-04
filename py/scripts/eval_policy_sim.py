@@ -23,7 +23,7 @@ from pick_and_place.policy import (
     resolve_checkpoint_cameras,
     select_device,
 )
-from pick_and_place.dppo_policy import DppoPolicyController
+from pick_and_place.diffusion_policy_client import DiffusionPolicyController
 from pick_and_place.policy_controllers import (
     OVERHEAD_FEATURE,
     WRIST_FEATURE,
@@ -52,7 +52,7 @@ from pick_and_place.workspace_overlays import workspace_interior_corners_world
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST = REPOSITORY_ROOT / "config" / "evaluation" / "smoke_v1.json"
-DEFAULT_DPPO_CONFIG = (
+DEFAULT_DIFFUSION_POLICY_CONFIG = (
     REPOSITORY_ROOT / "config" / "diffusion_policy" / "pretrain_so101_unet_img.yaml"
 )
 SCRIPTED_IMAGE_HW = DEFAULT_IMAGE_HW
@@ -62,13 +62,13 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--controller",
-        choices=("lerobot", "scripted", "dppo"),
+        choices=("lerobot", "scripted", "diffusion-policy"),
         default="lerobot",
         help="controller implementation (default: lerobot)",
     )
     parser.add_argument(
         "--checkpoint",
-        help="local LeRobot checkpoint or repository ID, or a DPPO state_*.pt file",
+        help="local LeRobot checkpoint or repository ID, or a Diffusion Policy state_*.pt file",
     )
     parser.add_argument(
         "--manifest",
@@ -96,36 +96,36 @@ def _parse_args() -> argparse.Namespace:
         help="enable ACT temporal ensembling (requires --n-action-steps 1)",
     )
     parser.add_argument(
-        "--dppo-python",
+        "--diffusion-policy-python",
         type=Path,
-        default=os.environ.get("DPPO_PYTHON"),
-        help="interpreter of the DPPO virtual environment (default: $DPPO_PYTHON)",
+        default=os.environ.get("DIFFUSION_POLICY_PYTHON"),
+        help="interpreter of the DPPO virtual environment (default: $DIFFUSION_POLICY_PYTHON)",
     )
     parser.add_argument(
-        "--dppo-config",
+        "--diffusion-policy-config",
         type=Path,
-        default=DEFAULT_DPPO_CONFIG,
-        help=f"DPPO training configuration YAML (default: {DEFAULT_DPPO_CONFIG})",
+        default=DEFAULT_DIFFUSION_POLICY_CONFIG,
+        help=f"training configuration YAML (default: {DEFAULT_DIFFUSION_POLICY_CONFIG})",
     )
     parser.add_argument(
-        "--dppo-normalization",
+        "--diffusion-policy-normalization",
         type=Path,
         help="normalization.npz written by the Diffusion Policy dataset export",
     )
     parser.add_argument(
-        "--dppo-act-steps",
+        "--diffusion-policy-act-steps",
         type=int,
         default=None,
         help="executed actions per policy query (default: the full prediction horizon)",
     )
     parser.add_argument(
-        "--dppo-seed",
+        "--diffusion-policy-seed",
         type=int,
         default=0,
         help="Torch seed for DDPM action sampling (default: 0)",
     )
     parser.add_argument(
-        "--dppo-ddim-steps",
+        "--diffusion-policy-ddim-steps",
         type=int,
         default=None,
         help=(
@@ -195,16 +195,26 @@ def _parse_args() -> argparse.Namespace:
         not math.isfinite(args.max_episode_seconds) or args.max_episode_seconds <= 0.0
     ):
         parser.error("--max-episode-seconds must be a positive finite number")
-    if args.controller in ("lerobot", "dppo") and args.checkpoint is None:
+    if args.controller in ("lerobot", "diffusion-policy") and args.checkpoint is None:
         parser.error(f"--checkpoint is required for the {args.controller} controller")
     if args.controller == "scripted" and args.checkpoint is not None:
         parser.error("--checkpoint does not apply to the scripted controller")
-    if args.controller == "dppo":
-        if args.dppo_python is None:
-            parser.error("--dppo-python (or $DPPO_PYTHON) is required for the dppo controller")
-        if args.dppo_normalization is None:
-            parser.error("--dppo-normalization is required for the dppo controller")
-        for name in ("checkpoint", "dppo_config", "dppo_normalization", "dppo_python"):
+    if args.controller == "diffusion-policy":
+        if args.diffusion_policy_python is None:
+            parser.error(
+                "--diffusion-policy-python (or $DIFFUSION_POLICY_PYTHON) is required for "
+                "the diffusion-policy controller"
+            )
+        if args.diffusion_policy_normalization is None:
+            parser.error(
+                "--diffusion-policy-normalization is required for the diffusion-policy controller"
+            )
+        for name in (
+            "checkpoint",
+            "diffusion_policy_config",
+            "diffusion_policy_normalization",
+            "diffusion_policy_python",
+        ):
             path = Path(getattr(args, name))
             if not path.exists():
                 parser.error(f"--{name.replace('_', '-')} does not exist: {path}")
@@ -239,9 +249,9 @@ def _sha256_of_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _dppo_metadata(controller: DppoPolicyController, args: argparse.Namespace) -> dict:
+def _diffusion_policy_metadata(controller: DiffusionPolicyController, args: argparse.Namespace) -> dict:
     return {
-        "type": "dppo-diffusion",
+        "type": "diffusion-policy",
         "image_features": {
             "overhead": OVERHEAD_FEATURE,
             "wrist": WRIST_FEATURE,
@@ -258,12 +268,12 @@ def _dppo_metadata(controller: DppoPolicyController, args: argparse.Namespace) -
         "server_device": controller.handshake["device"],
         "server_torch_version": controller.handshake["torch_version"],
         "config": {
-            "path": str(args.dppo_config.resolve()),
-            "sha256": _sha256_of_file(args.dppo_config),
+            "path": str(args.diffusion_policy_config.resolve()),
+            "sha256": _sha256_of_file(args.diffusion_policy_config),
         },
         "normalization": {
-            "path": str(args.dppo_normalization.resolve()),
-            "sha256": _sha256_of_file(args.dppo_normalization),
+            "path": str(args.diffusion_policy_normalization.resolve()),
+            "sha256": _sha256_of_file(args.diffusion_policy_normalization),
         },
     }
 
@@ -424,33 +434,33 @@ def main() -> None:
     )
     if args.controller == "lerobot":
         image_hw, _ = resolve_checkpoint_cameras(args.checkpoint, override_hw=override_hw)
-    elif args.controller == "dppo":
-        print(f"Starting the DPPO policy server for {args.checkpoint}...")
-        dppo_controller = DppoPolicyController.launch(
-            python=args.dppo_python,
+    elif args.controller == "diffusion-policy":
+        print(f"Starting the Diffusion Policy server for {args.checkpoint}...")
+        diffusion_policy_controller = DiffusionPolicyController.launch(
+            python=args.diffusion_policy_python,
             checkpoint=args.checkpoint,
-            config=args.dppo_config,
-            normalization=args.dppo_normalization,
+            config=args.diffusion_policy_config,
+            normalization=args.diffusion_policy_normalization,
             device=args.device,
-            seed=args.dppo_seed,
-            act_steps=args.dppo_act_steps,
-            ddim_steps=args.dppo_ddim_steps,
+            seed=args.diffusion_policy_seed,
+            act_steps=args.diffusion_policy_act_steps,
+            ddim_steps=args.diffusion_policy_ddim_steps,
         )
-        if override_hw is not None and override_hw != dppo_controller.image_hw:
+        if override_hw is not None and override_hw != diffusion_policy_controller.image_hw:
             raise ValueError(
                 f"--image-height/--image-width {override_hw} do not match the "
-                f"model's trained image size {dppo_controller.image_hw}"
+                f"model's trained image size {diffusion_policy_controller.image_hw}"
             )
-        image_hw = dppo_controller.image_hw
+        image_hw = diffusion_policy_controller.image_hw
         scenarios = tuple(
             replace(
                 scenario,
-                control_hz=dppo_controller.policy_hz,
+                control_hz=diffusion_policy_controller.policy_hz,
                 max_steps=max(
                     1,
                     round(
                         scenario.max_steps
-                        * dppo_controller.policy_hz
+                        * diffusion_policy_controller.policy_hz
                         / scenario.control_hz
                     ),
                 ),
@@ -489,10 +499,10 @@ def main() -> None:
             temporal_ensemble_coeff=args.temporal_ensemble_coeff,
         )
         controller_metadata = _lerobot_metadata(controller)
-    elif args.controller == "dppo":
-        device = dppo_controller.handshake["device"]
-        controller = dppo_controller
-        controller_metadata = _dppo_metadata(dppo_controller, args)
+    elif args.controller == "diffusion-policy":
+        device = diffusion_policy_controller.handshake["device"]
+        controller = diffusion_policy_controller
+        controller_metadata = _diffusion_policy_metadata(diffusion_policy_controller, args)
     else:
         device = None
         controller, controller_metadata = _make_scripted_controller(

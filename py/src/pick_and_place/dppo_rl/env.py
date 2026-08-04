@@ -9,7 +9,7 @@ wrappers play for robomimic tasks, against :class:`PolicySimEnv`:
 - observations are ``{"state": (cond_steps, 6), "rgb": (cond_steps, 6, H, W)}``,
   state min-max normalized to ``[-1, 1]`` with the training export's bounds and
   the two cameras concatenated overhead-then-wrist on the channel axis, exactly
-  as ``dppo_policy_server`` feeds the same checkpoint in closed loop;
+  as ``diffusion_policy_server`` feeds the same checkpoint in closed loop;
 - an action is a chunk of ``act_steps`` normalized six-dimensional joint
   commands, executed one control tick apart;
 - the reward is the sparse full-task one: ``1.0`` on the step where the success

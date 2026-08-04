@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: 0BSD
 
 # Train the blue-cube Diffusion Policy on a rented RTX 5090 using the fast
-# pre-training path (pick_and_place.dp_pretrain).
+# pre-training path (pick_and_place.diffusion_policy_pretrain).
 #
 # This is the throughput-oriented replacement for the recipe that produced
 # dp_blue_cube_1000 (~21 h on a 5080, ~10 h projected on a 5090). The model,
@@ -129,7 +129,7 @@ git -C "$repo" rev-parse HEAD | tee "$output_root/job-metadata/repository-commit
 
 # The fast path is a reformulation of the stock one, so prove that on this
 # machine before spending hours on it rather than trusting it after the fact.
-"$venv/bin/python" "$repo/py/scripts/check_dp_pretrain_fast.py" \
+"$venv/bin/python" "$repo/py/scripts/check_diffusion_policy_pretrain_fast.py" \
   --dataset "$artifact_root/train.npz" --max-episodes 30 \
   | tee "$output_root/job-metadata/equivalence-check.txt"
 

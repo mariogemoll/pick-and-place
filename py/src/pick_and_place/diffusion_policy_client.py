@@ -1,15 +1,16 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Client for the out-of-process DPPO diffusion-policy server.
+"""Client for the out-of-process Diffusion Policy server.
 
-The DPPO stack lives in its own virtual environment (incompatible Torch/Gym/AV
-pins), so inference runs in a subprocess speaking a small binary protocol on
-its standard streams: every message is a 4-byte big-endian length prefix
-followed by an ``.npz`` payload. ``scripts/dppo_policy_server.py`` implements
-the other end and documents the message contract.
+The DPPO stack the policy is built on lives in its own virtual environment
+(incompatible Torch/Gym/AV pins), so inference runs in a subprocess speaking a
+small binary protocol on its standard streams: every message is a 4-byte
+big-endian length prefix followed by an ``.npz`` payload.
+``scripts/diffusion_policy_server.py`` implements the other end and documents
+the message contract.
 
-:class:`DppoPolicyController` adapts that server to the evaluator's
+:class:`DiffusionPolicyController` adapts that server to the evaluator's
 ``PolicyController`` protocol. The policy predicts an action horizon per query;
 the controller queues the first ``act_steps`` actions and serves one per control
 tick, re-querying when the queue empties. Observation history is retained on
@@ -37,7 +38,7 @@ from pick_and_place.policy_controllers import (
     PolicyObservation,
 )
 
-SERVER_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "dppo_policy_server.py"
+SERVER_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "diffusion_policy_server.py"
 DEFAULT_CONFIG = (
     Path(__file__).resolve().parents[3]
     / "config"
@@ -46,22 +47,22 @@ DEFAULT_CONFIG = (
 )
 
 
-def add_dppo_arguments(parser: argparse.ArgumentParser) -> None:
-    """Add the common DPPO policy-server arguments to a runner CLI."""
+def add_diffusion_policy_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add the common Diffusion Policy server arguments to a runner CLI."""
     parser.add_argument(
-        "--dppo-python",
+        "--diffusion-policy-python",
         type=Path,
-        default=os.environ.get("DPPO_PYTHON"),
-        help="interpreter of the DPPO virtual environment (default: $DPPO_PYTHON)",
+        default=os.environ.get("DIFFUSION_POLICY_PYTHON"),
+        help="interpreter of the DPPO virtual environment (default: $DIFFUSION_POLICY_PYTHON)",
     )
     parser.add_argument(
-        "--dppo-config",
+        "--diffusion-policy-config",
         type=Path,
         default=DEFAULT_CONFIG,
-        help="DPPO training configuration YAML (default: the pretraining configuration)",
+        help="training configuration YAML (default: the pretraining configuration)",
     )
     parser.add_argument(
-        "--dppo-normalization",
+        "--diffusion-policy-normalization",
         type=Path,
         help="normalization.npz written by the Diffusion Policy dataset export",
     )
@@ -72,24 +73,24 @@ def add_dppo_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         metavar=("HEIGHT", "WIDTH"),
         help=(
-            "resolution the DPPO training videos were recorded at; defaults to "
-            "source_video_hw in export.json beside --dppo-normalization"
+            "resolution the training videos were recorded at; defaults to "
+            "source_video_hw in export.json beside --diffusion-policy-normalization"
         ),
     )
     parser.add_argument(
-        "--dppo-act-steps",
+        "--diffusion-policy-act-steps",
         type=int,
         default=None,
         help="executed actions per policy query (default: the training configuration)",
     )
     parser.add_argument(
-        "--dppo-seed",
+        "--diffusion-policy-seed",
         type=int,
         default=0,
         help="Torch seed for DDPM action sampling (default: 0)",
     )
     parser.add_argument(
-        "--dppo-ddim-steps",
+        "--diffusion-policy-ddim-steps",
         type=int,
         default=None,
         help=(
@@ -103,7 +104,7 @@ def resolve_recording_hw(
     normalization: str | Path,
     override: tuple[int, int] | None = None,
 ) -> tuple[int, int]:
-    """Resolve the intermediate video size used by a DPPO dataset export."""
+    """Resolve the intermediate video size used by a Diffusion Policy dataset export."""
     if override is not None:
         height, width = override
         if height < 1 or width < 1:
@@ -151,8 +152,8 @@ def read_message(stream: BinaryIO) -> dict[str, np.ndarray] | None:
         return {key: data[key] for key in data.files}
 
 
-class DppoPolicyController:
-    """Run a DPPO diffusion-policy checkpoint behind a subprocess boundary."""
+class DiffusionPolicyController:
+    """Run a Diffusion Policy checkpoint behind a subprocess boundary."""
 
     def __init__(self, command: list[str], *, act_steps: int | None = None) -> None:
         self._process = subprocess.Popen(
@@ -202,7 +203,7 @@ class DppoPolicyController:
         act_steps: int | None = None,
         ddim_steps: int | None = None,
         server_script: str | Path = SERVER_SCRIPT,
-    ) -> DppoPolicyController:
+    ) -> DiffusionPolicyController:
         """Start the server with the DPPO environment's interpreter."""
         command = [
             str(python),
@@ -230,29 +231,38 @@ class DppoPolicyController:
         *,
         override_hw: tuple[int, int] | None,
         default_checkpoint: str,
-    ) -> tuple[DppoPolicyController, tuple[int, int]]:
+    ) -> tuple[DiffusionPolicyController, tuple[int, int]]:
         """Validate common runner arguments and start a configured controller."""
         if args.checkpoint == default_checkpoint:
-            parser.error("--checkpoint (a DPPO state_*.pt file) is required for dppo")
-        if args.dppo_python is None:
-            parser.error("--dppo-python (or $DPPO_PYTHON) is required for dppo")
-        if args.dppo_normalization is None:
-            parser.error("--dppo-normalization is required for dppo")
+            parser.error(
+                "--checkpoint (a state_*.pt file) is required for the "
+                "diffusion-policy controller"
+            )
+        if args.diffusion_policy_python is None:
+            parser.error(
+                "--diffusion-policy-python (or $DIFFUSION_POLICY_PYTHON) is required "
+                "for the diffusion-policy controller"
+            )
+        if args.diffusion_policy_normalization is None:
+            parser.error(
+                "--diffusion-policy-normalization is required for the "
+                "diffusion-policy controller"
+            )
         try:
-            recording_hw = resolve_recording_hw(args.dppo_normalization, args.recording_hw)
+            recording_hw = resolve_recording_hw(args.diffusion_policy_normalization, args.recording_hw)
         except (FileNotFoundError, ValueError) as exc:
             parser.error(str(exc))
 
-        print(f"Starting the DPPO policy server for {args.checkpoint}...")
+        print(f"Starting the Diffusion Policy server for {args.checkpoint}...")
         controller = cls.launch(
-            python=args.dppo_python,
+            python=args.diffusion_policy_python,
             checkpoint=args.checkpoint,
-            config=args.dppo_config,
-            normalization=args.dppo_normalization,
+            config=args.diffusion_policy_config,
+            normalization=args.diffusion_policy_normalization,
             device=args.device,
-            seed=args.dppo_seed,
-            act_steps=args.dppo_act_steps,
-            ddim_steps=args.dppo_ddim_steps,
+            seed=args.diffusion_policy_seed,
+            act_steps=args.diffusion_policy_act_steps,
+            ddim_steps=args.diffusion_policy_ddim_steps,
         )
         if override_hw is not None and override_hw != controller.image_hw:
             trained_hw = controller.image_hw
@@ -266,7 +276,7 @@ class DppoPolicyController:
     def _server_exited(self) -> RuntimeError:
         code = self._process.poll()
         return RuntimeError(
-            f"dppo policy server exited unexpectedly (return code {code}); "
+            f"diffusion policy server exited unexpectedly (return code {code}); "
             "its stderr output has the details"
         )
 

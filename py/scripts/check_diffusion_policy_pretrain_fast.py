@@ -5,7 +5,8 @@
 
 """Prove the fast pre-training path is arithmetically the stock one.
 
-``pick_and_place.dp_pretrain`` replaces DPPO's per-sample ``DataLoader`` with an
+``pick_and_place.diffusion_policy_pretrain`` replaces DPPO's per-sample
+``DataLoader`` with an
 on-device gather and folds the two camera encoders into one batched call. Both
 are meant to be reformulations, not approximations, so they are checkable
 exactly rather than by eyeballing a loss curve:
@@ -20,7 +21,7 @@ exactly rather than by eyeballing a loss curve:
 
 Runs on CPU against any exported Diffusion Policy artifact — no GPU needed.
 
-    python py/scripts/check_dp_pretrain_fast.py \
+    python py/scripts/check_diffusion_policy_pretrain_fast.py \
         --dataset output/blue-cube-no-dr-200-10hz-96x96/train.npz
 """
 
@@ -33,7 +34,7 @@ from pathlib import Path
 
 import torch
 
-from pick_and_place.dp_pretrain import (
+from pick_and_place.diffusion_policy_pretrain import (
     GpuBatchSampler,
     build_gather_indices,
     install_batched_vision_encoder,
@@ -185,7 +186,7 @@ def check_augmentation_independence() -> None:
 def check_checkpoint_is_server_loadable(tmp_dir: Path) -> None:
     """A checkpoint must open under ``torch.load(weights_only=True)``.
 
-    ``scripts/dppo_policy_server.py`` loads that way, so anything in the file
+    ``scripts/diffusion_policy_server.py`` loads that way, so anything in the file
     whose pickle needs a global the safe unpickler rejects — numpy's RNG state
     is the easy mistake — produces a checkpoint that trains fine and then
     cannot be served. That failure surfaces only at evaluation time, hours

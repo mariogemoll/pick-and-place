@@ -158,9 +158,10 @@ Ten strands, roughly in dependency order:
    `miscalibration`, `dataset_metadata`, `dataset_subset`. Two pipelines: direct
    recording, and a two-pass scheme that records ground truth once and
    re-renders it under any scene appearance.
-5. **Diffusion Policy training** — `dp_pretrain`, `diffusion_policy_dataset`,
-   `dppo_policy`. Trains and serves the current best policy. ACT and SmolVLA are
-   *evaluated* here but trained externally via the `lerobot` CLI.
+5. **Diffusion Policy training** — `diffusion_policy_pretrain`,
+   `diffusion_policy_dataset`, `diffusion_policy_client`. Trains and serves the
+   current best policy. ACT and SmolVLA are *evaluated* here but trained
+   externally via the `lerobot` CLI.
 6. **Real-robot control** — `executor`, `follower`, `physical_rig`,
    `physical_collection`, `safety`, `session_calibration`, `episode_loop`,
    `recording`, `recorder`, `episode_video`, `policy_real`, `policy_recording`.
@@ -256,6 +257,9 @@ surface in `git status`, not because they are still a valid place to write.
 - **Do not add backward-compatibility shims.** There are no external consumers.
   Change the call sites and pick the cleanest design.
 - **American English** in prose and identifiers.
+- **`diffusion_policy_*` is the working policy; `dppo_*` is the failed RL
+  experiment.** Spell the prefix out — never `dp_`. `DPPO` in prose means
+  upstream `third_party/dppo` or the RL fine-tuning strand, nothing else.
 
 ## Known rough edges
 
@@ -264,9 +268,6 @@ Recorded here so they are not mistaken for intentional design:
 - `executor.py`, `trajectory.py`, `pick_and_place/real.py` and
   `run_policy_real.py` are oversized and combine too many responsibilities.
 - Scripts hold more code than the package (~27k lines against ~22k).
-- Naming does not yet distinguish Diffusion Policy (which works) from DPPO RL
-  fine-tuning (which did not). A rename to a consistent `diffusion_policy_*`
-  prefix is planned.
 - No dependency lockfiles are committed for either language.
 - Python and TypeScript reimplement the same kinematics, grasp selection, and
   trajectory logic with no cross-language parity fixtures.
