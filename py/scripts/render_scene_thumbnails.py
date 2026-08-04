@@ -42,9 +42,9 @@ def main() -> None:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
     from PIL import Image
 
-    from pick_and_place.dppo_rl.scenes import training_scenario
-    from pick_and_place.policy_sim import OVERHEAD_FEATURE, PolicySimEnv
-    from pick_and_place.scene_appearance import parse_appearance
+    from pick_and_place.runtime.training_scenes import training_scenario
+    from pick_and_place.runtime.policy_sim import OVERHEAD_FEATURE, PolicySimEnv
+    from pick_and_place.sim.scene_appearance import parse_appearance
 
     payload = json.loads(args.phenotypes.read_text())
     scenes = payload["scenes"]

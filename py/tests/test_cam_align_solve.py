@@ -3,22 +3,12 @@
 
 import numpy as np
 
-from pick_and_place.cam_align_solve import (
+from pick_and_place.calibration.cam_align_solve import (
     NominalDelta,
     SolveResult,
     average_results,
-    mat_to_quat_wxyz,
     opencv_camera_pose_to_mujoco_parent_pose,
-    quat_angle_deg,
 )
-
-
-def test_mat_to_quat_wxyz_uses_mujoco_order_and_canonical_sign():
-    np.testing.assert_allclose(mat_to_quat_wxyz(np.eye(3)), (1.0, 0.0, 0.0, 0.0))
-
-
-def test_quat_angle_deg_uses_shortest_arc():
-    assert quat_angle_deg(np.array((1.0, 0.0, 0.0, 0.0)), np.array((-1.0, 0.0, 0.0, 0.0))) == 0.0
 
 
 def test_opencv_camera_pose_to_mujoco_parent_pose_converts_axes():

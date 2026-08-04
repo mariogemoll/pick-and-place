@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pick_and_place.render_randomization import (
+from pick_and_place.sim.render_randomization import (
     BackgroundRandomization,
     CameraJitter,
     CameraRandomization,
@@ -14,7 +14,7 @@ from pick_and_place.render_randomization import (
     set_scene_texture,
     snapshot_overhead_camera,
 )
-from pick_and_place.sim_recorder import OVERHEAD_CAMERA, build_recording_scene
+from pick_and_place.runtime.sim_recorder import OVERHEAD_CAMERA, build_recording_scene
 
 PRESET = Path(__file__).parents[2] / "config" / "domain_randomization" / "act_mild_v1.json"
 

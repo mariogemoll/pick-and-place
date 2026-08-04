@@ -24,20 +24,18 @@ import cv2
 import mujoco
 import numpy as np
 
-from pick_and_place.cam_align_solve import parse_index_or_path
-from pick_and_place.camera_compare import load_intrinsics
-from pick_and_place.camera_extrinsics import (
-    apply_camera_extrinsics_to_model,
-    load_local_camera_extrinsics,
-)
-from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
-from pick_and_place.cube_detection import (
+from pick_and_place.calibration.cam_align_solve import parse_index_or_path
+from pick_and_place.calibration.camera_compare import load_intrinsics
+from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
+from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
+from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR
+from pick_and_place.perception.cube_detection import (
     cube_pose_to_world,
     detect_cube_faces,
     fuse_cube_faces,
     make_cube_detector,
 )
-from pick_and_place.scene import build_scene
+from pick_and_place.sim.scene import build_scene
 
 
 def _angle_deg(a: np.ndarray, b: np.ndarray) -> float:

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.overhead_localization import (
+from pick_and_place.perception.overhead_localization import (
     OverheadLocalizer,
     localize_cube,
     localize_drop_target,
@@ -37,11 +37,11 @@ def test_localize_cube_maps_detection_to_world_pose(monkeypatch):
     )
     position = np.array([0.2, -0.1, 0.03])
     monkeypatch.setattr(
-        "pick_and_place.overhead_localization.estimate_cube_pose",
+        "pick_and_place.perception.overhead_localization.estimate_cube_pose",
         lambda frame, detector, camera_matrix: estimate,
     )
     monkeypatch.setattr(
-        "pick_and_place.overhead_localization.cube_pose_to_world",
+        "pick_and_place.perception.overhead_localization.cube_pose_to_world",
         lambda detected, camera_position, camera_rotation: (rotation, position),
     )
 
@@ -64,7 +64,7 @@ def test_localize_cube_maps_detection_to_world_pose(monkeypatch):
 
 def test_localize_cube_returns_none_without_detection(monkeypatch):
     monkeypatch.setattr(
-        "pick_and_place.overhead_localization.estimate_cube_pose",
+        "pick_and_place.perception.overhead_localization.estimate_cube_pose",
         lambda frame, detector, camera_matrix: None,
     )
 
@@ -94,7 +94,7 @@ def test_localize_drop_target_updates_tracker(monkeypatch):
             return value
 
     monkeypatch.setattr(
-        "pick_and_place.overhead_localization.detect_paper_target",
+        "pick_and_place.perception.overhead_localization.detect_paper_target",
         detect,
     )
     workspace = np.ones((4, 3))
@@ -148,7 +148,7 @@ def test_overhead_localizer_owns_state_and_fixed_calibration(monkeypatch):
         )
         return None
 
-    monkeypatch.setattr("pick_and_place.overhead_localization.localize_cube", capture_cube)
+    monkeypatch.setattr("pick_and_place.perception.overhead_localization.localize_cube", capture_cube)
     localizer.localize_cube(np.zeros((8, 8, 3), dtype=np.uint8))
 
     assert captured["detector"] is detectors[0]
@@ -174,7 +174,7 @@ def test_overhead_localizer_tracks_drop_target(monkeypatch):
     )
     detection = object()
     monkeypatch.setattr(
-        "pick_and_place.overhead_localization.detect_paper_target",
+        "pick_and_place.perception.overhead_localization.detect_paper_target",
         lambda *args, **kwargs: detection,
     )
 

@@ -41,10 +41,10 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from export_sim_real_pairs import _load_episode, _read_episode_rows, _read_info
-from pick_and_place import build_scene
+from pick_and_place.sim.scene import build_scene
 from pick_and_place.spec.robot import JOINT_NAMES
-from pick_and_place.joint_frames import real_frame_to_sim
-from pick_and_place.joint_zero_fit import (
+from pick_and_place.core.joint_frames import real_frame_to_sim
+from pick_and_place.hardware.joint_zero_fit import (
     FIT_JOINTS,
     JointZeroSample,
     build_columns,

@@ -7,9 +7,9 @@ import numpy as np
 
 import pytest
 
-import pick_and_place.episodes as episodes
-from pick_and_place.episode_sampling import sample_recovery_cube
-from pick_and_place.episodes import (
+import pick_and_place.runtime.episodes as episodes
+from pick_and_place.planning.episode_sampling import sample_recovery_cube
+from pick_and_place.runtime.episodes import (
     EpisodeSamplingError,
     _build_model,
     placement_error,
@@ -17,10 +17,10 @@ from pick_and_place.episodes import (
     set_cube_pose,
 )
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.geometry import CANONICAL_PREGRASP_DISTANCE, CubePose
-from pick_and_place.ik import solve_simple_grasp_ik
-from pick_and_place.derive_kinematics import derive_kinematics
-from pick_and_place.trajectory import (
+from pick_and_place.core.geometry import CANONICAL_PREGRASP_DISTANCE, CubePose
+from pick_and_place.core.ik import solve_simple_grasp_ik
+from pick_and_place.sim.derive_kinematics import derive_kinematics
+from pick_and_place.planning.trajectory import (
     DROP_CUBE_CENTER_Z,
     GRASP_CLOSE_DURATION,
     GRASP_SETTLE_DURATION,
@@ -30,7 +30,7 @@ from pick_and_place.trajectory import (
     grasp_candidates,
     plan_carry_candidates,
 )
-from pick_and_place.workspace_bounds import (
+from pick_and_place.core.workspace_bounds import (
     RECOVERY_TARGET_FRAME_BORDER_MARGIN,
     WORKSPACE_FRAME_INNER_HALF_EXTENT,
     world_to_frame_xy,

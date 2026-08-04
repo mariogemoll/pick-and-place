@@ -27,23 +27,21 @@ import numpy as np
 import pandas as pd
 from scipy.spatial.transform import Rotation
 
-from pick_and_place.camera_compare import load_intrinsics
-from pick_and_place.camera_extrinsics import (
-    apply_camera_extrinsics_to_model,
-    load_local_camera_extrinsics,
-)
-from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
-from pick_and_place.cube_detection import (
+from pick_and_place.calibration.camera_compare import load_intrinsics
+from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
+from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
+from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR
+from pick_and_place.perception.cube_detection import (
     cube_pose_to_world,
     estimate_cube_pose,
     make_cube_detector,
 )
-from pick_and_place.episodes import _build_model
+from pick_and_place.runtime.episodes import _build_model
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.geometry import CubePose
-from pick_and_place.paths import ENV_VAR, datasets_root
-from pick_and_place.paper_detection import detect_paper_target
-from pick_and_place.workspace_bounds import PAN_AXIS, workspace_interior_corners_world
+from pick_and_place.core.geometry import CubePose
+from pick_and_place.core.paths import ENV_VAR, datasets_root
+from pick_and_place.perception.paper_detection import detect_paper_target
+from pick_and_place.core.workspace_bounds import PAN_AXIS, workspace_interior_corners_world
 
 
 POSE_COLUMNS = ("cube_start_x", "cube_start_y", "cube_start_yaw", "target_x", "target_y")

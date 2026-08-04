@@ -20,8 +20,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from pick_and_place.dataset_subset import SUCCESS_XY_TOLERANCE_M
-from pick_and_place.sim_dataset_staging import (
+from pick_and_place.data.dataset_subset import SUCCESS_XY_TOLERANCE_M
+from pick_and_place.data.sim_dataset_staging import (
     episode_staging_root,
     find_episode_datasets,
     merge_episodes,

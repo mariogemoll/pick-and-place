@@ -18,13 +18,13 @@ from pathlib import Path
 import mujoco
 import mujoco.viewer
 
-from pick_and_place import build_scene, export_scene
-from pick_and_place.camera_extrinsics import (
+from pick_and_place.sim.scene import build_scene, export_scene
+from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
+from pick_and_place.sim.camera_extrinsics import (
     add_camera_extrinsics_markers,
     apply_camera_extrinsics_to_spec,
-    camera_pose_delta_mm_deg,
-    load_local_camera_extrinsics,
 )
+from pick_and_place.core.rotations import pose_delta_mm_deg
 
 
 def main() -> None:
@@ -97,8 +97,9 @@ def main() -> None:
                 measured = extrinsics.get(camera.name)
                 if measured is None:
                     continue
-                authored = (camera.pos, camera.quat)
-                millimetres, degrees = camera_pose_delta_mm_deg(authored, measured)
+                millimetres, degrees = pose_delta_mm_deg(
+                    camera.pos, camera.quat, measured["pos"], measured["quat"]
+                )
                 print(f"{camera.name}: measured pose is {millimetres:.2f} mm and "
                       f"{degrees:.2f} deg from the authored one")
             add_camera_extrinsics_markers(spec, extrinsics)

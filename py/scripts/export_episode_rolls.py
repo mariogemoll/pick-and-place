@@ -6,7 +6,7 @@
 
 Each output file holds one episode's per-frame ``qpos`` — the 6 arm/gripper
 joint angles (radians) followed by the cube's free-joint pose (pos[3] +
-quat[4]), sampled from a fresh physics rollout (see ``pick_and_place.episodes``)
+quat[4]), sampled from a fresh physics rollout (see ``pick_and_place.runtime.episodes``)
 at a fixed frame rate. That is the complete, minimal state needed to replay
 the episode: the browser viewer drives the existing joint-hierarchy robot
 model directly from these values, the same way ``robot.ts``/``grasp-and-lift.ts``
@@ -57,13 +57,13 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from pick_and_place.episode_sampling import (
+from pick_and_place.planning.episode_sampling import (
     pickup_yaw_from_azimuth,
     sample_cube,
     sample_near_neutral,
     sample_target,
 )
-from pick_and_place.episodes import (
+from pick_and_place.runtime.episodes import (
     EpisodeSamplingError,
     is_unexpected,
     prepare_episode,
@@ -71,8 +71,8 @@ from pick_and_place.episodes import (
 )
 from pick_and_place.spec.robot import ARM_JOINT_NAMES
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.geometry import CubePose
-from pick_and_place.workspace_bounds import (
+from pick_and_place.core.geometry import CubePose
+from pick_and_place.core.workspace_bounds import (
     CUBE_PLACEMENT_BOUNDS,
     PAN_AXIS,
     is_cube_drop_allowed,

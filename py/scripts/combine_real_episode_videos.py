@@ -290,11 +290,11 @@ def build_view3d_model(render_size: tuple[int, int]):
     """
     import mujoco
 
-    from pick_and_place import build_scene
-    from pick_and_place.episodes import cube_quat_from_pose
-    from pick_and_place.geometry import CubePose
+    from pick_and_place.sim.scene import build_scene
+    from pick_and_place.runtime.episodes import cube_quat_from_pose
+    from pick_and_place.core.geometry import CubePose
     from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-    from pick_and_place.workspace_bounds import PAN_AXIS
+    from pick_and_place.core.workspace_bounds import PAN_AXIS
 
     width, height = render_size
     source = CubePose(x=PAN_AXIS[0] + 0.1, y=PAN_AXIS[1], z=CUBE_HALF_SIZE)
@@ -350,11 +350,8 @@ def solve_view3d_pose(model, data, directory: Path, matrix: np.ndarray) -> bool:
     """
     import mujoco
 
-    from pick_and_place.cam_align_solve import (
-        TAG_GEOMS,
-        average_results,
-        solve_camera_pose,
-    )
+    from pick_and_place.calibration.cam_align_solve import average_results, solve_camera_pose
+    from pick_and_place.sim.frame_tags import TAG_GEOMS
     import cv2
 
     camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, VIEW3D_CAMERA)

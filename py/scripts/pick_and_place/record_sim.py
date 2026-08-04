@@ -50,27 +50,27 @@ import mujoco.viewer
 import numpy as np
 from tqdm import tqdm
 
-from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
-from pick_and_place.dataset_metadata import cube_pose_metadata, placement_error_metadata
-from pick_and_place.domain_randomization import (
+from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
+from pick_and_place.data.dataset_metadata import cube_pose_metadata, placement_error_metadata
+from pick_and_place.sim.domain_randomization import (
     DomainRandomizationPreset,
     DomainRandomizer,
     domain_seed,
     generate_procedural_appearance,
     orient_cube,
 )
-from pick_and_place.episode_sampling import sample_cube
-from pick_and_place.episodes import EpisodeSamplingError, placement_error, prepare_episode
-from pick_and_place.executor import CONTROL_HZ
-from pick_and_place.miscalibration import MiscalibrationDraw, MiscalibrationModel
-from pick_and_place.recording import RecordingSession
+from pick_and_place.planning.episode_sampling import sample_cube
+from pick_and_place.runtime.episodes import EpisodeSamplingError, placement_error, prepare_episode
+from pick_and_place.runtime.executor import CONTROL_HZ
+from pick_and_place.core.miscalibration import MiscalibrationDraw, MiscalibrationModel
+from pick_and_place.data.recording import RecordingSession
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
-from pick_and_place.geometry import CubePose
-from pick_and_place.paper_target_marker import place_paper_target_marker
-from pick_and_place.paths import datasets_root
-from pick_and_place.sim_recorder import SimCameraRig, build_recording_scene, record_episode
-from pick_and_place.task_phases import phase_spans_json
-from pick_and_place.sim_dataset_staging import (
+from pick_and_place.core.geometry import CubePose
+from pick_and_place.sim.paper_target_marker import place_paper_target_marker
+from pick_and_place.core.paths import datasets_root
+from pick_and_place.runtime.sim_recorder import SimCameraRig, build_recording_scene, record_episode
+from pick_and_place.core.task_phases import phase_spans_json
+from pick_and_place.data.sim_dataset_staging import (
     episode_index,
     episode_staging_root,
     ensure_collection_config,
@@ -78,7 +78,7 @@ from pick_and_place.sim_dataset_staging import (
     next_episode_index,
     successful_episode_datasets,
 )
-from pick_and_place.workspace_bounds import is_cube_drop_allowed, sample_target_plate_yaw
+from pick_and_place.core.workspace_bounds import is_cube_drop_allowed, sample_target_plate_yaw
 
 
 SAVED_IMAGE_WIDTH = 960

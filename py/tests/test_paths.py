@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from pick_and_place.paths import (
+from pick_and_place.core.paths import (
     ENV_VAR,
     DataRootNotConfigured,
     data_root,

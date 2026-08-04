@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: 0BSD
 
 # Train the blue-cube Diffusion Policy on a rented RTX 5090 using the fast
-# pre-training path (pick_and_place.diffusion_policy_pretrain).
+# pre-training path (pick_and_place.policies.diffusion_policy_pretrain).
 #
 # This is the throughput-oriented replacement for the recipe that produced
 # dp_blue_cube_1000 (~21 h on a 5080, ~10 h projected on a 5090). The model,

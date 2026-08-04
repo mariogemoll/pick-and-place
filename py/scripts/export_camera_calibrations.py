@@ -3,7 +3,7 @@
 
 """Export generic camera calibration JSON for recorded datasets."""
 
-from pick_and_place.camera_calibration_export import main
+from pick_and_place.calibration.camera_calibration_export import main
 
 
 if __name__ == "__main__":

@@ -51,17 +51,15 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
-from pick_and_place import build_scene
-from pick_and_place.camera_extrinsics import (
-    apply_camera_extrinsics_to_spec,
-    load_local_camera_extrinsics,
-)
-from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
+from pick_and_place.sim.scene import build_scene
+from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
+from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_spec
+from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
 from pick_and_place.spec.robot import JOINT_NAMES
-from pick_and_place.episode_sampling import sample_cube, sample_target
-from pick_and_place.geometry import cube_quat_from_pose, CubePose
+from pick_and_place.planning.episode_sampling import sample_cube, sample_target
+from pick_and_place.core.geometry import cube_quat_from_pose, CubePose
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
-from pick_and_place.domain_randomization import (
+from pick_and_place.sim.domain_randomization import (
     DomainRandomizationPreset,
     DomainRandomizer,
     domain_seed,
@@ -69,8 +67,8 @@ from pick_and_place.domain_randomization import (
     orient_cube,
     reload_renderer_textures,
 )
-from pick_and_place.miscalibration import MiscalibrationDraw, MiscalibrationModel
-from pick_and_place.render_randomization import (
+from pick_and_place.core.miscalibration import MiscalibrationDraw, MiscalibrationModel
+from pick_and_place.sim.render_randomization import (
     BackgroundRandomization,
     CameraRandomization,
     scene_texture_ids,
@@ -78,25 +76,25 @@ from pick_and_place.render_randomization import (
     set_scene_texture,
     snapshot_overhead_camera,
 )
-from pick_and_place.scene_appearance import (
+from pick_and_place.sim.scene_appearance import (
     APPEARANCE_PRESETS,
     SceneAppearanceOverride,
     parse_appearance,
 )
-from pick_and_place.sim_recorder import OVERHEAD_CAMERA, downsample_through_recording
-from pick_and_place.paper_target_marker import add_paper_target_marker, place_paper_target_marker
-from pick_and_place.trajectory import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
-from pick_and_place.workspace_bounds import is_cube_drop_allowed, sample_target_plate_yaw
-from pick_and_place.diffusion_policy_client import DiffusionPolicyController
-from pick_and_place.policy import (
+from pick_and_place.runtime.sim_recorder import OVERHEAD_CAMERA, downsample_through_recording
+from pick_and_place.sim.paper_target_marker import add_paper_target_marker, place_paper_target_marker
+from pick_and_place.planning.trajectory import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
+from pick_and_place.core.workspace_bounds import is_cube_drop_allowed, sample_target_plate_yaw
+from pick_and_place.policies.diffusion_policy_client import DiffusionPolicyController
+from pick_and_place.policies.policy import (
     DEFAULT_CHECKPOINT,
     DEFAULT_INSTRUCTION,
     resolve_checkpoint_cameras,
     select_device,
 )
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
-from pick_and_place.policy_controllers import LeRobotPolicyController
-from pick_and_place.policy_sim import (
+from pick_and_place.policies.policy_controllers import LeRobotPolicyController
+from pick_and_place.runtime.policy_sim import (
     joint_qpos_addresses,
     real_action_to_sim_ctrl,
     sim_state_to_real,
@@ -105,7 +103,7 @@ from pick_and_place.policy_sim import (
 # One policy query and one camera render happen per control tick; the sim steps
 # at the model timestep in between. The rate matches the real rig's control loop
 # (and the dataset fps), so a chunked policy's action spacing plays back true.
-from pick_and_place.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
+from pick_and_place.runtime.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 
 
 def _resolve_recording_hw(

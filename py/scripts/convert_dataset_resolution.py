@@ -63,9 +63,9 @@ from typing import Any
 
 import numpy as np
 
-from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
-from pick_and_place.recording import RecordingSession
-from pick_and_place.image_rectify import (
+from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
+from pick_and_place.data.recording import RecordingSession
+from pick_and_place.perception.image_rectify import (
     SQUARE_SIZE,
     build_undistort_map,
     center_crop_and_resize,

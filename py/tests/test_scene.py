@@ -4,14 +4,14 @@
 import mujoco
 import numpy as np
 
-from pick_and_place import build_environment, build_scene, export_scene
-from pick_and_place.scene import BACKDROP_WALL_DISTANCE, BACKDROP_WALL_THICKNESS, TABLE_BACKGROUND_RGBA, TABLE_EAST_EDGE_Y, TABLE_HEIGHT, TABLE_LENGTH, TABLE_NORTH_EDGE_X, TABLE_THICKNESS, TABLE_WEST_EDGE_Y, TABLE_WIDTH
+from pick_and_place.sim.scene import build_environment, build_scene, export_scene
+from pick_and_place.sim.scene import BACKDROP_WALL_DISTANCE, BACKDROP_WALL_THICKNESS, TABLE_BACKGROUND_RGBA, TABLE_EAST_EDGE_Y, TABLE_HEIGHT, TABLE_LENGTH, TABLE_NORTH_EDGE_X, TABLE_THICKNESS, TABLE_WEST_EDGE_Y, TABLE_WIDTH
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE, WORKSPACE_FRAME_APRILTAG_PLATES
-from pick_and_place.episodes import _build_model
-from pick_and_place.geometry import CubePose
-from pick_and_place.paper_target_marker import PAPER_TARGET_MARKER_NAME
-from pick_and_place.workspace_bounds import REACH_SECTORS
-from pick_and_place.workspace_overlays import WORKSPACE_OVERLAY_GROUP
+from pick_and_place.runtime.episodes import _build_model
+from pick_and_place.core.geometry import CubePose
+from pick_and_place.sim.paper_target_marker import PAPER_TARGET_MARKER_NAME
+from pick_and_place.core.workspace_bounds import REACH_SECTORS
+from pick_and_place.sim.workspace_overlays import WORKSPACE_OVERLAY_GROUP
 
 
 def test_scene_contains_robot_floor_light_and_cube():

@@ -45,13 +45,16 @@ jobs:
       - name: "Run ruff on simulation package"
         working-directory: py
         run: python -m ruff check .
+      - name: "Check package layering"
+        working-directory: py
+        run: python scripts/check_package_layering.py
       - name: "Run simulation package tests"
         working-directory: py
         run: python -m pytest
       - name: "Generate web model"
         working-directory: py
         run: |
-          python -m pick_and_place.export -o ../ts/public/so101.xml
+          python -m pick_and_place.sim.export -o ../ts/public/so101.xml
           rm ../ts/public/so101.xml
       - name: "Run ruff on mesh optimization package"
         working-directory: mesh_optimization

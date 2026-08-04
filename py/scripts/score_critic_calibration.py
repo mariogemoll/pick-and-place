@@ -84,7 +84,7 @@ def main() -> None:
 
     from pick_and_place.dppo_rl.env import EnvConfig
     from pick_and_place.dppo_rl.vector_env import DppoVectorEnv
-    from pick_and_place.scene_appearance import parse_appearance
+    from pick_and_place.sim.scene_appearance import parse_appearance
 
     for name in ("DPPO_LOG_DIR", "DPPO_DATA_DIR", "DPPO_BASE_POLICY"):
         os.environ.setdefault(name, "unused-by-this-check")

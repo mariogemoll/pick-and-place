@@ -79,27 +79,27 @@ from typing import Callable
 import mujoco
 import numpy as np
 
-from pick_and_place.dataset_metadata import cube_pose_metadata, driver_metadata
-from pick_and_place.episodes import _build_model
-from pick_and_place.executor import (
+from pick_and_place.data.dataset_metadata import cube_pose_metadata, driver_metadata
+from pick_and_place.runtime.episodes import _build_model
+from pick_and_place.runtime.executor import (
     CONTROL_HZ,
     RAMP_DURATION,
     clamp_and_warn,
     follower_clamp_limits,
 )
-from pick_and_place.recording import RecordingSession
+from pick_and_place.data.recording import RecordingSession
 from pick_and_place.spec.robot import GRIPPER_INDEX
-from pick_and_place.joint_frames import (
+from pick_and_place.core.joint_frames import (
     GRIPPER_READBACK_CLOSED,
     GRIPPER_READBACK_OPEN,
     action_to_joints,
     joints_to_action,
 )
-from pick_and_place.follower import make_so101_follower, make_so101_leader
+from pick_and_place.hardware.follower import make_so101_follower, make_so101_leader
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.geometry import CubePose
-from pick_and_place.derive_kinematics import derive_kinematics
-from pick_and_place.overhead_detection import (
+from pick_and_place.core.geometry import CubePose
+from pick_and_place.sim.derive_kinematics import derive_kinematics
+from pick_and_place.runtime.overhead_detection import (
     DEFAULT_ALERT_SOUND,
     OperatorNotifier,
     OverheadDetectionDebug,
@@ -109,9 +109,9 @@ from pick_and_place.overhead_detection import (
     track_drop_zone_square,
     write_overhead_debug_image,
 )
-from pick_and_place.paper_detection import PaperTracker
-from pick_and_place.paths import datasets_root
-from pick_and_place.workspace_bounds import PAN_AXIS
+from pick_and_place.perception.paper_detection import PaperTracker
+from pick_and_place.core.paths import datasets_root
+from pick_and_place.core.workspace_bounds import PAN_AXIS
 
 # Seconds each detection attempt stares at the overhead feed before giving up.
 DETECT_TIMEOUT = 2.0
@@ -684,18 +684,16 @@ def main() -> None:
 
     import cv2
 
-    from pick_and_place.cam_align_solve import (
+    from pick_and_place.calibration.cam_align_solve import (
         ExtrinsicsSolveError,
         apply_solve_result,
         check_solve_plausible,
         parse_index_or_path,
         solve_overhead_extrinsics,
     )
-    from pick_and_place.camera_extrinsics import (
-        apply_camera_extrinsics_to_model,
-        load_local_camera_extrinsics,
-    )
-    from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
+    from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
+    from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
+    from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR
 
     def require_intrinsics(camera_name: str, override) -> None:
         path = (

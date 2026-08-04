@@ -6,7 +6,7 @@ import json
 import numpy as np
 import pytest
 
-from pick_and_place.physical_rig import PhysicalRig, require_joint_zero_offsets
+from pick_and_place.hardware.physical_rig import PhysicalRig, require_joint_zero_offsets
 
 
 def test_joint_zero_calibration_is_required_by_default(tmp_path):

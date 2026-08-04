@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-from pick_and_place.policy import (
+from pick_and_place.policies.policy import (
     DEFAULT_INSTRUCTION,
     OVERHEAD_FEATURE,
     WRIST_FEATURE,

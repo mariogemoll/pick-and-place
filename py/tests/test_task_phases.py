@@ -4,7 +4,7 @@
 import numpy as np
 import pytest
 
-from pick_and_place.task_phases import (
+from pick_and_place.core.task_phases import (
     PHASES,
     PhaseSpan,
     coarse_phase_labels,

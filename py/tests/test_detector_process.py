@@ -3,7 +3,7 @@
 
 """Check that out-of-process detection matches in-process and survives a crash.
 
-The point of :mod:`pick_and_place.detector_process` is that a native segfault
+The point of :mod:`pick_and_place.perception.detector_process` is that a native segfault
 inside ``libapriltag`` costs one detection tick instead of a whole shard
 worker, so the crash path is what these tests exercise: a helper killed
 mid-run must yield an empty detection list, not an exception, and must be
@@ -19,9 +19,10 @@ import cv2
 import numpy as np
 import pytest
 
-from pick_and_place.cube_detection import CUBE_TAG_IDS, detect_cube_faces, make_cube_detector
-from pick_and_place.detector_process import DetectorProcess
-from pick_and_place.environment import APRILTAG_TEXTURE_DIR
+from pick_and_place.perception.cube_detection import detect_cube_faces, make_cube_detector
+from pick_and_place.spec.workspace import CUBE_APRILTAG_IDS
+from pick_and_place.perception.detector_process import DetectorProcess
+from pick_and_place.sim.environment import APRILTAG_TEXTURE_DIR
 
 _TAG_PX = 260
 
@@ -30,7 +31,7 @@ _TAG_PX = 260
 def frame() -> np.ndarray:
     """A mid-grey frame with two real cube-face tags pasted onto it."""
     img = np.full((720, 1280, 3), 140, dtype=np.uint8)
-    for tag_id, x in zip(CUBE_TAG_IDS[:2], (200, 700)):
+    for tag_id, x in zip(CUBE_APRILTAG_IDS[:2], (200, 700)):
         matches = sorted(APRILTAG_TEXTURE_DIR.glob(f"tagStandard41h12_{tag_id:05d}_*.png"))
         assert matches, f"no texture on disk for tag {tag_id}"
         tag = cv2.imread(str(matches[0]))

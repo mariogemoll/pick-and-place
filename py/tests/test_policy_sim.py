@@ -7,9 +7,9 @@ from pathlib import Path
 import numpy as np
 
 from pick_and_place.spec.controller import ControllerFailure, OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
-from pick_and_place.policy_controllers import NoOpPolicyController
-from pick_and_place.policy_evaluation import ScenarioManifest
-from pick_and_place.policy_sim import (
+from pick_and_place.policies.policy_controllers import NoOpPolicyController
+from pick_and_place.policies.policy_evaluation import ScenarioManifest
+from pick_and_place.runtime.policy_sim import (
     PolicySimEnv,
     evaluate_policy_episode,
     joint_qpos_addresses,

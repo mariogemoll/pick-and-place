@@ -9,16 +9,16 @@ import numpy as np
 import pytest
 
 from pick_and_place.spec.robot import ARM_JOINT_NAMES
-from pick_and_place.joint_frames import real_frame_to_sim, sim_frame_to_real
+from pick_and_place.core.joint_frames import real_frame_to_sim, sim_frame_to_real
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.geometry import CubePose
+from pick_and_place.core.geometry import CubePose
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
-from pick_and_place.scripted_policy import (
+from pick_and_place.runtime.scripted_policy import (
     AsyncWristLocalization,
     ScriptedPolicy,
     ScriptedPolicyState,
 )
-from pick_and_place.trajectory import DescentPhase, Frame, GraspChoice, Trajectory
+from pick_and_place.planning.trajectory import DescentPhase, Frame, GraspChoice, Trajectory
 
 
 class StubLocalizer:

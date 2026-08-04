@@ -13,8 +13,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from pick_and_place.paths import ENV_VAR, outputs_root
-from pick_and_place.domain_randomization import (
+from pick_and_place.core.paths import ENV_VAR, outputs_root
+from pick_and_place.sim.domain_randomization import (
     DomainRandomizationPreset,
     generate_procedural_appearance,
 )

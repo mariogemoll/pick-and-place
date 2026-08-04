@@ -9,8 +9,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from pick_and_place import diffusion_policy_dataset
-from pick_and_place.diffusion_policy_dataset import (
+from pick_and_place.data import diffusion_policy_dataset
+from pick_and_place.data.diffusion_policy_dataset import (
     CAMERA_FEATURES,
     _decimated_indices,
     decimated_length,

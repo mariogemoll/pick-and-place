@@ -26,7 +26,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from pick_and_place.paths import outputs_root
+from pick_and_place.core.paths import outputs_root
 
 
 CAMERAS = ("observation.images.wrist", "observation.images.overhead")

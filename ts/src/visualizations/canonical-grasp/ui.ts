@@ -36,7 +36,7 @@ export const DEFAULT_CUBE_X = 0.2;
 export const DEFAULT_CUBE_Y = 0;
 
 // Cube-center height used for the "drop mode" sweep, matching Python's
-// DROP_CUBE_CENTER_Z (py/src/pick_and_place/trajectory.py).
+// DROP_CUBE_CENTER_Z (py/src/pick_and_place/planning/trajectory.py).
 export const DROP_POSE_Z_MM = 45;
 
 // Yaw is measured from the radial direction (not the world frame), so the grasp

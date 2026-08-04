@@ -29,7 +29,7 @@ import mujoco
 import numpy as np
 from tqdm import tqdm
 
-from pick_and_place.episodes import (
+from pick_and_place.runtime.episodes import (
     Episode,
     EpisodeSamplingError,
     is_unexpected,
@@ -38,8 +38,8 @@ from pick_and_place.episodes import (
 )
 from pick_and_place.spec.robot import JOINT_NAMES
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.geometry import CubePose
-from pick_and_place.recorder import EpisodeRecorder
+from pick_and_place.core.geometry import CubePose
+from pick_and_place.data.recorder import EpisodeRecorder
 
 # Default rate at which the trajectory is sampled into the dataset (Hz). The sim
 # steps far faster; frames are emitted on this slower clock — the same cadence a

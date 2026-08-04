@@ -6,7 +6,7 @@ from __future__ import annotations
 import mujoco
 
 from pick_and_place.spec.workspace import CUBE_APRILTAG_IDS
-from pick_and_place.scene import build_environment, build_scene
+from pick_and_place.sim.scene import build_environment, build_scene
 
 
 def _texture(spec: mujoco.MjSpec, name: str) -> mujoco.MjsTexture:

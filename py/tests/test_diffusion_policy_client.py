@@ -13,9 +13,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pick_and_place import diffusion_policy_client
-from pick_and_place.diffusion_policy_dataset import normalize_min_max
-from pick_and_place.diffusion_policy_client import DiffusionPolicyController, resolve_recording_hw
+from pick_and_place.policies import diffusion_policy_client
+from pick_and_place.data.diffusion_policy_dataset import normalize_min_max
+from pick_and_place.policies.diffusion_policy_client import DiffusionPolicyController, resolve_recording_hw
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
 
 SERVER_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "diffusion_policy_server.py"

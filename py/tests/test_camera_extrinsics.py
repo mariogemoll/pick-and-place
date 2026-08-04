@@ -5,13 +5,13 @@ import json
 
 import numpy as np
 
-from pick_and_place.camera_extrinsics import (
+from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
+from pick_and_place.sim.camera_extrinsics import (
     apply_camera_extrinsics_to_model,
     apply_camera_extrinsics_to_spec,
-    load_local_camera_extrinsics,
     save_camera_extrinsics,
 )
-from pick_and_place.scene import build_environment
+from pick_and_place.sim.scene import build_environment
 
 
 def test_save_and_load_camera_extrinsics_sidecar(tmp_path):

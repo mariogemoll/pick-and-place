@@ -72,32 +72,32 @@ os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 import mujoco
 import numpy as np
 
-from pick_and_place import build_scene
-from pick_and_place.camera_intrinsics import (
+from pick_and_place.sim.scene import build_scene
+from pick_and_place.core.camera_calibration import (
     LOCAL_CAMERA_INTRINSICS_DIR,
     load_camera_intrinsics,
     load_local_camera_intrinsics,
 )
-from pick_and_place.diffusion_policy_client import DiffusionPolicyController, add_diffusion_policy_arguments
-from pick_and_place.episode_sampling import sample_hunt_pose, sample_near_neutral
-from pick_and_place.executor import (
+from pick_and_place.policies.diffusion_policy_client import DiffusionPolicyController, add_diffusion_policy_arguments
+from pick_and_place.planning.episode_sampling import sample_hunt_pose, sample_near_neutral
+from pick_and_place.runtime.executor import (
     CONTROL_HZ,
     RAMP_DURATION,
     clamp_and_warn,
     follower_clamp_limits,
 )
 from pick_and_place.spec.robot import GRIPPER_INDEX, JOINT_NAMES
-from pick_and_place.joint_frames import action_to_joints, joints_to_action, sim_frame_to_real
-from pick_and_place.follower import make_so101_follower
+from pick_and_place.core.joint_frames import action_to_joints, joints_to_action, sim_frame_to_real
+from pick_and_place.hardware.follower import make_so101_follower
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.image_rectify import (
+from pick_and_place.perception.image_rectify import (
     build_undistort_map,
     center_crop_and_resize,
     transform_frame,
 )
-from pick_and_place.derive_kinematics import derive_kinematics
-from pick_and_place.overhead_detection import DEFAULT_ALERT_SOUND, OperatorNotifier
-from pick_and_place.policy import (
+from pick_and_place.sim.derive_kinematics import derive_kinematics
+from pick_and_place.runtime.overhead_detection import DEFAULT_ALERT_SOUND, OperatorNotifier
+from pick_and_place.policies.policy import (
     DEFAULT_CHECKPOINT,
     DEFAULT_INSTRUCTION,
     make_policy,
@@ -105,7 +105,7 @@ from pick_and_place.policy import (
     select_device,
 )
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
-from pick_and_place.trajectory import (
+from pick_and_place.planning.trajectory import (
     NEUTRAL_ARM_JOINTS,
     NEUTRAL_GRIPPER,
     REST_ARM_JOINTS,
@@ -150,7 +150,7 @@ class CameraReader:
     def __init__(self, source: str, width: int, height: int, label: str) -> None:
         import cv2
 
-        from pick_and_place.cam_align_solve import parse_index_or_path
+        from pick_and_place.calibration.cam_align_solve import parse_index_or_path
 
         backend = cv2.CAP_AVFOUNDATION if hasattr(cv2, "CAP_AVFOUNDATION") else cv2.CAP_ANY
         self._cap = cv2.VideoCapture(parse_index_or_path(source), backend)
@@ -732,7 +732,7 @@ def main() -> None:
     if args.record_video is not None:
         import datetime
 
-        from pick_and_place.episode_video import LiveVideoRecorder
+        from pick_and_place.analysis.episode_video import LiveVideoRecorder
 
         record_dir = args.record_video / datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         record_maps = {"overhead": overhead_undistort_map, "wrist": wrist_undistort_map}
@@ -763,29 +763,27 @@ def main() -> None:
     # is unmeasured.
     measure_scene = args.controller == "lerobot"
     rng = np.random.default_rng()
-    from pick_and_place.camera_compare import load_intrinsics
-    from pick_and_place.cam_align_solve import (
+    from pick_and_place.calibration.camera_compare import load_intrinsics
+    from pick_and_place.calibration.cam_align_solve import (
         ExtrinsicsSolveError,
         apply_solve_result,
         check_solve_plausible,
-        pose_delta_mm_deg,
         solve_overhead_extrinsics,
     )
-    from pick_and_place.camera_extrinsics import (
-        apply_camera_extrinsics_to_model,
-        load_local_camera_extrinsics,
-    )
-    from pick_and_place.cube_detection import (
+    from pick_and_place.core.rotations import pose_delta_mm_deg
+    from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
+    from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
+    from pick_and_place.perception.cube_detection import (
         cube_pose_to_world,
         estimate_cube_pose,
         make_cube_detector,
     )
-    from pick_and_place.overhead_detection import (
+    from pick_and_place.runtime.overhead_detection import (
         CUBE_LOOK_TIMEOUT,
         track_cube,
         track_drop_zone_square,
     )
-    from pick_and_place.paper_detection import PaperTracker
+    from pick_and_place.perception.paper_detection import PaperTracker
 
     # The success scan reads the cube pose in world coordinates, so the model's
     # overhead camera must sit where the real one does. Start from the saved

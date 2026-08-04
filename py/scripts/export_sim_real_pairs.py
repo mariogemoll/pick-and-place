@@ -53,13 +53,11 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from scipy.spatial.transform import Rotation
 
-from pick_and_place import build_scene
-from pick_and_place.camera_extrinsics import (
-    apply_camera_extrinsics_to_spec,
-    load_local_camera_extrinsics,
-)
-from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
-from pick_and_place.cube_detection import (
+from pick_and_place.sim.scene import build_scene
+from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
+from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_spec
+from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
+from pick_and_place.perception.cube_detection import (
     cube_pose_to_world,
     detect_tags,
     estimate_cube_pose,
@@ -71,21 +69,21 @@ from pick_and_place.spec.workspace import (
     WORKSPACE_FRAME_APRILTAG_PLATES,
 )
 from pick_and_place.spec.robot import ARM_JOINT_NAMES, JOINT_NAMES
-from pick_and_place.joint_frames import real_frame_to_sim
-from pick_and_place.paths import ENV_VAR, datasets_root
-from pick_and_place.image_rectify import (
+from pick_and_place.core.joint_frames import real_frame_to_sim
+from pick_and_place.core.paths import ENV_VAR, datasets_root
+from pick_and_place.perception.image_rectify import (
     build_undistort_map,
     rectified_camera_matrix,
     transform_frame,
 )
-from pick_and_place.paper_target_marker import add_paper_target_marker, place_paper_target_marker
-from pick_and_place.workspace_alignment import (
+from pick_and_place.sim.paper_target_marker import add_paper_target_marker, place_paper_target_marker
+from pick_and_place.core.workspace_alignment import (
     IDENTITY_ALIGNMENT,
     WorkspaceAlignment,
     fit_alignment,
     pixel_to_table_point,
 )
-from pick_and_place.workspace_bounds import is_cube_drop_allowed
+from pick_and_place.core.workspace_bounds import is_cube_drop_allowed
 
 CAMERA_TO_FEATURE = {
     "wrist_camera": "observation.images.wrist",

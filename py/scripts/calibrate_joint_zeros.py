@@ -6,7 +6,7 @@
 
 Sets up the real rig (overhead + wrist cameras, follower, sim model with solved
 overhead extrinsics) and runs the report-only calibration routine in
-``pick_and_place.session_calibration``: it measures the four arm joint zeros
+``pick_and_place.calibration.session_calibration``: it measures the four arm joint zeros
 "du jour" by driving the wrist camera through look-at orbits around the cube at
 several operator-placed positions, then persists them to
 ``config/joint_zeros.json``.
@@ -31,20 +31,20 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
-from pick_and_place.episodes import _build_model
-from pick_and_place.joint_frames import action_to_joints, real_frame_to_sim
-from pick_and_place.follower import make_so101_follower
+from pick_and_place.runtime.episodes import _build_model
+from pick_and_place.core.joint_frames import action_to_joints, real_frame_to_sim
+from pick_and_place.hardware.follower import make_so101_follower
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.geometry import CubePose
-from pick_and_place.derive_kinematics import derive_kinematics
-from pick_and_place.cam_align_solve import parse_index_or_path
-from pick_and_place.overhead_detection import MockViewer
-from pick_and_place.session_calibration import (
+from pick_and_place.core.geometry import CubePose
+from pick_and_place.sim.derive_kinematics import derive_kinematics
+from pick_and_place.calibration.cam_align_solve import parse_index_or_path
+from pick_and_place.runtime.overhead_detection import MockViewer
+from pick_and_place.calibration.session_calibration import (
     CalibrationConfig,
     run_session_calibration,
 )
-from pick_and_place.trajectory import REST_ARM_JOINTS, REST_GRIPPER
-from pick_and_place.workspace_bounds import PAN_AXIS
+from pick_and_place.planning.trajectory import REST_ARM_JOINTS, REST_GRIPPER
+from pick_and_place.core.workspace_bounds import PAN_AXIS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT = REPO_ROOT / "config" / "joint_zeros.json"
@@ -142,11 +142,9 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     args = parser.parse_args()
 
-    from pick_and_place.camera_extrinsics import (
-        apply_camera_extrinsics_to_model,
-        load_local_camera_extrinsics,
-    )
-    from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
+    from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
+    from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
+    from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR
 
     wrist_intrinsics = args.wrist_intrinsics or LOCAL_CAMERA_INTRINSICS_DIR / "wrist_camera.json"
     if not wrist_intrinsics.exists():
@@ -158,7 +156,7 @@ def main() -> None:
     # The autonomous-relocation fallback runs the hardware executor, whose 30 Hz
     # control loop requires a timestep that divides evenly into it. The stock
     # 500 Hz model timestep does not, so match the hardware runner's rate.
-    from pick_and_place.executor import HARDWARE_SIMULATION_HZ
+    from pick_and_place.runtime.executor import HARDWARE_SIMULATION_HZ
 
     model.opt.timestep = 1.0 / HARDWARE_SIMULATION_HZ
     apply_camera_extrinsics_to_model(model, load_local_camera_extrinsics())
@@ -182,8 +180,8 @@ def main() -> None:
         """Pick the cube from ``source`` and place it at ``target`` (production
         pick-place + descent servo). Frees the wrist device for the executor and
         reopens it afterwards. Returns True only on a completed placement."""
-        from pick_and_place.episodes import EpisodeSamplingError, prepare_episode
-        from pick_and_place.executor import execute_episode
+        from pick_and_place.runtime.episodes import EpisodeSamplingError, prepare_episode
+        from pick_and_place.runtime.executor import execute_episode
 
         current = action_to_joints(follower.get_observation(), np.zeros(6))
         start_joints, start_gripper = real_frame_to_sim(current)
@@ -216,7 +214,7 @@ def main() -> None:
     try:
         with viewer_ctx as viewer:
             if not args.no_recalibrate:
-                from pick_and_place.cam_align_solve import (
+                from pick_and_place.calibration.cam_align_solve import (
                     ExtrinsicsSolveError,
                     apply_solve_result,
                     check_solve_plausible,
@@ -265,7 +263,7 @@ def main() -> None:
             _persist(args.output, args.day, calibration, CalibrationConfig())
 
             print("\nParking the arm to REST...")
-            from pick_and_place.session_calibration import _move_arm_to
+            from pick_and_place.calibration.session_calibration import _move_arm_to
 
             qpos_addrs = {
                 n: int(model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, n)])

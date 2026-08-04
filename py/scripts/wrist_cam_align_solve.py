@@ -31,13 +31,14 @@ from typing import Optional, Any
 import mujoco
 import numpy as np
 
-from pick_and_place.camera_extrinsics import LOCAL_CAMERA_EXTRINSICS_DIR, save_camera_extrinsics
-from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
-from pick_and_place.scene import build_scene
+from pick_and_place.core.camera_calibration import LOCAL_CAMERA_EXTRINSICS_DIR
+from pick_and_place.sim.camera_extrinsics import save_camera_extrinsics
+from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR
+from pick_and_place.sim.scene import build_scene
 from pick_and_place.spec.robot import ARM_JOINT_NAMES
-from pick_and_place.joint_frames import action_to_joints, joints_to_action, real_frame_to_sim
-from pick_and_place.follower import make_so101_follower, make_so101_leader
-from pick_and_place.cam_align_solve import (
+from pick_and_place.core.joint_frames import action_to_joints, joints_to_action, real_frame_to_sim
+from pick_and_place.hardware.follower import make_so101_follower, make_so101_leader
+from pick_and_place.calibration.cam_align_solve import (
     parse_index_or_path,
     camera_matrix_from_intrinsics,
     default_camera_matrix,
@@ -46,47 +47,12 @@ from pick_and_place.cam_align_solve import (
     average_results,
     print_result,
     SolveResult,
-    TAG_GEOMS,
     opencv_camera_pose_to_mujoco_parent_pose,
-    quat_angle_deg,
     NominalDelta,
 )
-from pick_and_place.camera_compare import draw_tag_detections, draw_hud, load_intrinsics
-
-def tag_world_corners(model: mujoco.MjModel, data: mujoco.MjData) -> dict[int, np.ndarray]:
-    # The workspace tag is a 40mm printed graphic on a 60mm physical sticker.
-    # pupil_apriltags detects the black border, which for tagStandard41h12 is 5/9 of the graphic edge.
-    WORKSPACE_TAG_GRAPHIC_M = 0.040
-    TAG_BORDER_FRACTION = 5.0 / 9.0
-    half_edge = WORKSPACE_TAG_GRAPHIC_M * TAG_BORDER_FRACTION / 2.0
-    
-    # local corners in pupil_apriltags order: bottom-left, bottom-right, top-right, top-left
-    local_corners = np.array(
-        [[-1, -1, 0], [1, -1, 0], [1, 1, 0], [-1, 1, 0]], dtype=float
-    ) * half_edge
-    
-    corners: dict[int, np.ndarray] = {}
-    mujoco.mj_forward(model, data)
-    for tag_id, (geom_name, axis) in TAG_GEOMS.items():
-        geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
-        if geom_id < 0:
-            continue
-        center = data.geom_xpos[geom_id].copy()
-        rotation = data.geom_xmat[geom_id].reshape(3, 3)
-        if axis is not None:
-            axis_index, sign = axis
-            center = center + sign * rotation[:, axis_index] * model.geom_size[geom_id][axis_index]
-            
-        # The tag is on the face.
-        tag_corners = []
-        for local_pt in local_corners:
-            world_pt = center + rotation @ local_pt
-            tag_corners.append(world_pt)
-            
-        corners[tag_id] = np.array(tag_corners)
-        
-    return corners
-
+from pick_and_place.sim.frame_tags import tag_world_corners
+from pick_and_place.core.rotations import quat_angle_deg
+from pick_and_place.calibration.camera_compare import draw_tag_detections, draw_hud, load_intrinsics
 
 def solve_wrist_camera_pose(
     *,

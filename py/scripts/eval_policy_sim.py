@@ -17,16 +17,16 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from pick_and_place.policy import (
+from pick_and_place.policies.policy import (
     DEFAULT_IMAGE_HW,
     DEFAULT_INSTRUCTION,
     resolve_checkpoint_cameras,
     select_device,
 )
-from pick_and_place.diffusion_policy_client import DiffusionPolicyController
+from pick_and_place.policies.diffusion_policy_client import DiffusionPolicyController
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, WRIST_FEATURE
-from pick_and_place.policy_controllers import LeRobotPolicyController
-from pick_and_place.policy_evaluation import (
+from pick_and_place.policies.policy_controllers import LeRobotPolicyController
+from pick_and_place.policies.policy_evaluation import (
     ScenarioManifest,
     TaskOracleConfig,
     fingerprint_checkpoint,
@@ -34,17 +34,17 @@ from pick_and_place.policy_evaluation import (
     package_versions,
     write_evaluation_artifacts,
 )
-from pick_and_place.policy_sim import build_policy_sim_model, evaluate_policy_episode, PolicySimEnv
-from pick_and_place.overhead_localization import OverheadLocalizer
-from pick_and_place.scripted_policy import (
+from pick_and_place.runtime.policy_sim import build_policy_sim_model, evaluate_policy_episode, PolicySimEnv
+from pick_and_place.perception.overhead_localization import OverheadLocalizer
+from pick_and_place.runtime.scripted_policy import (
     AsyncWristLocalization,
     ScriptedPolicy,
     WristCameraLocalizer,
 )
-from pick_and_place.cube_detection import CubeTracker
-from pick_and_place.detector_process import DetectorProcess
-from pick_and_place.scene_appearance import APPEARANCE_PRESETS, parse_appearance
-from pick_and_place.workspace_bounds import workspace_interior_corners_world
+from pick_and_place.perception.cube_detection import CubeTracker
+from pick_and_place.perception.detector_process import DetectorProcess
+from pick_and_place.sim.scene_appearance import APPEARANCE_PRESETS, parse_appearance
+from pick_and_place.core.workspace_bounds import workspace_interior_corners_world
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST = REPOSITORY_ROOT / "config" / "evaluation" / "smoke_v1.json"

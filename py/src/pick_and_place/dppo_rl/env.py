@@ -31,15 +31,15 @@ from typing import Any
 
 import numpy as np
 
-from pick_and_place.dppo_rl.scenes import (
+from pick_and_place.runtime.training_scenes import (
     TRAINING_CONTROL_HZ,
     TRAINING_MAX_STEPS,
     TRAINING_SEED_BASE,
     SceneStream,
 )
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
-from pick_and_place.policy_sim import PolicySimEnv
-from pick_and_place.scene_appearance import SceneAppearance
+from pick_and_place.runtime.policy_sim import PolicySimEnv
+from pick_and_place.sim.scene_appearance import SceneAppearance
 
 # The resolution the blue-cube dataset's videos were recorded at
 # (``source_video_hw`` in its export manifest).

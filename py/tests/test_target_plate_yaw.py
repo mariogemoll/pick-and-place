@@ -13,9 +13,9 @@ import math
 import numpy as np
 import pytest
 
-from pick_and_place.episode_sampling import sample_target
+from pick_and_place.planning.episode_sampling import sample_target
 from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
-from pick_and_place.workspace_bounds import (
+from pick_and_place.core.workspace_bounds import (
     is_target_plate_allowed,
     is_target_plate_position_allowed,
     sample_target_plate_yaw,

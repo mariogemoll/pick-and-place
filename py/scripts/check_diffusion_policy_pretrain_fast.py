@@ -5,7 +5,7 @@
 
 """Prove the fast pre-training path is arithmetically the stock one.
 
-``pick_and_place.diffusion_policy_pretrain`` replaces DPPO's per-sample
+``pick_and_place.policies.diffusion_policy_pretrain`` replaces DPPO's per-sample
 ``DataLoader`` with an
 on-device gather and folds the two camera encoders into one batched call. Both
 are meant to be reformulations, not approximations, so they are checkable
@@ -34,7 +34,7 @@ from pathlib import Path
 
 import torch
 
-from pick_and_place.diffusion_policy_pretrain import (
+from pick_and_place.policies.diffusion_policy_pretrain import (
     GpuBatchSampler,
     build_gather_indices,
     install_batched_vision_encoder,

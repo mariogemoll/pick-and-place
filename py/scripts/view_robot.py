@@ -16,7 +16,7 @@ import math
 import mujoco
 import mujoco.viewer
 
-from pick_and_place import build_robot
+from pick_and_place.sim.builder import build_robot
 
 
 def main() -> None:

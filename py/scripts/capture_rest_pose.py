@@ -11,14 +11,14 @@ import numpy as np
 # Add py/src to path so we can import pick_and_place
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
-from pick_and_place.joint_frames import action_to_joints, real_frame_to_sim
-from pick_and_place.follower import make_so101_follower
+from pick_and_place.core.joint_frames import action_to_joints, real_frame_to_sim
+from pick_and_place.hardware.follower import make_so101_follower
 
 def main():
     parser = argparse.ArgumentParser(description="Capture the current robot pose as the rest position.")
     parser.add_argument("--port", required=True, help="Serial port of the SO-101 follower")
     parser.add_argument("--id", default="folly", help="Follower ID (default: folly)")
-    parser.add_argument("--update", action="store_true", help="Automatically update py/src/pick_and_place/trajectory.py")
+    parser.add_argument("--update", action="store_true", help="Automatically update py/src/pick_and_place/planning/trajectory.py")
     args = parser.parse_args()
 
     print(f"Connecting to follower on {args.port}...")

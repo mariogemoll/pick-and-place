@@ -36,16 +36,14 @@ import mujoco
 import numpy as np
 import pyarrow.parquet as pq
 
-from pick_and_place import build_scene
-from pick_and_place.camera_compare import load_intrinsics
-from pick_and_place.camera_extrinsics import (
-    apply_camera_extrinsics_to_model,
-    load_local_camera_extrinsics,
-)
-from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
+from pick_and_place.sim.scene import build_scene
+from pick_and_place.calibration.camera_compare import load_intrinsics
+from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
+from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
+from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR
 from pick_and_place.spec.workspace import WORKSPACE_FRAME_POS
-from pick_and_place.camera_projection import project_to_pixel
-from pick_and_place.scene import WORKSPACE_FLOOR_HALF
+from pick_and_place.core.camera_projection import project_to_pixel
+from pick_and_place.sim.scene import WORKSPACE_FLOOR_HALF
 
 OVERHEAD_CAMERA = "overhead_camera"
 OVERHEAD_W, OVERHEAD_H = 1920, 1080

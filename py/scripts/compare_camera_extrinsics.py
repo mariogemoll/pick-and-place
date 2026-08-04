@@ -11,9 +11,9 @@ import numpy as np
 import mujoco
 import mujoco.viewer
 
-from pick_and_place.scene import build_scene
-from pick_and_place.camera_extrinsics import load_local_camera_extrinsics
-from pick_and_place.builder import STOCK_ASSETS_DIR
+from pick_and_place.sim.scene import build_scene
+from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
+from pick_and_place.sim.builder import STOCK_ASSETS_DIR
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)

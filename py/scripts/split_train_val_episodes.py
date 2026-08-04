@@ -9,7 +9,7 @@ between train and val. The split is a deterministic seeded shuffle (see
 ``--seed``) of the dataset's episode indices, so re-running with the same
 ``--seed`` always reproduces the same assignment.
 
-Uses ``pick_and_place.dataset_subset.write_subset_dataset`` to reindex data and
+Uses ``pick_and_place.data.dataset_subset.write_subset_dataset`` to reindex data and
 metadata without re-encoding any video -- see that module's docstring for why
 re-encoding would otherwise be unavoidable and lossy for a scattered episode
 subset like a val split.
@@ -29,7 +29,7 @@ import argparse
 import random
 from pathlib import Path
 
-from pick_and_place.dataset_subset import load_all_episodes, write_subset_dataset
+from pick_and_place.data.dataset_subset import load_all_episodes, write_subset_dataset
 
 
 def main() -> None:

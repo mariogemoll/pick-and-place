@@ -22,68 +22,63 @@ from typing import Any
 import mujoco
 import numpy as np
 
-from pick_and_place.camera_extrinsics import (
-    apply_camera_extrinsics_to_model,
-    load_local_camera_extrinsics,
-)
-from pick_and_place.camera_intrinsics import (
-    LOCAL_CAMERA_INTRINSICS_DIR,
-    load_camera_intrinsics,
-)
-from pick_and_place.dataset_metadata import cube_pose_metadata, driver_metadata
-from pick_and_place.episode_loop import episode_loop
-from pick_and_place.episode_sampling import sample_recovery_cube
-from pick_and_place.episodes import _build_model, set_cube_pose, set_joint
-from pick_and_place.executor import CONTROL_HZ, follower_clamp_limits
+from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
+from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
+from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR, load_camera_intrinsics
+from pick_and_place.data.dataset_metadata import cube_pose_metadata, driver_metadata
+from pick_and_place.runtime.episode_loop import episode_loop
+from pick_and_place.planning.episode_sampling import sample_recovery_cube
+from pick_and_place.runtime.episodes import _build_model, set_cube_pose, set_joint
+from pick_and_place.runtime.executor import CONTROL_HZ, follower_clamp_limits
 from pick_and_place.spec.robot import GRIPPER_INDEX
-from pick_and_place.joint_frames import (
+from pick_and_place.core.joint_frames import (
     GRIPPER_READBACK_CLOSED,
     action_to_joints,
     joints_to_action,
     real_frame_to_sim,
     sim_frame_to_real,
 )
-from pick_and_place.follower import make_so101_follower
+from pick_and_place.hardware.follower import make_so101_follower
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.geometry import CubePose
-from pick_and_place.image_rectify import (
+from pick_and_place.core.geometry import CubePose
+from pick_and_place.perception.image_rectify import (
     build_undistort_map,
     rectified_camera_matrix,
     transform_frame,
 )
-from pick_and_place.derive_kinematics import derive_kinematics
-from pick_and_place.overhead_localization import OverheadLocalizer
-from pick_and_place.overhead_detection import DEFAULT_ALERT_SOUND, OperatorNotifier
-from pick_and_place.paper_target_marker import place_paper_target_marker
-from pick_and_place.policy import DEFAULT_IMAGE_HW
+from pick_and_place.sim.derive_kinematics import derive_kinematics
+from pick_and_place.perception.overhead_localization import OverheadLocalizer
+from pick_and_place.runtime.overhead_detection import DEFAULT_ALERT_SOUND, OperatorNotifier
+from pick_and_place.sim.paper_target_marker import place_paper_target_marker
+from pick_and_place.policies.policy import DEFAULT_IMAGE_HW
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
-from pick_and_place.physical_rig import PhysicalRig, require_joint_zero_offsets
-from pick_and_place.physical_collection import (
+from pick_and_place.hardware.physical_rig import PhysicalRig, require_joint_zero_offsets
+from pick_and_place.hardware.physical_collection import (
     CameraDriftError,
     recover_cube,
     reject_camera_drift,
     wait_for_target_movement,
 )
-from pick_and_place.policy_real import (
+from pick_and_place.runtime.policy_real import (
     PhysicalEpisodeOutcome,
     PhysicalPolicyTick,
     calibrated_state,
     prepare_physical_policy_episode,
     run_physical_policy_episode,
 )
-from pick_and_place.policy_recording import PolicyRecordingSession
-from pick_and_place.scripted_policy import (
+from pick_and_place.analysis.policy_recording import PolicyRecordingSession
+from pick_and_place.runtime.scripted_policy import (
     AsyncWristLocalization,
     ScriptedPolicy,
     WristCameraLocalizer,
 )
-from pick_and_place.trajectory import (
+from pick_and_place.planning.trajectory import (
     NEUTRAL_ARM_JOINTS,
     NEUTRAL_GRIPPER,
     REST_ARM_JOINTS,
     REST_GRIPPER,
 )
-from pick_and_place.workspace_bounds import (
+from pick_and_place.core.workspace_bounds import (
     PAN_AXIS,
     is_cube_recovery_target_allowed,
     workspace_interior_corners_world,
@@ -106,7 +101,7 @@ class LatestCamera:
         capture_size: tuple[int, int],
         cv2_module: Any,
     ) -> None:
-        from pick_and_place.cam_align_solve import parse_index_or_path
+        from pick_and_place.calibration.cam_align_solve import parse_index_or_path
 
         backend = (
             cv2_module.CAP_AVFOUNDATION
@@ -345,7 +340,7 @@ def main() -> None:
     args = _parse_args()
     import cv2
 
-    from pick_and_place.cam_align_solve import (
+    from pick_and_place.calibration.cam_align_solve import (
         ExtrinsicsSolveError,
         apply_solve_result,
         check_solve_plausible,
@@ -534,7 +529,7 @@ def main() -> None:
         if args.recording_format != "none":
             stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             if args.recording_format == "video":
-                from pick_and_place.episode_video import EpisodeVideoSession
+                from pick_and_place.analysis.episode_video import EpisodeVideoSession
 
                 camera_intrinsics = {"overhead": overhead_path, "wrist": wrist_path}
                 if workspace_path is not None:
@@ -547,7 +542,7 @@ def main() -> None:
                     input_rectified=True,
                 )
             else:
-                from pick_and_place.recording import RecordingSession
+                from pick_and_place.data.recording import RecordingSession
 
                 session = RecordingSession(
                     repo_id=args.dataset_repo_id,

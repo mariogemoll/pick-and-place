@@ -9,9 +9,8 @@ import mujoco
 import numpy as np
 import pytest
 
-import pick_and_place.cube_detection as cube_detection
-from pick_and_place.cube_detection import (
-    CUBE_TAG_IDS,
+import pick_and_place.perception.cube_detection as cube_detection
+from pick_and_place.perception.cube_detection import (
     CubeTracker,
     OrientationStabilizer,
     PoseEMA,
@@ -21,8 +20,8 @@ from pick_and_place.cube_detection import (
     fuse_cube_faces,
     make_cube_detector,
 )
-from pick_and_place.environment import APRILTAG_TEXTURE_DIR
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.sim.environment import APRILTAG_TEXTURE_DIR
+from pick_and_place.spec.workspace import CUBE_APRILTAG_IDS, CUBE_HALF_SIZE
 
 # OpenCV camera (x right, y down, z forward) <- MuJoCo camera (x right, y up, z back).
 _CV_FROM_MJ = np.diag([1.0, -1.0, -1.0])
@@ -65,7 +64,7 @@ def _render_cube(
     half = CUBE_HALF_SIZE
     face_files = " ".join(
         f'{attr}="tagStandard41h12_{tag_id:05d}_30x30mm_tag20mm.png"'
-        for attr, tag_id in zip(_CUBE_FACE_PNG, CUBE_TAG_IDS)
+        for attr, tag_id in zip(_CUBE_FACE_PNG, CUBE_APRILTAG_IDS)
     )
     xml = f"""
     <mujoco>

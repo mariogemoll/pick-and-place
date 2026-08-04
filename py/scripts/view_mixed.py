@@ -23,25 +23,20 @@ import cv2
 import mujoco
 import numpy as np
 
-from pick_and_place.camera_compare import draw_hud, draw_tag_detections, load_intrinsics, RealSource
-from pick_and_place.camera_extrinsics import (
-    apply_camera_extrinsics_to_model,
-    load_local_camera_extrinsics,
-)
-from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
-from pick_and_place.cam_align_solve import parse_index_or_path
-from pick_and_place.cube_detection import (
-    CUBE_TAG_IDS,
-    CubeTracker,
-    detect_tags,
-)
-from pick_and_place.paper_target_marker import add_paper_target_marker, place_paper_target_marker
-from pick_and_place.paper_detection import PaperTracker, detect_paper_target, draw_paper_target
-from pick_and_place.scene import build_scene
-from pick_and_place.workspace_bounds import is_cube_drop_allowed, workspace_interior_corners_world
+from pick_and_place.calibration.camera_compare import draw_hud, draw_tag_detections, load_intrinsics, RealSource
+from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
+from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
+from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR
+from pick_and_place.calibration.cam_align_solve import parse_index_or_path
+from pick_and_place.perception.cube_detection import CubeTracker, detect_tags
+from pick_and_place.spec.workspace import CUBE_APRILTAG_IDS
+from pick_and_place.sim.paper_target_marker import add_paper_target_marker, place_paper_target_marker
+from pick_and_place.perception.paper_detection import PaperTracker, detect_paper_target, draw_paper_target
+from pick_and_place.sim.scene import build_scene
+from pick_and_place.core.workspace_bounds import is_cube_drop_allowed, workspace_interior_corners_world
 from pick_and_place.spec.robot import JOINT_NAMES
-from pick_and_place.joint_frames import action_to_joints
-from pick_and_place.follower import make_so101_follower
+from pick_and_place.core.joint_frames import action_to_joints
+from pick_and_place.hardware.follower import make_so101_follower
 
 
 WINDOW_TITLE = "view_mixed  (m mode  , . alpha  q quit)"
@@ -427,7 +422,7 @@ def main() -> None:
 
                 if cube_tracker is not None:
                     tag_detections = detect_tags(det_rgb, cube_tracker.detector)
-                    cube_detections = [d for d in tag_detections if d.tag_id in CUBE_TAG_IDS]
+                    cube_detections = [d for d in tag_detections if d.tag_id in CUBE_APRILTAG_IDS]
                     pose = cube_tracker.update(
                         cube_detections,
                         detection_matrix,

@@ -30,7 +30,7 @@ from agent.finetune.train_ppo_diffusion_img_agent import TrainPPOImgDiffusionAge
 
 from pick_and_place.dppo_rl.env import EnvConfig
 from pick_and_place.dppo_rl.vector_env import DppoVectorEnv
-from pick_and_place.scene_appearance import parse_appearance
+from pick_and_place.sim.scene_appearance import parse_appearance
 
 log = logging.getLogger(__name__)
 

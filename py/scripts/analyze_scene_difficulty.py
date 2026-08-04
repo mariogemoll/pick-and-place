@@ -37,7 +37,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pick_and_place.workspace_bounds import PAN_AXIS
+from pick_and_place.core.workspace_bounds import PAN_AXIS
 
 # Milestones in the order the task passes through them, so "where did it stop"
 # is the first one that is False.
@@ -135,7 +135,7 @@ def main() -> None:
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-    from pick_and_place.dppo_rl.scenes import training_scenario
+    from pick_and_place.runtime.training_scenes import training_scenario
 
     payload = json.loads(args.sweep.read_text())
     seed_base = int(payload["summary"]["config"]["scene_seed_base"])

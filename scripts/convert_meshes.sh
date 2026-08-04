@@ -67,13 +67,13 @@ EXPORT_ARGS=()
 if [[ "$OMIT_WRIST_CAMERA_MOUNT" == true ]]; then
     EXPORT_ARGS+=(--no-wrist-camera)
 fi
-python -m pick_and_place.export \
+python -m pick_and_place.sim.export \
     -o "$PICK_AND_PLACE_DIR/ts/public/so101.xml" "${EXPORT_ARGS[@]}"
 
 # 3b. Environment only (Overhead Mount + Workspace Frame + Cube + Floor).
 # The robot lives in so101.json; the web viewer overlays this on top so the
 # robot is defined once instead of being baked into the scene a second time.
-python -m pick_and_place.export --environment-only \
+python -m pick_and_place.sim.export --environment-only \
     -o "$PICK_AND_PLACE_DIR/ts/public/environment.xml"
 
 rm -f "$PICK_AND_PLACE_DIR/ts/public/so101.xml" "$PICK_AND_PLACE_DIR/ts/public/environment.xml"

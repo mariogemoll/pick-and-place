@@ -22,16 +22,18 @@ These are non-negotiable and override convenience.
   modify anything inside it. Compose on top of it instead.
 - **`third_party/dppo` is vendored upstream too.** Same rule.
 - **The collision box values are a hand-tuned asset, not generated output.**
-  `py/src/pick_and_place/collision_boxes.py` and
+  `py/src/pick_and_place/core/collision_boxes.py` and
   `wrist_camera_mount_collision_boxes.py` hold numbers that were tuned by hand
   against the real arm. Do not regenerate, round, or "clean up" the numbers.
 - **Every source file carries SPDX headers**, enforced in CI:
   - `SPDX-FileCopyrightText: 2026 Mario Gemoll`
   - `SPDX-License-Identifier: 0BSD`
 - **No large files.** `scripts/check_files_in_repo.sh` fails the build above
-  40 KB per file, with four documented exceptions (`executor.py`,
-  `trajectory.py`, `pick_and_place/real.py`, `run_policy_real.py`). Those
-  ceilings are a ratchet — do not raise them to land new code.
+  40 KB per file, with documented exceptions for `runtime/executor.py`,
+  `planning/trajectory.py`, `scripts/pick_and_place/real.py` and
+  `scripts/run_policy_real.py`. Those ceilings are a ratchet — do not raise
+  them to land new code. The check walks the whole history, so a file that
+  moves keeps its old path listed at the ceiling that path once needed.
 - **Never commit datasets, checkpoints, renders, or recordings.** See
   [Local and generated data](#local-and-generated-data).
 
@@ -78,7 +80,7 @@ explicit path on the command line works whether or not the variable is set. A
 script that needs it and cannot find it fails immediately with a message naming
 the variable, rather than silently writing into the source tree.
 
-`pick_and_place.paths` is the only place that reads it. Never reintroduce a
+`pick_and_place.core.paths` is the only place that reads it. Never reintroduce a
 path default that points inside the repository.
 
 ## Standard commands
@@ -87,6 +89,7 @@ path default that points inside the repository.
 # Python — from py/
 python -m ruff check .
 MUJOCO_GL=egl python -m pytest
+python scripts/check_package_layering.py
 
 # TypeScript — from ts/
 pnpm i
@@ -113,7 +116,7 @@ Five test files read `ts/public/so101.json`, which is **not** in the
 repository. Generate it before running them:
 
 ```sh
-cd py && MUJOCO_GL=egl python -m pick_and_place.export -o ../ts/public/so101.xml
+cd py && MUJOCO_GL=egl python -m pick_and_place.sim.export -o ../ts/public/so101.xml
 ```
 
 That command writes both `so101.xml` and `so101.json`; only the `.json` is
@@ -125,7 +128,7 @@ the exporter and deletes the `.xml` afterwards, leaving the `.json` behind.
 | Directory | Contents |
 | --- | --- |
 | `SO-ARM100/` | Vendored hardware submodule: CAD, STL, URDF, MJCF, BOM. |
-| `py/` | The `pick_and_place` package (85 modules), 84 CLI scripts, 42 test files. Simulation, real-robot control, calibration, datasets, policies. |
+| `py/` | The `pick_and_place` package (86 modules in 12 subpackages), 85 CLI scripts, 44 test files. Simulation, real-robot control, calibration, datasets, policies. |
 | `ts/` | Vite + Three.js browser app: the visualizations embedded in the web page. |
 | `mesh_optimization/` | Standalone Python subproject that decimates high-poly STL into web-ready GLB. |
 | `scripts/` | Repository-level shell/TS tooling: license headers, file-size check, mesh pipeline, remote-GPU job scripts. |
@@ -134,61 +137,71 @@ the exporter and deletes the `.xml` afterwards, leaving the `.json` behind.
 | `assets/` | Generated AprilTag textures. Gitignored. |
 | `third_party/dppo` | Vendored DPPO submodule, used for its diffusion pre-training agent. |
 
-### What the Python package does
+### How the Python package is laid out
 
-`spec/` sits under all of it: the physical facts and contracts every strand
-has to agree on — the cube's size and face tag ids, the drop-zone and corner
-plate sizes, the workspace frame pose, the joint names and their order, and
-the `PolicyController` boundary. It imports nothing else in the package and
-needs no heavy dependency, which is what lets the simulator and the detector
-agree by construction instead of by importing into each other's internals.
-Then ten strands, roughly in dependency order:
+**The package is a fan, not a stack.** `perception` needs OpenCV, `sim` needs
+MuJoCo, `hardware` needs lerobot, `policies` needs Torch — and none of them
+needs another. They are siblings on a shared foundation, and they meet only
+above, where work genuinely combines capabilities.
 
-1. **Model composition** — `builder`, `scene`, `materials`, `collision_boxes`,
-   `wrist_camera`, `camera_module`, `workspace_overlays`, `paper_target_marker`,
-   `derive_kinematics`, `export`. Loads the
-   stock MJCF from `SO-ARM100/` with `MjSpec` and replaces full-mesh collision
-   geoms with the hand-tuned box model. `python -m pick_and_place.export`
-   writes standalone MJCF plus a web manifest for the browser app and external
-   consumers.
-2. **Scripted policy** — `trajectory`, `task_phases`, `scripted_policy`,
-   `geometry`, `ik`, `kinematics`, `transforms`, `workspace_bounds`,
-   `episode_sampling`, `episodes`, `scenario_sampling`. The analytic planner: grasp-pose search, an 8-phase
-   trajectory, preflight validation. Generates every demonstration and is the
-   expert baseline.
-3. **Policy evaluation** — `policy_evaluation`, `policy_controllers`,
-   `policy_sim`, `policy`. Frozen scenario manifests in `config/evaluation/`, a
-   success oracle, and a controller boundary that makes scripted, ACT, and
-   Diffusion Policy interchangeable.
-4. **Sim dataset generation** — `sim_recorder`, `sim_dataset_staging`,
-   `domain_randomization`, `render_randomization`, `episode_rerender`,
-   `miscalibration`, `dataset_metadata`, `dataset_subset`. Two pipelines: direct
-   recording, and a two-pass scheme that records ground truth once and
-   re-renders it under any scene appearance.
-5. **Diffusion Policy training** — `diffusion_policy_pretrain`,
-   `diffusion_policy_dataset`, `diffusion_policy_client`. Trains and serves the
-   current best policy. ACT and SmolVLA are *evaluated* here but trained
-   externally via the `lerobot` CLI.
-6. **Real-robot control** — `executor`, `follower`, `joint_frames`, `physical_rig`,
-   `physical_collection`, `safety`, `session_calibration`, `episode_loop`,
-   `recording`, `recorder`, `episode_video`, `policy_real`, `policy_recording`.
-   Hardware lifecycle, control loop, recording, and recovery.
-7. **Perception** — `cube_detection`, `detector_process`, `overhead_detection`,
-   `overhead_localization`, `paper_detection`, `camera_projection`,
-   `visual_servo`, `image_rectify`.
-   AprilTag-based cube and target localization, plus the wrist-camera descent
-   servo that absorbs residual sim/real mismatch.
-8. **Camera calibration** — `camera_intrinsics`, `camera_extrinsics`,
-   `cam_align_solve`, `camera_calibration_export`, `camera_compare`,
-   `camera_pose_envelope`, `environment`, `workspace_alignment`.
-9. **Sim-to-real measurement** — `joint_zero_fit`, `robot_dynamics`,
-   `miscalibration`, `scene_visibility`, `scene_appearance`,
-   `background_panorama`. Measures each sim/real gap from recorded episodes,
-   corrects the predictable part, randomizes over the residual.
-10. **DPPO RL fine-tuning** — `dppo_rl/`. Fine-tuning the pretrained Diffusion
-    Policy with PPO. **This did not work**: no configuration beat the
-    pretrained policy in a paired evaluation. Kept for a future attempt; do not
-    treat it as a working path.
+| Tier | Packages | Rule |
+| --- | --- | --- |
+| Foundation | `spec`, `core` | `spec` imports nothing else in the package; `core` imports only `spec`. |
+| Capability branches | `planning`, `perception`, `sim`, `hardware`, `data`, `policies` | Each owns one heavy dependency. **No branch may import another.** |
+| Convergence | `runtime`, `calibration`, `analysis` | May import anything, including each other. Nothing below them may import them. |
+
+`scripts/check_package_layering.py` enforces this in CI. When a module needs
+two capabilities it belongs in the convergence tier by construction; when it
+reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
+`dppo_rl/` sits above everything and is exempt.
+
+- **`spec/`** — the physical facts and the contracts every branch agrees on:
+  the cube's size and face tag ids, the drop-zone and corner plate sizes, the
+  workspace frame pose, the joint names and their order, the camera modules'
+  nominal optics, and the `PolicyController` boundary. This is what lets the
+  simulator and the detector agree by construction rather than by importing
+  into each other's internals.
+- **`core/`** — pure computation over the spec: `geometry`, `transforms`,
+  `rotations`, `ik`, `kinematics`, `workspace_bounds`, `joint_frames`,
+  `image_ops`, `miscalibration`, `robot_dynamics`, `camera_calibration` (the
+  rig's measured calibration files), `paths`.
+- **`planning/`** — the analytic planner: `trajectory` (grasp-pose search and
+  the 8-phase trajectory), `visual_servo`, and the declared reset distribution
+  (`episode_sampling`, `scenario_sampling`). Generates every demonstration and
+  is the expert baseline.
+- **`perception/`** — AprilTag cube and drop-zone localization:
+  `cube_detection`, `paper_detection`, `overhead_localization`,
+  `detector_process`, `image_rectify`.
+- **`sim/`** — composing and randomizing the MuJoCo scene: `builder`, `scene`,
+  `environment`, `materials`, `wrist_camera`, `camera_module`,
+  `workspace_overlays`, `paper_target_marker`, `frame_tags`,
+  `derive_kinematics`, `domain_randomization`, `render_randomization`,
+  `camera_pose_envelope`, `camera_extrinsics`, `export`. Loads the stock MJCF
+  from `SO-ARM100/` with `MjSpec` and replaces full-mesh collision geoms with
+  the hand-tuned box model; `python -m pick_and_place.sim.export` writes
+  standalone MJCF plus a web manifest.
+- **`hardware/`** — the physical arm: `follower`, `physical_rig`,
+  `physical_collection`, `joint_zero_fit`.
+- **`data/`** — recording and datasets: `recording`, `recorder`,
+  `dataset_metadata`, `dataset_subset`, `sim_dataset_staging`,
+  `diffusion_policy_dataset`.
+- **`policies/`** — controller implementations and the contract they are scored
+  against: `policy_controllers`, `policy`, `policy_evaluation` (frozen scenario
+  manifests in `config/evaluation/` and a success oracle),
+  `diffusion_policy_pretrain`, `diffusion_policy_client`. ACT and SmolVLA are
+  *evaluated* here but trained externally via the `lerobot` CLI.
+- **`runtime/`** — running an episode: `executor` (the real control loop),
+  `episodes` (preflight under physics), `scripted_policy`, `sim_recorder`,
+  `episode_rerender`, `policy_sim`, `policy_real`, `overhead_detection`,
+  `episode_loop`, `training_scenes`.
+- **`calibration/`** — solving the rig by rendering the scene and comparing it
+  to a real image: `cam_align_solve`, `camera_compare`,
+  `camera_calibration_export`, `session_calibration`.
+- **`analysis/`** — reports about recorded runs and about the scene:
+  `episode_video`, `policy_recording`, `scene_visibility`.
+- **`dppo_rl/`** — fine-tuning the pretrained Diffusion Policy with PPO. **This
+  did not work**: no configuration beat the pretrained policy in a paired
+  evaluation. Kept for a future attempt; do not treat it as a working path.
 
 ### Script categories
 
@@ -251,7 +264,7 @@ Do not add code comments that reference a `docs/` file; write the rationale
 into the comment itself so it stands alone.
 
 Scripts must not default to writing inside the repository. Resolve a default
-through `pick_and_place.paths` instead — see [`PAP_DATA_ROOT`](#pap_data_root).
+through `pick_and_place.core.paths` instead — see [`PAP_DATA_ROOT`](#pap_data_root).
 The in-tree locations above are ignored so that pre-existing local data does not
 surface in `git status`, not because they are still a valid place to write.
 
@@ -265,6 +278,10 @@ surface in `git status`, not because they are still a valid place to write.
 - **Do not add backward-compatibility shims.** There are no external consumers.
   Change the call sites and pick the cleanest design.
 - **American English** in prose and identifiers.
+- **Imports obey the layering above**, checked by
+  `scripts/check_package_layering.py`. A module that needs two capability
+  branches moves up to the convergence tier; a fact two branches share moves
+  down to `spec`.
 - **`diffusion_policy_*` is the working policy; `dppo_*` is the failed RL
   experiment.** Spell the prefix out — never `dp_`. `DPPO` in prose means
   upstream `third_party/dppo` or the RL fine-tuning strand, nothing else.
@@ -273,8 +290,9 @@ surface in `git status`, not because they are still a valid place to write.
 
 Recorded here so they are not mistaken for intentional design:
 
-- `executor.py`, `trajectory.py`, `pick_and_place/real.py` and
-  `run_policy_real.py` are oversized and combine too many responsibilities.
+- `runtime/executor.py`, `planning/trajectory.py`, `scripts/pick_and_place/real.py`
+  and `scripts/run_policy_real.py` are oversized and combine too many
+  responsibilities.
 - Scripts hold more code than the package (~27k lines against ~22k).
 - No dependency lockfiles are committed for either language.
 - Python and TypeScript reimplement the same kinematics, grasp selection, and

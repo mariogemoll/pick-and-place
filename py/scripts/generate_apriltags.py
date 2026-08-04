@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 from fpdf import FPDF
 
-from pick_and_place.paths import outputs_root
+from pick_and_place.core.paths import outputs_root
 
 # Paper sizes in mm
 PAPER_SIZES = {

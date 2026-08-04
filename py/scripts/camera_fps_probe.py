@@ -29,7 +29,7 @@ import time
 
 import cv2
 
-from pick_and_place.cam_align_solve import parse_index_or_path
+from pick_and_place.calibration.cam_align_solve import parse_index_or_path
 
 
 def parse_resolutions(text: str) -> list[tuple[int, int]]:

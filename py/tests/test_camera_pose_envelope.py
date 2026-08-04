@@ -10,12 +10,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pick_and_place.camera_pose_envelope import (
+from pick_and_place.sim.camera_pose_envelope import (
     CAMERA_NAME,
     calibrated_radius_px,
     overhead_pose_filter,
 )
-from pick_and_place.domain_randomization import DomainRandomizationPreset
+from pick_and_place.sim.domain_randomization import DomainRandomizationPreset
 
 from conftest import FIXTURE_CAMERA_INTRINSICS_DIR
 

@@ -4,7 +4,7 @@
 import mujoco
 import numpy as np
 
-from pick_and_place.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
+from pick_and_place.runtime.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 
 
 def test_hardware_physics_substeps_advance_exactly_one_control_tick():

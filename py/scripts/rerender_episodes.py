@@ -62,7 +62,7 @@ from typing import Any
 
 import numpy as np
 
-from pick_and_place.episode_rerender import (
+from pick_and_place.runtime.episode_rerender import (
     CAMERA_FEATURES,
     EpisodeRenderer,
     FrameDiff,
@@ -82,14 +82,14 @@ from pick_and_place.episode_rerender import (
     video_frame_count,
     x264_settings,
 )
-from pick_and_place.render_randomization import BackgroundRandomization, CameraRandomization
-from pick_and_place.scene_appearance import (
+from pick_and_place.sim.render_randomization import BackgroundRandomization, CameraRandomization
+from pick_and_place.sim.scene_appearance import (
     APPEARANCE_PRESETS,
     SceneAppearance,
     parse_appearance,
 )
-from pick_and_place.scene_visibility import load_episode_truth, video_render_hw
-from pick_and_place.sim_dataset_staging import (
+from pick_and_place.analysis.scene_visibility import load_episode_truth, video_render_hw
+from pick_and_place.data.sim_dataset_staging import (
     COLLECTION_CONFIG_FILENAME,
     episode_index,
     episode_staging_root,

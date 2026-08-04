@@ -3,8 +3,8 @@
 
 import json
 
-from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
-from pick_and_place.export import export_environment, export_robot
+from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
+from pick_and_place.sim.export import export_environment, export_robot
 
 
 def test_export_robot_writes_matching_xml_and_web_manifest(tmp_path):

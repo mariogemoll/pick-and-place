@@ -46,7 +46,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from pick_and_place.dataset_subset import BOOKKEEPING_COLUMNS, BOOKKEEPING_PREFIXES
+from pick_and_place.data.dataset_subset import BOOKKEEPING_COLUMNS, BOOKKEEPING_PREFIXES
 
 # Clean project column <- source column it is read/renamed from.
 RENAMES = {

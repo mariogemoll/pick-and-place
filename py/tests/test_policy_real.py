@@ -11,7 +11,7 @@ from pick_and_place.spec.controller import (
     STATE_FEATURE,
     WRIST_FEATURE,
 )
-from pick_and_place.policy_real import (
+from pick_and_place.runtime.policy_real import (
     PhysicalEpisodeOutcome,
     calibrated_state,
     classify_physical_outcome,

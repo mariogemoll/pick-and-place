@@ -4,7 +4,7 @@
 import numpy as np
 
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
-from pick_and_place.policy_controllers import LeRobotPolicyController, NoOpPolicyController, ScriptedPolicyController
+from pick_and_place.policies.policy_controllers import LeRobotPolicyController, NoOpPolicyController, ScriptedPolicyController
 
 
 def _observation():

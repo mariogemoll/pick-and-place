@@ -32,11 +32,11 @@ import cv2
 import mujoco
 import numpy as np
 
-from pick_and_place import build_scene
-from pick_and_place.camera_compare import load_intrinsics
-from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
+from pick_and_place.sim.scene import build_scene
+from pick_and_place.calibration.camera_compare import load_intrinsics
+from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR
 from pick_and_place.spec.robot import ARM_JOINT_NAMES, JOINT_NAMES
-from pick_and_place.joint_frames import real_frame_to_sim
+from pick_and_place.core.joint_frames import real_frame_to_sim
 
 WRIST_CAMERA = "wrist_camera"
 WRIST_W, WRIST_H = 1280, 720

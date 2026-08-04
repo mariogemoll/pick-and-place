@@ -3,10 +3,10 @@
 
 import numpy as np
 
-from pick_and_place.episodes import prepare_episode
+from pick_and_place.runtime.episodes import prepare_episode
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.geometry import CubePose
-from pick_and_place.trajectory import RECOVERY_LIFT_CUBE_Z, nominal_drop_center_z
+from pick_and_place.core.geometry import CubePose
+from pick_and_place.planning.trajectory import RECOVERY_LIFT_CUBE_Z, nominal_drop_center_z
 
 
 def test_free_grasp_recovery_lifts_vertically_before_carry():

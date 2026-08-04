@@ -4,7 +4,7 @@
 
 """Export a web-manifest JSON for an arbitrary robot_descriptions model.
 
-Unlike ``pick_and_place.export``, this loads the model's stock MJCF directly
+Unlike ``pick_and_place.sim.export``, this loads the model's stock MJCF directly
 instead of composing the project's own SO-101 scene, so it works for any
 robot_descriptions ``*_mj_description`` package.
 
@@ -29,7 +29,7 @@ from typing import Any
 import mujoco
 import numpy as np
 
-from pick_and_place.export import web_manifest
+from pick_and_place.sim.export import web_manifest
 
 GRIPPER_PREFIX = "gripper_"
 SETTLE_STEPS = 500

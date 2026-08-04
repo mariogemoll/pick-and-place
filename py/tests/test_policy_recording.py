@@ -4,8 +4,8 @@
 import numpy as np
 
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
-from pick_and_place.policy_real import PhysicalPolicyTick
-from pick_and_place.policy_recording import PolicyRecordingSession
+from pick_and_place.runtime.policy_real import PhysicalPolicyTick
+from pick_and_place.analysis.policy_recording import PolicyRecordingSession
 
 
 class StubSession:

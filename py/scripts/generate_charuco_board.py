@@ -18,7 +18,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from pick_and_place.paths import outputs_root
+from pick_and_place.core.paths import outputs_root
 
 
 # A4 is 210 x 297 mm. This 180 x 240 mm board leaves a real printable margin

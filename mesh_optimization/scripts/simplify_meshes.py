@@ -96,7 +96,7 @@ GRIPPER_MESH_NAMES = frozenset({
 })
 SHARED_ARM_GRIPPER_MESH_NAMES = frozenset({"sts3215_03a_v1"})
 
-# Keep these dimensions aligned with pick_and_place.camera_module. The generated
+# Keep these dimensions aligned with pick_and_place.sim.camera_module. The generated
 # mesh is visual-only; MuJoCo continues to use its primitive visual/collision geoms.
 CAMERA_BOARD_EXTENTS = (0.032, 0.032, 0.002)
 CAMERA_LENS_RADIUS = 0.007

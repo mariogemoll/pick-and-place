@@ -11,7 +11,7 @@ after the MuJoCo camera:
 - `camera_intrinsics/wrist_camera.json`
 - `camera_intrinsics/overhead_camera.json`
 
-These JSON files are ignored by git. When present, `python -m pick_and_place.export`
+These JSON files are ignored by git. When present, `python -m pick_and_place.sim.export`
 loads them automatically and uses them instead of the nominal camera defaults.
 
 ## Camera intrinsics calibration
@@ -70,7 +70,7 @@ Solve the overhead camera extrinsics from a frame where workspace-frame tags
 
 ```sh
 cd py
-python -m pick_and_place.cam_align_solve \
+python -m pick_and_place.calibration.cam_align_solve \
   --camera 0 \
   --intrinsics ../config/camera_intrinsics/overhead_camera.json
 ```

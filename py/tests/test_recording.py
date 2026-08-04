@@ -5,8 +5,8 @@ import sys
 import types
 from pathlib import Path
 
-from pick_and_place import recording as recording_module
-from pick_and_place.recording import RecordingSession
+from pick_and_place.data import recording as recording_module
+from pick_and_place.data.recording import RecordingSession
 
 
 def test_ffmpeg_encoder_reports_stay_quiet_after_lerobot_restores_callback(monkeypatch):

@@ -3,11 +3,11 @@
 
 import numpy as np
 
-from pick_and_place.episodes import _build_model
+from pick_and_place.runtime.episodes import _build_model
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.geometry import CubePose
-from pick_and_place.derive_kinematics import derive_kinematics
-from pick_and_place.trajectory import (
+from pick_and_place.core.geometry import CubePose
+from pick_and_place.sim.derive_kinematics import derive_kinematics
+from pick_and_place.planning.trajectory import (
     DROP_DWELL_DURATION,
     GRIPPER_GRASP,
     GRIPPER_OPEN,

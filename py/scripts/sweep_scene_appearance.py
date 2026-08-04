@@ -36,22 +36,23 @@ from typing import Any
 
 import numpy as np
 
-from pick_and_place.scene_appearance import (
+from pick_and_place.sim.scene_appearance import (
     CUBE_COLOURS,
     FLOOR_COLOURS,
     TARGET_COLOURS,
     SceneAppearance,
     SceneAppearanceOverride,
 )
-from pick_and_place.scene_visibility import (
+from pick_and_place.analysis.scene_visibility import (
     OBJECT_COVERAGE,
     SceneMeasurer,
     contrast,
     load_episode_truth,
     video_render_hw,
 )
-from pick_and_place.sim_recorder import OVERHEAD_CAMERA, WRIST_CAMERA, resize_and_center_crop
-from pick_and_place.task_phases import PHASES
+from pick_and_place.core.image_ops import resize_and_center_crop
+from pick_and_place.runtime.sim_recorder import OVERHEAD_CAMERA, WRIST_CAMERA
+from pick_and_place.core.task_phases import PHASES
 
 FRAME_STRIDE = 3  # 30 Hz source frames per 10 Hz policy tick
 CAMERAS = {"overhead": OVERHEAD_CAMERA, "wrist": WRIST_CAMERA}

@@ -19,6 +19,15 @@ CUBE_HALF_SIZE = 0.015
 # world directions -X, +X, -Y, +Y, +Z, -Z respectively.
 CUBE_APRILTAG_IDS: tuple[int, int, int, int, int, int] = (0, 1, 2, 3, 4, 5)
 
+# tagStandard41h12 geometry: the marker is nine cells wide and its black border
+# spans five of them, so the quad a detector returns has 5/9 of the edge of the
+# printed graphic.
+APRILTAG_BORDER_FRACTION = 5.0 / 9.0
+
+# Edge of the printed AprilTag graphic on a cube face: a 20 mm tag on a 30 mm
+# sticker.
+CUBE_APRILTAG_SIZE = 0.020
+
 # Half-edge of the square paper target the cube is dropped onto.
 DROP_ZONE_HALF_SIZE = 0.05
 
@@ -30,6 +39,9 @@ WORKSPACE_FRAME_QUAT = (-0.707107, 0.0, 0.0, -0.707107)
 
 # Half-edge of a square corner plate; the 60 mm plate carries a 40 mm tag.
 WORKSPACE_FRAME_APRILTAG_PLATE_HALF_SIZE = 0.03
+
+# Edge of the printed AprilTag graphic on a corner plate.
+WORKSPACE_FRAME_APRILTAG_SIZE = 0.040
 
 # Corner plates bolted to the workspace frame, as (tag id, compass name,
 # position in the frame's local coordinates).

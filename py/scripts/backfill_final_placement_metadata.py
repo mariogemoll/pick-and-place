@@ -26,23 +26,21 @@ import numpy as np
 import pandas as pd
 from scipy.spatial.transform import Rotation
 
-from pick_and_place.camera_compare import load_intrinsics
-from pick_and_place.camera_extrinsics import (
-    apply_camera_extrinsics_to_model,
-    load_local_camera_extrinsics,
-)
-from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
-from pick_and_place.cube_detection import (
+from pick_and_place.calibration.camera_compare import load_intrinsics
+from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
+from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
+from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR
+from pick_and_place.perception.cube_detection import (
     cube_pose_to_world,
     estimate_cube_pose,
     make_cube_detector,
 )
-from pick_and_place.dataset_metadata import placement_error_metadata
-from pick_and_place.episodes import _build_model
-from pick_and_place.geometry import CubePose, PlacementError
-from pick_and_place.paths import ENV_VAR, datasets_root
+from pick_and_place.data.dataset_metadata import placement_error_metadata
+from pick_and_place.runtime.episodes import _build_model
+from pick_and_place.core.geometry import CubePose, PlacementError
+from pick_and_place.core.paths import ENV_VAR, datasets_root
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.workspace_bounds import PAN_AXIS
+from pick_and_place.core.workspace_bounds import PAN_AXIS
 
 
 PLACEMENT_COLUMNS = (

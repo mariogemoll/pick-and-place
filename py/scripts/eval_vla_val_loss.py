@@ -25,7 +25,7 @@ from lerobot.datasets.factory import make_dataset
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.rl.wandb_utils import get_wandb_run_id_from_filesystem
 
-from pick_and_place.paths import ENV_VAR, outputs_root
+from pick_and_place.core.paths import ENV_VAR, outputs_root
 
 
 def _default_checkpoints_root() -> Path:

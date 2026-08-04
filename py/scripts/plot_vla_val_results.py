@@ -19,7 +19,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from pick_and_place.paths import outputs_root
+from pick_and_place.core.paths import outputs_root
 
 
 STEP_RE = re.compile(r"/checkpoints/([^/]+)/pretrained_model$")

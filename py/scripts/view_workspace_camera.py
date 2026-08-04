@@ -30,15 +30,16 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from pick_and_place.cam_align_solve import parse_index_or_path, solve_camera_pose
-from pick_and_place.camera_compare import RealSource, load_intrinsics
-from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
-from pick_and_place.cube_detection import CUBE_TAG_IDS, CubeTracker
-from pick_and_place.paths import outputs_root
-from pick_and_place.paper_target_marker import add_paper_target_marker, place_paper_target_marker
-from pick_and_place.paper_detection import PaperTracker, detect_paper_target, draw_paper_target
-from pick_and_place.scene import build_environment
-from pick_and_place.workspace_bounds import is_cube_drop_allowed, workspace_interior_corners_world
+from pick_and_place.calibration.cam_align_solve import parse_index_or_path, solve_camera_pose
+from pick_and_place.calibration.camera_compare import RealSource, load_intrinsics
+from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR
+from pick_and_place.perception.cube_detection import CubeTracker
+from pick_and_place.spec.workspace import CUBE_APRILTAG_IDS
+from pick_and_place.core.paths import outputs_root
+from pick_and_place.sim.paper_target_marker import add_paper_target_marker, place_paper_target_marker
+from pick_and_place.perception.paper_detection import PaperTracker, detect_paper_target, draw_paper_target
+from pick_and_place.sim.scene import build_environment
+from pick_and_place.core.workspace_bounds import is_cube_drop_allowed, workspace_interior_corners_world
 
 WINDOW_TITLE = "workspace camera  (f freeze, +/- overlay, s save, q / Esc quit)"
 OVERHEAD_WINDOW_TITLE = "overhead camera  (f freeze, +/- overlay, s save, q / Esc quit)"
@@ -394,7 +395,7 @@ def main() -> None:
                     [
                         detection
                         for detection in overhead_detections
-                        if detection.tag_id in CUBE_TAG_IDS
+                        if detection.tag_id in CUBE_APRILTAG_IDS
                     ],
                     overhead_solve_matrix,
                     overhead_position,

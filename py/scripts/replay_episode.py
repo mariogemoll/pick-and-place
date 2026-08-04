@@ -20,14 +20,12 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from pick_and_place import build_scene
-from pick_and_place.camera_extrinsics import (
-    apply_camera_extrinsics_to_spec,
-    load_local_camera_extrinsics,
-)
-from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
+from pick_and_place.sim.scene import build_scene
+from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
+from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_spec
+from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.workspace_bounds import is_cube_drop_allowed, is_cube_pickup_allowed
+from pick_and_place.core.workspace_bounds import is_cube_drop_allowed, is_cube_pickup_allowed
 
 
 def _add_target_marker(spec: mujoco.MjSpec, target: np.ndarray | None) -> None:
@@ -111,7 +109,7 @@ def _rebuild_model(
 ) -> tuple[mujoco.MjModel, mujoco.MjData]:
     """Recompile the scene with the cube at the episode's recorded start pose.
 
-    Matches ``pick_and_place.episodes`` exactly so the ``qpos`` layout lines up;
+    Matches ``pick_and_place.runtime.episodes`` exactly so the ``qpos`` layout lines up;
     the cube's free joint is what makes the logged ``qpos`` 13-wide.
     """
     spec = build_scene(include_environment=True)

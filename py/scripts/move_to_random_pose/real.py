@@ -5,12 +5,12 @@
 """Move-to-random-pose demo (real): the hardware counterpart of ``sim.py``.
 
 Same task, same toolbox (``episode_loop``/``EpisodeRecorder``/``recover_on``)
-and the same pose sampling/easing (``pick_and_place.move_to_random_pose``) as
+and the same pose sampling/easing (``pick_and_place.runtime.move_to_random_pose``) as
 ``sim.py`` — only the execution backend differs. Each episode samples a random
 near-neutral arm pose and moves the real SO-101 follower there, recording the
 real-frame commanded set point vs. the encoder read-back at each control tick.
 No cube, no camera, no grasp, no checkpoint replanning: this reuses
-``pick_and_place.follower``/``pick_and_place.executor``'s connect/ramp/clamp
+``pick_and_place.hardware.follower``/``pick_and_place.runtime.executor``'s connect/ramp/clamp
 plumbing, the same plumbing ``pick_and_place/real.py`` uses, but
 none of its grasp-specific machinery.
 
@@ -32,17 +32,17 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
-from pick_and_place import build_scene
-from pick_and_place.episode_loop import episode_loop
-from pick_and_place.executor import clamp_and_warn, follower_clamp_limits
+from pick_and_place.sim.scene import build_scene
+from pick_and_place.runtime.episode_loop import episode_loop
+from pick_and_place.runtime.executor import clamp_and_warn, follower_clamp_limits
 from pick_and_place.spec.robot import JOINT_NAMES
-from pick_and_place.joint_frames import action_to_joints, joints_to_action, sim_frame_to_real
-from pick_and_place.follower import make_so101_follower
-from pick_and_place.derive_kinematics import derive_kinematics
-from pick_and_place.move_to_random_pose import sample_reachable_pose, smoothstep
-from pick_and_place.recorder import EpisodeRecorder
-from pick_and_place.safety import recover_on
-from pick_and_place.trajectory import (
+from pick_and_place.core.joint_frames import action_to_joints, joints_to_action, sim_frame_to_real
+from pick_and_place.hardware.follower import make_so101_follower
+from pick_and_place.sim.derive_kinematics import derive_kinematics
+from pick_and_place.runtime.move_to_random_pose import sample_reachable_pose, smoothstep
+from pick_and_place.data.recorder import EpisodeRecorder
+from pick_and_place.core.safety import recover_on
+from pick_and_place.planning.trajectory import (
     NEUTRAL_ARM_JOINTS,
     NEUTRAL_GRIPPER,
     REST_ARM_JOINTS,

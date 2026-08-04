@@ -10,7 +10,7 @@ import argparse
 import json
 from pathlib import Path
 
-from pick_and_place.diffusion_policy_dataset import (
+from pick_and_place.data.diffusion_policy_dataset import (
     DEFAULT_POLICY_HZ,
     export_diffusion_policy_dataset,
 )

@@ -5,9 +5,9 @@ import math
 
 import numpy as np
 
-from pick_and_place.joint_frames import real_frame_to_sim, sim_frame_to_real
-from pick_and_place.geometry import CubePose
-from pick_and_place.miscalibration import MiscalibrationModel
+from pick_and_place.core.joint_frames import real_frame_to_sim, sim_frame_to_real
+from pick_and_place.core.geometry import CubePose
+from pick_and_place.core.miscalibration import MiscalibrationModel
 
 
 def test_sample_is_reproducible():

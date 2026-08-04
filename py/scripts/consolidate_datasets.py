@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from pick_and_place.paths import ENV_VAR, datasets_root
+from pick_and_place.core.paths import ENV_VAR, datasets_root
 
 
 def discover_runs(source_root: Path) -> list[tuple[datetime.datetime, Path]]:

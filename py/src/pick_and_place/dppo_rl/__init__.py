@@ -6,7 +6,7 @@
 The pieces here exist to feed the vendored DPPO fine-tuner (``third_party/dppo``)
 this project's simulated pick-and-place task:
 
-- :mod:`pick_and_place.dppo_rl.scenes` draws training resets from the same
+- :mod:`pick_and_place.runtime.training_scenes` draws training resets from the same
   declared distribution as the frozen evaluation manifests, on a disjoint seed
   stream.
 - :mod:`pick_and_place.dppo_rl.env` presents one episode in DPPO's observation

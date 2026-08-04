@@ -30,7 +30,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
-from pick_and_place import build_scene
+from pick_and_place.sim.scene import build_scene
 from pick_and_place.spec.robot import JOINT_NAMES
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 

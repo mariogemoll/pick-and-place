@@ -9,7 +9,7 @@ episode, successful or not, so consumers can define "success" themselves. This
 script is that consumer: it derives success from the recorded placement points
 (``placement_detected`` and ``cube_end``/``target`` within ``--xy-tolerance``,
 via ``successful_episode_mask``) and writes a new dataset containing only the
-successful ones, using ``pick_and_place.dataset_subset.write_subset_dataset`` to
+successful ones, using ``pick_and_place.data.dataset_subset.write_subset_dataset`` to
 reindex data and metadata without re-encoding any video (see that module's
 docstring for why re-encoding would otherwise be unavoidable and lossy).
 
@@ -28,7 +28,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from pick_and_place.dataset_subset import (
+from pick_and_place.data.dataset_subset import (
     SUCCESS_XY_TOLERANCE_M,
     load_all_episodes,
     successful_episode_mask,

@@ -74,28 +74,25 @@ import mujoco
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from pick_and_place.cam_align_solve import (
+from pick_and_place.calibration.cam_align_solve import (
     DEFAULT_MAX_NOMINAL_DELTA_DEG,
     DEFAULT_MAX_NOMINAL_DELTA_MM,
-    tag_world_corners,
 )
-from pick_and_place.camera_extrinsics import LOCAL_CAMERA_EXTRINSICS_DIR
-from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
-from pick_and_place.camera_pose_envelope import (
+from pick_and_place.sim.frame_tags import tag_world_corners
+from pick_and_place.core.camera_calibration import LOCAL_CAMERA_EXTRINSICS_DIR
+from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR
+from pick_and_place.sim.camera_pose_envelope import (
     apply_camera_jitter,
     calibrated_radius_px,
     camera_module_geoms,
     overhead_pose_filter,
 )
-from pick_and_place.episode_sampling import sample_cube, sample_target
+from pick_and_place.planning.episode_sampling import sample_cube, sample_target
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.scene import build_environment
-from pick_and_place.sim_recorder import (
-    configure_render_quality,
-    fovy_from_intrinsics,
-    resize_and_center_crop,
-)
-from pick_and_place.workspace_bounds import (
+from pick_and_place.sim.scene import build_environment
+from pick_and_place.core.image_ops import resize_and_center_crop
+from pick_and_place.runtime.sim_recorder import configure_render_quality, fovy_from_intrinsics
+from pick_and_place.core.workspace_bounds import (
     CANONICAL_PICKUP_SECTOR,
     CUBE_PLACEMENT_SECTOR,
     PAN_AXIS,
@@ -127,7 +124,7 @@ PLATE_HALF_SIZE = 0.03
 
 
 def _resize_crop_geometry() -> tuple[float, int, int]:
-    """Scale and crop offsets of ``sim_recorder.resize_and_center_crop``."""
+    """Scale and crop offsets of ``image_ops.resize_and_center_crop``."""
     scale = max(OUT_W / RENDER_W, OUT_H / RENDER_H)
     resized_w = max(OUT_W, round(RENDER_W * scale))
     resized_h = max(OUT_H, round(RENDER_H * scale))

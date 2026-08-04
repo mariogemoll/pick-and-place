@@ -4,7 +4,7 @@
 import numpy as np
 import pytest
 
-from pick_and_place.diffusion_policy_dataset import normalize_min_max
+from pick_and_place.data.diffusion_policy_dataset import normalize_min_max
 from pick_and_place.dppo_rl.env import (
     DppoTaskEnv,
     EnvConfig,

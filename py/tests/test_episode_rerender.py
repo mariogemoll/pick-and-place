@@ -11,7 +11,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from pick_and_place.episode_rerender import (
+from pick_and_place.runtime.episode_rerender import (
     DEFAULT_X264_CRF,
     DEFAULT_X264_KEYINT,
     STATS_PIXEL_STRIDE,
@@ -24,12 +24,12 @@ from pick_and_place.episode_rerender import (
     video_frame_count,
     x264_settings,
 )
-from pick_and_place.scene_appearance import (
+from pick_and_place.sim.scene_appearance import (
     CUBE_COLOURS,
     SceneAppearance,
     SceneAppearanceOverride,
 )
-from pick_and_place.sim_recorder import build_recording_scene
+from pick_and_place.runtime.sim_recorder import build_recording_scene
 
 RERENDER_PATH = Path(__file__).parents[1] / "scripts" / "rerender_episodes.py"
 

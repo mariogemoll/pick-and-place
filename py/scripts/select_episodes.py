@@ -48,7 +48,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pick_and_place.dataset_subset import (
+from pick_and_place.data.dataset_subset import (
     SUCCESS_XY_TOLERANCE_M,
     load_all_episodes,
     successful_episode_mask,

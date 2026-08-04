@@ -31,13 +31,13 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
-from pick_and_place.cube_detection import (
+from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
+from pick_and_place.perception.cube_detection import (
     cube_pose_to_world,
     estimate_cube_pose,
     make_cube_detector,
 )
-from pick_and_place.image_rectify import rectified_camera_matrix
+from pick_and_place.perception.image_rectify import rectified_camera_matrix
 
 MAX_CUBE_DISTANCE = 0.5
 

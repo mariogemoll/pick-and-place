@@ -9,17 +9,17 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from pick_and_place.domain_randomization import (
+from pick_and_place.sim.domain_randomization import (
     DomainRandomizationPreset,
     DomainRandomizer,
     domain_seed,
     generate_procedural_appearance,
     orient_cube,
 )
-from pick_and_place.episodes import _build_model
+from pick_and_place.runtime.episodes import _build_model
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
-from pick_and_place.geometry import CubePose, world_from_cube
-from pick_and_place.paper_target_marker import place_paper_target_marker
+from pick_and_place.core.geometry import CubePose, world_from_cube
+from pick_and_place.sim.paper_target_marker import place_paper_target_marker
 
 
 PRESET = Path(__file__).parents[2] / "config" / "domain_randomization" / "act_mild_v1.json"

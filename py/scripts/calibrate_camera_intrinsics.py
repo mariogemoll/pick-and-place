@@ -314,7 +314,7 @@ def main() -> None:
     except ValueError as exc:
         parser.error(str(exc))
 
-    from pick_and_place.cam_align_solve import open_camera, parse_index_or_path, read_camera_frame
+    from pick_and_place.calibration.cam_align_solve import open_camera, parse_index_or_path, read_camera_frame
     detector = cv2.aruco.CharucoDetector(board)
     cap = open_camera(parse_index_or_path(args.camera), args.width, args.height, 30, cv2)
     window = "ChArUco intrinsics calibration"

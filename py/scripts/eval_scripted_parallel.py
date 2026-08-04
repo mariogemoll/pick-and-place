@@ -61,8 +61,8 @@ def _evaluate_shard(payload: tuple) -> list[tuple[int, object]]:
         # instead of oversubscribing.
         os.environ.setdefault("LP_NUM_THREADS", "1")
 
-    from pick_and_place.policy_evaluation import ScenarioManifest
-    from pick_and_place.policy_sim import PolicySimEnv, evaluate_policy_episode
+    from pick_and_place.policies.policy_evaluation import ScenarioManifest
+    from pick_and_place.runtime.policy_sim import PolicySimEnv, evaluate_policy_episode
 
     import eval_policy_sim as eps
 
@@ -107,7 +107,7 @@ def main() -> None:
     if args.backend == "osmesa":
         os.environ.setdefault("LP_NUM_THREADS", "1")
     import eval_policy_sim as eps
-    from pick_and_place.policy_evaluation import (
+    from pick_and_place.policies.policy_evaluation import (
         ScenarioManifest,
         TaskOracleConfig,
         git_provenance,

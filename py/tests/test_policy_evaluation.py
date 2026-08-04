@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from pick_and_place.policy_evaluation import (
+from pick_and_place.policies.policy_evaluation import (
     EpisodeResult,
     FailureFlags,
     ScenarioManifest,
