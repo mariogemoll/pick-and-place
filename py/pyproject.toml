@@ -22,7 +22,6 @@ dependencies = [
     "robot_descriptions",
     "scipy",
     "sounddevice",
-    "stable-baselines3",
     "tqdm",
 ]
 
