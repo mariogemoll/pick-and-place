@@ -34,6 +34,7 @@ from pick_and_place.cam_align_solve import parse_index_or_path, solve_camera_pos
 from pick_and_place.camera_compare import RealSource, load_intrinsics
 from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
 from pick_and_place.cube_detection import CUBE_TAG_IDS, CubeTracker
+from pick_and_place.paths import outputs_root
 from pick_and_place.paper_detection import (
     PaperTracker,
     add_paper_target_marker,
@@ -219,10 +220,10 @@ def main() -> None:
     parser.add_argument(
         "--capture-dir",
         type=Path,
-        default=Path("out/workspace_camera_captures"),
         help="directory where the s key writes lossless images and poses",
     )
     args = parser.parse_args()
+    capture_dir = args.capture_dir or outputs_root() / "workspace_camera_captures"
     if not 0.0 <= args.overlay_alpha <= 1.0:
         parser.error("--overlay-alpha must be between 0 and 1")
     overlay_alpha = args.overlay_alpha
@@ -562,7 +563,7 @@ def main() -> None:
             if key == ord("s"):
                 try:
                     capture_path = _save_capture(
-                        capture_dir=args.capture_dir,
+                        capture_dir=capture_dir,
                         cv2_module=cv2,
                         workspace_raw=raw_frame,
                         overhead_raw=overhead_raw,

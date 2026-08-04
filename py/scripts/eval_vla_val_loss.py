@@ -25,9 +25,11 @@ from lerobot.datasets.factory import make_dataset
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.rl.wandb_utils import get_wandb_run_id_from_filesystem
 
+from pick_and_place.paths import ENV_VAR, outputs_root
 
-def _default_checkpoint() -> Path:
-    return Path("outputs/train/pick-and-place/checkpoints/003000/pretrained_model")
+
+def _default_checkpoints_root() -> Path:
+    return outputs_root() / "train" / "pick-and-place" / "checkpoints"
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,8 +37,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint",
         type=Path,
-        default=_default_checkpoint(),
-        help="LeRobot pretrained_model checkpoint directory, unless --all-checkpoints is set.",
+        help="LeRobot pretrained_model checkpoint directory, unless --all-checkpoints is set "
+        f"(default: the 003000 checkpoint under ${ENV_VAR}/outputs).",
     )
     parser.add_argument(
         "--all-checkpoints",
@@ -46,14 +48,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoints-root",
         type=Path,
-        default=Path("outputs/train/pick-and-place/checkpoints"),
-        help="Root containing step checkpoint directories for --all-checkpoints.",
+        help="Root containing step checkpoint directories for --all-checkpoints "
+        f"(default: ${ENV_VAR}/outputs/train/pick-and-place/checkpoints).",
     )
     parser.add_argument(
         "--val-root",
         type=Path,
-        default=Path("../datasets-512/combined-success-val"),
-        help="Held-out LeRobot dataset root, relative to py/ by default.",
+        required=True,
+        help="Held-out LeRobot dataset root.",
     )
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", type=int, default=0)
@@ -188,16 +190,17 @@ def log_results_to_wandb(results: list[dict]) -> None:
 def main() -> None:
     args = parse_args()
     if args.all_checkpoints:
+        checkpoints_root = args.checkpoints_root or _default_checkpoints_root()
         # Skip the "last" alias so the final step isn't scored twice.
         checkpoints = sorted(
             path
-            for path in args.checkpoints_root.glob("*/pretrained_model")
+            for path in checkpoints_root.glob("*/pretrained_model")
             if path.parent.name != "last"
         )
         if not checkpoints:
-            raise FileNotFoundError(f"No checkpoints found under {args.checkpoints_root}")
+            raise FileNotFoundError(f"No checkpoints found under {checkpoints_root}")
     else:
-        checkpoints = [args.checkpoint]
+        checkpoints = [args.checkpoint or _default_checkpoints_root() / "003000" / "pretrained_model"]
 
     results = []
     for index, checkpoint in enumerate(checkpoints, start=1):

@@ -110,6 +110,7 @@ from pick_and_place.overhead_detection import (
     write_overhead_debug_image,
 )
 from pick_and_place.paper_detection import PaperTracker
+from pick_and_place.paths import datasets_root
 
 # Seconds each detection attempt stares at the overhead feed before giving up.
 DETECT_TIMEOUT = 2.0
@@ -815,9 +816,7 @@ def main() -> None:
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     dataset_root = (
-        args.dataset_root
-        if args.dataset_root is not None
-        else Path(__file__).resolve().parents[2] / "datasets" / timestamp
+        args.dataset_root if args.dataset_root is not None else datasets_root() / timestamp
     )
     overhead_debug_dir = dataset_root / "overhead_debug"
     recording = RecordingSession(

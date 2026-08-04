@@ -9,12 +9,24 @@ build
 pnpm-lock.yaml
 *.log
 /assets/apriltags
-/datasets
-/docs/
 /dist_assets
 /intermediary-glb
 /intermediary-glb-generic
-/outputs/
 /config/camera_intrinsics/*.json
 /config/camera_extrinsics/*.json
 *.bak
+
+# Working notes, deliberately uncommitted.
+/docs/
+
+# Machine-local data. New work writes under $PAP_DATA_ROOT instead; these are
+# the pre-existing in-tree locations, kept ignored so old data does not surface
+# in git status or get walked by repository-wide checks.
+/datasets
+/outputs/
+/output/
+/extras/
+/out/
+/py/out/
+/.cache/
+/py/.cache/

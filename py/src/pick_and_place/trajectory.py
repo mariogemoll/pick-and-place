@@ -531,7 +531,7 @@ class CarryPlan:
 
     The long-distance transit (lift -> cruise) is a joint-space move: always a
     valid arm configuration, immune to the IK dead zones a fixed-elbow Cartesian
-    move can hit (see ``docs/GENERAL_CARRY_AND_DROP.txt``). The final approach
+    move can hit. The final approach
     (cruise -> drop) is a short Cartesian descent instead, mirroring
     ``DescentPhase`` on the pickup side, so the height into the drop is
     genuinely controlled rather than an incidental side effect of a joint blend.

@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from pick_and_place.paths import outputs_root
+
 
 CAMERAS = ("observation.images.wrist", "observation.images.overhead")
 
@@ -217,8 +219,9 @@ def main() -> None:
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--seed", type=int, default=0, help="Episode selection seed")
     parser.add_argument("--crf", type=int, help="Constant-quality level (23 mp4, 34 webm by default)")
-    parser.add_argument("--out", type=Path, default=Path("domain_randomization_grid.mp4"))
+    parser.add_argument("--out", type=Path, )
     args = parser.parse_args()
+    out_path = args.out or outputs_root() / "domain_randomization_grid.mp4"
 
     if args.rows < 1 or args.cols < 1 or args.duration <= 0 or args.fps < 1:
         parser.error("--rows, --cols, --duration, and --fps must be positive")
@@ -238,11 +241,11 @@ def main() -> None:
     command = build_command(
         find_ffmpeg(), args.canonical_dataset, canonical, args.randomized_dataset, randomized,
         selected, args.rows, args.cols, cell_width, cell_height, args.duration, args.fps,
-        args.crf, args.out,
+        args.crf, out_path,
     )
     subprocess.run(command, check=True)
     print(
-        f"Wrote {args.out}; each tile is blue canonical above orange randomized, "
+        f"Wrote {out_path}; each tile is blue canonical above orange randomized, "
         "wrist left of overhead."
     )
 

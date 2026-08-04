@@ -13,6 +13,8 @@ import cv2
 import numpy as np
 from fpdf import FPDF
 
+from pick_and_place.paths import outputs_root
+
 # Paper sizes in mm
 PAPER_SIZES = {
     "A4": (210, 297),
@@ -152,7 +154,7 @@ def main():
 
     parser.add_argument("--ids", type=int, nargs='+', help="Specific IDs to generate (0-25)")
     parser.add_argument("--tag_size_mm", type=float, default=40.0, help="Manual tag size in mm")
-    parser.add_argument("--output_dir", type=str, default="out/apriltags", help="Output directory")
+    parser.add_argument("--output_dir", type=str, help="Output directory")
     parser.add_argument("--paper", type=str, default="A4", choices=PAPER_SIZES.keys(), help="Paper format")
     
     args = parser.parse_args()
@@ -170,7 +172,8 @@ def main():
         tag_ids = [12, 13, 14, 15]
         print("No IDs or preset specified. Defaulting to workspace_frame tags (12-15).")
 
-    generate_tags(tag_ids, args.output_dir, tag_size, 10.0, args.paper)
+    output_dir = args.output_dir or str(outputs_root() / "apriltags")
+    generate_tags(tag_ids, output_dir, tag_size, 10.0, args.paper)
 
 if __name__ == "__main__":
     main()

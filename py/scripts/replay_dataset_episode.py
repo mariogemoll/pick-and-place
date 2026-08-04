@@ -44,6 +44,7 @@ from pick_and_place.follower import (
     real_frame_to_sim,
     sim_frame_to_real,
 )
+from pick_and_place.paths import outputs_root
 from pick_and_place.geometry import CUBE_HALF_SIZE
 from pick_and_place.paper_detection import (
     DROP_ZONE_HALF_SIZE,
@@ -484,7 +485,7 @@ def main() -> None:
         choices=tuple(CAMERA_TO_FEATURE),
         help="camera to render; repeat for both (default: overhead_camera and wrist_camera)",
     )
-    parser.add_argument("--output-dir", type=Path, default=Path("py/out/dataset_replay"))
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--alpha", type=float, default=0.45, help="sim opacity in blended output")
     parser.add_argument(
         "--panel",
@@ -513,6 +514,7 @@ def main() -> None:
         help="use the raw upstream MuJoCo actuators instead of fitted MJCF actuator time constants",
     )
     args = parser.parse_args()
+    output_dir = args.output_dir or outputs_root() / "dataset_replay"
 
     if not 0.0 <= args.alpha <= 1.0:
         parser.error("--alpha must be in [0, 1]")
@@ -536,7 +538,7 @@ def main() -> None:
             episode,
             mode=mode,
             cameras=cameras,
-            output_dir=args.output_dir,
+            output_dir=output_dir,
             alpha=args.alpha,
             panel=args.panel,
             max_frames=args.max_frames,
@@ -544,7 +546,7 @@ def main() -> None:
             camera_calibration=not args.no_camera_calibration,
             robot_dynamics=not args.no_robot_dynamics,
         )
-    print(f"wrote overlays to {args.output_dir}")
+    print(f"wrote overlays to {output_dir}")
 
 
 if __name__ == "__main__":

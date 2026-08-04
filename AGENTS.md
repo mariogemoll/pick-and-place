@@ -64,6 +64,23 @@ Set `MUJOCO_GL=egl` for headless rendering. On macOS, scripts that open a
 MuJoCo viewer need `mjpython` rather than `python`; most such scripts offer a
 `--no-viewer` flag to avoid it.
 
+### `PAP_DATA_ROOT`
+
+Datasets, checkpoints, renders, and reports live under one directory outside
+the repository, named by `PAP_DATA_ROOT`:
+
+```sh
+export PAP_DATA_ROOT=~/pick-and-place-data   # holds datasets/ and outputs/
+```
+
+Scripts resolve it lazily, only when a default is actually needed, so an
+explicit path on the command line works whether or not the variable is set. A
+script that needs it and cannot find it fails immediately with a message naming
+the variable, rather than silently writing into the source tree.
+
+`pick_and_place.paths` is the only place that reads it. Never reintroduce a
+path default that points inside the repository.
+
 ## Standard commands
 
 ```sh
@@ -224,8 +241,10 @@ Because `docs/` is not committed, nothing in the repository may depend on it.
 Do not add code comments that reference a `docs/` file; write the rationale
 into the comment itself so it stands alone.
 
-Scripts should not default to writing inside the repository. Several still do;
-that is a known defect, not a pattern to copy.
+Scripts must not default to writing inside the repository. Resolve a default
+through `pick_and_place.paths` instead — see [`PAP_DATA_ROOT`](#pap_data_root).
+The in-tree locations above are ignored so that pre-existing local data does not
+surface in `git status`, not because they are still a valid place to write.
 
 ## Conventions
 
@@ -249,9 +268,6 @@ Recorded here so they are not mistaken for intentional design:
   fine-tuning (which did not). A rename to a consistent `diffusion_policy_*`
   prefix is planned.
 - No dependency lockfiles are committed for either language.
-- `scripts/check-license-headers.sh` walks ignored directories, so it fails on
-  any machine holding local notes or training output. CI passes only because
-  its checkout is clean. Judge it by whether it flags a *tracked* file.
 - Python and TypeScript reimplement the same kinematics, grasp selection, and
   trajectory logic with no cross-language parity fixtures.
 - The browser entry point eagerly imports every visualization, producing an

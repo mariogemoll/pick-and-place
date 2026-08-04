@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Mario Gemoll
 // SPDX-License-Identifier: 0BSD
 
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -248,38 +249,47 @@ function validateFile(filePath: string, expectedLicense: string): ValidationErro
   return null;
 }
 
-function checkDirectory(dir: string, errors: ValidationError[]): void {
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
-
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name);
-
-    if (entry.isDirectory()) {
-      if (!config.excludedDirs.includes(entry.name)) {
-        checkDirectory(fullPath, errors);
-      }
-    } else if (entry.isFile()) {
-      if (config.excludedFiles.includes(entry.name)) {
-        continue;
-      }
-
-      const expectedLicense = getLicenseForFile(fullPath);
-
-      if (expectedLicense !== null) {
-        const ext = path.extname(fullPath);
-        if (ext === '.ipynb') {
-          const error = validateNotebook(fullPath, expectedLicense);
-          if (error) errors.push(error);
-        } else {
-          const commentStyle = getCommentStyle(fullPath);
-          if (commentStyle !== null) {
-            const error = validateFile(fullPath, expectedLicense);
-            if (error) errors.push(error);
-          }
-        }
-      }
-    }
+function checkFile(fullPath: string, errors: ValidationError[]): void {
+  if (config.excludedFiles.includes(path.basename(fullPath))) {
+    return;
   }
+
+  const expectedLicense = getLicenseForFile(fullPath);
+  if (expectedLicense === null) {
+    return;
+  }
+
+  if (path.extname(fullPath) === '.ipynb') {
+    const error = validateNotebook(fullPath, expectedLicense);
+    if (error) errors.push(error);
+    return;
+  }
+
+  if (getCommentStyle(fullPath) !== null) {
+    const error = validateFile(fullPath, expectedLicense);
+    if (error) errors.push(error);
+  }
+}
+
+/**
+ * Enumerate every file git would consider part of the project: tracked files
+ * plus new ones not yet added, minus anything ignored. Walking the filesystem
+ * instead would descend into local datasets, training output, and working
+ * notes, which are ignored precisely because they are not ours to police —
+ * while `--others` keeps a brand-new file from escaping the check simply
+ * because it has not been committed yet.
+ */
+function projectFiles(rootDir: string): string[] {
+  const stdout = execFileSync(
+    'git',
+    ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+    { cwd: rootDir, maxBuffer: 64 * 1024 * 1024 }
+  ).toString('utf8');
+
+  return stdout
+    .split('\0')
+    .filter((entry) => entry.length > 0)
+    .filter((entry) => !entry.split('/').some((part) => config.excludedDirs.includes(part)));
 }
 
 function main(): void {
@@ -287,7 +297,12 @@ function main(): void {
   const errors: ValidationError[] = [];
 
   console.log('Checking SPDX license headers...\n');
-  checkDirectory(rootDir, errors);
+  for (const relativePath of projectFiles(rootDir)) {
+    const fullPath = path.join(rootDir, relativePath);
+    if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
+      checkFile(fullPath, errors);
+    }
+  }
 
   if (errors.length === 0) {
     console.log('✓ All files have correct license headers!');

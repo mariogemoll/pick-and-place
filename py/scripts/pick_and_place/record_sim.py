@@ -70,6 +70,7 @@ from pick_and_place.miscalibration import MiscalibrationDraw, MiscalibrationMode
 from pick_and_place.recording import RecordingSession
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
 from pick_and_place.paper_detection import DROP_ZONE_HALF_SIZE, place_paper_target_marker
+from pick_and_place.paths import datasets_root
 from pick_and_place.sim_recorder import SimCameraRig, build_recording_scene, record_episode
 from pick_and_place.task_phases import phase_spans_json
 from pick_and_place.sim_dataset_staging import (
@@ -778,9 +779,7 @@ def main() -> None:
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     base_root = (
-        args.dataset_root
-        if args.dataset_root is not None
-        else Path(__file__).resolve().parents[2] / "datasets" / timestamp
+        args.dataset_root if args.dataset_root is not None else datasets_root() / timestamp
     )
 
     common = dict(

@@ -28,6 +28,8 @@ from pick_and_place.camera_intrinsics import (
 from pick_and_place.image_rectify import rectified_camera_matrix
 from pick_and_place.scene import build_environment
 
+from pick_and_place.paths import outputs_root
+
 
 def _as_float_matrix(value: Any, rows: int, cols: int) -> list[list[float]] | None:
     if hasattr(value, "tolist") and not isinstance(value, (str, bytes)):
@@ -140,8 +142,7 @@ def main() -> None:
         "-o",
         "--output",
         type=Path,
-        default=Path("out/camera_calibrations.json"),
-        help="output JSON path",
+        help="output JSON path (default: $PAP_DATA_ROOT/outputs/camera_calibrations.json)",
     )
     parser.add_argument(
         "--width",
@@ -162,7 +163,8 @@ def main() -> None:
     if (args.width is None) != (args.height is None):
         parser.error("--width and --height must be given together")
     out_size = (args.width, args.height) if args.width is not None else None
-    path = write_camera_calibrations(args.output, out_size)
+    output = args.output or outputs_root() / "camera_calibrations.json"
+    path = write_camera_calibrations(output, out_size)
     print(f"Wrote {path}")
 
 

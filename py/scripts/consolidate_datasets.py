@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from pick_and_place.paths import ENV_VAR, datasets_root
+
 
 def discover_runs(source_root: Path) -> list[tuple[datetime.datetime, Path]]:
     """Return ``(timestamp, run_root)`` for every LeRobotDataset directly under
@@ -67,29 +69,30 @@ def main() -> None:
         "source_roots",
         nargs="*",
         type=Path,
-        default=[Path(__file__).resolve().parents[1] / "datasets"],
-        help="parent directories to scan for run directories (default: py/datasets)",
+        help=f"parent directories to scan for run directories (default: ${ENV_VAR}/datasets)",
     )
     parser.add_argument(
         "--out-dir",
         type=Path,
-        default=Path(__file__).resolve().parents[2] / "datasets",
         help="output root; each day is written to <out-dir>/<YYYYMMDD> "
-        "(default: repo root datasets/)",
+        f"(default: ${ENV_VAR}/datasets)",
     )
     parser.add_argument("--write", action="store_true", help="perform the merge")
     args = parser.parse_args()
 
-    runs = [run for root in args.source_roots for run in discover_runs(root)]
+    source_roots = args.source_roots or [datasets_root()]
+    out_dir = args.out_dir or datasets_root()
+
+    runs = [run for root in source_roots for run in discover_runs(root)]
     if not runs:
-        raise SystemExit(f"No run directories found under {args.source_roots}")
+        raise SystemExit(f"No run directories found under {source_roots}")
 
     by_day = group_by_day(runs)
 
     print(f"Discovered {len(runs)} run(s) across {len(by_day)} day(s):")
     for day, day_roots in by_day.items():
         episode_count = sum(source_episode_count(root) for root in day_roots)
-        out_path = args.out_dir / f"{day:%Y%m%d}"
+        out_path = out_dir / f"{day:%Y%m%d}"
         print(
             f"  {day:%Y-%m-%d}: {len(day_roots)} run(s), {episode_count} episode(s) -> {out_path}"
         )
@@ -101,7 +104,7 @@ def main() -> None:
     from lerobot.datasets.aggregate import aggregate_datasets
 
     for day, day_roots in by_day.items():
-        out_path = args.out_dir / f"{day:%Y%m%d}"
+        out_path = out_dir / f"{day:%Y%m%d}"
         if out_path.exists():
             raise SystemExit(f"Output already exists, refusing to overwrite: {out_path}")
 

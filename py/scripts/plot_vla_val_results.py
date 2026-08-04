@@ -19,6 +19,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from pick_and_place.paths import outputs_root
+
 
 STEP_RE = re.compile(r"/checkpoints/([^/]+)/pretrained_model$")
 
@@ -29,8 +31,7 @@ def parse_args() -> argparse.Namespace:
         "results",
         nargs="?",
         type=Path,
-        default=Path("results.json"),
-        help="results JSON from eval_vla_val_loss.py (default: results.json)",
+                help="results JSON from eval_vla_val_loss.py (default: results.json)",
     )
     parser.add_argument(
         "--output",
@@ -65,8 +66,9 @@ def load_rows(path: Path) -> list[dict]:
 
 def main() -> None:
     args = parse_args()
-    rows = load_rows(args.results)
-    output = args.output or args.results.with_suffix(".png")
+    results_path = args.results or outputs_root() / "results.json"
+    rows = load_rows(results_path)
+    output = args.output or results_path.with_suffix(".png")
 
     numeric_rows = sorted(
         (row for row in rows if checkpoint_step(row) is not None),

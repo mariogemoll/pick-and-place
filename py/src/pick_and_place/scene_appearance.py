@@ -147,9 +147,9 @@ class SceneAppearance:
 
 AS_RECORDED = SceneAppearance()
 
-#: Named appearances. ``as-recorded`` changes nothing. The rest come from
-#: ``docs/SCENE_APPEARANCE_SWEEP.md``: recolouring the cube, or darkening the
-#: floor instead. A dark floor needs the white target — the black one is found by
+#: Named appearances. ``as-recorded`` changes nothing. The rest were selected
+#: by sweeping floor and drop-zone colours and measuring what survives the
+#: policy's 96x96 view: recolouring the cube, or darkening the floor instead. A dark floor needs the white target — the black one is found by
 #: local darkness and all but vanishes against it (plate contrast 0.24 on black,
 #: against 0.64 with a white target).
 #:

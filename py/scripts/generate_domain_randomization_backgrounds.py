@@ -13,6 +13,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from pick_and_place.paths import ENV_VAR, outputs_root
 from pick_and_place.domain_randomization import (
     DomainRandomizationPreset,
     generate_procedural_appearance,
@@ -49,11 +50,16 @@ def main() -> None:
         / "domain_randomization"
         / "act_mild_v1.json",
     )
-    parser.add_argument("--output", type=Path, default=Path("outputs/procedural_appearances"))
+    parser.add_argument(
+        "--output",
+        type=Path,
+        help=f"output directory (default: ${ENV_VAR}/outputs/procedural_appearances)",
+    )
     parser.add_argument("--count", type=int, default=24)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--columns", type=int, default=4)
     args = parser.parse_args()
+    output = args.output or outputs_root() / "procedural_appearances"
     if args.count < 1 or args.columns < 1:
         parser.error("--count and --columns must be positive")
 
@@ -67,8 +73,8 @@ def main() -> None:
         )
         sample = preset.sample(episode_seed)
         appearance = generate_procedural_appearance(sample)
-        background_path = args.output / "backgrounds" / f"{index:03d}.png"
-        table_path = args.output / "tables" / f"{index:03d}.png"
+        background_path = output / "backgrounds" / f"{index:03d}.png"
+        table_path = output / "tables" / f"{index:03d}.png"
         _write_rgb(background_path, appearance.background_rgb)
         _write_rgb(table_path, appearance.table_rgb)
         backgrounds.append(appearance.background_rgb)
@@ -77,8 +83,8 @@ def main() -> None:
             {
                 "index": index,
                 "domain_seed": episode_seed,
-                "background": str(background_path.relative_to(args.output)),
-                "table": str(table_path.relative_to(args.output)),
+                "background": str(background_path.relative_to(output)),
+                "table": str(table_path.relative_to(output)),
                 "background_rgb": sample.background_rgb,
                 "table_rgb": sample.table_rgb,
                 "blur_sigma": sample.appearance_blur_sigma,
@@ -86,11 +92,11 @@ def main() -> None:
             }
         )
 
-    args.output.mkdir(parents=True, exist_ok=True)
-    (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    _write_rgb(args.output / "backgrounds_grid.png", _contact_sheet(backgrounds, args.columns, 320))
-    _write_rgb(args.output / "tables_grid.png", _contact_sheet(tables, args.columns, 240))
-    print(f"Wrote {args.count} procedural appearances and preview grids to {args.output}")
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    _write_rgb(output / "backgrounds_grid.png", _contact_sheet(backgrounds, args.columns, 320))
+    _write_rgb(output / "tables_grid.png", _contact_sheet(tables, args.columns, 240))
+    print(f"Wrote {args.count} procedural appearances and preview grids to {output}")
 
 
 if __name__ == "__main__":

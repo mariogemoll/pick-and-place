@@ -90,7 +90,7 @@ update_epochs="${UPDATE_EPOCHS:-10}"
 # robomimic's small end-effector deltas; here an action is an absolute joint
 # command spanning ~180 degrees, so 0.1 is ~9 degrees of jitter on every joint of
 # every emitted action and drives the on-policy success rate to nearly zero --
-# which leaves PPO with no reward signal at all. See docs/DPPO_RL_FINETUNING.md.
+# which leaves PPO with no reward signal at all.
 sampling_std="${SAMPLING_STD:-0.01}"
 # The *likelihood* floor is a different quantity with a different job: DPPO clips
 # the std used to evaluate Gaussian log-probabilities for numerical stability,

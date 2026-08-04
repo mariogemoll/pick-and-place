@@ -4,8 +4,8 @@
 
 """Re-render staged ground-truth episodes under a different scene appearance.
 
-The pick cube must be rendered blue to be legible at 96x96 (see
-``docs/SCENE_APPEARANCE_SWEEP.md``) but cannot be *recorded* that way: with
+The pick cube must be rendered blue to be legible at 96x96, but cannot be
+*recorded* that way: with
 ``--miscalibration`` the descent visual servo detects the cube's AprilTags in
 the wrist image, so a solid-colour cube fails every episode. Datasets are
 therefore produced in two passes — record with the tags, then replay each

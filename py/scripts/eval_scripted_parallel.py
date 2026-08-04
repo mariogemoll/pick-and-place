@@ -10,8 +10,7 @@ and returns EpisodeResults. The parent re-orders them to manifest order and
 writes the same self-contained run directory as ``eval_policy_sim.py``.
 
 AprilTag detection runs out-of-process (``DetectorProcess``), so the
-``pupil_apriltags`` destructor segfault cannot kill a pool worker -- see
-``py/docs/parallel-sim-eval.md``.
+``pupil_apriltags`` destructor segfault cannot kill a pool worker.
 
 On Linux, ``--backend egl`` renders on the GPU (fast, the default) and
 ``--backend osmesa`` renders on CPU (slow, but leaves the GPU free). macOS uses

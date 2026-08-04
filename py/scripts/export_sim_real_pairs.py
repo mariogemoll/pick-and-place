@@ -68,6 +68,7 @@ from pick_and_place.cube_detection import (
 from pick_and_place.environment import WORKSPACE_FRAME_APRILTAG_PLATES
 from pick_and_place.follower import ARM_JOINT_NAMES, JOINT_NAMES, real_frame_to_sim
 from pick_and_place.geometry import CUBE_HALF_SIZE
+from pick_and_place.paths import ENV_VAR, datasets_root
 from pick_and_place.image_rectify import (
     build_undistort_map,
     rectified_camera_matrix,
@@ -620,7 +621,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dataset_roots", type=Path, nargs="+", help="LeRobotDataset root(s)")
     parser.add_argument("--episode", type=int, default=None, help="export only this episode index")
-    parser.add_argument("--output-root", type=Path, default=Path("datasets/pairs"))
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        help=f"where to write exported pairs (default: ${ENV_VAR}/datasets/pairs)",
+    )
     parser.add_argument("--width", type=int, default=960, help="output width (default: 960)")
     parser.add_argument("--height", type=int, default=720, help="output height (default: 720)")
     parser.add_argument(
@@ -694,6 +699,8 @@ def main() -> None:
         if not 0 <= shard_index < shard_count:
             parser.error("--shard index must be in [0, N)")
 
+    output_root = args.output_root or datasets_root() / "pairs"
+
     for dataset_root in args.dataset_roots:
         info = _read_info(dataset_root)
         exported_episodes = 0
@@ -705,7 +712,7 @@ def main() -> None:
                 continue
             if args.max_episodes is not None and exported_episodes >= args.max_episodes:
                 break
-            out_dir = args.output_root / dataset_root.name / f"episode_{index:06d}"
+            out_dir = output_root / dataset_root.name / f"episode_{index:06d}"
             if (out_dir / "pairs.json").is_file():
                 print(f"{dataset_root.name} episode {index}: already exported, skipping")
                 exported_episodes += 1

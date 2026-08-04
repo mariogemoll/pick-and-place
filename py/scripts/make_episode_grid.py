@@ -28,6 +28,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from pick_and_place.paths import outputs_root
+
 CAMERA = "observation.images.overhead"
 
 
@@ -325,9 +327,9 @@ def main() -> None:
                          "23 for .mp4/H.264, 34 for .webm/VP9")
     ap.add_argument("--seed", type=int, default=None,
                     help="RNG seed for reproducible randomization")
-    ap.add_argument("--out", type=Path, default=Path("episode_grid.mp4"),
-                    help="Output file; .webm => VP9 (smaller for web), else mp4")
+    ap.add_argument("--out", type=Path,                     help="Output file; .webm => VP9 (smaller for web), else mp4")
     args = ap.parse_args()
+    out_path = args.out or outputs_root() / "episode_grid.mp4"
 
     cell_w, cell_h = (int(v) for v in args.cell.lower().split("x"))
     if cell_w % 2 or cell_h % 2:
@@ -377,9 +379,9 @@ def main() -> None:
 
     render_grid(
         find_ffmpeg(), slots, args.rows, args.cols,
-        cell_w, cell_h, args.fps, args.duration, args.crf, args.out,
+        cell_w, cell_h, args.fps, args.duration, args.crf, out_path,
     )
-    print(f"Wrote {args.out} ({args.rows}x{args.cols}, "
+    print(f"Wrote {out_path} ({args.rows}x{args.cols}, "
           f"{cell_w}x{cell_h} cells, {args.duration:.0f}s)")
 
 

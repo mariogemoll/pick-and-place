@@ -10,7 +10,7 @@ trajectory of the move, then returns to neutral once the run ends. No cube, no
 detection, no grasp: this task shares nothing with pick-and-place except the
 episode loop, the recorder, and Ctrl-C recovery — proof that those three are
 the toolbox's actual seams, not an artifact of the one task it was extracted
-from. See ``docs/episode-toolkit-plan.md``.
+from.
 
 The arm is driven through the model's position actuators under real physics,
 same execution pattern as ``pick_and_place/sim.py``. Sim-only; see ``real.py`` for

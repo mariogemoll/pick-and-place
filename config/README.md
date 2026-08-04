@@ -89,7 +89,7 @@ Generate it from a dataset root:
 
 ```sh
 PYTHONPATH=py/src python3 py/scripts/calibrate_robot_dynamics.py \
-  datasets-512/combined \
+  "$PAP_DATA_ROOT/datasets/combined" \
   --output config/robot_dynamics/so101_follower.json
 ```
 
@@ -107,6 +107,6 @@ PYTHONPATH=py/src mjpython py/scripts/pick_and_place/sim.py --no-robot-dynamics
 
 ```sh
 PYTHONPATH=py/src mjpython py/scripts/replay_dataset_episode.py \
-  datasets-512/combined 0 \
+  "$PAP_DATA_ROOT/datasets/combined" 0 \
   --no-robot-dynamics
 ```

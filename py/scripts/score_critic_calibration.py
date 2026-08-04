@@ -9,9 +9,9 @@ is ``return - value``, so a critic whose predictions are uncorrelated with actua
 returns turns every update into a biased random walk -- which degrades a strong
 behavior-cloned policy monotonically, at a rate set by the learning rate and
 insensitive to everything else. That is precisely the pattern every fine-tuning
-run in ``docs/DPPO_RL_FINETUNING.md`` shows, and no run so far could have
-detected it, because DPPO logs value *loss* (which falls happily when the critic
-learns to predict a constant) but never explained variance.
+run so far shows, and none could have detected it, because DPPO
+logs value *loss* (which falls happily when the critic learns to predict a
+constant) but never explained variance.
 
 This rolls out the policy, records the critic's value at each step alongside the
 reward actually received, and reports:

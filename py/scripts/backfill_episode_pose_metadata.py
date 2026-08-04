@@ -40,6 +40,7 @@ from pick_and_place.cube_detection import (
 )
 from pick_and_place.episodes import _build_model
 from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.paths import ENV_VAR, datasets_root
 from pick_and_place.paper_detection import detect_paper_target
 from pick_and_place.workspace_overlays import PAN_AXIS, workspace_interior_corners_world
 
@@ -260,8 +261,8 @@ def main() -> None:
         "dataset_roots",
         nargs="*",
         type=Path,
-        default=[Path("datasets")],
-        help="dataset root(s), or a parent directory containing dataset roots",
+        help=f"dataset root(s), or a parent directory containing dataset roots "
+        f"(default: ${ENV_VAR}/datasets)",
     )
     parser.add_argument("--camera-name", default="overhead_camera")
     parser.add_argument("--target-color", choices=("black", "white"), default="black")
@@ -279,7 +280,7 @@ def main() -> None:
     _, _, cam_pos, cam_rot = _build_calibrated_overhead(args.camera_name)
 
     roots: list[Path] = []
-    for root in args.dataset_roots:
+    for root in args.dataset_roots or [datasets_root()]:
         if episode_parquets(root):
             roots.append(root)
         else:
