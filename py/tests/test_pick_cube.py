@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import mujoco
 
-from pick_and_place.scene import PICK_CUBE_APRILTAG_IDS, build_environment, build_scene
+from pick_and_place.spec.workspace import CUBE_APRILTAG_IDS
+from pick_and_place.scene import build_environment, build_scene
 
 
 def _texture(spec: mujoco.MjSpec, name: str) -> mujoco.MjsTexture:
@@ -24,7 +25,7 @@ def test_pick_cube_faces_carry_their_apriltag_textures():
     stems = [file.rsplit("/", 1)[-1] for file in texture.cubefiles]
     expected = [
         f"tagStandard41h12_{tag_id:05d}_30x30mm_tag20mm.png"
-        for tag_id in PICK_CUBE_APRILTAG_IDS
+        for tag_id in CUBE_APRILTAG_IDS
     ]
     assert stems == expected
 

@@ -13,23 +13,11 @@ import numpy as np
 
 from pick_and_place.background_panorama import add_background_panorama
 from pick_and_place.builder import STOCK_ASSETS_DIR, build_robot
-from pick_and_place.environment import (
-    APRILTAG_TEXTURE_DIR,
-    WORKSPACE_FRAME_POS,
-    add_overhead_camera_mount,
-    add_workspace_frame,
-    add_workspace_frame_apriltags,
-)
+from pick_and_place.spec.workspace import WORKSPACE_FRAME_POS
+from pick_and_place.environment import APRILTAG_TEXTURE_DIR, add_overhead_camera_mount, add_workspace_frame, add_workspace_frame_apriltags
 from pick_and_place.materials import MaterialConfig, apply_materials
+from pick_and_place.spec.workspace import CUBE_APRILTAG_IDS, CUBE_HALF_SIZE
 from pick_and_place.workspace_overlays import add_workspace_overlays
-
-# Tag IDs stickered onto the pick cube's six faces, in MuJoCo cube-texture order
-# (right, left, up, down, front, back). With the cube unrotated those map to the
-# world directions -X, +X, -Y, +Y, +Z, -Z respectively.
-PICK_CUBE_APRILTAG_IDS: tuple[int, int, int, int, int, int] = (0, 1, 2, 3, 4, 5)
-
-# Half-edge of the pick cube; the 30 mm faces carry 30 mm AprilTag stickers.
-PICK_CUBE_HALF_SIZE = 0.015
 
 # Plain pick cube colour, used when the AprilTag faces are not requested.
 PICK_CUBE_RGBA = (0.82, 0.12, 0.08, 1.0)
@@ -361,8 +349,8 @@ def export_scene(
 
 
 def _add_pick_cube(spec: mujoco.MjSpec, *, apriltag: bool) -> None:
-    cube = spec.worldbody.add_body(name="pick_cube", pos=(0.2, -0.12, PICK_CUBE_HALF_SIZE))
-    half = PICK_CUBE_HALF_SIZE
+    cube = spec.worldbody.add_body(name="pick_cube", pos=(0.2, -0.12, CUBE_HALF_SIZE))
+    half = CUBE_HALF_SIZE
     # The AprilTag stickers are white-backed; the material (added after
     # apply_materials) carries the per-face textures and tints them with this
     # white base so the tags render at full contrast. A plain cube keeps its
@@ -394,7 +382,7 @@ def _add_pick_cube_apriltags(spec: mujoco.MjSpec) -> None:
     )
     texture.cubefiles = [
         str(APRILTAG_TEXTURE_DIR / f"tagStandard41h12_{tag_id:05d}_30x30mm_tag20mm.png")
-        for tag_id in PICK_CUBE_APRILTAG_IDS
+        for tag_id in CUBE_APRILTAG_IDS
     ]
     material = spec.add_material(name="pick_cube_apriltags")
     material.textures[1] = "pick_cube_apriltags"

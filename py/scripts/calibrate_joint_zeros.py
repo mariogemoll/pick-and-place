@@ -37,7 +37,8 @@ from pick_and_place.follower import (
     make_so101_follower,
     real_frame_to_sim,
 )
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.geometry import CubePose
 from pick_and_place.kinematics import derive_kinematics
 from pick_and_place.cam_align_solve import parse_index_or_path
 from pick_and_place.overhead_detection import MockViewer

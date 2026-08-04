@@ -43,7 +43,8 @@ from pick_and_place.follower import (
     real_frame_to_sim,
     sim_frame_to_real,
 )
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.geometry import CubePose
 from pick_and_place.image_rectify import (
     build_undistort_map,
     rectified_camera_matrix,
@@ -54,7 +55,7 @@ from pick_and_place.overhead_localization import OverheadLocalizer
 from pick_and_place.overhead_detection import DEFAULT_ALERT_SOUND, OperatorNotifier
 from pick_and_place.paper_detection import set_paper_target_marker
 from pick_and_place.policy import DEFAULT_IMAGE_HW
-from pick_and_place.policy_controllers import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
+from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
 from pick_and_place.physical_rig import PhysicalRig, require_joint_zero_offsets
 from pick_and_place.physical_collection import (
     CameraDriftError,

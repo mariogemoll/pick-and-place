@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 
-from pick_and_place.policy_controllers import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
+from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
 from pick_and_place.policy_real import PhysicalPolicyTick
 
 

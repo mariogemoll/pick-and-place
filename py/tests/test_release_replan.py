@@ -4,7 +4,8 @@
 import numpy as np
 
 from pick_and_place.episodes import _build_model
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.geometry import CubePose
 from pick_and_place.kinematics import derive_kinematics
 from pick_and_place.trajectory import (
     DROP_DWELL_DURATION,

@@ -59,7 +59,8 @@ from pick_and_place.camera_extrinsics import (
 from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
 from pick_and_place.follower import JOINT_NAMES
 from pick_and_place.episodes import cube_quat_from_pose, sample_cube, sample_target
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.geometry import CubePose
 from pick_and_place.domain_randomization import (
     DomainRandomizationPreset,
     DomainRandomizer,
@@ -83,11 +84,8 @@ from pick_and_place.scene_appearance import (
     parse_appearance,
 )
 from pick_and_place.sim_recorder import OVERHEAD_CAMERA, downsample_through_recording
-from pick_and_place.paper_detection import (
-    DROP_ZONE_HALF_SIZE,
-    add_paper_target_marker,
-    place_paper_target_marker,
-)
+from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
+from pick_and_place.paper_detection import add_paper_target_marker, place_paper_target_marker
 from pick_and_place.trajectory import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
 from pick_and_place.workspace_overlays import is_cube_drop_allowed, sample_target_plate_yaw
 from pick_and_place.diffusion_policy_client import DiffusionPolicyController
@@ -97,12 +95,8 @@ from pick_and_place.policy import (
     resolve_checkpoint_cameras,
     select_device,
 )
-from pick_and_place.policy_controllers import (
-    OVERHEAD_FEATURE,
-    STATE_FEATURE,
-    WRIST_FEATURE,
-    LeRobotPolicyController,
-)
+from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
+from pick_and_place.policy_controllers import LeRobotPolicyController
 from pick_and_place.policy_sim import (
     joint_qpos_addresses,
     real_action_to_sim_ctrl,

@@ -11,6 +11,11 @@ import mujoco
 
 from pick_and_place.camera_module import add_camera_module
 from pick_and_place.camera_intrinsics import OVERHEAD_CAMERA_INTRINSICS
+from pick_and_place.spec.workspace import (
+    WORKSPACE_FRAME_APRILTAG_PLATES,
+    WORKSPACE_FRAME_POS,
+    WORKSPACE_FRAME_QUAT,
+)
 
 ENVIRONMENT_PLASTIC_MATERIAL = "environment_plastic"
 
@@ -25,9 +30,6 @@ OVERHEAD_MOUNT_STL_DIR = (
     / "stl"
 )
 
-WORKSPACE_FRAME_POS = (0.279579, 0.0000305, 0.0)
-WORKSPACE_FRAME_QUAT = (-0.707107, 0.0, 0.0, -0.707107)
-
 OVERHEAD_CAMERA_MOUNT_POS = (0.316979, -0.0729945, 0.0)
 OVERHEAD_CAMERA_MOUNT_QUAT = (-0.707107, 0.0, 0.0, -0.707107)
 
@@ -39,13 +41,6 @@ FRAME_PLASTIC_BLACK = (0.11, 0.11, 0.12, 1.0)
 FRAME_PLASTIC_WHITE = (0.85, 0.86, 0.88, 1.0)
 # The overhead camera mount is white 3D-printed plastic.
 MOUNT_PLASTIC_WHITE = (0.85, 0.86, 0.88, 1.0)
-
-WORKSPACE_FRAME_APRILTAG_PLATES: tuple[tuple[int, str, tuple[float, float, float]], ...] = (
-    (12, "ne", (0.230, 0.230, 0.0025)),
-    (13, "nw", (-0.230, 0.230, 0.0025)),
-    (14, "sw", (-0.230, -0.230, 0.0025)),
-    (15, "se", (0.230, -0.230, 0.0025)),
-)
 
 _APRILTAG_PLATE_HALF_SIZE = 0.03
 _APRILTAG_PLATE_HALF_THICKNESS = 0.0025

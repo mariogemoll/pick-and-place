@@ -5,7 +5,8 @@ import numpy as np
 import pytest
 
 from pick_and_place.episode_loop import episode_loop
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.geometry import CubePose
 from pick_and_place.physical_collection import (
     CameraDriftError,
     recover_cube,

@@ -48,7 +48,8 @@ from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
 from pick_and_place.domain_randomization import ProceduralAppearance
 from pick_and_place.episodes import set_joint
 from pick_and_place.follower import ARM_JOINT_NAMES, real_frame_to_sim
-from pick_and_place.paper_detection import DROP_ZONE_HALF_SIZE, place_paper_target_marker
+from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
+from pick_and_place.paper_detection import place_paper_target_marker
 from pick_and_place.render_randomization import (
     CameraJitter,
     scene_texture_ids,

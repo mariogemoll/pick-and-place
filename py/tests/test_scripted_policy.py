@@ -9,8 +9,9 @@ import numpy as np
 import pytest
 
 from pick_and_place.follower import ARM_JOINT_NAMES, real_frame_to_sim, sim_frame_to_real
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
-from pick_and_place.policy_controllers import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.geometry import CubePose
+from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
 from pick_and_place.scripted_policy import (
     AsyncWristLocalization,
     ScriptedPolicy,

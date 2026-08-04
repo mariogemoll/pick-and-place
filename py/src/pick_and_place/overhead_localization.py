@@ -16,7 +16,8 @@ from pick_and_place.cube_detection import (
     estimate_cube_pose,
     make_cube_detector,
 )
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.geometry import CubePose
 from pick_and_place.paper_detection import PaperTarget, PaperTracker, detect_paper_target
 
 

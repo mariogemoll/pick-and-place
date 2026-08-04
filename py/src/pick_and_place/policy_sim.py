@@ -37,18 +37,9 @@ from pick_and_place.follower import (
 )
 from pick_and_place.geometry import JAW_CONTACT_POSITION
 from pick_and_place.miscalibration import MiscalibrationDraw
-from pick_and_place.paper_detection import (
-    DROP_ZONE_HALF_SIZE,
-    add_paper_target_marker,
-    place_paper_target_marker,
-)
-from pick_and_place.policy_controllers import (
-    OVERHEAD_FEATURE,
-    STATE_FEATURE,
-    WRIST_FEATURE,
-    PolicyController,
-    PolicyObservation,
-)
+from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
+from pick_and_place.paper_detection import add_paper_target_marker, place_paper_target_marker
+from pick_and_place.spec.controller import OVERHEAD_FEATURE, PolicyController, PolicyObservation, STATE_FEATURE, WRIST_FEATURE
 from pick_and_place.policy_evaluation import (
     EpisodeResult,
     EvaluationScenario,

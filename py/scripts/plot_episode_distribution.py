@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 
 from pick_and_place.episodes import sample_cube, sample_target
-from pick_and_place.geometry import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.workspace_overlays import (
     CANONICAL_PICKUP_OVERLAY,
     CUBE_PLACEMENT_BOUNDS,

@@ -46,13 +46,12 @@ from pick_and_place.episodes import (
     scan_contacts,
 )
 from pick_and_place.executor import HARDWARE_SIMULATION_HZ
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.geometry import CubePose
 from pick_and_place.miscalibration import MiscalibrationModel
 from pick_and_place.sim_recorder import record_episode
-from pick_and_place.paper_detection import (
-    DROP_ZONE_HALF_SIZE,
-    place_paper_target_marker,
-)
+from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
+from pick_and_place.paper_detection import place_paper_target_marker
 from pick_and_place.workspace_overlays import (
     PAN_AXIS,
     is_cube_drop_allowed,

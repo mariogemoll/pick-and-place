@@ -26,7 +26,7 @@ from pick_and_place.camera_extrinsics import (
     load_local_camera_extrinsics,
 )
 from pick_and_place.camera_intrinsics import load_local_camera_intrinsics
-from pick_and_place.geometry import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.workspace_overlays import is_cube_drop_allowed, is_vertical_grip_allowed
 
 

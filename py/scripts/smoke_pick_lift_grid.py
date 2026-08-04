@@ -26,7 +26,8 @@ from pick_and_place.episodes import (
     set_cube_pose,
     set_joint,
 )
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.geometry import CubePose
 from pick_and_place.kinematics import derive_kinematics
 from pick_and_place.trajectory import (
     ApproachPhase,

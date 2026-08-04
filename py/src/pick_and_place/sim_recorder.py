@@ -64,7 +64,8 @@ from pick_and_place.executor import (
     CONTROL_HZ,
     HARDWARE_SIMULATION_HZ,
 )
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.geometry import CubePose
 from pick_and_place.recording import RecordingSession
 from pick_and_place.follower import (
     ARM_JOINT_NAMES,

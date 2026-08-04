@@ -24,13 +24,13 @@ from dataclasses import dataclass
 import numpy as np
 
 from pick_and_place import transforms as tf
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.transforms import Mat4, Vec3
 
 # Fixed-jaw tip collision box (the innermost box of the fixed-jaw model).
 _TIP_BOX_POS = np.array((-0.01189, -0.00015, -0.099363))
 _TIP_BOX_SIZE = np.array((0.004, 0.00545, 0.005063))
 
-CUBE_HALF_SIZE = 0.015
 SAFETY_MARGIN = 0.01
 _MARKER_SURFACE_OFFSET = 0.00001
 

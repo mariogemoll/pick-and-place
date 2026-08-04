@@ -42,7 +42,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pick_and_place.scene import PICK_CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 
 
 @dataclass
@@ -87,7 +87,7 @@ def load_frames(measurement_paths: list[Path]) -> list[Frame]:
                         delta_px=np.asarray(record["delta_px"], dtype=float),
                         cam_pos=np.asarray(wrist_cam["pos"], dtype=float),
                         cam_rot=np.asarray(wrist_cam["mat"], dtype=float).reshape(3, 3),
-                        cube=np.array([cube["x"], cube["y"], PICK_CUBE_HALF_SIZE]),
+                        cube=np.array([cube["x"], cube["y"], CUBE_HALF_SIZE]),
                     )
                 )
     return frames

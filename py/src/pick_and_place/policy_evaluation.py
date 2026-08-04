@@ -23,7 +23,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from pick_and_place.geometry import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 
 # v2 added the required target_plate_yaw_rad field to each scenario.
 SCENARIO_MANIFEST_VERSION = 2

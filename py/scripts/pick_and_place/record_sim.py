@@ -68,8 +68,10 @@ from pick_and_place.episodes import (
 from pick_and_place.executor import CONTROL_HZ
 from pick_and_place.miscalibration import MiscalibrationDraw, MiscalibrationModel
 from pick_and_place.recording import RecordingSession
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
-from pick_and_place.paper_detection import DROP_ZONE_HALF_SIZE, place_paper_target_marker
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.geometry import CubePose
+from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
+from pick_and_place.paper_detection import place_paper_target_marker
 from pick_and_place.paths import datasets_root
 from pick_and_place.sim_recorder import SimCameraRig, build_recording_scene, record_episode
 from pick_and_place.task_phases import phase_spans_json

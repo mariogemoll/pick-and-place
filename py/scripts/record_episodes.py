@@ -37,7 +37,8 @@ from pick_and_place.episodes import (
     scan_contacts,
 )
 from pick_and_place.follower import JOINT_NAMES
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.geometry import CubePose
 from pick_and_place.recorder import EpisodeRecorder
 
 # Default rate at which the trajectory is sampled into the dataset (Hz). The sim

@@ -25,13 +25,9 @@ import numpy as np
 
 from pick_and_place.dataset_metadata import placement_error_metadata
 from pick_and_place.episodes import PlacementError
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
-from pick_and_place.paper_detection import (
-    PaperTarget,
-    PaperTracker,
-    project_to_pixel,
-    set_paper_target_marker,
-)
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.geometry import CubePose
+from pick_and_place.paper_detection import PaperTarget, PaperTracker, project_to_pixel, set_paper_target_marker
 
 # How long a single look attempt stares at the camera feed before giving up.
 CUBE_LOOK_TIMEOUT = 2.0

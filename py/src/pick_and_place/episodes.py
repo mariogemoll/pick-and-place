@@ -24,7 +24,8 @@ import mujoco
 import numpy as np
 
 from pick_and_place import build_scene
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.geometry import CubePose
 from pick_and_place.kinematics import ARM_JOINT_NAMES, So101Kinematics, derive_kinematics
 from pick_and_place.miscalibration import MiscalibrationDraw
 from pick_and_place.paper_detection import add_paper_target_marker

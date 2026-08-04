@@ -88,7 +88,7 @@ from pick_and_place.camera_pose_envelope import (
     overhead_pose_filter,
 )
 from pick_and_place.episodes import sample_cube, sample_target
-from pick_and_place.geometry import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.scene import build_environment
 from pick_and_place.sim_recorder import (
     configure_render_quality,

@@ -16,7 +16,8 @@ from pick_and_place.episodes import (
     sample_recovery_cube,
     set_cube_pose,
 )
-from pick_and_place.geometry import CUBE_HALF_SIZE, CANONICAL_PREGRASP_DISTANCE, CubePose
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.geometry import CANONICAL_PREGRASP_DISTANCE, CubePose
 from pick_and_place.ik import solve_simple_grasp_ik
 from pick_and_place.kinematics import derive_kinematics
 from pick_and_place.trajectory import (

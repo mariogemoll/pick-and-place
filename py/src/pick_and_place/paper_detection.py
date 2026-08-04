@@ -12,10 +12,6 @@ from numpy.typing import NDArray
 
 PAPER_TARGET_MARKER_NAME = "paper_target_marker"
 
-# Half side length (metres) of the standard black drop-zone square. Real
-# recordings detect the physical paper's size; sim renders a square of this size.
-DROP_ZONE_HALF_SIZE = 0.05
-
 
 @dataclass(frozen=True)
 class PaperTarget:

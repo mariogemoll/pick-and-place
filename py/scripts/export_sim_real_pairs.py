@@ -65,20 +65,17 @@ from pick_and_place.cube_detection import (
     estimate_cube_pose,
     make_cube_detector,
 )
-from pick_and_place.environment import WORKSPACE_FRAME_APRILTAG_PLATES
+from pick_and_place.spec.workspace import WORKSPACE_FRAME_APRILTAG_PLATES
 from pick_and_place.follower import ARM_JOINT_NAMES, JOINT_NAMES, real_frame_to_sim
-from pick_and_place.geometry import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.paths import ENV_VAR, datasets_root
 from pick_and_place.image_rectify import (
     build_undistort_map,
     rectified_camera_matrix,
     transform_frame,
 )
-from pick_and_place.paper_detection import (
-    DROP_ZONE_HALF_SIZE,
-    add_paper_target_marker,
-    place_paper_target_marker,
-)
+from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
+from pick_and_place.paper_detection import add_paper_target_marker, place_paper_target_marker
 from pick_and_place.workspace_alignment import (
     IDENTITY_ALIGNMENT,
     WorkspaceAlignment,

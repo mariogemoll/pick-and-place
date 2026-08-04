@@ -56,12 +56,8 @@ from pick_and_place.follower import (
     real_frame_to_sim,
     sim_frame_to_real,
 )
-from pick_and_place.geometry import (
-    CUBE_HALF_SIZE,
-    CubePose,
-    canonical_grasp_matrix,
-    canonical_pregrasp_matrix,
-)
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.geometry import CubePose, canonical_grasp_matrix, canonical_pregrasp_matrix
 from pick_and_place.ik import solve_simple_grasp_ik
 from pick_and_place.joint_zero_fit import (
     FIT_JOINTS,

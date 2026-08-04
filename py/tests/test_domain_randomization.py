@@ -17,11 +17,10 @@ from pick_and_place.domain_randomization import (
     orient_cube,
 )
 from pick_and_place.episodes import _build_model
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose, world_from_cube
-from pick_and_place.paper_detection import (
-    DROP_ZONE_HALF_SIZE,
-    place_paper_target_marker,
-)
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.geometry import CubePose, world_from_cube
+from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
+from pick_and_place.paper_detection import place_paper_target_marker
 
 
 PRESET = Path(__file__).parents[2] / "config" / "domain_randomization" / "act_mild_v1.json"

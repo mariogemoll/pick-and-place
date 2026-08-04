@@ -19,7 +19,8 @@ from pick_and_place.episodes import (
     _build_model,
     pickup_yaw_from_azimuth,
 )
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.geometry import CubePose
 from pick_and_place.kinematics import derive_kinematics
 from pick_and_place.trajectory import grasp_candidates
 from pick_and_place.workspace_overlays import (

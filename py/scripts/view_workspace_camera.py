@@ -35,13 +35,7 @@ from pick_and_place.camera_compare import RealSource, load_intrinsics
 from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
 from pick_and_place.cube_detection import CUBE_TAG_IDS, CubeTracker
 from pick_and_place.paths import outputs_root
-from pick_and_place.paper_detection import (
-    PaperTracker,
-    add_paper_target_marker,
-    detect_paper_target,
-    draw_paper_target,
-    set_paper_target_marker,
-)
+from pick_and_place.paper_detection import PaperTracker, add_paper_target_marker, detect_paper_target, draw_paper_target, set_paper_target_marker
 from pick_and_place.scene import build_environment
 from pick_and_place.workspace_overlays import (
     is_cube_drop_allowed,

@@ -22,11 +22,8 @@ import mujoco
 import numpy as np
 import pyarrow.parquet as pq
 
-from pick_and_place.paper_detection import (
-    DROP_ZONE_HALF_SIZE,
-    PAPER_TARGET_MARKER_NAME,
-    place_paper_target_marker,
-)
+from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
+from pick_and_place.paper_detection import PAPER_TARGET_MARKER_NAME, place_paper_target_marker
 from pick_and_place.policy_sim import (
     build_policy_sim_model,
     joint_qpos_addresses,

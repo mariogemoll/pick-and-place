@@ -97,7 +97,8 @@ from pick_and_place.follower import (
     make_so101_follower,
     make_so101_leader,
 )
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.geometry import CubePose
 from pick_and_place.kinematics import derive_kinematics
 from pick_and_place.overhead_detection import (
     DEFAULT_ALERT_SOUND,

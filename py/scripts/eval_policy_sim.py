@@ -24,11 +24,8 @@ from pick_and_place.policy import (
     select_device,
 )
 from pick_and_place.diffusion_policy_client import DiffusionPolicyController
-from pick_and_place.policy_controllers import (
-    OVERHEAD_FEATURE,
-    WRIST_FEATURE,
-    LeRobotPolicyController,
-)
+from pick_and_place.spec.controller import OVERHEAD_FEATURE, WRIST_FEATURE
+from pick_and_place.policy_controllers import LeRobotPolicyController
 from pick_and_place.policy_evaluation import (
     ScenarioManifest,
     TaskOracleConfig,

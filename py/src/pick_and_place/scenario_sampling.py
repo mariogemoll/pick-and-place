@@ -28,7 +28,7 @@ from pick_and_place.episodes import (
     sample_cube,
     sample_target,
 )
-from pick_and_place.paper_detection import DROP_ZONE_HALF_SIZE
+from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
 from pick_and_place.workspace_overlays import (
     is_cube_drop_allowed,
     is_cube_placement_allowed,

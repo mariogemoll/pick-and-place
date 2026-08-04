@@ -1,39 +1,23 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Controller boundary used by closed-loop policy evaluation."""
+"""Controllers implementing the boundary declared in ``spec.controller``."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 import numpy as np
 
 from pick_and_place.follower import JOINT_NAMES
 from pick_and_place.policy import DEFAULT_INSTRUCTION, make_policy, resolve_checkpoint_cameras
-
-STATE_FEATURE = "observation.state"
-OVERHEAD_FEATURE = "observation.images.overhead"
-WRIST_FEATURE = "observation.images.wrist"
-
-PolicyObservation = dict[str, np.ndarray]
-
-
-@runtime_checkable
-class PolicyController(Protocol):
-    def reset(self) -> None: ...
-
-    def act(self, observation: PolicyObservation) -> np.ndarray: ...
-
-
-@dataclass(frozen=True)
-class ControllerFailure:
-    """A terminal failure reported by a controller without unsafe motion."""
-
-    code: str
-    message: str
+from pick_and_place.spec.controller import (
+    OVERHEAD_FEATURE,
+    STATE_FEATURE,
+    WRIST_FEATURE,
+    PolicyObservation,
+)
 
 
 def _action_vector(action: object) -> np.ndarray:

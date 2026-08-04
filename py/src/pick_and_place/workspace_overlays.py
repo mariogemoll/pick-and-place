@@ -11,12 +11,8 @@ from dataclasses import dataclass
 import mujoco
 import numpy as np
 
-from pick_and_place.environment import (
-    WORKSPACE_FRAME_APRILTAG_PLATES,
-    WORKSPACE_FRAME_POS,
-    WORKSPACE_FRAME_QUAT,
-)
-from pick_and_place.geometry import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import WORKSPACE_FRAME_APRILTAG_PLATES, WORKSPACE_FRAME_POS, WORKSPACE_FRAME_QUAT
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 
 WORKSPACE_FRAME_INNER_HALF_EXTENT = 0.2813 - 0.0187
 

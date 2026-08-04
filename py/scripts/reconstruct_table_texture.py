@@ -43,7 +43,7 @@ from pick_and_place.camera_extrinsics import (
     load_local_camera_extrinsics,
 )
 from pick_and_place.camera_intrinsics import LOCAL_CAMERA_INTRINSICS_DIR
-from pick_and_place.environment import WORKSPACE_FRAME_POS
+from pick_and_place.spec.workspace import WORKSPACE_FRAME_POS
 from pick_and_place.paper_detection import project_to_pixel
 from pick_and_place.scene import WORKSPACE_FLOOR_HALF
 

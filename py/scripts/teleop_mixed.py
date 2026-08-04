@@ -40,13 +40,7 @@ from pick_and_place.cube_detection import (
     CubeTracker,
     detect_tags,
 )
-from pick_and_place.paper_detection import (
-    PaperTracker,
-    add_paper_target_marker,
-    detect_paper_target,
-    draw_paper_target,
-    set_paper_target_marker,
-)
+from pick_and_place.paper_detection import PaperTracker, add_paper_target_marker, detect_paper_target, draw_paper_target, set_paper_target_marker
 from pick_and_place.scene import build_scene
 from pick_and_place.workspace_overlays import (
     is_cube_drop_allowed,

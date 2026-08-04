@@ -37,11 +37,7 @@ from pick_and_place.dppo_rl.scenes import (
     TRAINING_SEED_BASE,
     SceneStream,
 )
-from pick_and_place.policy_controllers import (
-    OVERHEAD_FEATURE,
-    STATE_FEATURE,
-    WRIST_FEATURE,
-)
+from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
 from pick_and_place.policy_sim import PolicySimEnv
 from pick_and_place.scene_appearance import SceneAppearance
 

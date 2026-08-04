@@ -292,7 +292,8 @@ def build_view3d_model(render_size: tuple[int, int]):
 
     from pick_and_place import build_scene
     from pick_and_place.episodes import cube_quat_from_pose
-    from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+    from pick_and_place.geometry import CubePose
+    from pick_and_place.spec.workspace import CUBE_HALF_SIZE
     from pick_and_place.workspace_overlays import PAN_AXIS
 
     width, height = render_size

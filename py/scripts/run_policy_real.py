@@ -94,7 +94,7 @@ from pick_and_place.follower import (
     make_so101_follower,
     sim_frame_to_real,
 )
-from pick_and_place.geometry import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.image_rectify import (
     build_undistort_map,
     center_crop_and_resize,
@@ -109,11 +109,7 @@ from pick_and_place.policy import (
     resolve_checkpoint_cameras,
     select_device,
 )
-from pick_and_place.policy_controllers import (
-    OVERHEAD_FEATURE,
-    STATE_FEATURE,
-    WRIST_FEATURE,
-)
+from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
 from pick_and_place.trajectory import (
     NEUTRAL_ARM_JOINTS,
     NEUTRAL_GRIPPER,

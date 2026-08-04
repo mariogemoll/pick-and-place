@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from pick_and_place.geometry import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.overhead_localization import (
     OverheadLocalizer,
     localize_cube,

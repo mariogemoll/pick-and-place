@@ -24,12 +24,12 @@ from dataclasses import dataclass, replace
 import numpy as np
 from numpy.typing import NDArray
 
-from pick_and_place.scene import PICK_CUBE_APRILTAG_IDS, PICK_CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_APRILTAG_IDS, CUBE_HALF_SIZE
 
 # The cube tag ids, in MuJoCo cube-texture order (right, left, up, down, front,
 # back). Imported from the scene so the detector and the rendered cube can never
 # drift apart.
-CUBE_TAG_IDS: tuple[int, ...] = PICK_CUBE_APRILTAG_IDS
+CUBE_TAG_IDS: tuple[int, ...] = CUBE_APRILTAG_IDS
 
 # tagStandard41h12 geometry: total 9 cells wide, black border at 5 cells. The
 # quad the detector returns spans the black border, so its metric edge is 5/9 of
@@ -79,7 +79,7 @@ def _face_transforms() -> dict[int, NDArray]:
     for tag_id, (rows, offset) in _FACE_EXTRINSICS.items():
         transform = np.eye(4)
         transform[:3, :3] = np.array(rows, dtype=float)
-        transform[:3, 3] = np.array(offset, dtype=float) * PICK_CUBE_HALF_SIZE
+        transform[:3, 3] = np.array(offset, dtype=float) * CUBE_HALF_SIZE
         transforms[tag_id] = transform
     return transforms
 

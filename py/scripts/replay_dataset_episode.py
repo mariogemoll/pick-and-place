@@ -45,12 +45,9 @@ from pick_and_place.follower import (
     sim_frame_to_real,
 )
 from pick_and_place.paths import outputs_root
-from pick_and_place.geometry import CUBE_HALF_SIZE
-from pick_and_place.paper_detection import (
-    DROP_ZONE_HALF_SIZE,
-    add_paper_target_marker,
-    place_paper_target_marker,
-)
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
+from pick_and_place.paper_detection import add_paper_target_marker, place_paper_target_marker
 from pick_and_place.robot_dynamics import set_actuator_activation
 from pick_and_place.workspace_overlays import is_cube_drop_allowed
 

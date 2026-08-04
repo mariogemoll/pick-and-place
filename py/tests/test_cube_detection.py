@@ -22,7 +22,7 @@ from pick_and_place.cube_detection import (
     make_cube_detector,
 )
 from pick_and_place.environment import APRILTAG_TEXTURE_DIR
-from pick_and_place.scene import PICK_CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 
 # OpenCV camera (x right, y down, z forward) <- MuJoCo camera (x right, y up, z back).
 _CV_FROM_MJ = np.diag([1.0, -1.0, -1.0])
@@ -62,7 +62,7 @@ def _render_cube(
     """Render the textured cube and return ``(rgb_frame, camera_matrix)``."""
     cam_rotation = _look_at_camera(cam_pos, cube_pos)
     cam_quat = _mat_to_quat_wxyz(cam_rotation)
-    half = PICK_CUBE_HALF_SIZE
+    half = CUBE_HALF_SIZE
     face_files = " ".join(
         f'{attr}="tagStandard41h12_{tag_id:05d}_30x30mm_tag20mm.png"'
         for attr, tag_id in zip(_CUBE_FACE_PNG, CUBE_TAG_IDS)

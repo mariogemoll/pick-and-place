@@ -24,14 +24,7 @@ from dataclasses import dataclass
 from functools import cached_property
 
 import numpy as np
-from pick_and_place.geometry import (
-    CubeFace,
-    CubePose,
-    CANONICAL_PREGRASP_DISTANCE,
-    WORLD_UP,
-    canonical_grasp_matrix,
-    canonical_pregrasp_matrix,
-)
+from pick_and_place.geometry import CANONICAL_PREGRASP_DISTANCE, CubeFace, CubePose, WORLD_UP, canonical_grasp_matrix, canonical_pregrasp_matrix
 from pick_and_place.ik import solve_simple_grasp_ik
 from pick_and_place.kinematics import ARM_JOINT_NAMES, So101Kinematics
 from pick_and_place import transforms as tf

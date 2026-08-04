@@ -68,7 +68,8 @@ from pick_and_place.episodes import (
     scan_contacts,
 )
 from pick_and_place.follower import ARM_JOINT_NAMES
-from pick_and_place.geometry import CUBE_HALF_SIZE, CubePose
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.geometry import CubePose
 from pick_and_place.workspace_overlays import (
     CUBE_PLACEMENT_BOUNDS,
     PAN_AXIS,

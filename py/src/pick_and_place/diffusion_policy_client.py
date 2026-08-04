@@ -31,12 +31,7 @@ from typing import Any, BinaryIO
 
 import numpy as np
 
-from pick_and_place.policy_controllers import (
-    OVERHEAD_FEATURE,
-    STATE_FEATURE,
-    WRIST_FEATURE,
-    PolicyObservation,
-)
+from pick_and_place.spec.controller import OVERHEAD_FEATURE, PolicyObservation, STATE_FEATURE, WRIST_FEATURE
 
 SERVER_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "diffusion_policy_server.py"
 DEFAULT_CONFIG = (
