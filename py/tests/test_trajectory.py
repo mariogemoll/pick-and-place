@@ -9,13 +9,8 @@ import pytest
 
 import pick_and_place.runtime.episodes as episodes
 from pick_and_place.planning.episode_sampling import sample_recovery_cube
-from pick_and_place.runtime.episodes import (
-    EpisodeSamplingError,
-    _build_model,
-    placement_error,
-    prepare_episode,
-    set_cube_pose,
-)
+from pick_and_place.runtime.episodes import EpisodeSamplingError, prepare_episode
+from pick_and_place.sim.model import build_model, placement_error, set_cube_pose
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CANONICAL_PREGRASP_DISTANCE, CubePose
 from pick_and_place.core.ik import solve_simple_grasp_ik
@@ -42,7 +37,7 @@ from pick_and_place.core.workspace_bounds import (
 def test_free_drop_plans_reachable_joint_carry_to_low_release():
     source = CubePose(x=0.20, y=-0.12, z=CUBE_HALF_SIZE)
     target = CubePose(x=0.20, y=-0.05, z=CUBE_HALF_SIZE)
-    model, _ = _build_model(source)
+    model, _ = build_model(source)
     kinematics = derive_kinematics(model)
     grasp = next(grasp_candidates(kinematics, source))
 
@@ -60,7 +55,7 @@ def test_free_drop_plans_reachable_joint_carry_to_low_release():
 
 def test_grasp_choice_exposes_distillation_metadata():
     source = CubePose(x=0.20, y=-0.12, z=CUBE_HALF_SIZE)
-    model, _ = _build_model(source)
+    model, _ = build_model(source)
     kinematics = derive_kinematics(model)
 
     grasp = next(grasp_candidates(kinematics, source))
@@ -75,7 +70,7 @@ def test_grasp_choice_exposes_distillation_metadata():
 
 def test_canonical_pregrasp_stands_further_back_from_cube():
     source = CubePose(x=0.20, y=-0.12, z=CUBE_HALF_SIZE)
-    model, _ = _build_model(source)
+    model, _ = build_model(source)
     kinematics = derive_kinematics(model)
 
     grasp = next(grasp_candidates(kinematics, source))
@@ -131,7 +126,7 @@ def test_fixed_target_must_be_in_allowed_drop_zone():
 def test_placement_error_reports_cube_center_offset():
     source = CubePose(x=0.20, y=-0.12, z=CUBE_HALF_SIZE)
     target = CubePose(x=0.21, y=-0.10, z=CUBE_HALF_SIZE)
-    model, data = _build_model(source)
+    model, data = build_model(source)
     set_cube_pose(model, data, source)
 
     error = placement_error(model, data, target)

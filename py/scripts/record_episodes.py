@@ -29,13 +29,8 @@ import mujoco
 import numpy as np
 from tqdm import tqdm
 
-from pick_and_place.runtime.episodes import (
-    Episode,
-    EpisodeSamplingError,
-    is_unexpected,
-    prepare_episode,
-    scan_contacts,
-)
+from pick_and_place.runtime.episodes import Episode, EpisodeSamplingError, prepare_episode
+from pick_and_place.sim.collisions import is_unexpected, scan_contacts
 from pick_and_place.spec.robot import JOINT_NAMES
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose

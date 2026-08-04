@@ -46,7 +46,7 @@ import pyarrow.parquet as pq
 from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
 from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
 from pick_and_place.sim.domain_randomization import ProceduralAppearance
-from pick_and_place.runtime.episodes import set_joint
+from pick_and_place.sim.model import set_joint
 from pick_and_place.spec.robot import ARM_JOINT_NAMES
 from pick_and_place.core.joint_frames import real_frame_to_sim
 from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE

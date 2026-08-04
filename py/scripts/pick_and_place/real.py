@@ -28,7 +28,7 @@ from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR, 
 from pick_and_place.data.dataset_metadata import cube_pose_metadata, driver_metadata
 from pick_and_place.runtime.episode_loop import episode_loop
 from pick_and_place.planning.episode_sampling import sample_recovery_cube
-from pick_and_place.runtime.episodes import _build_model, set_cube_pose, set_joint
+from pick_and_place.sim.model import build_model, set_cube_pose, set_joint
 from pick_and_place.runtime.executor import CONTROL_HZ, follower_clamp_limits
 from pick_and_place.spec.robot import GRIPPER_INDEX
 from pick_and_place.core.joint_frames import (
@@ -414,7 +414,7 @@ def main() -> None:
         )
 
         dummy_source = CubePose(PAN_AXIS[0] + 0.1, PAN_AXIS[1], CUBE_HALF_SIZE)
-        model, data = _build_model(
+        model, data = build_model(
             dummy_source,
             include_environment=True,
             paper_target_marker=True,

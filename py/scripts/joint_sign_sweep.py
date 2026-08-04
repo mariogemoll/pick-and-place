@@ -27,7 +27,7 @@ import math
 import mujoco
 import numpy as np
 
-from pick_and_place.runtime.episodes import _build_model
+from pick_and_place.sim.model import build_model
 from pick_and_place.spec.robot import ARM_JOINT_NAMES
 from pick_and_place.core.joint_frames import sim_frame_to_real
 from pick_and_place.hardware.follower import make_so101_follower
@@ -93,7 +93,7 @@ def main() -> None:
 
     print("Building scene...")
     dummy = CubePose(x=PAN_AXIS[0] + 0.24, y=PAN_AXIS[1], z=CUBE_HALF_SIZE)
-    model, data = _build_model(dummy, include_environment=False)
+    model, data = build_model(dummy, include_environment=False)
     mujoco.mj_forward(model, data)
 
     qpos_addrs = {

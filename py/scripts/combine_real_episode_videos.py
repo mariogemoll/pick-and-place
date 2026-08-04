@@ -291,7 +291,7 @@ def build_view3d_model(render_size: tuple[int, int]):
     import mujoco
 
     from pick_and_place.sim.scene import build_scene
-    from pick_and_place.runtime.episodes import cube_quat_from_pose
+    from pick_and_place.core.geometry import cube_quat_from_pose
     from pick_and_place.core.geometry import CubePose
     from pick_and_place.spec.workspace import CUBE_HALF_SIZE
     from pick_and_place.core.workspace_bounds import PAN_AXIS

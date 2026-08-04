@@ -36,15 +36,9 @@ import mujoco.viewer
 import numpy as np
 
 from pick_and_place.planning.episode_sampling import sample_target
-from pick_and_place.runtime.episodes import (
-    Episode,
-    EpisodeSamplingError,
-    _build_model,
-    is_unexpected,
-    placement_error,
-    prepare_episode,
-    scan_contacts,
-)
+from pick_and_place.runtime.episodes import Episode, EpisodeSamplingError, prepare_episode
+from pick_and_place.sim.collisions import is_unexpected, scan_contacts
+from pick_and_place.sim.model import build_model, placement_error
 from pick_and_place.runtime.executor import HARDWARE_SIMULATION_HZ
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
@@ -375,7 +369,7 @@ def main() -> None:
     # One persistent scene for the whole run: the cube is a freejoint that
     # prepare_episode repositions per episode, so a single viewer stays bound.
     dummy_source = CubePose(x=PAN_AXIS[0] + 0.1, y=PAN_AXIS[1], z=CUBE_HALF_SIZE)
-    model, data = _build_model(
+    model, data = build_model(
         dummy_source,
         include_environment=args.environment,
         paper_target_marker=True,

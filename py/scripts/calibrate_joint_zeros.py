@@ -31,7 +31,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
-from pick_and_place.runtime.episodes import _build_model
+from pick_and_place.sim.model import build_model
 from pick_and_place.core.joint_frames import action_to_joints, real_frame_to_sim
 from pick_and_place.hardware.follower import make_so101_follower
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
@@ -152,7 +152,7 @@ def main() -> None:
 
     print("Building scene...")
     dummy = CubePose(x=PAN_AXIS[0] + 0.24, y=PAN_AXIS[1], z=CUBE_HALF_SIZE)
-    model, data = _build_model(dummy, include_environment=True)
+    model, data = build_model(dummy, include_environment=True)
     # The autonomous-relocation fallback runs the hardware executor, whose 30 Hz
     # control loop requires a timestep that divides evenly into it. The stock
     # 500 Hz model timestep does not, so match the hardware runner's rate.

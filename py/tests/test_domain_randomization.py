@@ -16,7 +16,7 @@ from pick_and_place.sim.domain_randomization import (
     generate_procedural_appearance,
     orient_cube,
 )
-from pick_and_place.runtime.episodes import _build_model
+from pick_and_place.sim.model import build_model
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose, world_from_cube
 from pick_and_place.sim.paper_target_marker import place_paper_target_marker
@@ -28,7 +28,7 @@ PRESET = Path(__file__).parents[2] / "config" / "domain_randomization" / "act_mi
 def _procedural_model(preset: DomainRandomizationPreset):
     sample = preset.sample(123)
     appearance = generate_procedural_appearance(sample)
-    return _build_model(
+    return build_model(
         CubePose(0.2, 0.0, CUBE_HALF_SIZE),
         include_environment=True,
         paper_target_marker=True,

@@ -44,7 +44,7 @@ from pick_and_place.perception.cube_detection import (
     make_cube_detector,
 )
 from pick_and_place.planning.episode_sampling import sample_hunt_pose
-from pick_and_place.runtime.episodes import build_geom_sets, make_carry_collision_checker
+from pick_and_place.sim.collisions import build_geom_sets, make_carry_collision_checker
 from pick_and_place.spec.robot import ARM_JOINT_NAMES, JOINT_NAMES
 from pick_and_place.core.joint_frames import (
     action_to_joints,

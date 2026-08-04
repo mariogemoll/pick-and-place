@@ -18,7 +18,10 @@ from scipy.spatial.transform import Rotation
 
 from pick_and_place.perception.cube_detection import CubeTracker
 from pick_and_place.planning.episode_sampling import sample_hunt_pose
-from pick_and_place.runtime.episodes import Episode, _preflight, is_unexpected, prepare_episode, set_joint
+from pick_and_place.runtime.episodes import Episode, prepare_episode
+from pick_and_place.runtime.preflight import preflight
+from pick_and_place.sim.collisions import is_unexpected
+from pick_and_place.sim.model import set_joint
 from pick_and_place.spec.robot import JOINT_NAMES
 from pick_and_place.core.joint_frames import real_frame_to_sim, sim_frame_to_real
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
@@ -320,7 +323,7 @@ class ScriptedPolicy:
 
     @staticmethod
     def _default_preflight(episode: Episode, trajectory: Trajectory) -> bool:
-        events = _preflight(
+        events = preflight(
             episode.model,
             trajectory,
             episode.actuator_id,

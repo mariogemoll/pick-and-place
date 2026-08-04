@@ -36,7 +36,7 @@ from pick_and_place.perception.cube_detection import (
     make_cube_detector,
 )
 from pick_and_place.data.dataset_metadata import placement_error_metadata
-from pick_and_place.runtime.episodes import _build_model
+from pick_and_place.sim.model import build_model
 from pick_and_place.core.geometry import CubePose, PlacementError
 from pick_and_place.core.paths import ENV_VAR, datasets_root
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
@@ -52,7 +52,7 @@ PLACEMENT_COLUMNS = (
 
 def _build_calibrated_overhead(camera_name: str) -> tuple[Any, Any, np.ndarray, np.ndarray]:
     dummy_source = CubePose(x=PAN_AXIS[0] + 0.1, y=PAN_AXIS[1], z=CUBE_HALF_SIZE)
-    model, data = _build_model(dummy_source, include_environment=True, paper_target_marker=True)
+    model, data = build_model(dummy_source, include_environment=True, paper_target_marker=True)
     apply_camera_extrinsics_to_model(model, load_local_camera_extrinsics())
     mujoco.mj_forward(model, data)
     camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)

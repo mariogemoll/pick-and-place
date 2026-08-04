@@ -17,14 +17,8 @@ import numpy as np
 
 from pick_and_place.sim.scene import build_scene
 from pick_and_place.planning.episode_sampling import PICKUP_YAW_DEVIATION, pickup_yaw_from_azimuth
-from pick_and_place.runtime.episodes import (
-    _build_model,
-    build_geom_sets,
-    is_unexpected,
-    scan_contacts,
-    set_cube_pose,
-    set_joint,
-)
+from pick_and_place.sim.collisions import build_geom_sets, is_unexpected, scan_contacts
+from pick_and_place.sim.model import build_model, set_cube_pose, set_joint
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.sim.derive_kinematics import derive_kinematics
@@ -405,7 +399,7 @@ def main() -> int:
         print("No poses sampled.")
         return 2
 
-    model, data = _build_model(poses[0])
+    model, data = build_model(poses[0])
     kinematics = derive_kinematics(model)
     actuator_id = _actuator_ids(model)
     cube_body_id = _cube_body_id(model)

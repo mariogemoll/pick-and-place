@@ -35,18 +35,20 @@ from typing import Any, Callable
 import mujoco
 import numpy as np
 
-from pick_and_place.runtime.episodes import (
-    Episode,
-    _preflight,
-    _preflight_collision_is_unexpected,
-    _save_failed_preflight_trajectory,
-    _write_failed_trajectory_note,
+from pick_and_place.runtime.episodes import Episode
+from pick_and_place.runtime.preflight import (
+    preflight,
+    preflight_collision_is_unexpected,
+    save_failed_preflight_trajectory,
+    write_failed_trajectory_note,
+)
+from pick_and_place.sim.collisions import (
     is_unexpected,
     jaw_floor_clearance,
     jaw_geom_ids,
     scan_contacts,
-    set_joint,
 )
+from pick_and_place.sim.model import set_joint
 from pick_and_place.spec.robot import ARM_JOINT_NAMES, GRIPPER_INDEX, JOINT_NAMES
 from pick_and_place.core.joint_frames import (
     GRIPPER_READBACK_CLOSED,
@@ -1235,7 +1237,7 @@ def execute_episode(
                 start=1,
             ):
                 if failed_trajectory_path is not None:
-                    detail_events = _preflight(
+                    detail_events = preflight(
                         model,
                         replan_traj,
                         actuator_id,
@@ -1246,13 +1248,13 @@ def execute_episode(
                     unexpected_detail = [
                         event
                         for event in detail_events
-                        if _preflight_collision_is_unexpected(event)
+                        if preflight_collision_is_unexpected(event)
                     ]
                     unexpected = [
                         (event.time, event.geom1, event.geom2) for event in unexpected_detail
                     ]
                 else:
-                    events = _preflight(
+                    events = preflight(
                         model, replan_traj, actuator_id, robot_geom_ids, env_geom_ids
                     )
                     unexpected_detail = None
@@ -1287,7 +1289,7 @@ def execute_episode(
                         path = failed_trajectory_path / (
                             f"replan_after_{completed_phase_name or 'start'}_failed.npz"
                         )
-                        _save_failed_preflight_trajectory(
+                        save_failed_preflight_trajectory(
                             path,
                             model,
                             rejected_traj,
@@ -1295,7 +1297,7 @@ def execute_episode(
                             rejected_detail,
                         )
                         print(f"saved rejected replan trajectory: {path}")
-                _write_failed_trajectory_note(
+                write_failed_trajectory_note(
                     failed_trajectory_path,
                     reason,
                     source=dynamic_source,

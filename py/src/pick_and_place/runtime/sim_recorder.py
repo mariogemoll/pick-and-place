@@ -45,14 +45,13 @@ import numpy as np
 
 from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
 from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
-from pick_and_place.runtime.episodes import (
-    Episode,
-    _build_model,
-    _preflight,
+from pick_and_place.runtime.episodes import Episode
+from pick_and_place.runtime.preflight import preflight
+from pick_and_place.sim.collisions import is_unexpected, scan_contacts
+from pick_and_place.sim.model import (
+    build_model,
     get_joint,
-    is_unexpected,
     placement_error,
-    scan_contacts,
     set_cube_pose,
     set_joint,
 )
@@ -251,7 +250,7 @@ def build_recording_scene(
     are meant to.
     """
     placeholder = CubePose(x=PAN_AXIS[0] + 0.1, y=PAN_AXIS[1], z=CUBE_HALF_SIZE)
-    model, data = _build_model(
+    model, data = build_model(
         placeholder,
         include_environment=True,
         paper_target_marker=True,
@@ -798,7 +797,7 @@ def record_episode(
                 episode.end_joints,
                 episode.end_gripper,
             ):
-                events = _preflight(
+                events = preflight(
                     model,
                     replan_traj,
                     actuator_id,

@@ -7,7 +7,7 @@ import numpy as np
 from pick_and_place.sim.scene import build_environment, build_scene, export_scene
 from pick_and_place.sim.scene import BACKDROP_WALL_DISTANCE, BACKDROP_WALL_THICKNESS, TABLE_BACKGROUND_RGBA, TABLE_EAST_EDGE_Y, TABLE_HEIGHT, TABLE_LENGTH, TABLE_NORTH_EDGE_X, TABLE_THICKNESS, TABLE_WEST_EDGE_Y, TABLE_WIDTH
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE, WORKSPACE_FRAME_APRILTAG_PLATES
-from pick_and_place.runtime.episodes import _build_model
+from pick_and_place.sim.model import build_model
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.sim.paper_target_marker import PAPER_TARGET_MARKER_NAME
 from pick_and_place.core.workspace_bounds import REACH_SECTORS
@@ -214,7 +214,7 @@ def test_export_scene_writes_compilable_xml(tmp_path):
 
 
 def test_episode_model_can_include_drop_zone_marker():
-    model, _ = _build_model(
+    model, _ = build_model(
         CubePose(x=0.2, y=-0.1, z=CUBE_HALF_SIZE),
         paper_target_marker=True,
     )

@@ -128,7 +128,7 @@ the exporter and deletes the `.xml` afterwards, leaving the `.json` behind.
 | Directory | Contents |
 | --- | --- |
 | `SO-ARM100/` | Vendored hardware submodule: CAD, STL, URDF, MJCF, BOM. |
-| `py/` | The `pick_and_place` package (86 modules in 12 subpackages), 85 CLI scripts, 44 test files. Simulation, real-robot control, calibration, datasets, policies. |
+| `py/` | The `pick_and_place` package (89 modules in 12 subpackages), 85 CLI scripts, 45 test files. Simulation, real-robot control, calibration, datasets, policies. |
 | `ts/` | Vite + Three.js browser app: the visualizations embedded in the web page. |
 | `mesh_optimization/` | Standalone Python subproject that decimates high-poly STL into web-ready GLB. |
 | `scripts/` | Repository-level shell/TS tooling: license headers, file-size check, mesh pipeline, remote-GPU job scripts. |
@@ -173,6 +173,7 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   `cube_detection`, `paper_detection`, `overhead_localization`,
   `detector_process`, `image_rectify`.
 - **`sim/`** — composing and randomizing the MuJoCo scene: `builder`, `scene`,
+  `model` (compile a runnable model and move things in it), `collisions`,
   `environment`, `materials`, `wrist_camera`, `camera_module`,
   `workspace_overlays`, `paper_target_marker`, `frame_tags`,
   `derive_kinematics`, `domain_randomization`, `render_randomization`,
@@ -191,9 +192,10 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   `diffusion_policy_pretrain`, `diffusion_policy_client`. ACT and SmolVLA are
   *evaluated* here but trained externally via the `lerobot` CLI.
 - **`runtime/`** — running an episode: `executor` (the real control loop),
-  `episodes` (preflight under physics), `scripted_policy`, `sim_recorder`,
-  `episode_rerender`, `policy_sim`, `policy_real`, `overhead_detection`,
-  `episode_loop`, `training_scenes`.
+  `episodes` (sample one that runs clean), `preflight` (vet a trajectory under
+  live physics), `scripted_policy`, `sim_recorder`, `episode_rerender`,
+  `policy_sim`, `policy_real`, `overhead_detection`, `episode_loop`,
+  `training_scenes`.
 - **`calibration/`** — solving the rig by rendering the scene and comparing it
   to a real image: `cam_align_solve`, `camera_compare`,
   `camera_calibration_export`, `session_calibration`.

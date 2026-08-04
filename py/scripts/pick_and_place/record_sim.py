@@ -60,7 +60,8 @@ from pick_and_place.sim.domain_randomization import (
     orient_cube,
 )
 from pick_and_place.planning.episode_sampling import sample_cube
-from pick_and_place.runtime.episodes import EpisodeSamplingError, placement_error, prepare_episode
+from pick_and_place.runtime.episodes import EpisodeSamplingError, prepare_episode
+from pick_and_place.sim.model import placement_error
 from pick_and_place.runtime.executor import CONTROL_HZ
 from pick_and_place.core.miscalibration import MiscalibrationDraw, MiscalibrationModel
 from pick_and_place.data.recording import RecordingSession

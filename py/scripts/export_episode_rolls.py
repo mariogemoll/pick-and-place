@@ -63,12 +63,8 @@ from pick_and_place.planning.episode_sampling import (
     sample_near_neutral,
     sample_target,
 )
-from pick_and_place.runtime.episodes import (
-    EpisodeSamplingError,
-    is_unexpected,
-    prepare_episode,
-    scan_contacts,
-)
+from pick_and_place.runtime.episodes import EpisodeSamplingError, prepare_episode
+from pick_and_place.sim.collisions import is_unexpected, scan_contacts
 from pick_and_place.spec.robot import ARM_JOINT_NAMES
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose

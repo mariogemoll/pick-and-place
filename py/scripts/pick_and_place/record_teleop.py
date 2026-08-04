@@ -80,7 +80,7 @@ import mujoco
 import numpy as np
 
 from pick_and_place.data.dataset_metadata import cube_pose_metadata, driver_metadata
-from pick_and_place.runtime.episodes import _build_model
+from pick_and_place.sim.model import build_model
 from pick_and_place.runtime.executor import (
     CONTROL_HZ,
     RAMP_DURATION,
@@ -708,7 +708,7 @@ def main() -> None:
 
     print("Building scene...")
     dummy_source = CubePose(x=PAN_AXIS[0] + 0.1, y=PAN_AXIS[1], z=CUBE_HALF_SIZE)
-    model, data = _build_model(
+    model, data = build_model(
         dummy_source,
         include_environment=True,
         paper_target_marker=True,
