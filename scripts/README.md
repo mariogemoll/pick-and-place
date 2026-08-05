@@ -1,0 +1,85 @@
+<!-- SPDX-FileCopyrightText: 2026 Mario Gemoll -->
+<!-- SPDX-License-Identifier: 0BSD -->
+
+# Job scripts
+
+Long-running jobs: recording datasets, and training a policy on a rented GPU.
+Everything here assumes `PAP_DATA_ROOT` points at a directory outside the
+repository, and that the Python environment is the one `AGENTS.md` describes.
+
+## Does the cube's appearance decide whether the policy learns?
+
+The working Diffusion Policy is trained on a blue cube. The physical cube
+carries AprilTags, because that is how its pose is measured on hardware, so a
+blue-cube policy has no path to the real robot. An earlier tagged-cube run
+failed, but that comparison was confounded — different hardware, a different GL
+backend, a later checkout and a separately recorded dataset — so it bounded
+sample efficiency rather than showing the tagged cube cannot be learned.
+
+`record_two_variant_dataset.sh` produces the unconfounded version of that
+comparison:
+
+```sh
+export PAP_DATA_ROOT=~/pick-and-place-data
+EPISODES=1000 WORKERS=12 scripts/record_two_variant_dataset.sh
+```
+
+It records once with the tagged cube, then renders both appearances from a
+single replay of each recorded frame. The two variants therefore share states,
+actions and phase spans bit for bit and differ only at the cube's pixels, so a
+difference between two policies trained on them is attributable to the
+appearance and nothing else.
+
+The cube cannot simply be recorded blue: under `--miscalibration` the descent
+visual servo detects the cube's AprilTags in the wrist image, so a solid-colour
+cube fails every episode.
+
+**Record and re-render on the same machine.** The camera calibrations are
+machine-local files and the OpenGL backend decides the shading, so the
+verification pass the script runs is only evidence for re-renders produced
+beside it. The script refuses to render without it.
+
+Then train each variant, changing nothing but the dataset:
+
+```sh
+ARTIFACT_NAME=two-variant-1000-as-recorded RUN_NAME=<fresh> \
+  scripts/vast_diffusion_policy_train_fast.sh
+ARTIFACT_NAME=two-variant-1000-blue-cube   RUN_NAME=<fresh> \
+  scripts/vast_diffusion_policy_train_fast.sh
+```
+
+`vast_diffusion_policy_train_fast.sh` only downloads from S3 when
+`$ARTIFACT_NAME/train.npz` is missing, so a locally recorded dataset trains
+without an upload round trip — export into `/workspace/artifacts` on the pod by
+setting `ARTIFACTS_DIR`. Leave `BATCH_SIZE` and `N_EPOCHS` at their defaults for
+both runs, or the comparison measures the hyperparameters instead of the cube.
+
+### Checking a pair by hand
+
+```sh
+python py/scripts/check_variant_pair.py <export-a> <export-b>
+```
+
+Exits non-zero unless the states, actions and episode lengths are identical. It
+reports how much of each camera's frame the appearance touches rather than
+judging it — on a 96x96 export the cube is a few tenths of a percent of the
+overhead frame and roughly a tenth of the wrist frame.
+
+### Cost
+
+Roughly, on a 12-worker GPU box: recording 1000 episodes ~80 min, re-rendering
+both variants ~45 min, one training run ~30 min. Recording is resumable — rerun
+the same command and it continues at the next unused episode index.
+
+**Delete any partial `epNNNNNN/` left by an interrupted recording** before
+rerunning. A directory with a `meta/` but no `meta/episodes/chunk-*/` makes the
+next run's final tally fail with `ValueError: No objects to concatenate`, after
+the new episodes have already been recorded successfully. The episodes are not
+lost; the tally is.
+
+## Training on the reference dataset
+
+`vast_diffusion_policy_train_fast.sh` trains the blue-cube policy from the
+published artifact. Its header documents the hyperparameters that are
+load-bearing and the ones that were tried and reverted; read it before changing
+anything.

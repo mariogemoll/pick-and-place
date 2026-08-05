@@ -200,14 +200,6 @@ git rev-parse HEAD | tee "$output_root/job-metadata/repository-commit.txt"
 # builds obs_dims generically from shape_meta. An asymmetric critic needs a
 # third key, which was collected during rollout and then crashed torch.split.
 # Applied here so a fresh clone of the pinned submodule gets it too.
-if ! git -C third_party/dppo apply --reverse --check \
-     ../../config/diffusion_policy/dppo-generic-obs-keys.patch 2>/dev/null; then
-  git -C third_party/dppo apply ../../config/diffusion_policy/dppo-generic-obs-keys.patch
-  echo "Applied dppo-generic-obs-keys.patch to the vendored agent."
-else
-  echo "dppo-generic-obs-keys.patch already applied."
-fi
-
 venv="$workspace/venvs/pick-and-place"
 base_python="python3"
 if [ -x /venv/main/bin/python ]; then

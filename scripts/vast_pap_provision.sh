@@ -55,14 +55,6 @@ else
   echo "No overlay tarball; running the committed tree." >&2
 fi
 
-if ! git -C third_party/dppo apply --reverse --check \
-     ../../config/diffusion_policy/dppo-generic-obs-keys.patch 2>/dev/null; then
-  git -C third_party/dppo apply ../../config/diffusion_policy/dppo-generic-obs-keys.patch
-  echo "Applied dppo-generic-obs-keys.patch to the vendored agent."
-else
-  echo "dppo-generic-obs-keys.patch already applied."
-fi
-
 base_python="python3"
 if [ -x /venv/main/bin/python ]; then
   base_python="/venv/main/bin/python"
