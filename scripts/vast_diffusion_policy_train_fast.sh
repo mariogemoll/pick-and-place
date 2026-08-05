@@ -119,8 +119,21 @@ if aws s3 ls "$output_prefix/" | grep -q .; then
   exit 1
 fi
 
+# Artifacts are stored as <name>.tar.zst, roughly 4.5x smaller than the loose
+# directory -- train.npz is deliberately ZIP_STORED, so its bytes are raw
+# pixels and zstd has plenty to work with. That is minutes off every launch on
+# a fresh pod, and it is the only stored form: publish the archive, not a
+# directory of loose files.
 if [ ! -f "$artifact_root/train.npz" ]; then
-  aws s3 sync "$artifact_prefix/$artifact_name" "$artifact_root" --only-show-errors
+  archive="$artifact_prefix/$artifact_name.tar.zst"
+  staging="$workspace/artifacts"
+  aws s3 cp "$archive" "$staging/$artifact_name.tar.zst" --only-show-errors
+  aws s3 cp "$archive.sha256" "$staging/$artifact_name.tar.zst.sha256" --only-show-errors
+  # Verify before unpacking: a truncated download otherwise surfaces hours
+  # later as a corrupt tensor rather than as a failed transfer.
+  (cd "$staging" && sha256sum -c "$artifact_name.tar.zst.sha256")
+  tar -x -I zstd -f "$staging/$artifact_name.tar.zst" -C "$staging"
+  rm -f "$staging/$artifact_name.tar.zst" "$staging/$artifact_name.tar.zst.sha256"
 fi
 
 cp "$repo/config/diffusion_policy/pretrain_so101_unet_img_fast.yaml" \
