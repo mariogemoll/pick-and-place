@@ -25,7 +25,7 @@ from pick_and_place.sim.domain_randomization import (
     reload_renderer_textures,
 )
 from pick_and_place.sim.collisions import build_geom_sets, is_unexpected, scan_contacts
-from pick_and_place.runtime.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
+from pick_and_place.spec.robot import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 from pick_and_place.spec.robot import ARM_JOINT_NAMES, GRIPPER_INDEX, JOINT_NAMES
 from pick_and_place.core.joint_frames import real_frame_to_sim, sim_frame_to_real
 from pick_and_place.core.geometry import JAW_CONTACT_POSITION

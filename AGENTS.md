@@ -129,7 +129,7 @@ the exporter and deletes the `.xml` afterwards, leaving the `.json` behind.
 | Directory | Contents |
 | --- | --- |
 | `SO-ARM100/` | Vendored hardware submodule: CAD, STL, URDF, MJCF, BOM. |
-| `py/` | The `pick_and_place` package (93 modules in 12 subpackages), 85 CLI scripts, 46 test files. Simulation, real-robot control, calibration, datasets, policies. |
+| `py/` | The `pick_and_place` package (100 modules in 13 subpackages), 85 CLI scripts, 48 test files. Simulation, real-robot control, calibration, datasets, policies. |
 | `ts/` | Vite + Three.js browser app: the visualizations embedded in the web page. |
 | `mesh_optimization/` | Standalone Python subproject that decimates high-poly STL into web-ready GLB. |
 | `scripts/` | Repository-level shell/TS tooling: license headers, file-size check, mesh pipeline, remote-GPU job scripts. |
@@ -149,7 +149,7 @@ above, where work genuinely combines capabilities.
 | --- | --- | --- |
 | Foundation | `spec`, `core` | `spec` imports nothing else in the package; `core` imports only `spec`. |
 | Capability branches | `planning`, `perception`, `sim`, `hardware`, `data`, `policies` | Each owns one heavy dependency. **No branch may import another.** |
-| Convergence | `runtime`, `calibration`, `analysis` | May import anything, including each other. Nothing below them may import them. |
+| Convergence | `runtime`, `calibration`, `analysis`, `cli` | May import anything, including each other. Nothing below them may import them. |
 
 `scripts/check_package_layering.py` enforces this in CI. When a module needs
 two capabilities it belongs in the convergence tier by construction; when it
@@ -158,14 +158,15 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
 
 - **`spec/`** — the physical facts and the contracts every branch agrees on:
   the cube's size and face tag ids, the drop-zone and corner plate sizes, the
-  workspace frame pose, the joint names and their order, the camera modules'
-  nominal optics, and the `PolicyController` boundary. This is what lets the
-  simulator and the detector agree by construction rather than by importing
-  into each other's internals.
+  workspace frame pose, the joint names and their order, the rig's control rate
+  (`CONTROL_HZ`), the camera modules' nominal optics, and the `PolicyController`
+  boundary. This is what lets the simulator and the detector agree by
+  construction rather than by importing into each other's internals.
 - **`core/`** — pure computation over the spec: `geometry`, `transforms`,
-  `rotations`, `ik`, `kinematics`, `workspace_bounds`, `joint_frames`,
-  `image_ops`, `miscalibration`, `robot_dynamics`, `camera_calibration` (the
-  rig's measured calibration files), `paths`.
+  `rotations`, `ik`, `kinematics`, `workspace_bounds`, `joint_frames` (sim↔real
+  conversions and the joint-limit clamp), `image_ops`, `miscalibration`,
+  `robot_dynamics`, `camera_calibration` (the rig's measured calibration files),
+  `paths`.
 - **`planning/`** — the analytic planner, which generates every demonstration
   and is the expert baseline: `motion` (interpolation, easing, how long a move
   takes), `grasp` (where to take hold), `carry` (getting the cube across),
@@ -187,8 +188,9 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
 - **`hardware/`** — the physical arm: `follower`, `physical_rig`,
   `physical_collection`, `joint_zero_fit`.
 - **`data/`** — recording and datasets: `recording`, `recorder`,
-  `dataset_metadata`, `dataset_subset`, `sim_dataset_staging`,
-  `diffusion_policy_dataset`.
+  `recording_config` (what one recording run is: the scene it draws, its frame
+  sizes, where it lands), `dataset_metadata`, `dataset_subset`,
+  `sim_dataset_staging`, `diffusion_policy_dataset`.
 - **`policies/`** — controller implementations and the contract they are scored
   against: `policy_controllers`, `policy`, `policy_evaluation` (frozen scenario
   manifests in `config/evaluation/` and a success oracle),
@@ -196,14 +198,20 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   *evaluated* here but trained externally via the `lerobot` CLI.
 - **`runtime/`** — running an episode: `executor` (the real control loop),
   `episodes` (sample one that runs clean), `preflight` (vet a trajectory under
-  live physics), `scripted_policy`, `sim_recorder`, `episode_rerender`,
-  `policy_sim`, `policy_real`, `overhead_detection`, `episode_loop`,
-  `training_scenes`.
+  live physics), `frame_reader` (one background thread per camera, holding only
+  the newest frame), `ramp` (ease the arm onto a pose), `scripted_policy`,
+  `sim_recorder`, `episode_rerender`, `policy_sim`, `policy_real`,
+  `overhead_detection`, `episode_loop`, `training_scenes`.
 - **`calibration/`** — solving the rig by rendering the scene and comparing it
   to a real image: `cam_align_solve`, `camera_compare`,
   `camera_calibration_export`, `session_calibration`.
 - **`analysis/`** — reports about recorded runs and about the scene:
   `episode_video`, `policy_recording`, `scene_visibility`.
+- **`cli/`** — the argument groups the scripts compose their parsers from, one
+  per subsystem: `policy` (controller choice and the Diffusion Policy server),
+  `rig` (follower, cameras, recalibration, operator alerts), `scene` (cube
+  pinning, render size, appearance, preflight diagnostics), `dataset`. A flag
+  two commands share is declared once, here, not agreed by hand in each.
 - **`dppo_rl/`** — fine-tuning the pretrained Diffusion Policy with PPO. **This
   did not work**: no configuration beat the pretrained policy in a paired
   evaluation. Kept for a future attempt; do not treat it as a working path.
@@ -297,7 +305,7 @@ Recorded here so they are not mistaken for intentional design:
 
 - `runtime/executor.py` and `scripts/run_policy_real.py` are oversized and
   combine too many responsibilities.
-- Scripts hold more code than the package (~27k lines against ~22k).
+- Scripts hold more code than the package (~27k lines against ~23k).
 - No dependency lockfiles are committed for either language.
 - Python and TypeScript reimplement the same kinematics, grasp selection, and
   trajectory logic with no cross-language parity fixtures.

@@ -13,6 +13,7 @@ from pick_and_place.core.joint_frames import real_frame_to_sim, sim_frame_to_rea
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
+from pick_and_place.runtime.preflight import PreflightDebug
 from pick_and_place.runtime.scripted_policy import (
     AsyncWristLocalization,
     ScriptedPolicy,
@@ -259,9 +260,7 @@ def test_scripted_policy_forwards_planning_diagnostics():
         np.ones((4, 3)),
         planning_max_attempts=7,
         planning_verbose=True,
-        preflight_debug=True,
-        preflight_debug_limit=3,
-        failed_trajectory_limit=2,
+        debug=PreflightDebug(print_contacts=True, contact_limit=3, trajectory_limit=2),
         plan_episode=lambda *args, **kwargs: calls.append(kwargs)
         or SimpleNamespace(trajectory="planned"),
     )
@@ -270,9 +269,9 @@ def test_scripted_policy_forwards_planning_diagnostics():
 
     assert calls[0]["max_attempts"] == 7
     assert calls[0]["verbose"] is True
-    assert calls[0]["preflight_debug"] is True
-    assert calls[0]["preflight_debug_limit"] == 3
-    assert calls[0]["failed_trajectory_limit"] == 2
+    assert calls[0]["debug"] == PreflightDebug(
+        print_contacts=True, contact_limit=3, trajectory_limit=2
+    )
 
 
 def test_scripted_policy_reports_planning_failure_and_holds():

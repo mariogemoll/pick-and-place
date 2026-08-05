@@ -14,6 +14,7 @@ import pytest
 from pick_and_place.data import sim_dataset_staging as staging
 from pick_and_place.core.image_ops import resize_and_center_crop
 from pick_and_place.runtime.sim_recorder import configure_render_quality, downsample_through_recording
+from pick_and_place.data.recording_config import FrameSizes
 
 
 RECORD_SIM_PATH = Path(__file__).parents[1] / "scripts" / "pick_and_place" / "record_sim.py"
@@ -256,13 +257,23 @@ def test_resuming_at_an_offset_extends_the_run_instead_of_repeating_it():
 
 
 def test_recording_defaults_supersample_saved_frames():
-    module = _record_sim_module()
-    parameters = inspect.signature(module.run_recording).parameters
+    """Rendering above the saved size is what keeps the frames free of aliasing."""
+    frames = inspect.signature(_record_sim_module().run_recording).parameters["frames"].default
 
-    assert parameters["image_width"].default == 960
-    assert parameters["image_height"].default == 720
-    assert parameters["render_width"].default == 1920
-    assert parameters["render_height"].default == 1080
+    assert (frames.image_width, frames.image_height) == (960, 720)
+    assert (frames.render_width, frames.render_height) == (1920, 1080)
+    assert frames.render_width > frames.image_width
+    assert frames.render_height > frames.image_height
+
+
+def test_frame_sizes_reject_a_render_smaller_than_the_saved_image():
+    with pytest.raises(ValueError, match="at least"):
+        FrameSizes(render_width=640, render_height=480, image_width=960, image_height=720)
+
+
+def test_frame_sizes_reject_a_degenerate_image():
+    with pytest.raises(ValueError, match="positive"):
+        FrameSizes(image_width=0, image_height=720)
 
 
 def test_recording_render_quality_focuses_a_larger_shadow_map():
@@ -373,12 +384,10 @@ def test_episode_timeout_default_leaves_room_for_resampling():
 def test_vcodec_defaults_to_software_h264():
     """`auto` probes for a HW encoder and silently picks the ~4x slower path."""
     module = _record_sim_module()
-    parser = [
-        line for line in inspect.getsource(module.main).splitlines() if '"--vcodec"' in line
-    ]
+    source = inspect.getsource(module.main)
 
-    assert parser, "expected a --vcodec argument"
-    assert 'default="h264"' in inspect.getsource(module.main)
+    assert 'vcodec="h264"' in source, "the sim recorder must pin the software codec"
+    assert 'vcodec="auto"' not in source
 
 
 def test_wedged_episode_is_abandoned_once_retries_run_out():

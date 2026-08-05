@@ -22,7 +22,6 @@ from __future__ import annotations
 import argparse
 import io
 import json
-import os
 import struct
 import subprocess
 from collections import deque
@@ -34,67 +33,6 @@ import numpy as np
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, PolicyObservation, STATE_FEATURE, WRIST_FEATURE
 
 SERVER_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "diffusion_policy_server.py"
-DEFAULT_CONFIG = (
-    Path(__file__).resolve().parents[4]
-    / "config"
-    / "diffusion_policy"
-    / "pretrain_so101_unet_img.yaml"
-)
-
-
-def add_diffusion_policy_arguments(parser: argparse.ArgumentParser) -> None:
-    """Add the common Diffusion Policy server arguments to a runner CLI."""
-    parser.add_argument(
-        "--diffusion-policy-python",
-        type=Path,
-        default=os.environ.get("DIFFUSION_POLICY_PYTHON"),
-        help="interpreter of the DPPO virtual environment (default: $DIFFUSION_POLICY_PYTHON)",
-    )
-    parser.add_argument(
-        "--diffusion-policy-config",
-        type=Path,
-        default=DEFAULT_CONFIG,
-        help="training configuration YAML (default: the pretraining configuration)",
-    )
-    parser.add_argument(
-        "--diffusion-policy-normalization",
-        type=Path,
-        help="normalization.npz written by the Diffusion Policy dataset export",
-    )
-    parser.add_argument(
-        "--recording-hw",
-        type=int,
-        nargs=2,
-        default=None,
-        metavar=("HEIGHT", "WIDTH"),
-        help=(
-            "resolution the training videos were recorded at; defaults to "
-            "source_video_hw in export.json beside --diffusion-policy-normalization"
-        ),
-    )
-    parser.add_argument(
-        "--diffusion-policy-act-steps",
-        type=int,
-        default=None,
-        help="executed actions per policy query (default: the training configuration)",
-    )
-    parser.add_argument(
-        "--diffusion-policy-seed",
-        type=int,
-        default=0,
-        help="Torch seed for DDPM action sampling (default: 0)",
-    )
-    parser.add_argument(
-        "--diffusion-policy-ddim-steps",
-        type=int,
-        default=None,
-        help=(
-            "sample with DDIM using this many steps instead of the trained DDPM "
-            "schedule (try 10 for live control)"
-        ),
-    )
-
-
 def resolve_recording_hw(
     normalization: str | Path,
     override: tuple[int, int] | None = None,

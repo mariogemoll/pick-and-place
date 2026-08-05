@@ -16,7 +16,6 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import mujoco
 import numpy as np
@@ -30,6 +29,7 @@ from pick_and_place.planning.episode_sampling import sample_cube, sample_near_ne
 from pick_and_place.planning.grasp import GraspChoice, free_grasp_candidates, grasp_candidates
 from pick_and_place.planning.trajectory import Trajectory, trajectory_candidates_for_grasp
 from pick_and_place.runtime.preflight import (
+    PreflightDebug,
     preflight,
     preflight_collision_is_unexpected,
     print_preflight_debug,
@@ -108,12 +108,7 @@ def prepare_episode(
     max_attempts: int | None = None,
     verbose: bool = False,
     include_environment: bool = False,
-    offwidth: int = 1280,
-    offheight: int = 720,
-    preflight_debug: bool = False,
-    preflight_debug_limit: int = 12,
-    failed_trajectory_dir: Path | None = None,
-    failed_trajectory_limit: int = 8,
+    debug: PreflightDebug = PreflightDebug(),
     free_grasp: bool = False,
     target_sampler: Callable[[np.random.Generator], CubePose] | None = None,
     miscalibration: MiscalibrationDraw | None = None,
@@ -156,18 +151,18 @@ def prepare_episode(
     if fixed_target and target_sampler is not None:
         raise ValueError("target and target_sampler are mutually exclusive")
 
-    if failed_trajectory_dir is not None:
-        failed_trajectory_dir.mkdir(parents=True, exist_ok=True)
+    if debug.trajectory_dir is not None:
+        debug.trajectory_dir.mkdir(parents=True, exist_ok=True)
 
     source_allowed = is_cube_drop_allowed if free_grasp else is_cube_pickup_allowed
     if fixed_source and not source_allowed(source.x, source.y):
         zone = "allowed drop zone" if free_grasp else "allowed pickup zone"
         reason = f"source ({source.x:.4f}, {source.y:.4f}) is outside the {zone}"
-        write_failed_trajectory_note(failed_trajectory_dir, reason, source=source, target=target)
+        write_failed_trajectory_note(debug.trajectory_dir, reason, source=source, target=target)
         raise EpisodeSamplingError(reason)
     if fixed_target and not is_cube_drop_allowed(target.x, target.y):
         reason = f"target ({target.x:.4f}, {target.y:.4f}) is outside the allowed drop zone"
-        write_failed_trajectory_note(failed_trajectory_dir, reason, source=source, target=target)
+        write_failed_trajectory_note(debug.trajectory_dir, reason, source=source, target=target)
         raise EpisodeSamplingError(reason)
 
     attempt = 0
@@ -198,8 +193,6 @@ def prepare_episode(
             ep_model, ep_data = build_model(
                 ep_source,
                 include_environment=include_environment,
-                offwidth=offwidth,
-                offheight=offheight,
             )
         kinematics = derive_kinematics(ep_model)
         actuator_id = {
@@ -257,8 +250,7 @@ def prepare_episode(
             )
             for traj in candidate_trajectories:
                 grasp = traj.grasp
-                collect_preflight_detail = preflight_debug or failed_trajectory_dir is not None
-                if collect_preflight_detail:
+                if debug.detailed:
                     detail_events = preflight(
                         ep_model,
                         traj,
@@ -287,16 +279,16 @@ def prepare_episode(
                             f"  carry={traj.carry.mode}  (attempt {attempt})"
                         )
                     break
-                if preflight_debug:
+                if debug.print_contacts:
                     print_preflight_debug(
                         attempt,
                         traj,
                         unexpected_detail,
-                        limit=preflight_debug_limit,
+                        limit=debug.contact_limit,
                     )
                 if (
-                    failed_trajectory_dir is not None
-                    and saved_failed_trajectories < failed_trajectory_limit
+                    debug.trajectory_dir is not None
+                    and saved_failed_trajectories < debug.trajectory_limit
                 ):
                     grasp_label = (
                         "unknown"
@@ -304,7 +296,7 @@ def prepare_episode(
                         else f"{traj.grasp.face}_{traj.grasp.elbow}"
                     )
                     path = (
-                        failed_trajectory_dir
+                        debug.trajectory_dir
                         / f"attempt_{attempt:03d}_candidate_{saved_failed_trajectories + 1:03d}_{grasp_label}.npz"
                     )
                     save_failed_preflight_trajectory(

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from pick_and_place.core.geometry import CubePose
+from pick_and_place.planning.motion import smoothstep
 
 # Descent PBVS completion gate. The planned descent duration is still the
 # minimum time needed to physically move from hover to grasp; these values decide
@@ -28,11 +29,6 @@ DESCENT_SERVO_POSITION_TOLERANCE_M = 0.0015
 DESCENT_SERVO_YAW_TOLERANCE_RAD = math.radians(1.5)
 DESCENT_SERVO_MAX_NO_DETECTION_RETRIES = 2
 DESCENT_SERVO_BACKUP_DURATION = 0.9
-
-
-def smoothstep(t: float) -> float:
-    c = min(1.0, max(0.0, t))
-    return c * c * (3.0 - 2.0 * c)
 
 
 def _shortest_angle_delta(start: float, end: float) -> float:

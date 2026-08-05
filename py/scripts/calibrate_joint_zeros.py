@@ -156,7 +156,7 @@ def main() -> None:
     # The autonomous-relocation fallback runs the hardware executor, whose 30 Hz
     # control loop requires a timestep that divides evenly into it. The stock
     # 500 Hz model timestep does not, so match the hardware runner's rate.
-    from pick_and_place.runtime.executor import HARDWARE_SIMULATION_HZ
+    from pick_and_place.spec.robot import HARDWARE_SIMULATION_HZ
 
     model.opt.timestep = 1.0 / HARDWARE_SIMULATION_HZ
     apply_camera_extrinsics_to_model(model, load_local_camera_extrinsics())

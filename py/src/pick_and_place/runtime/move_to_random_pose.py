@@ -46,11 +46,6 @@ def sample_reachable_pose(rng: np.random.Generator) -> tuple[dict[str, float], f
     return joints, gripper
 
 
-def smoothstep(t: float) -> float:
-    c = min(1.0, max(0.0, t))
-    return c * c * (3.0 - 2.0 * c)
-
-
 def lerp_joints(a: dict[str, float], b: dict[str, float], alpha: float) -> dict[str, float]:
     return {name: a[name] + (b[name] - a[name]) * alpha for name in ARM_JOINT_NAMES}
 

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import datetime
-import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -30,11 +29,20 @@ from pick_and_place.runtime.episode_loop import episode_loop
 from pick_and_place.planning.episode_sampling import sample_recovery_cube
 from pick_and_place.sim.model import build_model, set_cube_pose, set_joint
 from pick_and_place.runtime.executor import CONTROL_HZ, follower_clamp_limits
+from pick_and_place.cli.rig import (
+    add_drop_zone_arguments,
+    add_follower_arguments,
+    add_operator_alert_arguments,
+    add_overhead_recalibration_arguments,
+    add_rig_camera_arguments,
+)
+from pick_and_place.cli.scene import add_preflight_debug_arguments, preflight_debug_from_args
+from pick_and_place.runtime.frame_reader import FrameReader, open_frame_reader
+from pick_and_place.runtime.ramp import ramp_follower
 from pick_and_place.spec.robot import GRIPPER_INDEX
 from pick_and_place.core.joint_frames import (
     GRIPPER_READBACK_CLOSED,
     action_to_joints,
-    joints_to_action,
     real_frame_to_sim,
     sim_frame_to_real,
 )
@@ -48,7 +56,7 @@ from pick_and_place.perception.image_rectify import (
 )
 from pick_and_place.sim.derive_kinematics import derive_kinematics
 from pick_and_place.perception.overhead_localization import OverheadLocalizer
-from pick_and_place.runtime.overhead_detection import DEFAULT_ALERT_SOUND, OperatorNotifier
+from pick_and_place.runtime.overhead_detection import OperatorNotifier
 from pick_and_place.sim.paper_target_marker import place_paper_target_marker
 from pick_and_place.policies.policy import DEFAULT_IMAGE_HW
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
@@ -91,76 +99,8 @@ MAX_POLICY_SLEW_PER_SECOND = np.array([60.0, 60.0, 75.0, 90.0, 120.0, 150.0])
 PICKUP_GRIPPER_MARGIN = 5.0
 
 
-class LatestCamera:
-    """Continuously capture a camera while exposing its freshest frame."""
-
-    def __init__(
-        self,
-        source: str,
-        label: str,
-        capture_size: tuple[int, int],
-        cv2_module: Any,
-    ) -> None:
-        from pick_and_place.calibration.cam_align_solve import parse_index_or_path
-
-        backend = (
-            cv2_module.CAP_AVFOUNDATION
-            if hasattr(cv2_module, "CAP_AVFOUNDATION")
-            else cv2_module.CAP_ANY
-        )
-        self._capture = cv2_module.VideoCapture(parse_index_or_path(source), backend)
-        self._capture.set(cv2_module.CAP_PROP_FRAME_WIDTH, capture_size[0])
-        self._capture.set(cv2_module.CAP_PROP_FRAME_HEIGHT, capture_size[1])
-        if not self._capture.isOpened():
-            self._capture.release()
-            raise RuntimeError(f"could not open {label} camera {source!r}")
-        self._condition = threading.Condition()
-        self._frame: np.ndarray | None = None
-        self._sequence = 0
-        self._last_read_sequence = 0
-        self._running = True
-        self._thread = threading.Thread(target=self._capture_loop, daemon=True)
-        self._thread.start()
-
-    def _capture_loop(self) -> None:
-        while self._running:
-            ok, frame = self._capture.read()
-            if ok and frame is not None:
-                with self._condition:
-                    self._frame = frame
-                    self._sequence += 1
-                    self._condition.notify_all()
-
-    def latest(self) -> np.ndarray:
-        with self._condition:
-            if self._frame is None:
-                self._condition.wait_for(lambda: self._frame is not None, timeout=2.0)
-            if self._frame is None:
-                raise RuntimeError("timed out waiting for camera frames")
-            return self._frame.copy()
-
-    def read(self) -> tuple[bool, np.ndarray | None]:
-        """OpenCV-compatible fresh-frame read used by calibration."""
-        with self._condition:
-            self._condition.wait_for(
-                lambda: self._sequence > self._last_read_sequence or not self._running,
-                timeout=1.0,
-            )
-            if self._frame is None or self._sequence <= self._last_read_sequence:
-                return False, None
-            self._last_read_sequence = self._sequence
-            return True, self._frame.copy()
-
-    def close(self) -> None:
-        self._running = False
-        with self._condition:
-            self._condition.notify_all()
-        self._thread.join(timeout=1.0)
-        self._capture.release()
-
-
 def _rectified_rgb_reader(
-    camera: LatestCamera,
+    camera: FrameReader,
     intrinsics: dict[str, Any],
     frame_size: tuple[int, int],
     cv2: Any,
@@ -170,8 +110,7 @@ def _rectified_rgb_reader(
     maps = build_undistort_map(intrinsics, *frame_size, cv2)
 
     def read() -> np.ndarray:
-        bgr = camera.latest()
-        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        rgb = cv2.cvtColor(camera.wait_for_frame().bgr, cv2.COLOR_BGR2RGB)
         if output_size is None:
             return cv2.remap(rgb, maps[0], maps[1], cv2.INTER_LINEAR)
         return transform_frame(
@@ -184,34 +123,9 @@ def _rectified_rgb_reader(
     return read
 
 
-def _ramp_follower(
-    follower: Any,
-    target: np.ndarray,
-    low: np.ndarray,
-    high: np.ndarray,
-    *,
-    max_joint_speed: float,
-) -> None:
-    """Move smoothly to a non-policy parking pose in hardware-frame units."""
-    current = action_to_joints(follower.get_observation(), target)
-    arm_travel = float(np.max(np.abs(target[:-1] - current[:-1])))
-    duration = max(1.0, arm_travel / max_joint_speed)
-    steps = max(1, round(duration * CONTROL_HZ))
-    for index in range(1, steps + 1):
-        started = time.monotonic()
-        t = index / steps
-        smooth = t * t * (3.0 - 2.0 * t)
-        command = np.clip(current + smooth * (target - current), low, high)
-        follower.send_action(joints_to_action(command))
-        remaining = 1.0 / CONTROL_HZ - (time.monotonic() - started)
-        if remaining > 0.0:
-            time.sleep(remaining)
-
-
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--follower-port", required=True, help="serial port of the SO-101 follower")
-    parser.add_argument("--follower-id", default="folly", help="follower calibration id")
+    add_follower_arguments(parser)
     parser.add_argument(
         "--joint-zeros",
         type=Path,
@@ -222,20 +136,10 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="run without joint-zero correction for safe bench diagnostics only",
     )
-    parser.add_argument("--camera", default="0", help="OpenCV index/path of the overhead camera")
-    parser.add_argument("--wrist-camera", default="1", help="OpenCV index/path of the wrist camera")
-    parser.add_argument("--camera-name", default="overhead_camera", help="overhead MuJoCo camera name")
-    parser.add_argument("--overhead-intrinsics", type=Path, default=None)
-    parser.add_argument("--wrist-intrinsics", type=Path, default=None)
-    parser.add_argument(
-        "--workspace-camera",
-        default=None,
-        help="optional OpenCV index/path of a synchronized workspace camera",
+    add_rig_camera_arguments(
+        parser, wrist_intrinsics=True, workspace_camera=True, workspace_intrinsics=True
     )
-    parser.add_argument("--workspace-intrinsics", type=Path, default=None)
-    parser.add_argument(
-        "--drop-zone-color", choices=("black", "white"), default="black"
-    )
+    add_drop_zone_arguments(parser)
     parser.add_argument("--episodes", type=int, default=1, help="episodes to run; 0 means continuous")
     parser.add_argument(
         "--rest-every",
@@ -244,12 +148,7 @@ def _parse_args() -> argparse.Namespace:
         help="completed episodes between cooldowns; 0 disables cooldowns",
     )
     parser.add_argument("--rest-duration", type=float, default=30.0)
-    parser.add_argument(
-        "--operator-alerts",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-    )
-    parser.add_argument("--alert-sound", default=DEFAULT_ALERT_SOUND)
+    add_operator_alert_arguments(parser)
     parser.add_argument("--target-change-min-distance", type=float, default=0.03)
     parser.add_argument("--target-change-alert-min-seconds", type=float, default=10.0)
     parser.add_argument("--target-change-alert-max-seconds", type=float, default=120.0)
@@ -265,14 +164,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-localization-steps", type=int, default=60)
     parser.add_argument("--localization-steps-per-search", type=int, default=15)
     parser.add_argument("--planning-attempts", type=int, default=40)
-    parser.add_argument(
-        "--preflight-debug",
-        action="store_true",
-        help="print collision details for rejected trajectory candidates",
-    )
-    parser.add_argument("--preflight-debug-limit", type=int, default=12)
-    parser.add_argument("--save-failed-trajectories", type=Path, default=None)
-    parser.add_argument("--failed-trajectory-limit", type=int, default=8)
+    add_preflight_debug_arguments(parser)
     parser.add_argument(
         "--show-camera-feeds",
         action="store_true",
@@ -284,17 +176,8 @@ def _parse_args() -> argparse.Namespace:
         help="show the measured arm and localized objects in MuJoCo",
     )
     parser.add_argument("--rng-seed", type=int, default=0)
-    parser.add_argument(
-        "--recalibrate",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="solve overhead extrinsics from workspace AprilTags at startup",
-    )
-    parser.add_argument("--recalibrate-samples", type=int, default=10)
-    parser.add_argument("--recalibrate-max-seconds", type=float, default=15.0)
+    add_overhead_recalibration_arguments(parser, drift_checks=True)
     parser.add_argument("--recalibrate-check-min-cooldown", type=float, default=15.0)
-    parser.add_argument("--recalibrate-drift-mm", type=float, default=10.0)
-    parser.add_argument("--recalibrate-drift-deg", type=float, default=2.0)
     parser.add_argument("--cube-recovery-attempts", type=int, default=3)
     parser.add_argument(
         "--park-speed",
@@ -381,9 +264,9 @@ def main() -> None:
     )
 
     print("Opening cameras...")
-    overhead = LatestCamera(args.camera, "overhead", OVERHEAD_CAPTURE_SIZE, cv2)
-    wrist: LatestCamera | None = None
-    workspace: LatestCamera | None = None
+    overhead = open_frame_reader(args.camera, *OVERHEAD_CAPTURE_SIZE, "overhead")
+    wrist: FrameReader | None = None
+    workspace: FrameReader | None = None
     follower = None
     rig = None
     controller = None
@@ -392,21 +275,18 @@ def main() -> None:
     debug_viewer = None
     torque_released = False
     try:
-        wrist = LatestCamera(args.wrist_camera, "wrist", WRIST_CAPTURE_SIZE, cv2)
+        wrist = open_frame_reader(args.wrist_camera, *WRIST_CAPTURE_SIZE, "wrist")
         if args.workspace_camera is not None:
-            workspace = LatestCamera(
-                args.workspace_camera,
-                "workspace",
-                OVERHEAD_CAPTURE_SIZE,
-                cv2,
+            workspace = open_frame_reader(
+                args.workspace_camera, *OVERHEAD_CAPTURE_SIZE, "workspace"
             )
-        overhead_frame = overhead.latest()
-        wrist_frame = wrist.latest()
+        overhead_frame = overhead.wait_for_frame().bgr
+        wrist_frame = wrist.wait_for_frame().bgr
         overhead_size = (overhead_frame.shape[1], overhead_frame.shape[0])
         wrist_size = (wrist_frame.shape[1], wrist_frame.shape[0])
         workspace_size = None
         if workspace is not None:
-            workspace_frame = workspace.latest()
+            workspace_frame = workspace.wait_for_frame().bgr
             workspace_size = (workspace_frame.shape[1], workspace_frame.shape[0])
         print(
             f"Camera resolutions: overhead {overhead_size[0]}x{overhead_size[1]}, "
@@ -480,10 +360,7 @@ def main() -> None:
                 localization_steps_per_search=args.localization_steps_per_search,
                 planning_max_attempts=args.planning_attempts,
                 planning_verbose=True,
-                preflight_debug=args.preflight_debug,
-                preflight_debug_limit=args.preflight_debug_limit,
-                failed_trajectory_dir=args.save_failed_trajectories,
-                failed_trajectory_limit=args.failed_trajectory_limit,
+                debug=preflight_debug_from_args(args),
                 rng_seed=args.rng_seed,
                 control_hz=CONTROL_HZ / args.speed,
                 wrist_localizer=AsyncWristLocalization(
@@ -581,26 +458,29 @@ def main() -> None:
         follower.connect()
         limits = follower_clamp_limits(derive_kinematics(model))
         clamp_low, clamp_high = limits
+        clip_warned: set[str] = set()
 
         def park_action() -> None:
             print("Parking at NEUTRAL, then REST...")
             follower.bus.enable_torque()
-            _ramp_follower(
+            ramp_follower(
                 follower,
                 sim_frame_to_real(
                     NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER, joint_zero_offsets
                 ),
                 clamp_low,
                 clamp_high,
+                clip_warned,
                 max_joint_speed=args.park_speed,
             )
-            _ramp_follower(
+            ramp_follower(
                 follower,
                 sim_frame_to_real(
                     REST_ARM_JOINTS, REST_GRIPPER, joint_zero_offsets
                 ),
                 clamp_low,
                 clamp_high,
+                clip_warned,
                 max_joint_speed=args.park_speed,
             )
 
@@ -616,13 +496,14 @@ def main() -> None:
         )
 
         print("Moving to NEUTRAL before localization and planning...")
-        _ramp_follower(
+        ramp_follower(
             follower,
             sim_frame_to_real(
                 NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER, joint_zero_offsets
             ),
             clamp_low,
             clamp_high,
+            clip_warned,
             max_joint_speed=args.park_speed,
         )
 
@@ -717,11 +598,12 @@ def main() -> None:
         def cooldown() -> None:
             print("Cooldown: moving to REST and releasing torque...")
             notifier.alert("Cooldown started. Move the target plate before the next episode.")
-            _ramp_follower(
+            ramp_follower(
                 follower,
                 sim_frame_to_real(REST_ARM_JOINTS, REST_GRIPPER, joint_zero_offsets),
                 clamp_low,
                 clamp_high,
+                clip_warned,
                 max_joint_speed=args.park_speed,
             )
             follower.bus.disable_torque()
@@ -738,11 +620,12 @@ def main() -> None:
                 )
             finally:
                 follower.bus.enable_torque()
-            _ramp_follower(
+            ramp_follower(
                 follower,
                 sim_frame_to_real(NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER, joint_zero_offsets),
                 clamp_low,
                 clamp_high,
+                clip_warned,
                 max_joint_speed=args.park_speed,
             )
             if (
@@ -773,11 +656,12 @@ def main() -> None:
 
         def rehome() -> None:
             print("Opening and re-homing before retry...")
-            _ramp_follower(
+            ramp_follower(
                 follower,
                 sim_frame_to_real(NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER, joint_zero_offsets),
                 clamp_low,
                 clamp_high,
+                clip_warned,
                 max_joint_speed=args.park_speed,
             )
 
@@ -869,13 +753,14 @@ def main() -> None:
             )
             if preflight_result is not None:
                 print(f"Preflight failed: {preflight_result.outcome.value}")
-                _ramp_follower(
+                ramp_follower(
                     follower,
                     sim_frame_to_real(
                         NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER, joint_zero_offsets
                     ),
                     clamp_low,
                     clamp_high,
+                    clip_warned,
                     max_joint_speed=args.park_speed,
                 )
                 continue

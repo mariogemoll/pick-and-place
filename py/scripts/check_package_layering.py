@@ -12,7 +12,7 @@ The package is a fan, not a stack:
 * ``planning``, ``perception``, ``sim``, ``hardware``, ``data`` and ``policies``
   are capability branches. Each owns one heavy dependency and **none may import
   another** — they meet only above.
-* ``runtime``, ``calibration`` and ``analysis`` are where capabilities
+* ``runtime``, ``calibration``, ``analysis`` and ``cli`` are where capabilities
   converge. They may import anything, including each other; nothing below them
   may import them.
 
@@ -40,7 +40,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1] / "src" / "pick_and_place"
 
 FOUNDATION = ("spec", "core")
 BRANCHES = ("planning", "perception", "sim", "hardware", "data", "policies")
-CONVERGENCE = ("runtime", "calibration", "analysis")
+CONVERGENCE = ("runtime", "calibration", "analysis", "cli")
 EXEMPT = ("dppo_rl",)
 
 

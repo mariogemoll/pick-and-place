@@ -77,7 +77,6 @@ from pick_and_place.sim.render_randomization import (
     snapshot_overhead_camera,
 )
 from pick_and_place.sim.scene_appearance import (
-    APPEARANCE_PRESETS,
     SceneAppearanceOverride,
     parse_appearance,
 )
@@ -88,7 +87,6 @@ from pick_and_place.core.workspace_bounds import is_cube_drop_allowed, sample_ta
 from pick_and_place.policies.diffusion_policy_client import DiffusionPolicyController
 from pick_and_place.policies.policy import (
     DEFAULT_CHECKPOINT,
-    DEFAULT_INSTRUCTION,
     resolve_checkpoint_cameras,
     select_device,
 )
@@ -103,7 +101,14 @@ from pick_and_place.runtime.policy_sim import (
 # One policy query and one camera render happen per control tick; the sim steps
 # at the model timestep in between. The rate matches the real rig's control loop
 # (and the dataset fps), so a chunked policy's action spacing plays back true.
-from pick_and_place.runtime.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
+from pick_and_place.cli.policy import add_diffusion_policy_arguments, add_policy_arguments
+from pick_and_place.cli.scene import (
+    add_cube_pose_arguments,
+    add_render_size_arguments,
+    add_scene_appearance_arguments,
+    add_scene_texture_arguments,
+)
+from pick_and_place.spec.robot import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 
 
 def _resolve_recording_hw(
@@ -224,107 +229,10 @@ def _place_cube(data: mujoco.MjData, qadr: int, dofadr: int, pose: CubePose) -> 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--controller",
-        choices=("lerobot", "diffusion-policy"),
-        default="lerobot",
-        help="policy implementation (default: lerobot)",
-    )
-    parser.add_argument("--instruction", default=DEFAULT_INSTRUCTION, help="language task string")
-    parser.add_argument(
-        "--checkpoint",
-        default=DEFAULT_CHECKPOINT,
-        help="HF policy checkpoint, or a Diffusion Policy state_*.pt file",
-    )
-    parser.add_argument(
-        "--diffusion-policy-python",
-        type=Path,
-        default=os.environ.get("DIFFUSION_POLICY_PYTHON"),
-        help="interpreter of the DPPO virtual environment (default: $DIFFUSION_POLICY_PYTHON)",
-    )
-    parser.add_argument(
-        "--diffusion-policy-config",
-        type=Path,
-        default=Path(__file__).resolve().parents[2]
-        / "config"
-        / "diffusion_policy"
-        / "pretrain_so101_unet_img.yaml",
-        help="training configuration YAML (default: the pretraining configuration)",
-    )
-    parser.add_argument(
-        "--diffusion-policy-normalization",
-        type=Path,
-        help="normalization.npz written by the Diffusion Policy dataset export",
-    )
-    parser.add_argument(
-        "--recording-hw",
-        type=int,
-        nargs=2,
-        default=None,
-        metavar=("HEIGHT", "WIDTH"),
-        help=(
-            "resolution the training videos were recorded at, which observations are "
-            "downsampled through on the way to the policy's input size. Defaults to "
-            "the source_video_hw recorded by the dataset export, read from export.json "
-            "beside --diffusion-policy-normalization"
-        ),
-    )
-    parser.add_argument(
-        "--diffusion-policy-act-steps",
-        type=int,
-        default=None,
-        help="executed actions per policy query (default: the training configuration)",
-    )
-    parser.add_argument(
-        "--diffusion-policy-seed",
-        type=int,
-        default=0,
-        help="Torch seed for DDPM action sampling (default: 0)",
-    )
-    parser.add_argument(
-        "--diffusion-policy-ddim-steps",
-        type=int,
-        default=None,
-        help=(
-            "sample with DDIM using this many steps instead of the trained DDPM "
-            "schedule; much faster for interactive viewing (try 10)"
-        ),
-    )
-    parser.add_argument("--device", default="auto", help="auto | cpu | mps | cuda")
-    parser.add_argument(
-        "--image-height",
-        type=int,
-        default=None,
-        help="render height fed to the policy (default: the checkpoint's training height, else 480)",
-    )
-    parser.add_argument(
-        "--image-width",
-        type=int,
-        default=None,
-        help="render width fed to the policy (default: the checkpoint's training width, else 640)",
-    )
-    parser.add_argument(
-        "--render-width",
-        type=int,
-        default=1920,
-        help="MuJoCo source render width before downsampling/cropping (default: 1920)",
-    )
-    parser.add_argument(
-        "--render-height",
-        type=int,
-        default=1080,
-        help="MuJoCo source render height before downsampling/cropping (default: 1080)",
-    )
-    parser.add_argument("--source", type=float, nargs=2, metavar=("X", "Y"), default=(0.22, 0.0))
-    parser.add_argument("--source-yaw", type=float, default=0.0, help="cube yaw (radians)")
-    parser.add_argument(
-        "--target",
-        type=float,
-        nargs=2,
-        metavar=("X", "Y"),
-        default=None,
-        help="pin the drop-zone center (x, y); omit to sample one randomly like the recording",
-    )
+    add_policy_arguments(parser)
+    add_diffusion_policy_arguments(parser)
+    add_render_size_arguments(parser)
+    add_cube_pose_arguments(parser, source_default=(0.22, 0.0))
     parser.add_argument("--seed", type=int, default=None, help="RNG seed for random target sampling")
     parser.add_argument(
         "--miscalibration",
@@ -344,29 +252,8 @@ def main() -> None:
             "miscalibration, cameras, lighting, materials, cube orientation, and appearance"
         ),
     )
-    parser.add_argument(
-        "--background-panorama",
-        type=Path,
-        default=None,
-        help="equirectangular room panorama to render as a skybox behind the scene",
-    )
-    parser.add_argument(
-        "--table-texture",
-        type=Path,
-        default=None,
-        help="top-down table texture (from reconstruct_table_texture.py) for the floor",
-    )
-    parser.add_argument(
-        "--scene-appearance",
-        type=str,
-        default=None,
-        metavar="NAME",
-        help=(
-            "recolour the scene the way a re-rendered dataset was rendered, either a preset "
-            f"({', '.join(sorted(APPEARANCE_PRESETS))}) or an ad-hoc spec such as "
-            "'cube=blue,floor=dark-gray' (default: the scene as compiled)"
-        ),
-    )
+    add_scene_texture_arguments(parser)
+    add_scene_appearance_arguments(parser)
     parser.add_argument(
         "--camera-randomization",
         type=Path,
@@ -404,24 +291,6 @@ def main() -> None:
         type=int,
         default=0,
         help="stop after this many control ticks (0 = run until the viewer is closed)",
-    )
-    parser.add_argument(
-        "--n-action-steps",
-        type=int,
-        default=100,
-        help=(
-            "queued actions to execute before re-querying a chunked policy "
-            "(default: 100; matches common ACT checkpoints; temporal ensembling uses 1)"
-        ),
-    )
-    parser.add_argument(
-        "--temporal-ensemble-coeff",
-        type=float,
-        default=None,
-        help=(
-            "enable ACT temporal ensembling with this coefficient, e.g. 0.01; "
-            "requires --n-action-steps 1"
-        ),
     )
     parser.add_argument("--headless", action="store_true", help="no viewer; render only for the policy")
     parser.add_argument(
@@ -580,7 +449,7 @@ def main() -> None:
         x=float(args.source[0]),
         y=float(args.source[1]),
         z=CUBE_HALF_SIZE,
-        yaw=args.source_yaw,
+        yaw=math.radians(args.source_yaw),
     )
     if active_sample is not None:
         source_pose = orient_cube(source_pose, active_sample.cube_orientation_index)

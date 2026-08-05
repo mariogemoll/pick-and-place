@@ -31,6 +31,7 @@ from typing import Optional, Any
 import mujoco
 import numpy as np
 
+from pick_and_place.planning.motion import smoothstep
 from pick_and_place.core.camera_calibration import LOCAL_CAMERA_EXTRINSICS_DIR
 from pick_and_place.sim.camera_extrinsics import save_camera_extrinsics
 from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR
@@ -121,11 +122,6 @@ def solve_wrist_camera_pose(
     return res
 
 
-def _smoothstep(t: float) -> float:
-    c = min(1.0, max(0.0, t))
-    return c * c * (3.0 - 2.0 * c)
-
-
 @dataclass
 class TeleopState:
     leader_joints: Optional[np.ndarray] = None
@@ -148,7 +144,7 @@ def _teleop_thread_func(state: TeleopState, leader, follower, follower_start_joi
         follower_read_joints = None
         if follower is not None:
             if elapsed_total < ramp_duration:
-                alpha = _smoothstep(elapsed_total / ramp_duration)
+                alpha = smoothstep(elapsed_total / ramp_duration)
                 follower_target = follower_start_joints + alpha * (leader_joints - follower_start_joints)
             else:
                 follower_target = leader_joints

@@ -10,7 +10,6 @@ import argparse
 import datetime as dt
 import hashlib
 import math
-import os
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -19,7 +18,6 @@ import numpy as np
 
 from pick_and_place.policies.policy import (
     DEFAULT_IMAGE_HW,
-    DEFAULT_INSTRUCTION,
     resolve_checkpoint_cameras,
     select_device,
 )
@@ -43,29 +41,30 @@ from pick_and_place.runtime.scripted_policy import (
 )
 from pick_and_place.perception.cube_detection import CubeTracker
 from pick_and_place.perception.detector_process import DetectorProcess
-from pick_and_place.sim.scene_appearance import APPEARANCE_PRESETS, parse_appearance
+from pick_and_place.cli.policy import (
+    add_diffusion_policy_arguments,
+    add_policy_arguments,
+)
+from pick_and_place.cli.scene import add_render_size_arguments, add_scene_appearance_arguments
+from pick_and_place.sim.scene_appearance import parse_appearance
 from pick_and_place.core.workspace_bounds import workspace_interior_corners_world
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST = REPOSITORY_ROOT / "config" / "evaluation" / "smoke_v1.json"
-DEFAULT_DIFFUSION_POLICY_CONFIG = (
-    REPOSITORY_ROOT / "config" / "diffusion_policy" / "pretrain_so101_unet_img.yaml"
-)
 SCRIPTED_IMAGE_HW = DEFAULT_IMAGE_HW
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--controller",
-        choices=("lerobot", "scripted", "diffusion-policy"),
-        default="lerobot",
-        help="controller implementation (default: lerobot)",
+    add_policy_arguments(
+        parser,
+        controllers=("lerobot", "scripted", "diffusion-policy"),
+        checkpoint_default=None,
+        n_action_steps_default=None,
     )
-    parser.add_argument(
-        "--checkpoint",
-        help="local LeRobot checkpoint or repository ID, or a Diffusion Policy state_*.pt file",
-    )
+    add_diffusion_policy_arguments(parser, recording_hw=False)
+    add_render_size_arguments(parser)
+    add_scene_appearance_arguments(parser)
     parser.add_argument(
         "--manifest",
         type=Path,
@@ -73,74 +72,6 @@ def _parse_args() -> argparse.Namespace:
         help=f"frozen scenario manifest (default: {DEFAULT_MANIFEST})",
     )
     parser.add_argument("--output", type=Path, required=True, help="new evaluation run directory")
-    parser.add_argument("--device", default="auto", help="auto | cpu | mps | cuda")
-    parser.add_argument("--instruction", default=DEFAULT_INSTRUCTION)
-    parser.add_argument("--image-height", type=int, default=None)
-    parser.add_argument("--image-width", type=int, default=None)
-    parser.add_argument("--render-height", type=int, default=1080)
-    parser.add_argument("--render-width", type=int, default=1920)
-    parser.add_argument(
-        "--n-action-steps",
-        type=int,
-        default=None,
-        help="override queued actions executed per policy query",
-    )
-    parser.add_argument(
-        "--temporal-ensemble-coeff",
-        type=float,
-        default=None,
-        help="enable ACT temporal ensembling (requires --n-action-steps 1)",
-    )
-    parser.add_argument(
-        "--diffusion-policy-python",
-        type=Path,
-        default=os.environ.get("DIFFUSION_POLICY_PYTHON"),
-        help="interpreter of the DPPO virtual environment (default: $DIFFUSION_POLICY_PYTHON)",
-    )
-    parser.add_argument(
-        "--diffusion-policy-config",
-        type=Path,
-        default=DEFAULT_DIFFUSION_POLICY_CONFIG,
-        help=f"training configuration YAML (default: {DEFAULT_DIFFUSION_POLICY_CONFIG})",
-    )
-    parser.add_argument(
-        "--diffusion-policy-normalization",
-        type=Path,
-        help="normalization.npz written by the Diffusion Policy dataset export",
-    )
-    parser.add_argument(
-        "--diffusion-policy-act-steps",
-        type=int,
-        default=None,
-        help="executed actions per policy query (default: the full prediction horizon)",
-    )
-    parser.add_argument(
-        "--diffusion-policy-seed",
-        type=int,
-        default=0,
-        help="Torch seed for DDPM action sampling (default: 0)",
-    )
-    parser.add_argument(
-        "--diffusion-policy-ddim-steps",
-        type=int,
-        default=None,
-        help=(
-            "sample with DDIM using this many steps instead of the trained DDPM "
-            "schedule; faster but not the training sampler, so not for headline runs"
-        ),
-    )
-    parser.add_argument(
-        "--scene-appearance",
-        type=str,
-        default=None,
-        metavar="NAME",
-        help=(
-            "render the scene the way the checkpoint's training data was rendered, either a "
-            f"preset ({', '.join(sorted(APPEARANCE_PRESETS))}) or an ad-hoc spec such as "
-            "'cube=blue,floor=dark-gray' (default: the scene as compiled, which carries the "
-            "rig's AprilTag cube)"
-        ),
-    )
     parser.add_argument(
         "--limit",
         type=int,

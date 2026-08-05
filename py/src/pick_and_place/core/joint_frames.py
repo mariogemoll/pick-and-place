@@ -24,6 +24,7 @@ from pathlib import Path
 
 import numpy as np
 
+from pick_and_place.core.kinematics import So101Kinematics
 from pick_and_place.spec.robot import ARM_JOINT_NAMES, GRIPPER_INDEX, JOINT_NAMES
 
 # Observed follower gripper encoder endpoints, calibrated on the hardware.
@@ -65,6 +66,40 @@ def clamp_joints(joints: np.ndarray, low: np.ndarray, high: np.ndarray) -> np.nd
     silently pin ``wrist_roll`` to the wrong range.)
     """
     return np.clip(joints, low, high)
+
+
+def follower_clamp_limits(kinematics: So101Kinematics) -> tuple[np.ndarray, np.ndarray]:
+    """Real-frame clamp bounds derived from the model: arm-joint limits in degrees
+    (the same limits the trajectory was planned against) plus the gripper's 0-100
+    position range. Clamping to these never alters a valid command."""
+    low = np.empty(len(JOINT_NAMES))
+    high = np.empty(len(JOINT_NAMES))
+    for i, name in enumerate(ARM_JOINT_NAMES):
+        limit = kinematics.joint_limits[name]
+        low[i] = math.degrees(limit.min)
+        high[i] = math.degrees(limit.max)
+    low[GRIPPER_INDEX] = 0.0
+    high[GRIPPER_INDEX] = 100.0
+    return low, high
+
+
+def clamp_and_warn(
+    commanded: np.ndarray,
+    low: np.ndarray,
+    high: np.ndarray,
+    warned: set[str],
+) -> np.ndarray:
+    """Clamp ``commanded`` to ``[low, high]``, printing once per joint that a
+    command actually exceeded the limits (so clipping never goes unnoticed)."""
+    clamped = clamp_joints(commanded, low, high)
+    for i, name in enumerate(JOINT_NAMES):
+        if name not in warned and abs(clamped[i] - commanded[i]) > 1e-3:
+            warned.add(name)
+            print(
+                f"warning: {name} command {commanded[i]:.1f} clipped to "
+                f"[{low[i]:.1f}, {high[i]:.1f}]"
+            )
+    return clamped
 
 
 def gripper_angle_to_position(angle_rad: float) -> float:

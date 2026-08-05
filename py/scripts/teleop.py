@@ -12,13 +12,10 @@ import mujoco.viewer
 import numpy as np
 
 from pick_and_place.sim.scene import build_scene
+from pick_and_place.planning.motion import smoothstep
 from pick_and_place.spec.robot import ARM_JOINT_NAMES
 from pick_and_place.core.joint_frames import action_to_joints, joints_to_action, real_frame_to_sim
 from pick_and_place.hardware.follower import make_so101_follower, make_so101_leader
-
-def _smoothstep(t: float) -> float:
-    c = min(1.0, max(0.0, t))
-    return c * c * (3.0 - 2.0 * c)
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -133,7 +130,7 @@ def main() -> None:
                 # Mirror to follower with a smooth ramp from its starting position
                 if follower is not None:
                     if elapsed_total < ramp_duration:
-                        alpha = _smoothstep(elapsed_total / ramp_duration)
+                        alpha = smoothstep(elapsed_total / ramp_duration)
                         follower_target = follower_start_joints + alpha * (leader_joints - follower_start_joints)
                     else:
                         follower_target = leader_joints

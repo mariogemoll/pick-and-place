@@ -85,7 +85,13 @@ def _cartesian_move_duration(distance: float) -> float:
     return max(MIN_TRAVEL_DURATION, distance / CARTESIAN_SPEED)
 
 
-def _smoothstep(t: float) -> float:
+def smoothstep(t: float) -> float:
+    """Ease ``t`` in [0, 1] to [0, 1] with zero slope at both ends.
+
+    The project's one easing curve: every smooth move — a trajectory phase, a
+    ramp onto a start pose, a teleop hand-off — starts and stops from rest
+    through this, so nothing anywhere begins or ends with a velocity step.
+    """
     c = min(1.0, max(0.0, t))
     return c * c * (3.0 - 2.0 * c)
 

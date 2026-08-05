@@ -78,16 +78,26 @@ from pick_and_place.core.camera_calibration import (
     load_camera_intrinsics,
     load_local_camera_intrinsics,
 )
-from pick_and_place.policies.diffusion_policy_client import DiffusionPolicyController, add_diffusion_policy_arguments
+from pick_and_place.policies.diffusion_policy_client import DiffusionPolicyController
 from pick_and_place.planning.episode_sampling import sample_hunt_pose, sample_near_neutral
-from pick_and_place.runtime.executor import (
-    CONTROL_HZ,
-    RAMP_DURATION,
+from pick_and_place.cli.policy import add_diffusion_policy_arguments, add_policy_arguments
+from pick_and_place.cli.rig import (
+    add_drop_zone_arguments,
+    add_follower_arguments,
+    add_operator_alert_arguments,
+    add_overhead_recalibration_arguments,
+    add_rig_camera_arguments,
+)
+from pick_and_place.runtime.frame_reader import open_frame_reader
+from pick_and_place.runtime.ramp import ramp_follower
+from pick_and_place.spec.robot import CONTROL_HZ, GRIPPER_INDEX, JOINT_NAMES
+from pick_and_place.core.joint_frames import (
+    action_to_joints,
     clamp_and_warn,
     follower_clamp_limits,
+    joints_to_action,
+    sim_frame_to_real,
 )
-from pick_and_place.spec.robot import GRIPPER_INDEX, JOINT_NAMES
-from pick_and_place.core.joint_frames import action_to_joints, joints_to_action, sim_frame_to_real
 from pick_and_place.hardware.follower import make_so101_follower
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.perception.image_rectify import (
@@ -96,10 +106,9 @@ from pick_and_place.perception.image_rectify import (
     transform_frame,
 )
 from pick_and_place.sim.derive_kinematics import derive_kinematics
-from pick_and_place.runtime.overhead_detection import DEFAULT_ALERT_SOUND, OperatorNotifier
+from pick_and_place.runtime.overhead_detection import OperatorNotifier
 from pick_and_place.policies.policy import (
     DEFAULT_CHECKPOINT,
-    DEFAULT_INSTRUCTION,
     make_policy,
     resolve_checkpoint_cameras,
     select_device,
@@ -128,71 +137,6 @@ def _drain_stdin_lines() -> bool:
             break  # EOF
         typed = True
     return typed
-
-
-def _smoothstep(t: float) -> float:
-    c = min(1.0, max(0.0, t))
-    return c * c * (3.0 - 2.0 * c)
-
-
-class CameraReader:
-    """Background reader keeping a single-slot 'latest frame' buffer fresh.
-
-    The control loop snapshots ``frame`` once per tick rather than calling
-    ``read()`` inline, so a slow capture never stalls the policy loop and the
-    arm always acts on the most recent image rather than a buffered backlog.
-
-    ``on_frame`` may be set to a callable taking ``(bgr, monotonic_time)``; it
-    is invoked from the reader thread for every captured frame, so a recorder
-    sees the camera's full native rate rather than the control loop's snapshots.
-    """
-
-    def __init__(self, source: str, width: int, height: int, label: str) -> None:
-        import cv2
-
-        from pick_and_place.calibration.cam_align_solve import parse_index_or_path
-
-        backend = cv2.CAP_AVFOUNDATION if hasattr(cv2, "CAP_AVFOUNDATION") else cv2.CAP_ANY
-        self._cap = cv2.VideoCapture(parse_index_or_path(source), backend)
-        if not self._cap.isOpened():
-            raise RuntimeError(f"could not open {label} camera {source!r}")
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        self._lock = threading.Lock()
-        self._frame = None
-        self._running = True
-        self.on_frame = None
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
-
-    def _loop(self) -> None:
-        while self._running:
-            ok, frame = self._cap.read()
-            if ok:
-                captured_at = time.monotonic()
-                with self._lock:
-                    self._frame = frame
-                on_frame = self.on_frame
-                if on_frame is not None:
-                    on_frame(frame, captured_at)
-
-    def latest(self):
-        with self._lock:
-            return self._frame
-
-    def wait_for_first(self, timeout: float = 2.0):
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            frame = self.latest()
-            if frame is not None:
-                return frame
-            time.sleep(0.001)
-        raise RuntimeError("timed out waiting for the camera stream to start")
-
-    def close(self) -> None:
-        self._running = False
-        self._thread.join(timeout=1.0)
-        self._cap.release()
 
 
 class ActionLog:
@@ -269,88 +213,17 @@ class ActionLog:
         print(f"Wrote action log: {path}")
 
 
-def _ramp_follower(
-    follower, target_real: np.ndarray, low, high, warned, max_joint_speed: float
-) -> None:
-    """Smoothstep the real arm from its current pose onto ``target_real``.
-
-    The ramp is stretched so no arm joint exceeds ``max_joint_speed`` (deg/s),
-    so a large move from a far parked pose obeys the same velocity cap as the
-    closed-loop run rather than snapping over in a fixed window.
-    """
-    current = action_to_joints(follower.get_observation(), target_real)
-    delta = target_real - current
-    arm_travel = float(np.max(np.abs(delta[:GRIPPER_INDEX]))) if GRIPPER_INDEX else 0.0
-    capped_duration = arm_travel / max_joint_speed if max_joint_speed > 0 else 0.0
-    duration = max(RAMP_DURATION, capped_duration)
-    steps = max(1, round(duration * CONTROL_HZ))
-    period = 1.0 / CONTROL_HZ
-    for i in range(1, steps + 1):
-        step_start = time.monotonic()
-        interp = clamp_and_warn(current + _smoothstep(i / steps) * delta, low, high, warned)
-        follower.send_action(joints_to_action(interp))
-        remaining = period - (time.monotonic() - step_start)
-        if remaining > 0:
-            time.sleep(remaining)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--controller",
-        choices=("lerobot", "diffusion-policy"),
-        default="lerobot",
-        help="policy implementation (default: lerobot)",
-    )
-    parser.add_argument("--instruction", default=DEFAULT_INSTRUCTION, help="language task string")
-    parser.add_argument(
-        "--checkpoint",
-        default=DEFAULT_CHECKPOINT,
-        help="HF policy checkpoint, or a Diffusion Policy state_*.pt file",
-    )
+    add_policy_arguments(parser)
     add_diffusion_policy_arguments(parser)
-    parser.add_argument("--device", default="auto", help="auto | cpu | mps | cuda")
-    parser.add_argument("--follower-port", required=True, help="serial port of the SO-101 follower")
-    parser.add_argument(
-        "--follower-id", default="folly", help="follower calibration id (default: folly)"
-    )
-    parser.add_argument("--camera", default="0", help="OpenCV index/path of the overhead camera")
-    parser.add_argument("--wrist-camera", default="1", help="OpenCV index/path of the wrist camera")
-    parser.add_argument(
-        "--image-height",
-        type=int,
-        default=None,
-        help="height fed to the policy (default: the checkpoint's training height, else 480)",
-    )
-    parser.add_argument(
-        "--image-width",
-        type=int,
-        default=None,
-        help="width fed to the policy (default: the checkpoint's training width, else 640)",
-    )
+    add_follower_arguments(parser)
+    add_rig_camera_arguments(parser, workspace_camera=True)
     parser.add_argument(
         "--steps",
         type=int,
         default=0,
         help="stop after this many control ticks (0 = run until Ctrl-C)",
-    )
-    parser.add_argument(
-        "--n-action-steps",
-        type=int,
-        default=100,
-        help=(
-            "queued actions to execute before re-querying a chunked policy "
-            "(default: 100; matches common ACT checkpoints; temporal ensembling uses 1)"
-        ),
-    )
-    parser.add_argument(
-        "--temporal-ensemble-coeff",
-        type=float,
-        default=None,
-        help=(
-            "enable ACT temporal ensembling with this coefficient, e.g. 0.01; "
-            "requires --n-action-steps 1"
-        ),
     )
     parser.add_argument(
         "--max-joint-speed",
@@ -392,11 +265,6 @@ def main() -> None:
             "(ensembled) action, sent command, and every raw predicted chunk, all "
             "in the real frame"
         ),
-    )
-    parser.add_argument(
-        "--workspace-camera",
-        default=None,
-        help="optional OpenCV index/path of a workspace camera to include in --record-video",
     )
     parser.add_argument(
         "--record-audio",
@@ -472,35 +340,7 @@ def main() -> None:
         help="pan-around search poses to try while looking for the cube or drop zone "
         "before asking the operator for help (default: 5)",
     )
-    parser.add_argument(
-        "--camera-name", default="overhead_camera", help="overhead camera name in the model"
-    )
-    parser.add_argument(
-        "--recalibrate",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="solve the overhead camera extrinsics live from the workspace-frame AprilTags at "
-        "startup and refuse to start if the solve is implausible; the success scan then reads "
-        "the cube against where the camera actually is (--no-recalibrate uses the saved sidecar "
-        "extrinsics instead)",
-    )
-    parser.add_argument(
-        "--recalibrate-samples",
-        type=int,
-        default=10,
-        help="overhead frames to average per extrinsics solve (default: 10)",
-    )
-    parser.add_argument(
-        "--recalibrate-max-seconds",
-        type=float,
-        default=15.0,
-        help="time budget to gather the solve frames before giving up (default: 15)",
-    )
-    parser.add_argument(
-        "--overhead-intrinsics",
-        default=None,
-        help="overhead camera intrinsics JSON for the solve (default: local sidecar)",
-    )
+    add_overhead_recalibration_arguments(parser, drift_checks=True)
     parser.add_argument(
         "--recalibrate-check-interval",
         type=float,
@@ -509,35 +349,8 @@ def main() -> None:
         "while the arm is at neutral; the run stops if the camera has drifted past the limits "
         "below. <=0 disables (default: 120)",
     )
-    parser.add_argument(
-        "--recalibrate-drift-mm",
-        type=float,
-        default=10.0,
-        help="translation drift from the startup solve that stops the run (default: 10 mm)",
-    )
-    parser.add_argument(
-        "--recalibrate-drift-deg",
-        type=float,
-        default=2.0,
-        help="rotation drift from the startup solve that stops the run (default: 2 deg)",
-    )
-    parser.add_argument(
-        "--drop-zone-color",
-        choices=("black", "white"),
-        default="black",
-        help="color of the drop-zone square to detect as the target (default: black)",
-    )
-    parser.add_argument(
-        "--operator-alerts",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="play a sound and speak operator alerts on macOS (default: on)",
-    )
-    parser.add_argument(
-        "--alert-sound",
-        default=DEFAULT_ALERT_SOUND,
-        help="sound file played before spoken operator alerts",
-    )
+    add_drop_zone_arguments(parser)
+    add_operator_alert_arguments(parser)
     args = parser.parse_args()
     if args.workspace_camera is not None and args.record_video is None:
         parser.error("--workspace-camera requires --record-video")
@@ -613,14 +426,14 @@ def main() -> None:
         workspace_intrinsics = load_camera_intrinsics(workspace_intrinsics_path)
 
     print("Opening cameras...")
-    overhead = CameraReader(args.camera, 1920, 1080, "overhead")
-    wrist = CameraReader(args.wrist_camera, 1280, 720, "wrist")
-    first_overhead = overhead.wait_for_first()
-    first_wrist = wrist.wait_for_first()
+    overhead = open_frame_reader(args.camera, 1920, 1080, "overhead")
+    wrist = open_frame_reader(args.wrist_camera, 1280, 720, "wrist")
+    first_overhead = overhead.wait_for_frame().bgr
+    first_wrist = wrist.wait_for_frame().bgr
     workspace = first_workspace = None
     if args.workspace_camera is not None:
-        workspace = CameraReader(args.workspace_camera, 1920, 1080, "workspace")
-        first_workspace = workspace.wait_for_first()
+        workspace = open_frame_reader(args.workspace_camera, 1920, 1080, "workspace")
+        first_workspace = workspace.wait_for_frame().bgr
 
     # Every frame is rectified to the same pinhole view the offline dataset
     # conversion produces, at the policy's input resolution, so the policy loads
@@ -809,23 +622,13 @@ def main() -> None:
     drop_zone_tracker = PaperTracker()
     notifier = OperatorNotifier(enabled=args.operator_alerts, sound_path=args.alert_sound)
 
-    class _ReaderCap:
-        """Adapt the overhead CameraReader's latest-frame buffer to the
-        ``cap.read()`` interface the overhead detection helpers expect."""
-
-        def read(self):
-            frame = overhead.latest()
-            return frame is not None, frame
-
-    adapter = _ReaderCap()
-
     def scan_cube_world():
         """Detect the cube on the latest overhead frame and return its (x, y, z)
         world position, or None if it is not currently visible."""
         frame = overhead.latest()
         if frame is None:
             return None
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        rgb = cv2.cvtColor(frame.bgr, cv2.COLOR_BGR2RGB)
         rgb = cv2.remap(rgb, *det_map, cv2.INTER_LINEAR)
         estimate = estimate_cube_pose(rgb, detector, det_matrix)
         if estimate is None:
@@ -938,10 +741,8 @@ def main() -> None:
         while True:
             if _drain_stdin_lines():
                 return "abandoned"
-            overhead_bgr = overhead.latest()
-            wrist_bgr = wrist.latest()
-            overhead_rgb = cv2.cvtColor(overhead_bgr, cv2.COLOR_BGR2RGB)
-            wrist_rgb = cv2.cvtColor(wrist_bgr, cv2.COLOR_BGR2RGB)
+            overhead_rgb = cv2.cvtColor(overhead.wait_for_frame().bgr, cv2.COLOR_BGR2RGB)
+            wrist_rgb = cv2.cvtColor(wrist.wait_for_frame().bgr, cv2.COLOR_BGR2RGB)
             overhead_rgb = policy_frame(overhead_rgb, overhead_undistort_map)
             wrist_rgb = policy_frame(wrist_rgb, wrist_undistort_map)
 
@@ -1082,8 +883,13 @@ def main() -> None:
                 next_tick = time.monotonic()
 
     def go_neutral() -> None:
-        _ramp_follower(
-            follower, neutral_real, clamp_low, clamp_high, clip_warned, args.max_joint_speed
+        ramp_follower(
+            follower,
+            neutral_real,
+            clamp_low,
+            clamp_high,
+            clip_warned,
+            max_joint_speed=args.max_joint_speed,
         )
 
     def hunt(label, detect):
@@ -1096,9 +902,13 @@ def main() -> None:
             if i > 0:
                 arm, grip = sample_hunt_pose(rng)
                 print(f"{label} look {i + 1}/{args.max_hunt_tries}: panning to a new search pose...")
-                _ramp_follower(
-                    follower, sim_frame_to_real(arm, grip), clamp_low, clamp_high, clip_warned,
-                    args.max_joint_speed,
+                ramp_follower(
+                    follower,
+                    sim_frame_to_real(arm, grip),
+                    clamp_low,
+                    clamp_high,
+                    clip_warned,
+                    max_joint_speed=args.max_joint_speed,
                 )
                 time.sleep(0.5)  # let the camera settle
             else:
@@ -1123,11 +933,11 @@ def main() -> None:
 
     def detect_target():
         return track_drop_zone_square(
-            adapter, args.camera_name, model, data, drop_zone_tracker, args.drop_zone_color
+            overhead, args.camera_name, model, data, drop_zone_tracker, args.drop_zone_color
         )
 
     def detect_cube():
-        return track_cube(adapter, args.camera_name, model, data, CUBE_LOOK_TIMEOUT)
+        return track_cube(overhead, args.camera_name, model, data, CUBE_LOOK_TIMEOUT)
 
     def solve_startup_extrinsics() -> None:
         """Solve the overhead extrinsics live from the workspace-frame tags, validate
@@ -1139,7 +949,7 @@ def main() -> None:
         result = solve_overhead_extrinsics(
             model,
             data,
-            adapter,
+            overhead,
             camera_name=args.camera_name,
             intrinsics_path=args.overhead_intrinsics,
             samples=args.recalibrate_samples,
@@ -1190,7 +1000,7 @@ def main() -> None:
         check = solve_overhead_extrinsics(
             model,
             data,
-            adapter,
+            overhead,
             camera_name=args.camera_name,
             intrinsics_path=args.overhead_intrinsics,
             samples=args.recalibrate_samples,
@@ -1255,9 +1065,13 @@ def main() -> None:
             # simply retried from a new start rather than left to flail.
             arm, grip = sample_near_neutral(rng)
             print("Ramping to a randomish start pose...")
-            _ramp_follower(
-                follower, sim_frame_to_real(arm, grip), clamp_low, clamp_high, clip_warned,
-                args.max_joint_speed,
+            ramp_follower(
+                follower,
+                sim_frame_to_real(arm, grip),
+                clamp_low,
+                clamp_high,
+                clip_warned,
+                max_joint_speed=args.max_joint_speed,
             )
             policy.reset()
 
@@ -1307,11 +1121,21 @@ def main() -> None:
         try:
             print("Parking to NEUTRAL then REST...")
             follower.bus.enable_torque()
-            _ramp_follower(
-                follower, neutral_real, clamp_low, clamp_high, clip_warned, args.max_joint_speed
+            ramp_follower(
+                follower,
+                neutral_real,
+                clamp_low,
+                clamp_high,
+                clip_warned,
+                max_joint_speed=args.max_joint_speed,
             )
-            _ramp_follower(
-                follower, rest_real, clamp_low, clamp_high, clip_warned, args.max_joint_speed
+            ramp_follower(
+                follower,
+                rest_real,
+                clamp_low,
+                clamp_high,
+                clip_warned,
+                max_joint_speed=args.max_joint_speed,
             )
             parked = True
         except Exception as exc:  # noqa: BLE001 - best-effort park before release

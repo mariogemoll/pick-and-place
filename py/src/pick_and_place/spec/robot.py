@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Identity, ordering and standing postures of the SO-101's joints.
+"""Identity, ordering, standing postures and control rate of the SO-101.
 
 The names are the ones the MJCF gives its joints and the ones lerobot's
 ``SO101Follower`` reports and accepts, which is why a single tuple can serve the
@@ -13,11 +13,24 @@ The postures are the same kind of shared fact: where the arm parks, where it
 starts, and how far the jaws open are properties of this rig, agreed on by the
 planner that moves it, the recorder that logs it and the policies trained on
 what came out. Angles are in radians, in the simulator's frame.
+
+So is the rate everything runs at. The sim and the real arm are only comparable
+because they tick at the same frequency and record one row per tick, so the
+control rate is a contract between them rather than a property of either.
 """
 
 from __future__ import annotations
 
 import math
+
+# Wall-clock rate shared by physical control, motor readback, camera indexing,
+# and dataset rows. MuJoCo takes multiple internal steps per control tick.
+CONTROL_HZ = 30.0
+
+# Simulation rate used by the hardware runner. This is an integer multiple of
+# CONTROL_HZ, so sampling cannot drift onto the next MuJoCo step as it did with
+# the stock 500 Hz timestep.
+HARDWARE_SIMULATION_HZ = 600.0
 
 # The five arm joints, base to tip.
 ARM_JOINT_NAMES: tuple[str, str, str, str, str] = (

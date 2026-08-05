@@ -9,7 +9,6 @@ import dataclasses
 from collections.abc import Callable, Iterable
 from concurrent.futures import Future, ThreadPoolExecutor
 from enum import Enum
-from pathlib import Path
 from typing import Any
 
 import mujoco
@@ -19,7 +18,7 @@ from scipy.spatial.transform import Rotation
 from pick_and_place.perception.cube_detection import CubeTracker
 from pick_and_place.planning.episode_sampling import sample_hunt_pose
 from pick_and_place.runtime.episodes import Episode, prepare_episode
-from pick_and_place.runtime.preflight import preflight
+from pick_and_place.runtime.preflight import PreflightDebug, preflight
 from pick_and_place.sim.collisions import is_unexpected
 from pick_and_place.sim.model import set_joint
 from pick_and_place.spec.robot import JOINT_NAMES
@@ -195,10 +194,7 @@ class ScriptedPolicy:
         localization_steps_per_search: int = 15,
         planning_max_attempts: int = 40,
         planning_verbose: bool = False,
-        preflight_debug: bool = False,
-        preflight_debug_limit: int = 12,
-        failed_trajectory_dir: Path | None = None,
-        failed_trajectory_limit: int = 8,
+        debug: PreflightDebug = PreflightDebug(),
         rng_seed: int = 0,
         control_hz: float = 30.0,
         wrist_localizer: WristLocalization | None = None,
@@ -229,10 +225,7 @@ class ScriptedPolicy:
         self.localization_steps_per_search = localization_steps_per_search
         self.planning_max_attempts = planning_max_attempts
         self.planning_verbose = planning_verbose
-        self.preflight_debug = preflight_debug
-        self.preflight_debug_limit = preflight_debug_limit
-        self.failed_trajectory_dir = failed_trajectory_dir
-        self.failed_trajectory_limit = failed_trajectory_limit
+        self.debug = debug
         self.rng_seed = rng_seed
         self.control_hz = float(control_hz)
         self.wrist_localizer = wrist_localizer
@@ -361,10 +354,7 @@ class ScriptedPolicy:
             max_attempts=self.planning_max_attempts,
             verbose=self.planning_verbose,
             include_environment=True,
-            preflight_debug=self.preflight_debug,
-            preflight_debug_limit=self.preflight_debug_limit,
-            failed_trajectory_dir=self.failed_trajectory_dir,
-            failed_trajectory_limit=self.failed_trajectory_limit,
+            debug=self.debug,
             free_grasp=self.free_grasp,
             target_sampler=self.target_sampler,
         )

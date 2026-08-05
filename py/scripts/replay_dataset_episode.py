@@ -35,7 +35,7 @@ from pick_and_place.sim.scene import build_scene
 from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
 from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_spec
 from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
-from pick_and_place.runtime.executor import CONTROL_HZ, HARDWARE_SIMULATION_HZ
+from pick_and_place.spec.robot import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 from pick_and_place.spec.robot import ARM_JOINT_NAMES, JOINT_NAMES
 from pick_and_place.core.joint_frames import real_frame_to_sim, sim_frame_to_real
 from pick_and_place.core.paths import outputs_root

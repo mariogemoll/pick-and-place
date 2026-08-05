@@ -31,6 +31,27 @@ from pick_and_place.sim.model import set_cube_pose, set_joint
 
 
 @dataclass(frozen=True)
+class PreflightDebug:
+    """What to report about the trajectory candidates preflight rejects.
+
+    Silent by default. Both kinds of report need the same per-contact detail,
+    which costs a second, slower physics pass over every candidate, so a run that
+    plans thousands of episodes must not pay for it unasked — :attr:`detailed`
+    is what decides.
+    """
+
+    print_contacts: bool = False
+    contact_limit: int = 12
+    trajectory_dir: Path | None = None
+    trajectory_limit: int = 8
+
+    @property
+    def detailed(self) -> bool:
+        """Whether anything here needs the per-contact detail."""
+        return self.print_contacts or self.trajectory_dir is not None
+
+
+@dataclass(frozen=True)
 class PreflightCollision:
     """One unexpected contact observed while simulating a candidate trajectory."""
 

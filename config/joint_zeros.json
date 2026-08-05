@@ -1,0 +1,22 @@
+{
+ "latest": {
+  "day": "20260805",
+  "timestamp": "2026-08-05T10:01:13",
+  "offsets_deg": {
+   "shoulder_pan": 4.577,
+   "shoulder_lift": 1.74,
+   "elbow_flex": -5.777,
+   "wrist_flex": 0.998
+  },
+  "std_deg": {
+   "shoulder_pan": 0.14,
+   "shoulder_lift": 0.554,
+   "elbow_flex": 0.597,
+   "wrist_flex": 0.386
+  },
+  "positions": 7,
+  "samples": 63,
+  "residual_mm": 6.29
+ },
+ "history": []
+}

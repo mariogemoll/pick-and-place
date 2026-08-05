@@ -62,7 +62,20 @@ from pick_and_place.sim.domain_randomization import (
 from pick_and_place.planning.episode_sampling import sample_cube
 from pick_and_place.runtime.episodes import EpisodeSamplingError, prepare_episode
 from pick_and_place.sim.model import placement_error
-from pick_and_place.runtime.executor import CONTROL_HZ
+from pick_and_place.cli.dataset import add_dataset_arguments
+from pick_and_place.data.recording_config import (
+    DatasetOutput,
+    FrameSizes,
+    SAVED_IMAGE_HEIGHT,
+    SAVED_IMAGE_WIDTH,
+    SceneDraw,
+)
+from pick_and_place.cli.scene import (
+    add_cube_pose_arguments,
+    add_render_size_arguments,
+    add_scene_texture_arguments,
+)
+from pick_and_place.spec.robot import CONTROL_HZ
 from pick_and_place.core.miscalibration import MiscalibrationDraw, MiscalibrationModel
 from pick_and_place.data.recording import RecordingSession
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
@@ -82,10 +95,6 @@ from pick_and_place.data.sim_dataset_staging import (
 from pick_and_place.core.workspace_bounds import is_cube_drop_allowed, sample_target_plate_yaw
 
 
-SAVED_IMAGE_WIDTH = 960
-SAVED_IMAGE_HEIGHT = 720
-RENDER_WIDTH = 1920
-RENDER_HEIGHT = 1080
 # ~8.5x the ~35 s nominal episode under libx264, so an episode that burns many
 # trajectory resamples (up to --max-attempts) is not mistaken for a wedge.
 DEFAULT_EPISODE_TIMEOUT = 300.0
@@ -140,25 +149,12 @@ def run_recording(
     *,
     index_source: Callable[[], int | None],
     seed: int | None,
-    dataset_root: Path,
-    repo_id: str,
-    task: str,
+    output: DatasetOutput,
+    scene: SceneDraw = SceneDraw(),
+    frames: FrameSizes = FrameSizes(),
     heartbeat: Callable[[int | None], None] | None = None,
-    source_xy: tuple[float, float] | None = None,
-    target_xy: tuple[float, float] | None = None,
-    background_panorama: Path | None = None,
-    table_texture: Path | None = None,
     speed: float = 1.0,
-    vcodec: str = "h264",
-    streaming_encoding: bool = True,
-    image_writer_threads: int = 4,
-    image_width: int = SAVED_IMAGE_WIDTH,
-    image_height: int = SAVED_IMAGE_HEIGHT,
-    render_width: int = RENDER_WIDTH,
-    render_height: int = RENDER_HEIGHT,
     use_viewer: bool = False,
-    miscalibration: bool = False,
-    domain_randomization: Path | None = None,
     label: str = "",
     max_attempts: int = 50,
     show_progress: bool = True,
@@ -189,23 +185,29 @@ def run_recording(
     ``use_viewer`` opens the 3D viewer (single process only); pool workers
     always run headless.
     """
-    preset = DomainRandomizationPreset.load(domain_randomization) if domain_randomization else None
+    preset = (
+        DomainRandomizationPreset.load(scene.domain_randomization)
+        if scene.domain_randomization
+        else None
+    )
     # Appearance is re-applied per episode from that episode's own domain seed,
     # so this initial sample only seeds the textures the scene is built with.
     initial_sample = preset.sample(_domain_seed(seed, 0)) if preset is not None else None
+    table_texture = scene.table_texture
+    background_panorama = scene.background_panorama
     if preset is not None:
         initial_appearance = generate_procedural_appearance(initial_sample)
         table_texture = initial_appearance.table_rgb
         background_panorama = initial_appearance.background_rgb
-    source = _to_cube(source_xy)
-    target = _to_cube(target_xy)
+    source = _to_cube(scene.source_xy)
+    target = _to_cube(scene.target_xy)
 
     # One persistent scene reused across episodes. The environment is required for
     # the overhead camera; calibrated extrinsics place it where the real one sits.
     # `rerender_episodes.py` replays recordings through this same builder.
     model, data = build_recording_scene(
-        render_width=render_width,
-        render_height=render_height,
+        render_width=frames.render_width,
+        render_height=frames.render_height,
         background_panorama=background_panorama,
         table_texture=table_texture,
     )
@@ -214,10 +216,10 @@ def run_recording(
     rig = SimCameraRig(
         model,
         load_local_camera_intrinsics(),
-        width=image_width,
-        height=image_height,
-        render_width=render_width,
-        render_height=render_height,
+        width=frames.image_width,
+        height=frames.image_height,
+        render_width=frames.render_width,
+        render_height=frames.render_height,
         postprocess=randomizer.postprocess if randomizer is not None else None,
     )
 
@@ -227,7 +229,9 @@ def run_recording(
 
     disable_progress_bar()
 
-    miscalibration_model = MiscalibrationModel() if miscalibration and preset is None else None
+    miscalibration_model = (
+        MiscalibrationModel() if scene.miscalibration and preset is None else None
+    )
     viewer_cm = mujoco.viewer.launch_passive(model, data) if use_viewer else None
     viewer = viewer_cm.__enter__() if viewer_cm is not None else _MockViewer()
 
@@ -256,7 +260,7 @@ def run_recording(
 
             # One dataset per episode, finalized below. `record_episode` creates
             # it lazily on the first frame, once the camera shapes are known.
-            episode_root = dataset_root / f"ep{global_episode:06d}"
+            episode_root = output.root / f"ep{global_episode:06d}"
             if episode_root.exists():
                 if (episode_root / "meta" / "info.json").is_file():
                     raise FileExistsError(
@@ -266,13 +270,13 @@ def run_recording(
                 # watchdog retries the same deterministic global index.
                 shutil.rmtree(episode_root, ignore_errors=True)
             recording = RecordingSession(
-                repo_id=f"{repo_id}-ep{global_episode:06d}",
+                repo_id=f"{output.repo_id}-ep{global_episode:06d}",
                 root=episode_root,
-                task=task,
+                task=output.task,
                 fps=CONTROL_HZ,
-                vcodec=vcodec,
-                streaming_encoding=streaming_encoding,
-                image_writer_threads=image_writer_threads,
+                vcodec=output.vcodec,
+                streaming_encoding=output.streaming_encoding,
+                image_writer_threads=output.image_writer_threads,
             )
 
             rng = _episode_rng(seed, global_episode)
@@ -621,22 +625,7 @@ def main() -> None:
             "would spin forever on an index that wedges every time"
         ),
     )
-    parser.add_argument(
-        "--source",
-        type=float,
-        nargs=2,
-        metavar=("X", "Y"),
-        default=None,
-        help="pin the source cube (x, y); omit to resample each episode",
-    )
-    parser.add_argument(
-        "--target",
-        type=float,
-        nargs=2,
-        metavar=("X", "Y"),
-        default=None,
-        help="pin the target (x, y); omit to resample each episode",
-    )
+    add_cube_pose_arguments(parser, source_yaw=False)
     parser.add_argument(
         "--speed",
         type=float,
@@ -676,61 +665,19 @@ def main() -> None:
             "for diagnosing the crash; the run itself continues either way"
         ),
     )
-    parser.add_argument(
-        "--background-panorama",
-        type=Path,
-        default=None,
-        help="equirectangular room panorama to render as a skybox behind the scene",
-    )
-    parser.add_argument(
-        "--table-texture",
-        type=Path,
-        default=None,
-        help="top-down table texture (from reconstruct_table_texture.py) for the floor",
-    )
-    parser.add_argument(
-        "--dataset-root",
-        type=Path,
-        default=None,
-        help=(
-            "eventual finalized dataset path; collection writes to the sibling "
-            "<root>_episodes directory (default base: datasets/<timestamp>)"
+    add_scene_texture_arguments(parser)
+    add_dataset_arguments(
+        parser,
+        repo_id="local/pick-and-place-so101-sim",
+        vcodec="h264",
+        vcodec_help=(
+            "LeRobot video codec (default: h264 = software libx264). Measured ~35 s/episode "
+            "against ~122-167 s for h264_nvenc on a single-GPU machine: MuJoCo renders "
+            "offscreen through EGL on that same GPU, so hardware encoding contends with "
+            "rendering while software encoding runs on otherwise-idle cores. Prefer an "
+            "explicit codec over 'auto', which probes for a hardware encoder and silently "
+            "picks the slow path; pinning it also keeps one encoding profile across a dataset"
         ),
-    )
-    parser.add_argument(
-        "--repo-id",
-        default="local/pick-and-place-so101-sim",
-        help="dataset repo id stored in metadata",
-    )
-    parser.add_argument(
-        "--task",
-        default="Pick up the cube and place it at the target.",
-        help="natural-language task instruction saved with every frame",
-    )
-    parser.add_argument(
-        "--vcodec",
-        default="h264",
-        help=(
-            "LeRobot video codec (default: h264 = software libx264). Measured "
-            "~35 s/episode against ~122-167 s for h264_nvenc on a single-GPU "
-            "machine: MuJoCo renders offscreen through EGL on that same GPU, so "
-            "hardware encoding contends with rendering while software encoding "
-            "runs on otherwise-idle cores. Prefer an explicit codec over 'auto', "
-            "which probes for a hardware encoder and silently picks the slow "
-            "path; pinning it also keeps one encoding profile across a dataset"
-        ),
-    )
-    parser.add_argument(
-        "--streaming-encoding",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="encode video during capture; --no-streaming-encoding falls back to PNG-then-encode",
-    )
-    parser.add_argument(
-        "--image-writer-threads",
-        type=int,
-        default=4,
-        help="background image-writer threads for PNG-then-encode mode",
     )
     parser.add_argument(
         "--image-width",
@@ -744,18 +691,7 @@ def main() -> None:
         default=SAVED_IMAGE_HEIGHT,
         help=f"saved camera image height (default: {SAVED_IMAGE_HEIGHT})",
     )
-    parser.add_argument(
-        "--render-width",
-        type=int,
-        default=RENDER_WIDTH,
-        help=f"MuJoCo source render width before downsampling/cropping (default: {RENDER_WIDTH})",
-    )
-    parser.add_argument(
-        "--render-height",
-        type=int,
-        default=RENDER_HEIGHT,
-        help=f"MuJoCo source render height before downsampling/cropping (default: {RENDER_HEIGHT})",
-    )
+    add_render_size_arguments(parser)
     args = parser.parse_args()
 
     if args.episodes < 1:
@@ -764,10 +700,6 @@ def main() -> None:
         parser.error("--workers must be at least 1")
     if args.speed <= 0.0:
         parser.error("--speed must be positive")
-    if args.image_width < 1 or args.image_height < 1:
-        parser.error("--image-width and --image-height must be positive")
-    if args.render_width < args.image_width or args.render_height < args.image_height:
-        parser.error("--render-width and --render-height must be at least the image dimensions")
     if args.max_attempts < 1:
         parser.error("--max-attempts must be at least 1")
     if args.viewer and args.workers > 1:
@@ -780,24 +712,23 @@ def main() -> None:
         args.dataset_root if args.dataset_root is not None else datasets_root() / timestamp
     )
 
-    common = dict(
+    scene = SceneDraw(
         source_xy=tuple(args.source) if args.source is not None else None,
         target_xy=tuple(args.target) if args.target is not None else None,
         background_panorama=args.background_panorama,
         table_texture=args.table_texture,
-        speed=args.speed,
-        vcodec=args.vcodec,
-        streaming_encoding=args.streaming_encoding,
-        image_writer_threads=args.image_writer_threads,
-        image_width=args.image_width,
-        image_height=args.image_height,
-        render_width=args.render_width,
-        render_height=args.render_height,
         miscalibration=args.miscalibration,
         domain_randomization=args.domain_randomization,
-        max_attempts=args.max_attempts,
-        detector_crash_dump_dir=args.detector_crash_dump_dir,
     )
+    try:
+        frames = FrameSizes(
+            render_width=args.render_width,
+            render_height=args.render_height,
+            image_width=args.image_width,
+            image_height=args.image_height,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     # Episodes are staged as siblings of the eventual aggregate so collection
     # can be topped up and resumed without touching an already-finalized root.
@@ -808,8 +739,8 @@ def main() -> None:
         "seed": args.seed,
         "repo_id": args.repo_id,
         "task": args.task,
-        "source_xy": common["source_xy"],
-        "target_xy": common["target_xy"],
+        "source_xy": scene.source_xy,
+        "target_xy": scene.target_xy,
         "background_panorama": _configured_file(args.background_panorama),
         "table_texture": _configured_file(args.table_texture),
         "speed": args.speed,
@@ -844,10 +775,19 @@ def main() -> None:
 
     job = dict(
         seed=args.seed,
-        dataset_root=episodes_root,
-        repo_id=args.repo_id,
-        task=args.task,
-        **common,
+        output=DatasetOutput(
+            root=episodes_root,
+            repo_id=args.repo_id,
+            task=args.task,
+            vcodec=args.vcodec,
+            streaming_encoding=args.streaming_encoding,
+            image_writer_threads=args.image_writer_threads,
+        ),
+        scene=scene,
+        frames=frames,
+        speed=args.speed,
+        max_attempts=args.max_attempts,
+        detector_crash_dump_dir=args.detector_crash_dump_dir,
     )
 
     print(

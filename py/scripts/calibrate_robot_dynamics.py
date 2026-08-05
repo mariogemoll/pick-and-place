@@ -32,7 +32,7 @@ import numpy as np
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from pick_and_place.runtime.executor import CONTROL_HZ
+from pick_and_place.spec.robot import CONTROL_HZ
 from pick_and_place.spec.robot import GRIPPER_INDEX, JOINT_NAMES
 
 

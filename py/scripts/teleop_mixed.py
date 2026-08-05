@@ -28,6 +28,7 @@ import numpy as np
 
 from pick_and_place.calibration.camera_compare import draw_hud, draw_tag_detections, load_intrinsics, RealSource
 
+from pick_and_place.planning.motion import smoothstep
 from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
 from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
 from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR
@@ -41,10 +42,6 @@ from pick_and_place.core.workspace_bounds import is_cube_drop_allowed, workspace
 from pick_and_place.spec.robot import ARM_JOINT_NAMES
 from pick_and_place.core.joint_frames import action_to_joints, joints_to_action, real_frame_to_sim
 from pick_and_place.hardware.follower import make_so101_follower, make_so101_leader
-
-def _smoothstep(t: float) -> float:
-    c = min(1.0, max(0.0, t))
-    return c * c * (3.0 - 2.0 * c)
 
 WINDOW_TITLE = "teleop_mixed  (m mode  , . alpha  q quit)"
 
@@ -156,7 +153,7 @@ def _teleop_thread_func(state: TeleopState, leader, follower, follower_start_joi
         follower_read_joints = None
         if follower is not None:
             if elapsed_total < ramp_duration:
-                alpha = _smoothstep(elapsed_total / ramp_duration)
+                alpha = smoothstep(elapsed_total / ramp_duration)
                 follower_target = follower_start_joints + alpha * (leader_joints - follower_start_joints)
             else:
                 follower_target = leader_joints

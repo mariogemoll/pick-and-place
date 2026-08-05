@@ -44,6 +44,7 @@ from pick_and_place.perception.cube_detection import (
     make_cube_detector,
 )
 from pick_and_place.planning.episode_sampling import sample_hunt_pose
+from pick_and_place.planning.motion import smoothstep
 from pick_and_place.sim.collisions import build_geom_sets, make_carry_collision_checker
 from pick_and_place.spec.robot import ARM_JOINT_NAMES, JOINT_NAMES
 from pick_and_place.core.joint_frames import (
@@ -117,11 +118,6 @@ class CalibrationConfig:
     # may be parked over it after a relocation), swinging the arm clear of the
     # overhead view between tries.
     hunt_tries: int = 5
-
-
-def _smoothstep(t: float) -> float:
-    c = min(1.0, max(0.0, t))
-    return c * c * (3.0 - 2.0 * c)
 
 
 def _approach_vector(azimuth: float, pitch: float) -> np.ndarray:
@@ -244,7 +240,7 @@ def _move_arm_to(
         if viewer is not None and not viewer.is_running():
             return
         step_start = time.time()
-        interp = current + _smoothstep(i / steps) * delta
+        interp = current + smoothstep(i / steps) * delta
         follower.send_action(joints_to_action(interp))
         arm_rad, grip_rad = real_frame_to_sim(interp)
         for name in ARM_JOINT_NAMES:

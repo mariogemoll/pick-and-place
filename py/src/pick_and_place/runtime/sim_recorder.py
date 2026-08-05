@@ -56,15 +56,11 @@ from pick_and_place.sim.model import (
     set_joint,
 )
 from pick_and_place.sim.domain_randomization import reload_renderer_textures
-from pick_and_place.runtime.executor import (
-    CONTROL_HZ,
-    HARDWARE_SIMULATION_HZ,
-)
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.image_ops import resize_and_center_crop
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.data.recording import RecordingSession
-from pick_and_place.spec.robot import ARM_JOINT_NAMES
+from pick_and_place.spec.robot import ARM_JOINT_NAMES, CONTROL_HZ, HARDWARE_SIMULATION_HZ
 from pick_and_place.core.joint_frames import sim_frame_to_real
 from pick_and_place.perception.image_rectify import SQUARE_SIZE
 from pick_and_place.core.task_phases import PhaseSpan

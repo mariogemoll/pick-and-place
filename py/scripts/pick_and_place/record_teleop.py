@@ -81,18 +81,24 @@ import numpy as np
 
 from pick_and_place.data.dataset_metadata import cube_pose_metadata, driver_metadata
 from pick_and_place.sim.model import build_model
-from pick_and_place.runtime.executor import (
-    CONTROL_HZ,
-    RAMP_DURATION,
-    clamp_and_warn,
-    follower_clamp_limits,
+from pick_and_place.cli.dataset import add_dataset_arguments
+from pick_and_place.cli.rig import (
+    add_drop_zone_arguments,
+    add_follower_arguments,
+    add_operator_alert_arguments,
+    add_overhead_recalibration_arguments,
+    add_rig_camera_arguments,
 )
+from pick_and_place.runtime.frame_reader import FrameReader, open_capture
+from pick_and_place.runtime.ramp import ramp_follower
 from pick_and_place.data.recording import RecordingSession
-from pick_and_place.spec.robot import GRIPPER_INDEX
+from pick_and_place.spec.robot import CONTROL_HZ, GRIPPER_INDEX
 from pick_and_place.core.joint_frames import (
     GRIPPER_READBACK_CLOSED,
     GRIPPER_READBACK_OPEN,
     action_to_joints,
+    clamp_and_warn,
+    follower_clamp_limits,
     joints_to_action,
 )
 from pick_and_place.hardware.follower import make_so101_follower, make_so101_leader
@@ -100,7 +106,6 @@ from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.sim.derive_kinematics import derive_kinematics
 from pick_and_place.runtime.overhead_detection import (
-    DEFAULT_ALERT_SOUND,
     OperatorNotifier,
     OverheadDetectionDebug,
     empty_overhead_debug,
@@ -143,78 +148,6 @@ def make_gripper_transform(
     raise ValueError(f"unknown gripper mode {mode!r}")
 
 
-class CameraReader:
-    """Background reader keeping a single-slot 'latest frame' buffer fresh.
-
-    The record loop snapshots ``latest()`` once per tick rather than calling
-    ``read()`` inline, so a slow capture never stalls the loop and every frame
-    logged is the most recent one.
-    """
-
-    def __init__(self, cap, label: str) -> None:
-        self._cap = cap
-        self._label = label
-        self._lock = threading.Lock()
-        self._frame = None
-        self._running = True
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
-
-    def _loop(self) -> None:
-        while self._running:
-            ok, frame = self._cap.read()
-            if ok:
-                with self._lock:
-                    self._frame = frame
-
-    def latest(self):
-        with self._lock:
-            return self._frame
-
-    def wait_for_first(self, timeout: float = 2.0):
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            frame = self.latest()
-            if frame is not None:
-                return frame
-            time.sleep(0.001)
-        raise RuntimeError(f"timed out waiting for the {self._label} camera stream to start")
-
-    def close(self) -> None:
-        self._running = False
-        self._thread.join(timeout=1.0)
-
-
-def _smoothstep(t: float) -> float:
-    c = min(1.0, max(0.0, t))
-    return c * c * (3.0 - 2.0 * c)
-
-
-def _ramp_follower(
-    follower,
-    target_real: np.ndarray,
-    low: np.ndarray,
-    high: np.ndarray,
-    warned: set[str],
-) -> None:
-    """Smoothstep the real arm from its current pose onto ``target_real``.
-
-    The one-time startup ramp: the only follower motion this script commands
-    itself. Everything after is driven by the leader through :class:`Teleop`.
-    """
-    current = action_to_joints(follower.get_observation(), target_real)
-    delta = target_real - current
-    steps = max(1, round(RAMP_DURATION * CONTROL_HZ))
-    period = 1.0 / CONTROL_HZ
-    for i in range(1, steps + 1):
-        step_start = time.monotonic()
-        interp = clamp_and_warn(current + _smoothstep(i / steps) * delta, low, high, warned)
-        follower.send_action(joints_to_action(interp))
-        remaining = period - (time.monotonic() - step_start)
-        if remaining > 0:
-            time.sleep(remaining)
-
-
 class Teleop:
     """Continuously stream the leader's pose onto the follower.
 
@@ -253,8 +186,8 @@ class Teleop:
         self._running = True
         self._lock = threading.Lock()
         self._recording = False
-        self._wrist: CameraReader | None = None
-        self._overhead: CameraReader | None = None
+        self._wrist: FrameReader | None = None
+        self._overhead: FrameReader | None = None
         self._queue: queue.Queue | None = None
         self._frames = 0
         self._thread = threading.Thread(target=self._loop, daemon=True)
@@ -267,7 +200,7 @@ class Teleop:
         self._thread.join(timeout=1.0)
 
     def begin_recording(
-        self, wrist: CameraReader, overhead: CameraReader, record_queue: queue.Queue
+        self, wrist: FrameReader, overhead: FrameReader, record_queue: queue.Queue
     ) -> None:
         with self._lock:
             self._wrist = wrist
@@ -315,8 +248,8 @@ class Teleop:
                         (
                             measured.astype(np.float32),
                             commanded.astype(np.float32),
-                            wrist_frame,
-                            overhead_frame,
+                            wrist_frame.bgr,
+                            overhead_frame.bgr,
                         )
                     )
                     with self._lock:
@@ -492,8 +425,8 @@ def record_episode(
     """
     import cv2
 
-    overhead = CameraReader(overhead_cap, "overhead")
-    wrist = CameraReader(wrist_cap, "wrist")
+    overhead = FrameReader(overhead_cap, "overhead", owns_capture=False)
+    wrist = FrameReader(wrist_cap, "wrist", owns_capture=False)
     record_queue: queue.Queue = queue.Queue()
 
     def record_writer() -> None:
@@ -516,8 +449,8 @@ def record_episode(
     frames = 0
     aborted = False
     try:
-        first_wrist = wrist.wait_for_first()
-        first_overhead = overhead.wait_for_first()
+        first_wrist = wrist.wait_for_frame().bgr
+        first_overhead = overhead.wait_for_frame().bgr
         # Create the dataset on the first episode, once the frame shapes are known.
         if recording.dataset is None:
             recording.create_dataset(first_wrist.shape, first_overhead.shape)
@@ -546,42 +479,22 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--leader-port", required=True, help="serial port of the SO-101 leader")
     parser.add_argument("--leader-id", default="liddy", help="leader calibration id (default: liddy)")
-    parser.add_argument("--follower-port", required=True, help="serial port of the SO-101 follower")
-    parser.add_argument(
-        "--follower-id", default="folly", help="follower calibration id (default: folly)"
-    )
+    add_follower_arguments(parser)
     parser.add_argument(
         "--episodes",
         type=int,
         default=0,
         help="number of episodes to record; 0 means loop until quit (default: 0)",
     )
-    parser.add_argument(
-        "--drop-zone-color",
-        choices=("black", "white"),
-        default="black",
-        help="color of the drop-zone square to detect (default: black)",
-    )
-    parser.add_argument(
-        "--operator-alerts",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="play a signal sound and speak operator alerts on macOS (default: on)",
-    )
-    parser.add_argument(
-        "--alert-sound",
-        default=DEFAULT_ALERT_SOUND,
-        help=f"sound file to play before spoken alerts (default: {DEFAULT_ALERT_SOUND})",
-    )
+    add_drop_zone_arguments(parser)
+    add_operator_alert_arguments(parser)
     parser.add_argument(
         "--start-sound",
         default=DEFAULT_START_SOUND,
         help="short sound (no speech) played the instant recording starts "
         f"(default: {DEFAULT_START_SOUND})",
     )
-    parser.add_argument("--camera", default="0", help="OpenCV index/path of the overhead camera")
-    parser.add_argument("--camera-name", default="overhead_camera", help="camera name in the model")
-    parser.add_argument("--wrist-camera", default="1", help="OpenCV index/path of the wrist camera")
+    add_rig_camera_arguments(parser)
     parser.add_argument(
         "--gripper-mode",
         choices=("remap", "match-analytic", "passthrough"),
@@ -605,69 +518,18 @@ def main() -> None:
         help="remap mode: follower gripper position (0-100) at leader fully closed, a safe "
         "cube grip that never crushes (default: 10)",
     )
-    parser.add_argument(
-        "--recalibrate",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="solve the overhead camera extrinsics live from the workspace-frame AprilTags at "
-        "startup (default: on; --no-recalibrate uses the saved sidecar extrinsics)",
-    )
-    parser.add_argument(
-        "--recalibrate-samples",
-        type=int,
-        default=10,
-        help="overhead frames to average per extrinsics solve (default: 10)",
-    )
-    parser.add_argument(
-        "--recalibrate-max-seconds",
-        type=float,
-        default=15.0,
-        help="time budget to gather the solve frames before giving up (default: 15)",
-    )
-    parser.add_argument(
-        "--overhead-intrinsics",
-        type=Path,
-        default=None,
-        help="overhead camera intrinsics JSON for the solve (default: local sidecar)",
-    )
+    add_overhead_recalibration_arguments(parser)
     parser.add_argument(
         "--save-overhead-debug",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="save initial/final overhead verification images into the run directory (default: on)",
     )
-    parser.add_argument(
-        "--dataset-root",
-        type=Path,
-        default=None,
-        help="output dir for the LeRobotDataset (default: datasets/<timestamp>)",
-    )
-    parser.add_argument(
-        "--repo-id",
-        default="local/pick-and-place-so101",
-        help="dataset repo id stored in metadata",
-    )
-    parser.add_argument(
-        "--task",
-        default="Pick up the cube and place it at the target.",
-        help="natural-language task instruction saved with every frame",
-    )
-    parser.add_argument(
-        "--vcodec",
-        default="auto",
-        help="LeRobot video codec (default: auto = best available HW encoder)",
-    )
-    parser.add_argument(
-        "--streaming-encoding",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="encode video in real time during capture (default: on)",
-    )
-    parser.add_argument(
-        "--image-writer-threads",
-        type=int,
-        default=4,
-        help="background image-writer threads LeRobot uses for PNG-then-encode mode",
+    add_dataset_arguments(
+        parser,
+        repo_id="local/pick-and-place-so101",
+        vcodec="auto",
+        vcodec_help="LeRobot video codec (default: auto = best available HW encoder)",
     )
     args = parser.parse_args()
     if args.gripper_mode == "remap":
@@ -688,7 +550,6 @@ def main() -> None:
         ExtrinsicsSolveError,
         apply_solve_result,
         check_solve_plausible,
-        parse_index_or_path,
         solve_overhead_extrinsics,
     )
     from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
@@ -720,23 +581,18 @@ def main() -> None:
     clamp_low, clamp_high = follower_clamp_limits(kinematics)
     clip_warned: set[str] = set()
 
-    backend = cv2.CAP_AVFOUNDATION if hasattr(cv2, "CAP_AVFOUNDATION") else cv2.CAP_ANY
     print("Opening overhead camera...")
-    overhead_cap = cv2.VideoCapture(parse_index_or_path(args.camera), backend)
-    overhead_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
-    overhead_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-    if not overhead_cap.isOpened():
-        overhead_cap.release()
-        raise SystemExit(f"Could not open the overhead camera {args.camera!r}.")
+    try:
+        overhead_cap = open_capture(args.camera, 1920, 1080, "overhead")
+    except RuntimeError as exc:
+        raise SystemExit(str(exc)) from exc
 
     print("Opening wrist camera...")
-    wrist_cap = cv2.VideoCapture(parse_index_or_path(args.wrist_camera), backend)
-    wrist_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    wrist_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-    if not wrist_cap.isOpened():
+    try:
+        wrist_cap = open_capture(args.wrist_camera, 1280, 720, "wrist")
+    except RuntimeError as exc:
         overhead_cap.release()
-        wrist_cap.release()
-        raise SystemExit(f"Could not open the wrist camera {args.wrist_camera!r}.")
+        raise SystemExit(str(exc)) from exc
 
     if args.recalibrate:
         print("Solving overhead camera extrinsics from the workspace-frame tags...")
@@ -798,7 +654,7 @@ def main() -> None:
     )
     if gripper_transform is not None:
         start_command[GRIPPER_INDEX] = gripper_transform(float(start_command[GRIPPER_INDEX]))
-    _ramp_follower(follower, start_command, clamp_low, clamp_high, clip_warned)
+    ramp_follower(follower, start_command, clamp_low, clamp_high, clip_warned)
 
     teleop = Teleop(
         leader=leader,

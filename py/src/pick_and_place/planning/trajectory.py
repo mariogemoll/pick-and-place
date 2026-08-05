@@ -50,7 +50,7 @@ from pick_and_place.planning.motion import (
     _joint_distance,
     _joint_move_duration,
     _lerp_joints,
-    _smoothstep,
+    smoothstep,
     _timed_arc_fraction,
 )
 from pick_and_place.spec.robot import (
@@ -150,7 +150,7 @@ class DescentPhase:
         return DESCENT_DURATION
 
     def evaluate(self, t: float) -> Frame:
-        alpha = _smoothstep(t / self.duration) if self.duration > 0 else 1.0
+        alpha = smoothstep(t / self.duration) if self.duration > 0 else 1.0
         matrix = tf.with_position(
             self.grasp.hover_matrix,
             tf.get_position(self.grasp.hover_matrix)
@@ -190,7 +190,7 @@ class GraspPhase:
             return Frame(joints=self.grasp_joints, gripper=self.start_gripper)
         close_t = t - GRASP_SETTLE_DURATION
         alpha = (
-            _smoothstep(close_t / GRASP_CLOSE_DURATION)
+            smoothstep(close_t / GRASP_CLOSE_DURATION)
             if GRASP_CLOSE_DURATION > 0
             else 1.0
         )
@@ -270,7 +270,7 @@ class DropDescentPhase:
         return DESCENT_DURATION
 
     def evaluate(self, t: float) -> Frame:
-        alpha = _smoothstep(t / self.duration) if self.duration > 0 else 1.0
+        alpha = smoothstep(t / self.duration) if self.duration > 0 else 1.0
         joints = drop_descent_joints(
             self.k,
             self.carry.cruise_matrix,
@@ -339,7 +339,7 @@ class RetreatPhase:
         return Frame(
             joints=_lerp_joints(self.start_joints, self.end_joints, alpha),
             gripper=self.start_gripper
-            + (self.end_gripper - self.start_gripper) * _smoothstep(alpha),
+            + (self.end_gripper - self.start_gripper) * smoothstep(alpha),
         )
 
 

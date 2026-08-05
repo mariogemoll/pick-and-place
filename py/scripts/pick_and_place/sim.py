@@ -29,7 +29,6 @@ import math
 import sys
 import threading
 import time
-from pathlib import Path
 
 import mujoco
 import mujoco.viewer
@@ -39,7 +38,12 @@ from pick_and_place.planning.episode_sampling import sample_target
 from pick_and_place.runtime.episodes import Episode, EpisodeSamplingError, prepare_episode
 from pick_and_place.sim.collisions import is_unexpected, scan_contacts
 from pick_and_place.sim.model import build_model, placement_error
-from pick_and_place.runtime.executor import HARDWARE_SIMULATION_HZ
+from pick_and_place.cli.scene import (
+    add_cube_pose_arguments,
+    add_preflight_debug_arguments,
+    preflight_debug_from_args,
+)
+from pick_and_place.spec.robot import HARDWARE_SIMULATION_HZ
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.core.miscalibration import MiscalibrationModel
@@ -245,28 +249,7 @@ def main() -> None:
         default=0,
         help="number of episodes to play; 0 means loop until the viewer is closed (default: 0)",
     )
-    parser.add_argument(
-        "--source",
-        type=float,
-        nargs=2,
-        metavar=("X", "Y"),
-        default=None,
-        help="source cube (x, y) on the floor; omit for a random pose in the clearance annulus",
-    )
-    parser.add_argument(
-        "--source-yaw",
-        type=float,
-        default=0.0,
-        help="source cube yaw in degrees, only used with --source (default: 0.0)",
-    )
-    parser.add_argument(
-        "--target",
-        type=float,
-        nargs=2,
-        metavar=("X", "Y"),
-        default=None,
-        help="target (x, y) on the floor; omit for a random pose in the clearance annulus",
-    )
+    add_cube_pose_arguments(parser)
     parser.add_argument(
         "--speed",
         type=float,
@@ -278,33 +261,11 @@ def main() -> None:
         action="store_true",
         help="include the calibration workspace_frame and overhead camera mount in the scene",
     )
-    parser.add_argument(
-        "--preflight-debug",
-        action="store_true",
-        help="print detailed collision diagnostics for rejected trajectory candidates",
-    )
-    parser.add_argument(
-        "--preflight-debug-limit",
-        type=int,
-        default=12,
-        help="maximum detailed contact rows to print per rejected candidate",
-    )
+    add_preflight_debug_arguments(parser)
     parser.add_argument(
         "--plan-only",
         action="store_true",
         help="prepare and preflight a single episode, then exit without opening the viewer",
-    )
-    parser.add_argument(
-        "--save-failed-trajectories",
-        type=Path,
-        default=None,
-        help="directory for replayable .npz rollouts of rejected preflight candidates",
-    )
-    parser.add_argument(
-        "--failed-trajectory-limit",
-        type=int,
-        default=8,
-        help="maximum rejected candidates to save",
     )
     parser.add_argument(
         "--no-robot-dynamics",
@@ -397,10 +358,7 @@ def main() -> None:
             data=data,
             verbose=verbose,
             include_environment=args.environment,
-            preflight_debug=args.preflight_debug,
-            preflight_debug_limit=args.preflight_debug_limit,
-            failed_trajectory_dir=args.save_failed_trajectories,
-            failed_trajectory_limit=args.failed_trajectory_limit,
+            debug=preflight_debug_from_args(args),
             target_sampler=marker_sampler if target is None else None,
             miscalibration=miscalibration,
         )
