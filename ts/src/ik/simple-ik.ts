@@ -15,6 +15,17 @@ import { type ArmJointName, type So101Kinematics } from './kinematics';
 // face. Because the approach direction is fixed (down), the decomposition is
 // unambiguous: only the two elbow branches of a planar 2R arm remain.
 
+// The 5-DOF arm can only aim the approach axis within the vertical plane
+// spanned by the shoulder-pan radial and world up: pan picks the plane, the
+// three flex joints move in it, wrist-roll spins about the approach. A pose
+// whose approach leaves that plane is unreachable, and the closed-form solve
+// below would answer it by silently projecting the approach back in-plane —
+// returning a within-limits branch that misses by metres and tens of degrees.
+// Reject anything further out of plane than this (the sine of the out-of-plane
+// angle). Reachable poses sit at ~0, and the projection stays sub-millimetre
+// out to a few degrees.
+const MAX_APPROACH_OUT_OF_PLANE = 0.1;
+
 export interface SimpleIkBranch {
   joints: Record<ArmJointName, number>;
   elbow: 'up' | 'down';
@@ -89,6 +100,10 @@ export function solveSimpleGraspIk(
   const shoulderPan = -azimuth;
   const radialDir = new THREE.Vector3(Math.cos(azimuth), Math.sin(azimuth), 0);
   const planeNormal = new THREE.Vector3(-Math.sin(azimuth), Math.cos(azimuth), 0);
+
+  if (Math.abs(approach.dot(planeNormal)) > MAX_APPROACH_OUT_OF_PLANE) {
+    return { type: 'unreachable', reason: 'Approach leaves the arm\'s vertical plane' };
+  }
 
   // The wrist pivot sits one tool length back from the target along -approach.
   const wrist = target.clone().sub(approach.clone().multiplyScalar(k.toolLength));

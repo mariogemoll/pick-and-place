@@ -55,9 +55,10 @@ export interface SimpleWorkspaceSector {
 }
 
 // Derive the IK target height and face offset for a cube whose center is at
-// `cubeCenterZ`. The target height equals the cube-center z (face-center z for
-// a vertical face). The face offset (cube-center → IK target, horizontal) is
-// z-independent but is computed from the grasp geometry to stay in sync.
+// `cubeCenterZ`. The target height is the cube-center z shifted down by
+// GRIP_Z_OFFSET, the amount the jaws deliberately take hold below center. The
+// face offset (cube-center → IK target, horizontal) is z-independent but is
+// computed from the grasp geometry to stay in sync.
 function deriveSampleGeometry(cubeCenterZ: number): { height: number; faceOffset: number } {
   const samplePose = { ...DEFAULT_CUBE_POSE, z: cubeCenterZ };
   const worldFromGripper = createSimpleGraspMatrix('+x', samplePose);

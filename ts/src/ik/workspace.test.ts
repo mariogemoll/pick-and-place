@@ -11,7 +11,8 @@ import { describe, expect, it } from 'vitest';
 import {
   CUBE_HALF_SIZE,
   type CubeFace,
-  type CubePose
+  type CubePose,
+  GRIP_Z_OFFSET
 } from '../visualizations/grasp-pose-shared/body-factories';
 import { createSimpleGraspMatrix } from '../visualizations/simple-grasp-pose/pose';
 import type { WebModel } from '../web-model';
@@ -69,9 +70,9 @@ describe('computeSimpleWorkspace', () => {
     );
 
     // Pin the computed numbers so changes to the kinematics are visible here.
-    expect(sector.targetHeight).toBeCloseTo(CUBE_HALF_SIZE, 4);
-    expect(sector.radial.min).toBeCloseTo(0.0537, 3);
-    expect(sector.radial.max).toBeCloseTo(0.2750, 3);
+    expect(sector.targetHeight).toBeCloseTo(CUBE_HALF_SIZE + GRIP_Z_OFFSET, 4);
+    expect(sector.radial.min).toBeCloseTo(0.0522, 3);
+    expect(sector.radial.max).toBeCloseTo(0.2765, 3);
     expect(sector.azimuth.min).toBeCloseTo(-1.91986, 4);
     expect(sector.azimuth.max).toBeCloseTo(1.91986, 4);
     expect(sector.anyYawReachable).toBe(true);
@@ -132,7 +133,8 @@ describe('computeSimpleWorkspaceForCubeZ (cube 1 cm above ground-cube top)', () 
       clearance.radial.max.toFixed(4),
       clearance.targetHeight.toFixed(4)
     );
-    expect(clearance.targetHeight).toBeCloseTo(CUBE_Z_1CM_OVER_GROUND_TOP, 3);
+    expect(clearance.targetHeight)
+      .toBeCloseTo(CUBE_Z_1CM_OVER_GROUND_TOP + GRIP_Z_OFFSET, 3);
   });
 
   it('is smaller than the ground sector (arm reach shrinks at higher z)', () => {

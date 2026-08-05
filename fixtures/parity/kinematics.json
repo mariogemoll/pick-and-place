@@ -1,0 +1,50 @@
+{
+ "SPDX-FileCopyrightText": "2026 Mario Gemoll",
+ "SPDX-License-Identifier": "0BSD",
+ "description": "SO-101 kinematics derived from the compiled model. TypeScript derives the same numbers from ts/public/so101.json.",
+ "generator": "py/scripts/generate_parity_fixtures.py",
+ "kinematics": {
+  "panAxis": [
+   0.0388353,
+   -8.97657e-09
+  ],
+  "shoulderLift": {
+   "radial": 0.0303992,
+   "height": 0.1238
+  },
+  "upperArm": {
+   "radial": 0.028,
+   "height": 0.11257,
+   "length": 0.116000021121
+  },
+  "lowerArm": {
+   "radial": 0.1349,
+   "height": 0.0052,
+   "length": 0.135000185185
+  },
+  "toolLength": 0.160463,
+  "wristRollZeroTwist": -0.0486795148535,
+  "jointLimits": {
+   "shoulder_pan": {
+    "min": -1.91986217719,
+    "max": 1.91986217719
+   },
+   "shoulder_lift": {
+    "min": -1.74532925199,
+    "max": 1.74532925199
+   },
+   "elbow_flex": {
+    "min": -1.69,
+    "max": 1.69
+   },
+   "wrist_flex": {
+    "min": -1.65806284946,
+    "max": 1.65806272933
+   },
+   "wrist_roll": {
+    "min": -2.743847297,
+    "max": 2.84120630938
+   }
+  }
+ }
+}

@@ -63,10 +63,14 @@ export const JAW_CONTACT_POSITION = new THREE.Vector3(
   TIP_BOX.position[2]
 );
 
+// How far below the cube's vertical center the jaws take hold. Gripping a
+// little low leaves the jaw tips clear of the cube's top edge as they close.
+export const GRIP_Z_OFFSET = -0.005;
+
 export const CUBE_CONTACT_POSITION = new THREE.Vector3(
   CUBE_HALF_SIZE + MARKER_SURFACE_OFFSET,
   0,
-  0
+  GRIP_Z_OFFSET
 );
 
 // IK position target: the jaw contact point projected onto the wrist-roll axis

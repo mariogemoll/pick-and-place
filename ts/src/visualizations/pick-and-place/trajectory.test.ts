@@ -120,8 +120,9 @@ describe('pick-and-place trajectory', () => {
     expect(hoverTarget.x).toBeCloseTo(graspTarget.x, 3);
     expect(hoverTarget.y).toBeCloseTo(graspTarget.y, 3);
     // Source hover puts the tip contact 1 cm above the cube top (z = 4 cm),
-    // i.e. 2.5 cm above the grasp's face-center contact.
-    expect(hoverTarget.z - graspTarget.z).toBeCloseTo(0.025, 3);
+    // i.e. 3 cm above the grasp's contact, which sits GRIP_Z_OFFSET below the
+    // cube center.
+    expect(hoverTarget.z - graspTarget.z).toBeCloseTo(0.03, 3);
     expect(halfwayTarget.z).toBeCloseTo((hoverTarget.z + graspTarget.z) / 2, 3);
   });
 
@@ -170,8 +171,9 @@ describe('pick-and-place trajectory', () => {
     // Early in the carry the cube rises before reaching its cruise height.
     expect(liftingEarly.sourceCube.z).toBeGreaterThan(grasped.sourceCube.z + 0.002);
 
-    // It ends one hover (0.5 cm) above the target, sitting over the target x/y.
-    expect(predrop.sourceCube.z).toBeCloseTo(CUBE_HALF_SIZE + 0.005, 3);
+    // It ends with the tip contact at the drop hover height (2 cm), which holds
+    // the cube 1 cm above the target, sitting over the target x/y.
+    expect(predrop.sourceCube.z).toBeCloseTo(CUBE_HALF_SIZE + 0.01, 3);
     expect(predrop.sourceCube.x).toBeCloseTo(targetPose.x, 3);
     expect(predrop.sourceCube.y).toBeCloseTo(targetPose.y, 3);
   });
@@ -213,7 +215,7 @@ describe('pick-and-place trajectory', () => {
     // The released cube visibly accelerates downward, then rests on the target
     // while the gripper smoothly rises and restores the 1 cm horizontal
     // safety-margin backoff.
-    expect(openingBeforeRelease.sourceCube.z).toBeCloseTo(CUBE_HALF_SIZE + 0.005, 3);
+    expect(openingBeforeRelease.sourceCube.z).toBeCloseTo(CUBE_HALF_SIZE + 0.01, 3);
     expect(falling.sourceCube.z).toBeLessThan(openingBeforeRelease.sourceCube.z);
     expect(falling.sourceCube.z).toBeGreaterThan(targetPose.z);
     expect(droppedWaiting.sourceCube).toEqual(targetPose);

@@ -15,16 +15,17 @@ import {
   createWorldFromCubeContactMatrix,
   createWorldFromCubeMatrix,
   type CubeFace,
-  type CubePose
+  type CubePose,
+  GRIP_Z_OFFSET
 } from '../grasp-pose-shared/body-factories';
 import { createSimpleGraspMatrix } from '../simple-grasp-pose/pose';
 
 // Hover keyframes are specified by the height of the tip contact point (center
 // of the tip collision-box face) above the floor. The source hover clears the
 // cube top (3 cm) by 1 cm so the approach swing doesn't clip the cube; the drop
-// hover sits lower for a gentle release. At the grasp pose the tip contact is at
-// the cube-center height (`pose.z`), so the world-Z offset applied to a hover is
-// `tipZ - pose.z`.
+// hover sits lower for a gentle release. At the grasp pose the tip contact sits
+// GRIP_Z_OFFSET below the cube center, so the world-Z offset applied to a hover
+// is `tipZ - (pose.z + GRIP_Z_OFFSET)`.
 const SOURCE_HOVER_TIP_Z = 0.04;
 const PREDROP_HOVER_TIP_Z = 0.02;
 const POSTDROP_HOVER_TIP_Z = 0.04;
@@ -133,7 +134,7 @@ function graspMatrix(
   return grasp;
 }
 
-function smoothstep(t: number): number {
+export function smoothstep(t: number): number {
   const c = Math.min(1, Math.max(0, t));
   return c * c * (3 - 2 * c);
 }
@@ -303,7 +304,7 @@ function smootherstepIntegral(t: number): number {
 
 // Arc-length fraction at a playback phase: smooth acceleration over the first
 // window, constant speed through the middle, and smooth deceleration at the end.
-function timedArcFraction(phase: number): number {
+export function timedArcFraction(phase: number): number {
   const p = Math.min(1, Math.max(0, phase));
   const ease = CARRY_EASE_FRACTION;
   const totalArea = 1 - ease;
@@ -605,9 +606,9 @@ export function computeTrajectory(
   let selectedFace: CubeFace | null = null;
   let selectedElbow: 'up' | 'down' | null = null;
   let carryPlan: CarryPlan | null = null;
-  const sourceHoverOffset = SOURCE_HOVER_TIP_Z - sourcePose.z;
-  const targetHoverOffset = PREDROP_HOVER_TIP_Z - targetPose.z;
-  const postdropHoverOffset = POSTDROP_HOVER_TIP_Z - targetPose.z;
+  const sourceHoverOffset = SOURCE_HOVER_TIP_Z - (sourcePose.z + GRIP_Z_OFFSET);
+  const targetHoverOffset = PREDROP_HOVER_TIP_Z - (targetPose.z + GRIP_Z_OFFSET);
+  const postdropHoverOffset = POSTDROP_HOVER_TIP_Z - (targetPose.z + GRIP_Z_OFFSET);
   for (const face of VERTICAL_FACES) {
     const hover = graspMatrix(face, sourcePose, sourceHoverOffset);
     const grasp = graspMatrix(face, sourcePose);

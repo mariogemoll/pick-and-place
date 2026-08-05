@@ -124,6 +124,26 @@ That command writes both `so101.xml` and `so101.json`; only the `.json` is
 needed for tests. CI gets this by accident — its step reads as a smoke test of
 the exporter and deletes the `.xml` afterwards, leaving the `.json` behind.
 
+### Cross-language parity
+
+`fixtures/parity/` is the shared oracle for the logic both languages implement:
+the arm's kinematics, the grasp transforms, the closed-form IK, the forward
+kinematics and the canonical grasp search. Python writes the fixtures,
+`py/tests/test_parity.py` fails when Python stops reproducing them, and the
+tests in `ts/src/parity/` fail when TypeScript does.
+
+**Python is the source of truth.** When a planner change makes
+`test_parity.py` fail, regenerate:
+
+```sh
+cd py && MUJOCO_GL=egl python scripts/generate_parity_fixtures.py
+```
+
+then expect the TypeScript tests to fail until that side follows. Review the
+fixture diff; never regenerate to silence a failure you have not explained.
+`fixtures/parity/README.md` covers what the files pin and what is deliberately
+left out.
+
 ## Repository map
 
 | Directory | Contents |
@@ -135,6 +155,7 @@ the exporter and deletes the `.xml` afterwards, leaving the `.json` behind.
 | `scripts/` | Repository-level shell/TS tooling: license headers, file-size check, mesh pipeline, remote-GPU job scripts. |
 | `config/` | Committed configuration: evaluation manifests, training configs, fitted robot dynamics. Camera calibration JSON lives here but is gitignored. |
 | `stl/` | Committed printable geometry for the physical workspace frame. |
+| `fixtures/` | Committed cross-language test fixtures. `parity/` holds the shared Python/TypeScript oracle; see its `README.md`. |
 | `assets/` | Generated AprilTag textures. Gitignored. |
 | `third_party/dppo` | Vendored DPPO submodule, used for its diffusion pre-training agent. |
 
@@ -307,7 +328,8 @@ Recorded here so they are not mistaken for intentional design:
   combine too many responsibilities.
 - Scripts hold more code than the package (~27k lines against ~23k).
 - No dependency lockfiles are committed for either language.
-- Python and TypeScript reimplement the same kinematics, grasp selection, and
-  trajectory logic with no cross-language parity fixtures.
+- Python and TypeScript reimplement the same kinematics, grasp selection and
+  trajectory logic. The first three are held together by the parity fixtures
+  (see below); the two trajectory builders have genuinely diverged and are not.
 - The browser entry point eagerly imports every visualization, producing an
   ~870 KB main chunk.
