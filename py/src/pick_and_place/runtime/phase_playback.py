@@ -39,7 +39,7 @@ from pick_and_place.planning.visual_servo import (
 )
 from pick_and_place.runtime.descent import follow_estimate
 from pick_and_place.runtime.wrist_servo import WristServo, show_frame
-from pick_and_place.sim.collisions import is_unexpected, scan_contacts
+from pick_and_place.sim.collisions import unexpected_contact_pairs
 from pick_and_place.sim.model import set_cube_pose
 from pick_and_place.spec.robot import CONTROL_HZ
 
@@ -99,13 +99,9 @@ class PhaseResult:
 
 def _report_new_contacts(plant: Plant, previous: set[tuple[str, str]], phase_t: float) -> set:
     """Print unexpected contacts that were not there last tick; return the current set."""
-    current = {
-        (min(n1, n2), max(n1, n2))
-        for n1, n2 in scan_contacts(
-            plant.model, plant.data, plant.robot_geom_ids, plant.env_geom_ids
-        )
-        if is_unexpected(n1, n2)
-    }
+    current = unexpected_contact_pairs(
+        plant.model, plant.data, plant.robot_geom_ids, plant.env_geom_ids
+    )
     for pair in current - previous:
         print(f"collision phase_t={phase_t:.3f}s  {pair[0]} ↔ {pair[1]}")
     return current

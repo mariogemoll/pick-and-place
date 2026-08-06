@@ -72,6 +72,25 @@ def is_unexpected(n1: str, n2: str) -> bool:
     return not ((_is_jaw(n1) and n2 == "pick_cube") or (_is_jaw(n2) and n1 == "pick_cube"))
 
 
+def unexpected_contact_pairs(
+    model: mujoco.MjModel,
+    data: mujoco.MjData,
+    robot_geom_ids: set[int],
+    env_geom_ids: set[int],
+) -> set[tuple[str, str]]:
+    """The unexpected contacts holding right now, as order-independent name pairs.
+
+    A set of sorted pairs rather than the raw scan, because what a running loop
+    wants is the *difference* from last tick — a contact reported once as
+    ``(a, b)`` and again as ``(b, a)`` would otherwise look like two.
+    """
+    return {
+        (min(n1, n2), max(n1, n2))
+        for n1, n2 in scan_contacts(model, data, robot_geom_ids, env_geom_ids)
+        if is_unexpected(n1, n2)
+    }
+
+
 def make_carry_collision_checker(
     model: mujoco.MjModel,
     robot_geom_ids: set[int],

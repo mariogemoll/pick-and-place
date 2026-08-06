@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import dataclasses
 import math
-import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -44,43 +43,25 @@ import mujoco
 import numpy as np
 
 from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
-from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
-from pick_and_place.runtime.episodes import Episode
-from pick_and_place.runtime.preflight import preflight
-from pick_and_place.sim.collisions import is_unexpected, scan_contacts
-from pick_and_place.sim.model import (
-    build_model,
-    get_joint,
-    placement_error,
-    set_cube_pose,
-    set_joint,
-)
-from pick_and_place.sim.domain_randomization import reload_renderer_textures
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.core.image_ops import resize_and_center_crop
 from pick_and_place.core.geometry import CubePose
-from pick_and_place.data.recording import RecordingSession
-from pick_and_place.spec.robot import ARM_JOINT_NAMES, CONTROL_HZ, HARDWARE_SIMULATION_HZ
-from pick_and_place.core.joint_frames import sim_frame_to_real
-from pick_and_place.perception.image_rectify import SQUARE_SIZE
+from pick_and_place.core.image_ops import resize_and_center_crop
 from pick_and_place.core.task_phases import PhaseSpan
-from pick_and_place.planning.grasp import fold_cube_yaw, grasp_candidates
-from pick_and_place.planning.motion import shortest_delta
-from pick_and_place.planning.replan import replan_remaining_candidates
-from pick_and_place.planning.trajectory import (
-    DescentPhase,
-    GraspPhase,
-    LiftPhase,
-    RecoveryLiftPhase,
-)
-from pick_and_place.spec.robot import GRIPPER_OPEN
-from pick_and_place.planning.visual_servo import (
-    DESCENT_SERVO_MAX_DURATION,
-    DESCENT_SERVO_STABLE_FRAMES,
-    DescentServoConvergence,
-    DescentServoRetryState,
-)
 from pick_and_place.core.workspace_bounds import PAN_AXIS
+from pick_and_place.data.recording import RecordingSession
+from pick_and_place.perception.image_rectify import SQUARE_SIZE
+from pick_and_place.runtime.believed_frame import BelievedFrame
+from pick_and_place.runtime.checkpoint import fuses_into_next, replan_from_checkpoint
+from pick_and_place.runtime.descent import regrasp_after_descent
+from pick_and_place.runtime.episodes import Episode
+from pick_and_place.runtime.sim_phase_playback import SimPlant, play_phase
+from pick_and_place.runtime.sim_tick_recorder import SimTickRecorder
+from pick_and_place.runtime.sim_wrist_servo import SimWristServo
+from pick_and_place.runtime.wrist_mixed_view import close_mixed
+from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
+from pick_and_place.sim.domain_randomization import reload_renderer_textures
+from pick_and_place.sim.model import build_model, get_joint, placement_error
+from pick_and_place.spec.robot import CONTROL_HZ, HARDWARE_SIMULATION_HZ
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 
 WRIST_CAMERA = "wrist_camera"
 OVERHEAD_CAMERA = "overhead_camera"
@@ -91,19 +72,6 @@ OVERHEAD_CAMERA = "overhead_camera"
 SHADOW_MAP_SIZE = 8192
 OFFSCREEN_SAMPLES = 8
 SHADOW_CONE_SCALE = 0.4
-
-# Per-frame privileged ground truth stored as observation.environment_state:
-# the true simulator cube pose, valid in every phase (including in-gripper).
-CUBE_POSE_STATE_NAMES = (
-    "cube_x",
-    "cube_y",
-    "cube_z",
-    "cube_qw",
-    "cube_qx",
-    "cube_qy",
-    "cube_qz",
-)
-
 
 @dataclasses.dataclass(frozen=True)
 class RecordEpisodeResult:
@@ -261,6 +229,24 @@ def build_recording_scene(
     return model, data
 
 
+
+def _grasp_and_lift(kinematics, grasp, remaining_lift) -> tuple[Any, Any]:
+    """The close-and-lift pair, rebuilt from the grasp the descent settled on.
+
+    Which lift it is comes from the plan being replaced rather than from the
+    grasp mode: the planner picks the low recovery lift for its own reasons, and
+    the descent has no say in that.
+    """
+    from pick_and_place.planning.trajectory import GraspPhase, LiftPhase, RecoveryLiftPhase
+    from pick_and_place.spec.robot import GRIPPER_OPEN
+
+    lift_cls = RecoveryLiftPhase if isinstance(remaining_lift, RecoveryLiftPhase) else LiftPhase
+    return (
+        GraspPhase(grasp.grasp_joints, start_gripper=GRIPPER_OPEN),
+        lift_cls(kinematics, grasp.grasp_joints, grasp.lift_joints),
+    )
+
+
 def record_episode(
     episode: Episode,
     *,
@@ -281,45 +267,33 @@ def record_episode(
     ``sim.py``: each tick captures the frame (measured joints as
     ``observation.state``, cameras) first, then writes the trajectory set point
     — the ``action`` — to ``data.ctrl`` and advances the sim by a batch of
-    physics substeps. Capturing before stepping pairs each observation with the
-    command issued from it, matching a real recording, where the state is read
-    before the servos have tracked the new set point. Both streams are
-    expressed in the real joint frame (degrees / 0-100 gripper), so the dataset
-    is unit-for-unit comparable to a real recording. ``viewer`` (a launched
-    passive viewer, or ``None``) is synced once per tick if given.
+    physics substeps. Both streams are expressed in the real joint frame
+    (degrees / 0-100 gripper), so the dataset is unit-for-unit comparable to a
+    real recording. ``viewer`` (a launched passive viewer, or ``None``) is synced
+    once per tick if given.
 
     Without a miscalibration draw on the episode this is pure feedforward
-    playback. With one, the run mirrors the hardware executor: ctrl gets the
-    drawn joint-zero offsets added (physics runs the *true* joints while
-    commands and the recorded streams stay in the believed/servo frame), the
-    descent phase runs the wrist-camera AprilTag visual servo against renders
-    of the true world, and completed phases replan the remainder from the
-    believed readback. Returns ``"success"`` when the trajectory ran to
-    completion or ``"restart"`` when the descent servo or a checkpoint replan
-    failed — the caller should then discard the recorded episode. The result
-    also carries the exact phase spans of the recorded frames: one entry per
-    contiguous run of ticks driven by the same named trajectory phase, taken
+    playback of a vetted plan. With one, the run mirrors the hardware executor:
+    physics holds the true joints while commands and the recorded streams stay in
+    the believed frame, the descent runs the wrist-camera visual servo, and
+    completed phases replan the remainder from the believed readback. Returns
+    ``"success"`` when the trajectory ran to completion, ``"stopped"`` when
+    ``should_stop`` asked for it, or ``"restart"`` when the descent servo or a
+    checkpoint replan failed — the caller should then discard the recording.
+
+    The result also carries the exact phase spans of the recorded frames, taken
     from the controller itself rather than reconstructed afterwards.
 
-    Each recorded frame additionally stores the true simulator cube pose as
-    ``observation.environment_state`` (position plus wxyz quaternion). This is
-    privileged ground truth for diagnostics and auxiliary supervision; the
-    policy inputs remain joints and cameras only.
-
     ``recording``/``rig`` may be omitted together to play the episode without
-    capturing anything — the closed-loop path (offsets, wrist servo, replans)
-    still runs, which is how the sim viewer inspects a miscalibrated episode.
-    ``realtime`` paces the loop to the control rate for live viewing (recording
-    runs unpaced). ``should_stop`` is polled every tick; returning ``True``
-    aborts the episode with ``"stopped"``.
+    capturing anything — the closed-loop path still runs, which is how the sim
+    viewer inspects a miscalibrated episode. ``realtime`` paces the loop to the
+    control rate for live viewing (recording runs unpaced). ``should_stop`` is
+    polled every tick.
 
     ``show_wrist_mixed`` (closed-loop episodes only) opens an OpenCV window
-    blending the true-world wrist render (detected cube tags outlined) with a
-    render of the *believed* world — the arm at the believed joints, the cube
-    at the planner's current believed pose — the sim analog of the hardware
-    ``--show-wrist-mixed`` overlay: the visual offset between the two layers is
-    the injected miscalibration, and the descent shows the servo pulling them
-    into register. Needs no MuJoCo viewer, so it works under plain ``python``.
+    blending the true-world wrist render with a render of the believed world; see
+    :mod:`pick_and_place.runtime.wrist_mixed_view`. Needs no MuJoCo viewer, so it
+    works under plain ``python``.
 
     The dataset is created lazily on the first episode once the fixed output
     frame shape is known. The caller commits the episode with ``save_episode``
@@ -334,491 +308,141 @@ def record_episode(
 
     model = episode.model
     data = episode.data
-    actuator_id = episode.actuator_id
     kinematics = episode.kinematics
-    draw = episode.miscalibration
 
-    simulation_steps_per_tick = round(HARDWARE_SIMULATION_HZ / CONTROL_HZ)
-    control_period = 1.0 / CONTROL_HZ
-    if not math.isclose(model.opt.timestep * simulation_steps_per_tick, control_period):
+    substeps_per_tick = round(HARDWARE_SIMULATION_HZ / CONTROL_HZ)
+    if not math.isclose(model.opt.timestep * substeps_per_tick, 1.0 / CONTROL_HZ):
         raise ValueError(
             f"MuJoCo timestep {model.opt.timestep:g}s cannot produce {CONTROL_HZ:g} Hz exactly"
         )
 
-    if recording is not None and recording.dataset is None:
-        image_shape = (rig.height, rig.width, 3)
-        recording.create_dataset(
-            image_shape, image_shape, environment_state_names=CUBE_POSE_STATE_NAMES
+    belief = BelievedFrame(model, data, episode.miscalibration, data.time)
+    recorder = None if recording is None else SimTickRecorder(recording, rig, model, data)
+    servo = (
+        SimWristServo(
+            model,
+            data,
+            belief,
+            WRIST_CAMERA,
+            believed_camera_pose=believed_wrist_camera_pose,
+            detector_crash_dump_dir=detector_crash_dump_dir,
         )
+        if belief.closed_loop
+        else None
+    )
+    plant = SimPlant(
+        model=model,
+        data=data,
+        actuator_id=episode.actuator_id,
+        robot_geom_ids=episode.robot_geom_ids,
+        env_geom_ids=episode.env_geom_ids,
+        kinematics=kinematics,
+        substeps_per_tick=substeps_per_tick,
+        speed=speed,
+        realtime=realtime,
+        verbose=verbose,
+        viewer=viewer,
+        should_stop=should_stop,
+    )
 
-    cube_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pick_cube")
-    cube_qpos_adr = int(model.jnt_qposadr[model.body_jntadr[cube_body_id]])
-    recorded_frames = 0
-    phase_spans: list[PhaseSpan] = []
+    def spans() -> tuple[PhaseSpan, ...]:
+        return () if recorder is None else recorder.spans
 
-    time_origin = data.time
-
-    def offsets_deg_now() -> dict[str, float] | None:
-        return None if draw is None else draw.offsets_deg(data.time - time_origin)
-
-    def offsets_rad_now() -> dict[str, float]:
-        return {} if draw is None else draw.offsets_rad(data.time - time_origin)
-
-    def believed_arm_joints() -> dict[str, float]:
-        """The servo-style readback: true joints minus the offsets in effect."""
-        offsets = offsets_rad_now()
-        return {
-            name: get_joint(model, data, name) - offsets.get(name, 0.0) for name in ARM_JOINT_NAMES
-        }
-
-    # --- wrist visual servo (miscalibrated episodes only) -------------------
-    servo_enabled = draw is not None
-    servo_renderer = None
-    servo_detector = None
-    tracker = None
-    servo_camera_matrix = None
-    believed_shadow = None
-    wrist_cam_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, WRIST_CAMERA)
-    if servo_enabled:
-        from pick_and_place.perception.cube_detection import CubeTracker, detect_cube_faces
-        from pick_and_place.perception.detector_process import DetectorProcess
-        from scipy.spatial.transform import Rotation
-
-        if show_wrist_mixed:
-            import cv2
-
-        # Match the real servo's working resolution as far as the model's
-        # offscreen buffer allows (the executor detects on 1280x720 frames).
-        render_w = min(1280, int(model.vis.global_.offwidth))
-        render_h = min(720, int(model.vis.global_.offheight))
-        servo_renderer = mujoco.Renderer(model, width=render_w, height=render_h)
-        fovy = math.radians(float(model.cam_fovy[wrist_cam_id]))
-        fy = (render_h / 2.0) / math.tan(fovy / 2.0)
-        servo_camera_matrix = np.array(
-            [[fy, 0.0, render_w / 2.0], [0.0, fy, render_h / 2.0], [0.0, 0.0, 1.0]]
-        )
-        # Detect out-of-process: libapriltag segfaults on rare inputs, and in a
-        # sharded run that would take down the whole worker and corrupt its
-        # metadata parquet, losing every episode the shard had banked. Behind
-        # the process boundary a crash costs one detection tick, which the
-        # servo loop already handles as a routine occlusion. nthreads=1 because
-        # sharding already saturates the machine with worker processes.
-        servo_detector = DetectorProcess(nthreads=1, crash_dump_dir=detector_crash_dump_dir)
-        tracker = CubeTracker(smooth=0.95, detector=servo_detector)
-        # Kinematics-only mirror holding the believed joints, whose wrist camera
-        # pose is what the detection is mapped to world through — the believed
-        # pose, not the true one, exactly as the hardware servo uses the sim
-        # mirror's camera. The world-frame estimate therefore inherits the
-        # injected hand-eye error.
-        believed_shadow = mujoco.MjData(model)
-
-    def believed_camera_pose(believed_cube: CubePose) -> tuple[np.ndarray, np.ndarray]:
-        """Pose the believed-world shadow and return its wrist camera pose."""
-        for name, value in believed_arm_joints().items():
-            set_joint(model, believed_shadow, name, value)
-        set_joint(model, believed_shadow, "gripper", get_joint(model, data, "gripper"))
-        set_cube_pose(model, believed_shadow, believed_cube)
-        mujoco.mj_kinematics(model, believed_shadow)
-        # Body kinematics alone leaves camera poses unset; this fills cam_xpos/xmat.
-        if believed_wrist_camera_pose is None:
-            mujoco.mj_camlight(model, believed_shadow)
-            return (
-                believed_shadow.cam_xpos[wrist_cam_id].copy(),
-                believed_shadow.cam_xmat[wrist_cam_id].reshape(3, 3).copy(),
-            )
-
-        # Rendering uses the perturbed physical camera stored in the model. The
-        # controller maps detections through the nominal mount calibration, so
-        # temporarily restore that local pose only while updating the believed
-        # shadow's camera transform.
-        true_pos = model.cam_pos[wrist_cam_id].copy()
-        true_quat = model.cam_quat[wrist_cam_id].copy()
-        try:
-            model.cam_pos[wrist_cam_id] = believed_wrist_camera_pose[0]
-            model.cam_quat[wrist_cam_id] = believed_wrist_camera_pose[1]
-            mujoco.mj_camlight(model, believed_shadow)
-            return (
-                believed_shadow.cam_xpos[wrist_cam_id].copy(),
-                believed_shadow.cam_xmat[wrist_cam_id].reshape(3, 3).copy(),
-            )
-        finally:
-            model.cam_pos[wrist_cam_id] = true_pos
-            model.cam_quat[wrist_cam_id] = true_quat
-
-    def record_tick(frame, phase_name: str) -> None:
-        nonlocal recorded_frames
-        if recording is None:
-            return
-        measured_arm = {name: get_joint(model, data, name) for name in ARM_JOINT_NAMES}
-        measured_gripper = get_joint(model, data, "gripper")
-        state = sim_frame_to_real(measured_arm, measured_gripper, offsets_deg_now())
-        action = sim_frame_to_real(frame.joints, frame.gripper)
-        cube_pose = np.asarray(
-            data.qpos[cube_qpos_adr : cube_qpos_adr + 7], dtype=np.float32
-        ).copy()
-
-        wrist_rgb, overhead_rgb = rig.capture(data)
-        recording.dataset.add_frame(
-            {
-                "observation.state": state.astype(np.float32),
-                "action": action.astype(np.float32),
-                "observation.environment_state": cube_pose,
-                "observation.images.wrist": wrist_rgb,
-                "observation.images.overhead": overhead_rgb,
-                "task": recording.task,
-            }
-        )
-        if not phase_spans or phase_spans[-1].name != phase_name:
-            phase_spans.append(PhaseSpan(name=phase_name, start_frame=recorded_frames))
-        recorded_frames += 1
-
-        # A dropped encoder frame would leave the video shorter than the recorded
-        # rows; rather than write a corrupt episode, fail the moment it happens.
-        dropped = recording.dropped_frame_count()
-        if dropped:
-            raise RuntimeError(
-                f"Streaming video encoder dropped {dropped} frame(s): the encoder "
-                "cannot keep pace with capture, which would desync the video from "
-                "the recorded frames. Use a hardware vcodec (auto) or raise the "
-                "encoder queue size."
-            )
-
-    prev_contacts: set[tuple[str, str]] = set()
     current_traj = episode.trajectory
-    dynamic_source = episode.believed_source
-    dynamic_grasp = current_traj.grasp
+    tracked_source = episode.believed_source
+    tracked_grasp = current_traj.grasp
+    contacts: set[tuple[str, str]] = set()
     status = "incomplete"
 
     try:
         while current_traj is not None and current_traj.phases:
-            phase = current_traj.phases[0]
-            playback_start = data.time
-
-            is_descent = servo_enabled and isinstance(phase, DescentPhase)
-            convergence = DescentServoConvergence() if is_descent else None
-            retry = DescentServoRetryState() if is_descent else None
-            saw_detection = False
-            max_duration = (
-                max(phase.duration, DESCENT_SERVO_MAX_DURATION) if is_descent else phase.duration
+            played = play_phase(
+                plant,
+                current_traj.phases[0],
+                belief=belief,
+                servo=servo,
+                recorder=recorder,
+                tracked_source=tracked_source,
+                contacts=contacts,
+                show_wrist_mixed=show_wrist_mixed,
             )
-
-            while True:
-                if should_stop is not None and should_stop():
-                    return RecordEpisodeResult("stopped", tuple(phase_spans))
-                tick_start = time.monotonic()
-                raw_phase_t = (data.time - playback_start) * speed
-                phase_t = (
-                    retry.command_phase_t(raw_phase_t, phase.duration)
-                    if retry is not None
-                    else raw_phase_t
-                )
-
-                true_rgb = None
-                detections: list = []
-                estimate = None
-                if is_descent or show_wrist_mixed:
-                    cam_pos, cam_rot = believed_camera_pose(dynamic_source)
-                    servo_renderer.update_scene(data, camera=WRIST_CAMERA)
-                    true_rgb = servo_renderer.render()
-                if is_descent:
-                    detections = detect_cube_faces(true_rgb, tracker.detector)
-                    estimate = tracker.update(
-                        detections, servo_camera_matrix, cam_pos, cam_rot, dist=None
-                    )
-                    if estimate is not None:
-                        _, _, yaw = Rotation.from_matrix(estimate.rotation).as_euler("xyz")
-                        # A cube grasp repeats every 90 deg, so fold the detected
-                        # yaw onto the quarter-turn nearest the current target;
-                        # the single-tag planar-pose ambiguity otherwise flips it
-                        # 90/180 deg and spins the re-solved wrist roll around.
-                        folded_yaw = fold_cube_yaw(dynamic_source.yaw, float(yaw))
-                        new_source = CubePose(
-                            x=float(estimate.position[0]),
-                            y=float(estimate.position[1]),
-                            z=CUBE_HALF_SIZE,
-                            yaw=folded_yaw,
-                        )
-                        # Smoothly interpolate the target to avoid arm jumps.
-                        alpha = 0.1
-                        dynamic_source = dataclasses.replace(
-                            new_source,
-                            x=dynamic_source.x * (1 - alpha) + new_source.x * alpha,
-                            y=dynamic_source.y * (1 - alpha) + new_source.y * alpha,
-                            yaw=dynamic_source.yaw
-                            + shortest_delta(dynamic_source.yaw, new_source.yaw) * alpha,
-                        )
-                        if phase.grasp.face != "free":
-                            updated_grasp = next(
-                                (
-                                    g
-                                    for g in grasp_candidates(kinematics, dynamic_source)
-                                    if g.face == phase.grasp.face and g.elbow == phase.grasp.elbow
-                                ),
-                                None,
-                            )
-                            if updated_grasp is not None:
-                                phase = dataclasses.replace(phase, grasp=updated_grasp)
-                        saw_detection = True
-                        convergence.observe(dynamic_source)
-
-                if show_wrist_mixed:
-                    # Re-pose the shadow so the underlay shows the believed cube
-                    # as updated by this tick's servo estimate, then blend it
-                    # under the true render (detections outlined): the visual
-                    # offset between the layers is the live believed-true gap.
-                    believed_camera_pose(dynamic_source)
-                    servo_renderer.update_scene(believed_shadow, camera=WRIST_CAMERA)
-                    believed_rgb = servo_renderer.render()
-                    bgr = cv2.cvtColor(true_rgb, cv2.COLOR_RGB2BGR)
-                    for det in detections:
-                        corners = np.array(det.corners, dtype=np.int32)
-                        cv2.polylines(bgr, [corners], True, (0, 255, 0), 2, cv2.LINE_AA)
-                        cv2.putText(
-                            bgr,
-                            str(det.tag_id),
-                            tuple(corners[0]),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            0.5,
-                            (255, 255, 0),
-                            1,
-                            cv2.LINE_AA,
-                        )
-                    if estimate is not None:
-                        # The tracker's world estimate, projected back through
-                        # the believed camera it was solved with: pose axes and
-                        # the orange cube wireframe, as on the hardware overlay.
-                        cv_to_mj = np.diag([1.0, -1.0, -1.0])
-                        pos_mj_cam = cam_rot.T @ (estimate.position - cam_pos)
-                        rot_mj_cam = cam_rot.T @ estimate.rotation
-                        tvec = cv_to_mj @ pos_mj_cam
-                        rvec, _ = cv2.Rodrigues(cv_to_mj @ rot_mj_cam)
-                        cv2.drawFrameAxes(
-                            bgr, servo_camera_matrix, np.zeros(5), rvec, tvec, 0.03, 2
-                        )
-                        s = CUBE_HALF_SIZE
-                        pts_3d = np.float32(
-                            [
-                                [-s, -s, -s],
-                                [s, -s, -s],
-                                [s, s, -s],
-                                [-s, s, -s],
-                                [-s, -s, s],
-                                [s, -s, s],
-                                [s, s, s],
-                                [-s, s, s],
-                            ]
-                        )
-                        pts_img, _ = cv2.projectPoints(
-                            pts_3d, rvec, tvec, servo_camera_matrix, np.zeros(5)
-                        )
-                        pts_img = pts_img.reshape(-1, 2).astype(int)
-                        edges = [
-                            (0, 1),
-                            (1, 2),
-                            (2, 3),
-                            (3, 0),
-                            (4, 5),
-                            (5, 6),
-                            (6, 7),
-                            (7, 4),
-                            (0, 4),
-                            (1, 5),
-                            (2, 6),
-                            (3, 7),
-                        ]
-                        for i, j in edges:
-                            cv2.line(
-                                bgr,
-                                tuple(pts_img[i]),
-                                tuple(pts_img[j]),
-                                (0, 165, 255),
-                                2,
-                                cv2.LINE_AA,
-                            )
-                    mixed = cv2.addWeighted(
-                        bgr, 0.6, cv2.cvtColor(believed_rgb, cv2.COLOR_RGB2BGR), 0.4, 0.0
-                    )
-                    cv2.imshow("Wrist Mixed (true + believed)", mixed)
-                    cv2.waitKey(1)
-
-                frame = phase.evaluate(min(phase_t, phase.duration))
-                record_tick(frame, phase.name)
-
-                if is_descent:
-                    if retry.is_backing_up():
-                        if retry.backup_complete(raw_phase_t):
-                            retry.finish_backup()
-                            convergence = DescentServoConvergence()
-                            saw_detection = False
-                            playback_start = data.time
-                    elif not saw_detection and raw_phase_t >= phase.duration and retry.can_retry():
-                        retry.start_backup(raw_phase_t)
-                        if verbose:
-                            print(
-                                "warning: descent saw no cube tags; backing up to "
-                                "pregrasp and retrying "
-                                f"({retry.retries_started}/{retry.max_retries})"
-                            )
-                    elif phase_t >= max_duration:
-                        if verbose:
-                            if saw_detection:
-                                print(
-                                    "warning: descent visual servo hit "
-                                    f"{max_duration:.1f}s cap before settling "
-                                    f"({convergence.stable_frames}/"
-                                    f"{DESCENT_SERVO_STABLE_FRAMES} stable frames)"
-                                )
-                            else:
-                                print(
-                                    "warning: descent visual servo hit "
-                                    f"{max_duration:.1f}s cap without a cube detection"
-                                )
-                        return RecordEpisodeResult("restart", tuple(phase_spans))
-                    elif phase_t >= phase.duration and convergence.is_stable():
-                        break
-                elif phase_t >= phase.duration:
-                    break
-
-                for name, value in frame.joints.items():
-                    data.ctrl[actuator_id[name]] = value
-                offsets = offsets_rad_now()
-                for name, offset in offsets.items():
-                    if name in frame.joints:
-                        data.ctrl[actuator_id[name]] += offset
-                data.ctrl[actuator_id["gripper"]] = frame.gripper
-                mujoco.mj_step(model, data, nstep=simulation_steps_per_tick)
-
-                curr_contacts = {
-                    (min(n1, n2), max(n1, n2))
-                    for n1, n2 in scan_contacts(
-                        model, data, episode.robot_geom_ids, episode.env_geom_ids
-                    )
-                    if is_unexpected(n1, n2)
-                }
-                if verbose:
-                    for pair in curr_contacts - prev_contacts:
-                        print(f"collision t={raw_phase_t:.3f}s  {pair[0]} ↔ {pair[1]}")
-                prev_contacts = curr_contacts
-
-                if viewer is not None:
-                    viewer.sync()
-
-                if realtime:
-                    remaining = control_period - (time.monotonic() - tick_start)
-                    if remaining > 0:
-                        time.sleep(remaining)
+            phase = played.phase
+            tracked_source = played.tracked_source
+            contacts = played.contacts
+            if played.outcome != "completed":
+                return RecordEpisodeResult(played.outcome, spans())
 
             completed = phase.name
+            remaining_phases = current_traj.phases[1:]
 
-            if not servo_enabled:
+            if servo is None:
                 # Pure feedforward playback: the vetted plan needs no
                 # checkpoints, so just advance phase by phase.
-                current_traj = dataclasses.replace(current_traj, phases=current_traj.phases[1:])
+                current_traj = dataclasses.replace(current_traj, phases=remaining_phases)
                 if not current_traj.phases:
                     status = "success"
                 continue
 
-            # The transitions below mirror the hardware executor: approach flows
-            # straight into the servo descent; the descent's converged grasp
-            # rebuilds grasp+lift as one contact-critical section; grasp+lift,
-            # carry+drop_descent and drop_descent+release likewise run from the
-            # locked plan; everything else replans from the believed readback.
-            if completed == "approach" and (
-                len(current_traj.phases) > 1 and current_traj.phases[1].name == "descent"
-            ):
-                current_traj = dataclasses.replace(current_traj, phases=current_traj.phases[1:])
+            # From here the transitions mirror the hardware executor exactly:
+            # the same fused pairs, the same rebuilt grasp and lift after the
+            # descent, and the same replan from the measured (believed) state
+            # everywhere else.
+            if remaining_phases and fuses_into_next(completed, remaining_phases[0].name):
+                current_traj = dataclasses.replace(current_traj, phases=remaining_phases)
                 continue
 
-            if completed == "descent" and isinstance(phase, DescentPhase):
-                if phase.grasp.face == "free":
-                    dynamic_grasp = phase.grasp
-                else:
-                    for g in grasp_candidates(kinematics, dynamic_source):
-                        if g.face == phase.face and g.elbow == phase.elbow:
-                            dynamic_grasp = g
-                            break
-                lift_cls = (
-                    RecoveryLiftPhase
-                    if isinstance(current_traj.phases[2], RecoveryLiftPhase)
-                    else LiftPhase
-                )
-                grasp_phase = GraspPhase(dynamic_grasp.grasp_joints, start_gripper=GRIPPER_OPEN)
-                lift_phase = lift_cls(
-                    kinematics, dynamic_grasp.grasp_joints, dynamic_grasp.lift_joints
+            if completed == "descent":
+                tracked_grasp = regrasp_after_descent(
+                    phase,
+                    tracked_source,
+                    kinematics,
+                    free_grasp=phase.grasp.face == "free",
+                    current=tracked_grasp,
                 )
                 current_traj = dataclasses.replace(
                     current_traj,
-                    phases=(grasp_phase, lift_phase, *current_traj.phases[3:]),
-                    grasp=dynamic_grasp,
+                    phases=(
+                        *_grasp_and_lift(kinematics, tracked_grasp, current_traj.phases[2]),
+                        *current_traj.phases[3:],
+                    ),
+                    grasp=tracked_grasp,
                 )
                 continue
 
-            if completed == "grasp" and (
-                len(current_traj.phases) > 1
-                and current_traj.phases[1].name in ("lift", "recovery_lift")
-            ):
-                current_traj = dataclasses.replace(current_traj, phases=current_traj.phases[1:])
-                continue
-
-            if completed == "carry" and (
-                len(current_traj.phases) > 1 and current_traj.phases[1].name == "drop_descent"
-            ):
-                current_traj = dataclasses.replace(current_traj, phases=current_traj.phases[1:])
-                continue
-
-            if completed == "drop_descent" and (
-                len(current_traj.phases) > 1 and current_traj.phases[1].name == "release"
-            ):
-                current_traj = dataclasses.replace(current_traj, phases=current_traj.phases[1:])
-                continue
-
-            if len(current_traj.phases) <= 1:
+            if not remaining_phases:
                 status = "success"
                 break
 
-            measured_joints = believed_arm_joints()
-            measured_gripper = get_joint(model, data, "gripper")
             if verbose:
                 print(f"Replanning remaining trajectory after {completed}...")
-            candidate_traj = None
-            for replan_traj in replan_remaining_candidates(
-                kinematics,
-                measured_joints,
-                measured_gripper,
-                completed,
-                dynamic_source,
-                episode.believed_target,
-                dynamic_grasp,
-                episode.end_joints,
-                episode.end_gripper,
-            ):
-                events = preflight(
-                    model,
-                    replan_traj,
-                    actuator_id,
-                    episode.robot_geom_ids,
-                    episode.env_geom_ids,
-                )
-                if not any(is_unexpected(n1, n2) for _, n1, n2 in events):
-                    candidate_traj = replan_traj
-                    break
-            if candidate_traj is None:
+            candidate = replan_from_checkpoint(
+                model,
+                kinematics=kinematics,
+                actuator_id=episode.actuator_id,
+                robot_geom_ids=episode.robot_geom_ids,
+                env_geom_ids=episode.env_geom_ids,
+                measured_joints=belief.arm_joints(),
+                measured_gripper=get_joint(model, data, "gripper"),
+                completed_phase_name=completed,
+                source=tracked_source,
+                target=episode.believed_target,
+                grasp=tracked_grasp,
+                end_joints=episode.end_joints,
+                end_gripper=episode.end_gripper,
+                free_grasp=False,
+                verbose=verbose,
+            )
+            if candidate is None:
                 if verbose:
                     print(f"No clean replan after {completed}; aborting episode.")
-                return RecordEpisodeResult("restart", tuple(phase_spans))
-            current_traj = candidate_traj
+                return RecordEpisodeResult("restart", spans())
+            current_traj = candidate
     finally:
-        if servo_renderer is not None:
-            servo_renderer.close()
-        if servo_detector is not None:
-            servo_detector.close()
+        if servo is not None:
+            servo.close()
         if show_wrist_mixed:
-            import cv2
-
-            cv2.destroyAllWindows()
+            close_mixed()
 
     if verbose:
         print(placement_error(model, data, episode.target).summary())
-    return RecordEpisodeResult(
-        "success" if status == "success" else "restart", tuple(phase_spans)
-    )
+    return RecordEpisodeResult("success" if status == "success" else "restart", spans())

@@ -224,11 +224,24 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   measured state, or fly straight on where a checkpoint would do more harm than
   good). `wrist_servo` runs the descent's cube detector on its own thread and
   `descent` folds its estimates back into the running phase; `tick_recorder`
-  turns the run into dataset rows, one per control tick. Around those:
-  `episodes` (sample one that runs clean), `preflight` (vet a trajectory under
-  live physics), `frame_reader` (one background thread per camera, holding only
-  the newest frame), `ramp` (ease the arm onto a pose), `scripted_policy`,
-  `sim_recorder`, `episode_rerender`, `policy_sim`, `policy_real`,
+  turns the run into dataset rows, one per control tick.
+
+  `sim_recorder` is the same episode with no arm in it, and is built from the
+  matching set: `sim_phase_playback` (the tick loop, capturing each row *before*
+  it commands it), `sim_wrist_servo` (render the wrist camera, detect the cube
+  in it — inline, not on a thread, which is what keeps a recorded episode a pure
+  function of its seed), `sim_tick_recorder` (one dataset row per tick, plus its
+  phase spans), and `wrist_mixed_view` (the true and believed wrist views
+  blended, for watching the servo converge). `believed_frame` is what the two
+  worlds meet through: with a miscalibration draw, commands and recorded rows
+  live in the believed frame while physics runs the true one. `checkpoint` and
+  `descent` are shared with the hardware path, so both agree by construction on
+  which phase boundaries replan.
+
+  Around those: `episodes` (sample one that runs clean), `preflight` (vet a
+  trajectory under live physics), `frame_reader` (one background thread per
+  camera, holding only the newest frame), `ramp` (ease the arm onto a pose),
+  `scripted_policy`, `episode_rerender`, `policy_sim`, `policy_real`,
   `overhead_detection`, `episode_loop`, `training_scenes`.
 - **`calibration/`** — solving the rig by rendering the scene and comparing it
   to a real image: `cam_align_solve`, `camera_compare`,

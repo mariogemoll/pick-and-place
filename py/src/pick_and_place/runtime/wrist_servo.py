@@ -55,7 +55,7 @@ _CUBE_EDGES = (
 )
 
 
-def _draw_tags(bgr: np.ndarray, detections, cv2) -> None:
+def draw_tags(bgr: np.ndarray, detections, cv2) -> None:
     """Outline each detected tag and label it with its id, in place."""
     for det in detections:
         corners = np.array(det.corners, dtype=np.int32)
@@ -72,7 +72,7 @@ def _draw_tags(bgr: np.ndarray, detections, cv2) -> None:
         )
 
 
-def _project_cube(
+def project_cube(
     estimate,
     camera_matrix: np.ndarray,
     camera_position: np.ndarray,
@@ -98,7 +98,7 @@ def _project_cube(
     return rvec, tvec, points.reshape(-1, 2).astype(int)
 
 
-def _draw_cube(bgr, rvec, tvec, points, camera_matrix: np.ndarray, cv2) -> None:
+def draw_cube(bgr, rvec, tvec, points, camera_matrix: np.ndarray, cv2) -> None:
     """Draw the solved cube's pose axes and wireframe, in place."""
     cv2.drawFrameAxes(bgr, camera_matrix, np.zeros(5), rvec, tvec, 0.03, 2)
     for i, j in _CUBE_EDGES:
@@ -218,7 +218,7 @@ class WristServo:
             )
             detections = detect_cube_faces(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), self.tracker.detector)
             if self.annotate:
-                _draw_tags(bgr, detections, cv2)
+                draw_tags(bgr, detections, cv2)
 
             estimate = self.tracker.update(
                 detections, self.camera_matrix, position, rotation, dist=None
@@ -241,14 +241,14 @@ class WristServo:
                 # Projecting the cube is cheap and is what a viewer needs to see
                 # what the servo saw, so it happens whether or not anything is
                 # being drawn on screen right now.
-                rvec, tvec, points = _project_cube(
+                rvec, tvec, points = project_cube(
                     estimate, self.camera_matrix, position, rotation, cv2
                 )
                 overlay["cube_edges"] = [
                     [points[i].tolist(), points[j].tolist()] for i, j in _CUBE_EDGES
                 ]
                 if self.annotate:
-                    _draw_cube(bgr, rvec, tvec, points, self.camera_matrix, cv2)
+                    draw_cube(bgr, rvec, tvec, points, self.camera_matrix, cv2)
 
             if self.on_overlay is not None:
                 self.on_overlay(frame.captured_at, overlay)

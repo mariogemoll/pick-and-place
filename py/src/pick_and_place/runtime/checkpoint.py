@@ -112,6 +112,7 @@ def replan_from_checkpoint(
     end_gripper: float,
     free_grasp: bool,
     failed_trajectory_dir=None,
+    verbose: bool = True,
 ):
     """The first replan candidate that survives preflight, or ``None`` to restart.
 
@@ -120,6 +121,10 @@ def replan_from_checkpoint(
     here, and ``failed_trajectory_dir`` (if set) receives the last rejected
     trajectory and a note saying why, which is what makes an abort diagnosable
     after the fact.
+
+    ``verbose`` gates the narration only. A sharded recording run has dozens of
+    these going at once and wants them silent; the decision it reports is the
+    same either way.
     """
     candidate = None
     rejected = None
@@ -154,13 +159,13 @@ def replan_from_checkpoint(
             unexpected = [(t, n1, n2) for t, n1, n2 in events if is_unexpected(n1, n2)]
         if not unexpected:
             candidate = replan_traj
-            if index > 1:
+            if index > 1 and verbose:
                 print(f"Selected replan candidate {index} after preflight rejections.")
             break
         rejected = replan_traj
         rejected_detail = unexpected_detail
         rejected_unexpected = unexpected
-        if replan_traj.carry is not None:
+        if replan_traj.carry is not None and verbose:
             print(
                 f"  rejected replan candidate {index}: "
                 f"carry={replan_traj.carry.mode} collision t={unexpected[0][0]:.3f}s "
@@ -171,12 +176,14 @@ def replan_from_checkpoint(
         return candidate
 
     if rejected is None:
-        print("Error: No feasible plan from current state. Aborting episode.")
+        if verbose:
+            print("Error: No feasible plan from current state. Aborting episode.")
         reason = f"no feasible replan after {completed_phase_name}"
     else:
-        print("Error: All replan candidates failed preflight. Aborting episode.")
-        for t, n1, n2 in rejected_unexpected:
-            print(f"  collision t={t:.3f}s {n1} ↔ {n2}")
+        if verbose:
+            print("Error: All replan candidates failed preflight. Aborting episode.")
+            for t, n1, n2 in rejected_unexpected:
+                print(f"  collision t={t:.3f}s {n1} ↔ {n2}")
         reason = f"all replan candidates failed preflight after {completed_phase_name}"
         if failed_trajectory_dir is not None and rejected_detail is not None:
             path = failed_trajectory_dir / (
@@ -185,6 +192,7 @@ def replan_from_checkpoint(
             save_failed_preflight_trajectory(
                 path, model, rejected, actuator_id, rejected_detail
             )
-            print(f"saved rejected replan trajectory: {path}")
+            if verbose:
+                print(f"saved rejected replan trajectory: {path}")
     write_failed_trajectory_note(failed_trajectory_dir, reason, source=source, target=target)
     return None

@@ -33,7 +33,8 @@ import pytest
 from pick_and_place.core.joint_frames import sim_frame_to_real
 from pick_and_place.core.miscalibration import MiscalibrationModel
 from pick_and_place.runtime.episodes import prepare_episode
-from pick_and_place.runtime.sim_recorder import CUBE_POSE_STATE_NAMES, record_episode
+from pick_and_place.runtime.sim_recorder import record_episode
+from pick_and_place.runtime.sim_tick_recorder import CUBE_POSE_STATE_NAMES
 from pick_and_place.spec.robot import ARM_JOINT_NAMES, CONTROL_HZ, HARDWARE_SIMULATION_HZ
 
 #: Real speed. The pick only holds at 1.0 — faster playback outruns the position
@@ -435,9 +436,9 @@ def test_a_descent_that_never_sees_the_cube_retries_then_asks_for_a_restart(
     monkeypatch, capsys
 ) -> None:
     """Blind descent: back up to pregrasp, come in again, and give up rather than close blind."""
-    from pick_and_place.perception import cube_detection
+    from pick_and_place.runtime import sim_wrist_servo
 
-    monkeypatch.setattr(cube_detection, "detect_cube_faces", lambda rgb, detector: [])
+    monkeypatch.setattr(sim_wrist_servo, "detect_cube_faces", lambda rgb, detector: [])
     result, recording, _ = _run(_episode(closed_loop=True), speed=4.0, verbose=True)
     assert result.status == "restart"
     out = capsys.readouterr().out
@@ -449,9 +450,9 @@ def test_a_descent_that_never_sees_the_cube_retries_then_asks_for_a_restart(
 
 
 def test_a_checkpoint_with_no_clean_replan_asks_for_a_restart(monkeypatch, capsys) -> None:
-    from pick_and_place.runtime import sim_recorder
+    from pick_and_place.runtime import checkpoint
 
-    monkeypatch.setattr(sim_recorder, "replan_remaining_candidates", lambda *a, **k: iter(()))
+    monkeypatch.setattr(checkpoint, "replan_remaining_candidates", lambda *a, **k: iter(()))
     result, _, _ = _run(_episode(closed_loop=True), verbose=True)
     assert result.status == "restart"
     assert "No clean replan after" in capsys.readouterr().out
