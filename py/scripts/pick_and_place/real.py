@@ -28,7 +28,8 @@ from pick_and_place.data.dataset_metadata import cube_pose_metadata, driver_meta
 from pick_and_place.runtime.episode_loop import episode_loop
 from pick_and_place.planning.episode_sampling import sample_recovery_cube
 from pick_and_place.sim.model import build_model, set_cube_pose, set_joint
-from pick_and_place.runtime.executor import CONTROL_HZ, follower_clamp_limits
+from pick_and_place.core.joint_frames import follower_clamp_limits
+from pick_and_place.spec.robot import CONTROL_HZ
 from pick_and_place.cli.rig import (
     add_drop_zone_arguments,
     add_follower_arguments,

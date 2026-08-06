@@ -29,12 +29,12 @@ These are non-negotiable and override convenience.
   - `SPDX-FileCopyrightText: 2026 Mario Gemoll`
   - `SPDX-License-Identifier: 0BSD`
 - **No large files.** `scripts/check_files_in_repo.sh` fails the build above
-  40 KB per file. Two files in the tree are still over it —
-  `runtime/executor.py` and `scripts/run_policy_real.py` — and are listed at
-  ceilings just above their current size. Those ceilings are a ratchet: lower
-  them as the files shrink, never raise them to land new code. The check walks
-  the whole history, so paths that have since shrunk or moved stay listed at
-  the ceiling their largest historical blob needs.
+  40 KB per file. One file in the tree is still over it —
+  `scripts/run_policy_real.py`. Those ceilings are a ratchet: lower them as the
+  files shrink, never raise them to land new code. The check walks the whole
+  history, so paths that have since shrunk or moved stay listed at the ceiling
+  their largest historical blob needs — `runtime/executor.py` is 21 KB now but
+  keeps a 61 KB entry, because a 60.7 KB blob of it is still in the history.
 - **Never commit datasets, checkpoints, renders, or recordings.** See
   [Local and generated data](#local-and-generated-data).
 
@@ -217,7 +217,14 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   manifests in `config/evaluation/` and a success oracle),
   `diffusion_policy_pretrain`, `diffusion_policy_client`. ACT and SmolVLA are
   *evaluated* here but trained externally via the `lerobot` CLI.
-- **`runtime/`** — running an episode: `executor` (the real control loop),
+- **`runtime/`** — running an episode. `executor` orchestrates one: it opens the
+  cameras, ramps the arm onto the start pose, and then alternates between
+  `phase_playback` (the tick loop — evaluate the phase, step physics, command
+  the servos, read back) and `checkpoint` (after each phase, replan from
+  measured state, or fly straight on where a checkpoint would do more harm than
+  good). `wrist_servo` runs the descent's cube detector on its own thread and
+  `descent` folds its estimates back into the running phase; `tick_recorder`
+  turns the run into dataset rows, one per control tick. Around those:
   `episodes` (sample one that runs clean), `preflight` (vet a trajectory under
   live physics), `frame_reader` (one background thread per camera, holding only
   the newest frame), `ramp` (ease the arm onto a pose), `scripted_policy`,
@@ -324,9 +331,19 @@ surface in `git status`, not because they are still a valid place to write.
 
 Recorded here so they are not mistaken for intentional design:
 
-- `runtime/executor.py` and `scripts/run_policy_real.py` are oversized and
-  combine too many responsibilities.
+- `scripts/run_policy_real.py` is oversized and combines too many
+  responsibilities: one 938-line `main` holding ten nested closures that share
+  state through `nonlocal`.
 - Scripts hold more code than the package (~27k lines against ~23k).
+- **`execute_episode`'s recording branch has no caller.** Its one production
+  caller is `calibrate_joint_zeros.py`, which passes only the episode, follower,
+  viewer and wrist camera. `recording`, `overhead_camera_cap`,
+  `workspace_camera_cap`, `record_rest_to_rest`, `success_metadata`,
+  `failed_trajectory_dir` and `joint_offsets_deg` are reachable from nothing —
+  real-robot recording goes through
+  `runtime/policy_real.run_physical_policy_episode` instead. The branch is
+  covered by tests but exercised by no command, so treat it as unproven against
+  hardware and decide whether it earns its keep before building on it.
 - No dependency lockfiles are committed for either language.
 - Python and TypeScript reimplement the same kinematics, grasp selection and
   trajectory logic. The first three are held together by the parity fixtures
