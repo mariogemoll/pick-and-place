@@ -11,6 +11,17 @@
 #   scp scripts/vast_dppo_finetune.sh <ssh-host>:/workspace/
 #   ssh <ssh-host> 'VAST_INSTANCE_ID=... bash /workspace/vast_dppo_finetune.sh'
 #
+# The starting policy is chosen by run name and epoch, and the dataset export
+# whose normalization bounds it was fitted against travels with it:
+#
+#   BASE_RUN_NAME=two-variant-1000-blue-cube-b256-e500-v2 BASE_EPOCH=500 \
+#   ARTIFACT_NAME=two-variant-1000-blue-cube RUN_NAME=<fresh> \
+#     bash /workspace/vast_dppo_finetune.sh
+#
+# Both must move together. The bounds normalize what the policy sees and
+# unnormalize what it commands, so pairing a checkpoint with another run's
+# artifact does not fail -- it quietly feeds the policy the wrong units.
+#
 # Rollout collection is CPU-bound (MuJoCo physics) and the PPO update is
 # GPU-bound, so pick an instance with cores to spare: N_ENVS defaults to 32 and
 # wants roughly that many vCPUs to keep the GPU fed. The per-iteration log line
@@ -27,13 +38,14 @@ export MUJOCO_GL=egl
 : "${VAST_INSTANCE_ID:?}"
 
 bucket_root="s3://allyouneed/pick-and-place"
-# The pretrained policy this run starts from: epoch 1500 of dp_blue_cube_1000,
-# the strongest checkpoint from the closed-loop baseline sweep.
-base_run="dp_blue_cube_1000/pretrain/so101_pre_diffusion_unet_img_to2_ta16_te2_td100/2026-07-31_04-01-38_42"
-# Which pretraining epoch to start RL from. Epoch 1500 is the strongest policy
-# (~0.75 on held-out scenes) but leaves little headroom. DPPO's own paper
-# fine-tunes deliberately undertrained checkpoints "so there is more room for
-# fine-tuning improvement"; epoch 200 scores ~0.45 here.
+# Which pretraining run this fine-tune starts from, as an outputs/ run name. The
+# default is dp_blue_cube_1000, whose epoch 1500 is the strongest checkpoint from
+# the closed-loop baseline sweep.
+base_run_name="${BASE_RUN_NAME:-dp_blue_cube_1000}"
+# Which pretraining epoch to start RL from. Epoch 1500 of the default run is the
+# strongest policy (~0.75 on held-out scenes) but leaves little headroom. DPPO's
+# own paper fine-tunes deliberately undertrained checkpoints "so there is more
+# room for fine-tuning improvement"; epoch 200 of that run scores ~0.45 here.
 #
 # Do NOT justify this by "epoch 1500's failures are scene-difficulty dominated,
 # so the advantage carries no signal" -- that was measured and is false. At the
@@ -43,21 +55,28 @@ base_run="dp_blue_cube_1000/pretrain/so101_pre_diffusion_unet_img_to2_ta16_te2_t
 # the cube, retreats and hovers out the clock, because no demonstration contains
 # a retry. See the 2026-08-02 scene-difficulty sweep.
 base_epoch="${BASE_EPOCH:-1500}"
-base_policy_s3="$bucket_root/outputs/$base_run/checkpoint/state_$base_epoch.pt"
-declare -A base_policy_sha=(
-  [1500]="4bbcdc552942456dc76bd2911f57e808da5314505ae15e8581bd3bdcfbb57846"
-  [200]="a3c50124d6897aa41951178d8d54f574aac22119c09e668262d28b74c5faa153"
-)
-base_policy_sha256="${base_policy_sha[$base_epoch]}"
-artifact_s3="$bucket_root/diffusion-policy-data/blue-cube-1000-10hz-96x96"
-normalization_sha256="138facc5ff6611e2a82e607dc3658a2b2cd50a12e6d91d7a7051da38d16482d4"
+# The pretraining launcher writes one timestamped directory under this prefix, so
+# discover it rather than pinning it: a run name plus an epoch is what a human
+# knows, and the timestamp is not. Set BASE_RUN_DIR to disambiguate a prefix that
+# somehow holds more than one.
+pretrain_prefix="$bucket_root/outputs/$base_run_name/pretrain/so101_pre_diffusion_unet_img_to2_ta16_te2_td100"
+# The dataset export the checkpoint was trained on. Its normalization bounds are
+# what the environment normalizes states with and unnormalizes actions by, so it
+# must be the artifact that run used and not merely a similar one.
+artifact_name="${ARTIFACT_NAME:-blue-cube-1000-10hz-96x96}"
+artifact_s3="$bucket_root/diffusion-policy-data/$artifact_name.tar.zst"
+# The appearance the base checkpoint was trained in. Getting this wrong is the
+# failure the pre-flight gate exists to catch -- an AprilTag cube shown to a
+# blue-cube policy scored 0/4 contact attempts -- so it travels with the
+# checkpoint, not with the config file.
+scene_appearance="${SCENE_APPEARANCE:-blue-cube}"
 
-run_name="${RUN_NAME:-dppo_ft_blue_cube_1500_$(date +%Y%m%d)}"
+run_name="${RUN_NAME:-dppo_ft_${base_run_name}_${base_epoch}_$(date +%Y%m%d)}"
 output_prefix="$bucket_root/outputs/$run_name"
 workspace="/workspace"
 repo="$workspace/pick-and-place"
-artifact_root="$workspace/artifacts/blue-cube-1000-10hz-96x96"
-base_policy="$workspace/artifacts/state_$base_epoch.pt"
+artifact_root="$workspace/artifacts/$artifact_name"
+base_policy="$workspace/artifacts/${base_run_name}_state_$base_epoch.pt"
 output_root="$workspace/outputs/$run_name"
 job_log="$workspace/dppo-finetune.log"
 status_file="$workspace/dppo-finetune-status.json"
@@ -197,9 +216,26 @@ git submodule update --init --recursive
 git rev-parse HEAD | tee "$output_root/job-metadata/repository-commit.txt"
 
 # The vendored image agent moves only "rgb" and "state" to torch, though it
-# builds obs_dims generically from shape_meta. An asymmetric critic needs a
-# third key, which was collected during rollout and then crashed torch.split.
-# Applied here so a fresh clone of the pinned submodule gets it too.
+# builds obs_dims generically from shape_meta. The asymmetric critic needs a
+# third key, "privileged", which the rollout collects as numpy and then hands to
+# torch.split:
+#
+#   AttributeError: 'numpy.ndarray' object has no attribute 'split'
+#
+# raised at the end of the very first iteration, after the pre-flight gate has
+# passed and the run looks healthy. This patch is therefore load-bearing for
+# every run that uses the privileged critic, which is the default config. It was
+# dropped once as vestigial because the patch file it names had never been
+# committed; the file is committed now. Applied here so a fresh clone of the
+# pinned submodule gets it too.
+if ! git -C third_party/dppo apply --reverse --check \
+     ../../config/diffusion_policy/dppo-generic-obs-keys.patch 2>/dev/null; then
+  git -C third_party/dppo apply ../../config/diffusion_policy/dppo-generic-obs-keys.patch
+  echo "Applied dppo-generic-obs-keys.patch to the vendored agent."
+else
+  echo "dppo-generic-obs-keys.patch already applied."
+fi
+
 venv="$workspace/venvs/pick-and-place"
 base_python="python3"
 if [ -x /venv/main/bin/python ]; then
@@ -258,22 +294,96 @@ if aws s3 ls "$output_prefix/" | grep -q .; then
 fi
 
 mkdir -p "$artifact_root"
+
+# The pretraining launcher writes exactly one timestamped directory per run, and
+# nobody remembers a timestamp. Resolve it from the run name instead -- except
+# for dp_blue_cube_1000, which predates that launcher's refusal to reuse an
+# output prefix and holds five directories, four of them abandoned starts.
+declare -A legacy_run_dir=(
+  [dp_blue_cube_1000]="2026-07-31_04-01-38_42"
+)
+base_run_dir="${BASE_RUN_DIR:-${legacy_run_dir[$base_run_name]:-}}"
+if [ -z "$base_run_dir" ]; then
+  mapfile -t base_run_dirs < <(aws s3 ls "$pretrain_prefix/" | awk '/ PRE /{print $2}' | tr -d '/')
+  if [ "${#base_run_dirs[@]}" -ne 1 ]; then
+    echo "expected one run directory under $pretrain_prefix/, found ${#base_run_dirs[@]}:" >&2
+    printf '  %s\n' ${base_run_dirs[@]+"${base_run_dirs[@]}"} >&2
+    echo "set BASE_RUN_DIR to pick one." >&2
+    exit 1
+  fi
+  base_run_dir="${base_run_dirs[0]}"
+fi
+base_policy_s3="$pretrain_prefix/$base_run_dir/checkpoint/state_$base_epoch.pt"
+
+# The expected checkpoint hash, most authoritative source first: an explicit
+# override, then the hash the pretraining launcher recorded beside its own run,
+# then the two checkpoints that predate that launcher. Refuse to start without
+# one: aws does not verify a multipart download, so a truncated checkpoint
+# surfaces as a policy that has silently forgotten the task rather than as a
+# failed transfer.
+base_policy_sha256="${BASE_POLICY_SHA256:-}"
+if [ -z "$base_policy_sha256" ]; then
+  recorded_sha="$bucket_root/outputs/$base_run_name/job-metadata/state_$base_epoch.pt.sha256"
+  base_policy_sha256=$(aws s3 cp "$recorded_sha" - 2>/dev/null | awk '{print $1}')
+fi
+declare -A legacy_policy_sha=(
+  [dp_blue_cube_1000/1500]="4bbcdc552942456dc76bd2911f57e808da5314505ae15e8581bd3bdcfbb57846"
+  [dp_blue_cube_1000/200]="a3c50124d6897aa41951178d8d54f574aac22119c09e668262d28b74c5faa153"
+)
+if [ -z "$base_policy_sha256" ]; then
+  base_policy_sha256="${legacy_policy_sha[$base_run_name/$base_epoch]:-}"
+fi
+if [ -z "$base_policy_sha256" ]; then
+  echo "no expected sha256 for $base_run_name epoch $base_epoch, and none recorded at" >&2
+  echo "$recorded_sha -- pass BASE_POLICY_SHA256 to state what you expect." >&2
+  exit 1
+fi
+
+# The artifact is published as one .tar.zst and in no other form; the loose
+# per-file prefix this used to copy from is gone from the bucket. Its sha256
+# covers the whole archive, so take the download, verify it, and unpack only the
+# two small members the environment needs -- train.npz is gigabytes and is the
+# pretrainer's business, not this run's.
+if [ ! -f "$artifact_root/normalization.npz" ] || [ ! -f "$artifact_root/export.json" ]; then
+  staging="$workspace/artifacts"
+  aws s3 cp "$artifact_s3" "$staging/$artifact_name.tar.zst" --only-show-errors
+  aws s3 cp "$artifact_s3.sha256" "$staging/$artifact_name.tar.zst.sha256" --only-show-errors
+  (cd "$staging" && sha256sum -c "$artifact_name.tar.zst.sha256")
+  tar -x -I zstd -f "$staging/$artifact_name.tar.zst" -C "$staging" --wildcards \
+    "*/normalization.npz" "*/export.json"
+  rm -f "$staging/$artifact_name.tar.zst" "$staging/$artifact_name.tar.zst.sha256"
+fi
+for member in normalization.npz export.json; do
+  if [ ! -f "$artifact_root/$member" ]; then
+    echo "$artifact_name.tar.zst does not hold $artifact_name/$member" >&2
+    exit 1
+  fi
+done
+
 aws s3 cp "$base_policy_s3" "$base_policy" --only-show-errors
-aws s3 cp "$artifact_s3/normalization.npz" "$artifact_root/normalization.npz" --only-show-errors
-aws s3 cp "$artifact_s3/export.json" "$artifact_root/export.json" --only-show-errors
 echo "$base_policy_sha256  $base_policy" | sha256sum --check
-echo "$normalization_sha256  $artifact_root/normalization.npz" | sha256sum --check
+# No separate expected hash for normalization.npz: the archive's published
+# sha256, checked above, already pins its contents exactly. Record what was
+# unpacked so a run can be traced back to its bounds.
+sha256sum "$artifact_root/normalization.npz" \
+  | tee "$output_root/job-metadata/normalization.sha256"
 cp "$artifact_root/export.json" "$output_root/job-metadata/dataset-export.json"
 cp config/diffusion_policy/ft_ppo_so101_unet_img.yaml "$output_root/job-metadata/launcher-config.yaml"
 
 # Gitignored build artifacts a clean clone lacks. The AprilTag textures are
-# generated; the camera calibration is machine-local and must have been copied
-# here by the launcher -- its 9.13 mm / 1.76 deg offset is outside the
-# domain-randomization jitter, so nothing else supplies it.
+# generated; the camera calibration is machine-local -- its 9.13 mm / 1.76 deg
+# offset is outside the domain-randomization jitter, so nothing else supplies it
+# and the scene would be subtly wrong without it. The bucket's config-backup is
+# the copy of record, so a pod can be brought up from any machine.
 "$venv/bin/python" py/scripts/render_apriltag_textures.py --all-defaults
 for calibration in config/camera_extrinsics/overhead_camera.json \
                    config/camera_intrinsics/overhead_camera.json \
                    config/camera_intrinsics/wrist_camera.json; do
+  if [ ! -f "$repo/$calibration" ]; then
+    mkdir -p "$(dirname "$repo/$calibration")"
+    aws s3 cp "$bucket_root/config-backup/${calibration#config/}" \
+      "$repo/$calibration" --only-show-errors
+  fi
   if [ ! -f "$repo/$calibration" ]; then
     echo "missing machine-local calibration on the pod: $calibration" >&2
     exit 1
@@ -285,6 +395,17 @@ export DPPO_BASE_POLICY="$base_policy"
 export DPPO_LOG_DIR="$output_root"
 export PYTHONPATH="$repo/third_party/dppo"
 
+# Weights & Biases is optional, and a key on the controller does nothing: without
+# one on the *pod*, wandb.init aborts the run. That would land after provisioning
+# and after the pre-flight gate has already spent GPU minutes, so degrade to no
+# logging and say so rather than dying an hour in. The console log and the
+# per-iteration S3 sync carry the same numbers.
+wandb_override=()
+if ! grep -q api.wandb.ai "${NETRC:-$HOME/.netrc}" 2>/dev/null; then
+  echo "No api.wandb.ai entry in $HOME/.netrc on this pod; training without W&B logging."
+  wandb_override=(wandb=null)
+fi
+
 # Gate: does the pretrained policy still perform the task in this environment?
 # An observation-pipeline mismatch is indistinguishable from "RL had nothing to
 # learn from" once training starts, and costs a full run to discover.
@@ -294,6 +415,7 @@ export PYTHONPATH="$repo/third_party/dppo"
   --normalization "$artifact_root/normalization.npz" \
   --episodes "$preflight_episodes" \
   --n-envs "$n_envs" \
+  --scene-appearance "$scene_appearance" \
   --device cuda:0 \
   --output "$output_root/job-metadata/preflight.json"
 
@@ -335,10 +457,12 @@ set +e
   train.target_kl="$target_kl" \
   train.update_epochs="$update_epochs" \
   train.augment="$augment" \
+  env.scene_appearance="$scene_appearance" \
   env.shaping_weight="$shaping_weight" \
   env.debug_action_reward="$debug_action_reward" \
   model.denoised_clip_value="$denoised_clip" \
   model._target_="$model_target" \
+  ${wandb_override[@]+"${wandb_override[@]}"} \
   "$@" \
   model.min_sampling_denoising_std="$sampling_std" \
   model.min_logprob_denoising_std="$logprob_std" \
