@@ -67,6 +67,15 @@ env:
   # pure sparse settled placement that the plan calls for. Being potential-based
   # (gamma * phi(s') - phi(s)) it cannot change which policy is optimal, so it is
   # a variance-reduction device rather than a different task.
+  # Pay the success reward for every control tick the cube stays settled on
+  # target, running the episode out instead of ending it at the placement. The
+  # sparse alternative returns exactly 0.0 or 1.0 per episode, which is the
+  # maximum-variance form the return can take; robomimic's `can`, the image
+  # benchmark that learns on this build, is sparse in the same sense but never
+  # terminates and so grades how quickly the task was finished. Does not change
+  # which policy is optimal, and leaves the oracle milestones -- and therefore
+  # the paired A/B -- untouched.
+  dense_success_reward: False
   shaping_weight: 0.0
   # Emit privileged simulator state for the asymmetric critic below. The actor
   # never reads it, so the deployed policy is unchanged.
@@ -77,7 +86,18 @@ env:
   save_video: False
   # An episode's summed reward is 1.0 exactly when it succeeded, and DPPO divides
   # the best per-chunk reward by act_steps before this comparison.
-  best_reward_threshold_for_success: ${eval:'1 / ${act_steps}'}
+  # An episode's summed reward is 1.0 exactly when it succeeded, and DPPO
+  # divides the best per-chunk reward by act_steps before this comparison.
+  #
+  # Under dense_success_reward the stat changes meaning. The agent computes
+  # `max(chunk reward) / act_steps`, so a chunk whose every tick was settled
+  # scores 1.0 and a chunk that settled halfway through scores 0.5; a threshold
+  # of 1.0 therefore reads as "some chunk in which the cube was on target for
+  # all act_steps ticks". That is close to success but not the oracle's
+  # dwell-confirmed definition -- an episode settling in its last few ticks
+  # would read as a failure. As with shaping, only the oracle A/B in
+  # check_dppo_rl_env.py is the measurement.
+  best_reward_threshold_for_success: ${eval:'1.0 if ${env.dense_success_reward} else 1 / ${act_steps}'}
 
 shape_meta:
   obs:

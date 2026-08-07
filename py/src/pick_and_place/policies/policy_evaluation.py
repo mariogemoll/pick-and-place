@@ -257,6 +257,7 @@ class TaskSuccessOracle:
         self._stable_carry_dwell_s = 0.0
         self._success_time_s: float | None = None
         self._elapsed_s = 0.0
+        self._settled_on_target = False
 
     @property
     def milestones(self) -> TaskMilestones:
@@ -269,6 +270,18 @@ class TaskSuccessOracle:
     @property
     def success_time_s(self) -> float | None:
         return self._success_time_s
+
+    @property
+    def settled_on_target(self) -> bool:
+        """Whether the cube is on target *right now*, as of the last update.
+
+        Distinct from :attr:`success`, which latches: success is the confirmed
+        milestone and never goes back to False, while this is an instantaneous
+        condition that can turn off again if the cube is disturbed. Nothing in
+        the scored evaluation reads it -- it exists so an episode can be paid a
+        reward for every tick the cube stays where it was put.
+        """
+        return self._settled_on_target
 
     def _settled(self, state: TaskState) -> bool:
         config = self.config
@@ -287,13 +300,24 @@ class TaskSuccessOracle:
     def update(self, state: TaskState, step_duration_s: float) -> bool:
         if step_duration_s <= 0.0 or not math.isfinite(step_duration_s):
             raise ValueError("step_duration_s must be a positive finite number")
+        # Ahead of the early return, so that an episode which keeps running past
+        # its success -- which only the reinforcement-learning environment does,
+        # to pay a reward per tick the cube stays put -- still gets a live
+        # answer. Every scored evaluation stops at success, so for those callers
+        # this is exactly where it always was.
+        self._collision |= state.unexpected_collision
+        self._out_of_bounds |= state.out_of_bounds
+        settled = self._settled(state)
+        self._settled_on_target = (
+            settled
+            and state.xy_error_m <= self.config.success_xy_tolerance_m
+            and not self._collision
+            and not self._out_of_bounds
+        )
         if self.success:
             return True
 
         self._elapsed_s += step_duration_s
-        self._collision |= state.unexpected_collision
-        self._out_of_bounds |= state.out_of_bounds
-        settled = self._settled(state)
         lifted = state.cube_position_m[2] >= (
             self.config.resting_height_m + self.config.lift_clearance_m
         )
@@ -316,12 +340,7 @@ class TaskSuccessOracle:
         )
         lifted_during_episode = self._milestones.cube_lifted or lifted
         settled_after_lift = settled and lifted_during_episode
-        placement_candidate = (
-            settled
-            and state.xy_error_m <= self.config.success_xy_tolerance_m
-            and not self._collision
-            and not self._out_of_bounds
-        )
+        placement_candidate = self._settled_on_target
         self._success_dwell_s = (
             self._success_dwell_s + step_duration_s if placement_candidate else 0.0
         )

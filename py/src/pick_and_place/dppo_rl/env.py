@@ -86,6 +86,23 @@ class EnvConfig:
     # policy unchanged, and the terminal reward still dominates: the potential
     # spans about 0.5 m, so a weight of 0.5 contributes at most ~0.25 against
     # the terminal 1.0.
+    # Pay the success reward on every control tick the cube stays settled on
+    # target, and run the episode out rather than ending it at the placement.
+    #
+    # The sparse alternative pays 1.0 once and terminates, so an episode returns
+    # exactly 0.0 or 1.0 -- convenient to read as a success rate, and the
+    # maximum-variance form the return can take. Robomimic's `can`, the image
+    # benchmark that does learn on this build, is sparse in the same sense but
+    # sets `ignore_done`: its reward fires on every remaining step of the 300,
+    # so its return grades how quickly the task was finished and its critic
+    # regresses a number rather than a Bernoulli. This is that, for this task.
+    #
+    # It does not change which policy is optimal -- placing early and leaving
+    # the cube there dominates placing late -- and it leaves the oracle's
+    # milestones untouched, so the paired A/B in `check_dppo_rl_env.py` stays
+    # exactly as readable as before. Unexpected collisions and out-of-bounds
+    # cubes still end the episode.
+    dense_success_reward: bool = False
     shaping_weight: float = 0.0
     # Discount used by the shaping term. Must match the trainer's gamma for the
     # policy-invariance guarantee to hold.
@@ -152,6 +169,7 @@ class DppoTaskEnv:
             image_hw=config.image_hw,
             render_hw=config.render_hw,
             scene_appearance=config.scene_appearance,
+            terminate_on_success=not config.dense_success_reward,
             **renderer,
         )
         self._history: deque[dict[str, np.ndarray]] = deque(maxlen=config.cond_steps)
@@ -298,7 +316,14 @@ class DppoTaskEnv:
             observation, step_reward, terminated, truncated, info = self._env.step(
                 self._command(action)
             )
-            reward += float(step_reward)
+            if self.config.dense_success_reward:
+                # Not the env's own reward, which latches with the success
+                # milestone and would keep paying after the cube has been
+                # knocked off target. Pay for the condition holding *now*,
+                # which is what "and keep it there" has to mean.
+                reward += SUCCESS_REWARD if info["settled_on_target"] else 0.0
+            else:
+                reward += float(step_reward)
             self._step = int(info["control_steps"])
             self._record(observation)
             if terminated or truncated:

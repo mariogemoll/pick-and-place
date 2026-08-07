@@ -156,6 +156,45 @@ def test_a_delta_chunk_is_integrated_onto_each_ticks_measured_joints(tmp_path):
     np.testing.assert_allclose(commanded[1], measured[0] + 100.0, atol=1e-4)
 
 
+def test_the_dense_reward_pays_for_every_tick_the_cube_stays_on_target(tmp_path):
+    env = _env(tmp_path, act_steps=3, max_steps=9, dense_success_reward=True)
+    settled = [False, True, True]
+    try:
+        env.reset()
+        # The oracle is driven by physics, so stub the one fact the reward reads.
+        inner_step = env._env.step
+
+        def settling_step(action):
+            observation, reward, terminated, truncated, info = inner_step(action)
+            info = {**info, "settled_on_target": settled.pop(0) if settled else True}
+            return observation, reward, terminated, truncated, info
+
+        env._env.step = settling_step
+        _, reward, _, _, _ = env.step(np.zeros((3, 6), dtype=np.float32))
+    finally:
+        env.close()
+
+    # Two of the chunk's three ticks had the cube on target.
+    assert reward == pytest.approx(2.0)
+
+
+def test_the_sparse_reward_still_pays_once_and_ends_the_episode(tmp_path):
+    env = _env(tmp_path, act_steps=2, max_steps=10)
+    try:
+        # The default keeps the underlying environment terminating on success,
+        # which is what every scored evaluation depends on.
+        assert env._env.terminate_on_success
+        assert not env.config.dense_success_reward
+    finally:
+        env.close()
+
+    dense = _env(tmp_path, act_steps=2, max_steps=10, dense_success_reward=True)
+    try:
+        assert not dense._env.terminate_on_success
+    finally:
+        dense.close()
+
+
 def _record_commands(env):
     """Capture what reaches the simulator, and what it reports back."""
     commanded: list[np.ndarray] = []

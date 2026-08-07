@@ -126,6 +126,27 @@ def test_oracle_accepts_tolerance_boundaries_after_dwell():
     assert oracle.success_time_s == pytest.approx(0.11)
 
 
+def test_settled_on_target_is_instantaneous_where_success_latches():
+    oracle = TaskSuccessOracle(TaskOracleConfig(success_confirmation_s=0.1))
+
+    oracle.update(_state(cube_position_m=(0.04, 0.0, 0.05), grasped=True), 0.01)
+    assert not oracle.settled_on_target
+    oracle.update(_state(), 0.05)
+    assert oracle.settled_on_target
+    assert oracle.update(_state(), 0.05)
+    assert oracle.success
+
+    # Knocked off target after the placement was confirmed. Success is a
+    # milestone and stays; being on target right now does not.
+    oracle.update(_state(cube_position_m=(0.4, 0.0, 0.015)), 0.05)
+    assert oracle.success
+    assert not oracle.settled_on_target
+    # And it comes back if the cube does, which is what the dense reward pays
+    # for tick by tick.
+    oracle.update(_state(), 0.05)
+    assert oracle.settled_on_target
+
+
 @pytest.mark.parametrize(
     "state",
     [

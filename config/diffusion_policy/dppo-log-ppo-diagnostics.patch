@@ -1,0 +1,22 @@
+--- a/agent/finetune/train_ppo_diffusion_img_agent.py
++++ b/agent/finetune/train_ppo_diffusion_img_agent.py
+@@ -438,6 +438,19 @@
+                     log.info(
+                         f"{self.itr}: step {cnt_train_step:8d} | loss {loss:8.4f} | pg loss {pg_loss:8.4f} | value loss {v_loss:8.4f} | bc loss {bc_loss:8.4f} | reward {avg_episode_reward:8.4f} | eta {eta:8.4f} | t:{time:8.4f}"
+                     )
++                    # These three are computed above and were previously sent
++                    # only to W&B, so a run launched with wandb=null could not
++                    # see them at all -- and a critic with negative explained
++                    # variance is exactly the failure that would go unnoticed.
++                    log.info(
++                        f"{self.itr}: approx_kl {float(approx_kl):10.3e} | clipfrac "
++                        f"{(np.mean(clipfracs) if len(clipfracs) else float('nan')):8.4f} | "
++                        f"explained_var {explained_var:8.4f} | adv "
++                        f"mean {float(np.mean(advantages_trajs)):8.4f} "
++                        f"std {float(np.std(advantages_trajs)):8.4f} "
++                        f"min {float(np.min(advantages_trajs)):8.4f} "
++                        f"max {float(np.max(advantages_trajs)):8.4f}"
++                    )
+                     if self.use_wandb:
+                         wandb.log(
+                             {

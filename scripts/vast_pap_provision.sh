@@ -7,8 +7,13 @@
 # assumes: repo cloned with submodules, working-tree overlay applied, DPPO
 # patch applied, venv built with the RTX-5090 overrides, CUDA usable.
 #
-#   scp scripts/vast_pap_provision.sh overlay.tar.gz <ssh-host>:/workspace/
+#   scp scripts/vast_pap_provision.sh overlay.tar.gz ~/.netrc <ssh-host>:/workspace/
 #   ssh <ssh-host> 'bash /workspace/vast_pap_provision.sh'
+#
+# The netrc carries the Weights & Biases credential. Copy it every time: the job
+# launchers look for it on the *pod*, and having one on the controller does
+# nothing. Nothing used to put it there, so every run in this repository's
+# history logged to nowhere.
 #
 # vast_diffusion_policy_train_fast.sh starts from this state and does not create
 # it. Every step is idempotent, so re-running after a partial failure is safe.
@@ -60,6 +65,16 @@ fi
 # (lerobot 0.5.1), so inheriting it fails resolution outright -- and a template
 # that happens to satisfy the floor today would still let a bump change the
 # interpreter a run was measured on without anyone noticing.
+if [ -f "$workspace/.netrc" ] || [ -f "$workspace/netrc" ]; then
+  cp "$workspace/.netrc" "$HOME/.netrc" 2>/dev/null || cp "$workspace/netrc" "$HOME/.netrc"
+  chmod 600 "$HOME/.netrc"
+  echo "Installed netrc; W&B logging is available."
+elif [ -f "$HOME/.netrc" ]; then
+  echo "netrc already present."
+else
+  echo "No netrc staged at $workspace/.netrc -- job launchers will refuse to start." >&2
+fi
+
 #
 # Not PYTHON_VERSION: the vastai/pytorch image exports that already, set to its
 # own 3.10, so an override named that is silently supplied by the environment.

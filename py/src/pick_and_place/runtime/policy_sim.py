@@ -178,6 +178,7 @@ class PolicySimEnv(gym.Env):
         render_hw: tuple[int, int] = (1080, 1920),
         renderer_factory: RendererFactory = mujoco.Renderer,
         scene_appearance: SceneAppearance | None = None,
+        terminate_on_success: bool = True,
     ) -> None:
         super().__init__()
         image_height, image_width = image_hw
@@ -196,6 +197,13 @@ class PolicySimEnv(gym.Env):
         # blue-cube checkpoints see a recoloured cube that the compiled scene,
         # which carries the physical rig's AprilTag cube, does not have.
         self.scene_appearance = scene_appearance
+        # Every scored evaluation ends the episode the moment the placement is
+        # confirmed, because the task is done and nothing after it is measured.
+        # Reinforcement learning has a reason to keep going: an episode that
+        # runs to its budget can be paid for each tick the cube stays put, which
+        # turns a one-bit return into one that grades how quickly the policy
+        # finished. See `settled_on_target` on the oracle.
+        self.terminate_on_success = terminate_on_success
         self._appearance_override = (
             SceneAppearanceOverride(self.model) if scene_appearance is not None else None
         )
@@ -448,6 +456,7 @@ class PolicySimEnv(gym.Env):
             "task_state": asdict(task_state),
             "milestones": asdict(self._oracle.milestones),
             "success": self._oracle.success,
+            "settled_on_target": self._oracle.settled_on_target,
             "control_steps": self._step_count,
         }
 
@@ -472,7 +481,7 @@ class PolicySimEnv(gym.Env):
             step_duration_s=1.0 / self._scenario.control_hz,
         )
         terminated = (
-            success
+            (success and self.terminate_on_success)
             or self._last_task_state.unexpected_collision
             or self._last_task_state.out_of_bounds
         )

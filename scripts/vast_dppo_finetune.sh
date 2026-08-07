@@ -132,6 +132,13 @@ augment="${AUGMENT:-False}"
 # settled-placement reward. Non-zero densifies credit assignment without
 # changing the optimal policy.
 shaping_weight="${SHAPING_WEIGHT:-0.0}"
+# Pay the success reward per control tick the cube stays on target, and run the
+# episode out rather than ending it at the placement. The sparse alternative
+# returns one bit per episode; robomimic's `can`, the image benchmark that does
+# learn on this build, is sparse in the same sense but never terminates. Unlike
+# shaping this does not corrupt the oracle A/B, which reads milestones rather
+# than the training reward.
+dense_success_reward="${DENSE_SUCCESS_REWARD:-False}"
 # Diagnostic: replace the task reward with a trivially learnable function of the
 # action. Used to prove the gradient path works at all.
 debug_action_reward="${DEBUG_ACTION_REWARD:-False}"
@@ -233,13 +240,22 @@ git rev-parse HEAD | tee "$output_root/job-metadata/repository-commit.txt"
 # dropped once as vestigial because the patch file it names had never been
 # committed; the file is committed now. Applied here so a fresh clone of the
 # pinned submodule gets it too.
-if ! git -C third_party/dppo apply --reverse --check \
-     ../../config/diffusion_policy/dppo-generic-obs-keys.patch 2>/dev/null; then
-  git -C third_party/dppo apply ../../config/diffusion_policy/dppo-generic-obs-keys.patch
-  echo "Applied dppo-generic-obs-keys.patch to the vendored agent."
-else
-  echo "dppo-generic-obs-keys.patch already applied."
-fi
+#
+# dppo-log-ppo-diagnostics.patch is the second one, and must be applied after:
+# both touch this file. It prints approx_kl, clipfrac, explained variance and
+# the advantage distribution to the console. Upstream computes all of them
+# already but sends them only to W&B, so every run launched with wandb=null --
+# which is every run here without a key on the pod -- was flying without the one
+# diagnostic that would show a critic explaining nothing.
+for patch in dppo-generic-obs-keys dppo-log-ppo-diagnostics; do
+  if ! git -C third_party/dppo apply --reverse --check \
+       "../../config/diffusion_policy/$patch.patch" 2>/dev/null; then
+    git -C third_party/dppo apply "../../config/diffusion_policy/$patch.patch"
+    echo "Applied $patch.patch to the vendored agent."
+  else
+    echo "$patch.patch already applied."
+  fi
+done
 
 venv="$workspace/venvs/pick-and-place"
 base_python="python3"
@@ -400,15 +416,27 @@ export DPPO_BASE_POLICY="$base_policy"
 export DPPO_LOG_DIR="$output_root"
 export PYTHONPATH="$repo/third_party/dppo"
 
-# Weights & Biases is optional, and a key on the controller does nothing: without
-# one on the *pod*, wandb.init aborts the run. That would land after provisioning
-# and after the pre-flight gate has already spent GPU minutes, so degrade to no
-# logging and say so rather than dying an hour in. The console log and the
-# per-iteration S3 sync carry the same numbers.
-wandb_override=()
-if ! grep -q api.wandb.ai "${NETRC:-$HOME/.netrc}" 2>/dev/null; then
-  echo "No api.wandb.ai entry in $HOME/.netrc on this pod; training without W&B logging."
+# Weights & Biases is required, and a key on the controller does nothing: the
+# credential has to be on the *pod*. This used to degrade to wandb=null so a
+# missing key could not kill an hours-long job, and the cost of that kindness
+# was that every run in this repository's history logged to nowhere -- including
+# the approx_kl, clipfrac and explained-variance numbers upstream sends only to
+# W&B, which is precisely the diagnostic eleven collapsing runs needed.
+#
+# So: still checked before anything expensive, but now a refusal rather than a
+# shrug. Stage the credential with vast_pap_provision.sh, or pass WANDB=off if
+# you really mean to fly blind.
+if [ "${WANDB:-on}" = "off" ]; then
+  echo "WANDB=off: training without W&B logging, by request."
   wandb_override=(wandb=null)
+elif grep -q api.wandb.ai "${NETRC:-$HOME/.netrc}" 2>/dev/null; then
+  wandb_override=()
+  echo "W&B credential found on this pod."
+else
+  echo "No api.wandb.ai entry in ${NETRC:-$HOME/.netrc} on this pod." >&2
+  echo "Copy your ~/.netrc to the pod (vast_pap_provision.sh stages it), or set" >&2
+  echo "WANDB=off to run without logging. Refusing to start blind." >&2
+  exit 1
 fi
 
 # Gate: does the pretrained policy still perform the task in this environment?
@@ -464,6 +492,7 @@ set +e
   train.update_epochs="$update_epochs" \
   train.augment="$augment" \
   env.scene_appearance="$scene_appearance" \
+  env.dense_success_reward="$dense_success_reward" \
   env.shaping_weight="$shaping_weight" \
   env.debug_action_reward="$debug_action_reward" \
   model.denoised_clip_value="$denoised_clip" \

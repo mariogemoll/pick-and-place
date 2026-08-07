@@ -103,14 +103,25 @@ trap finalize EXIT
 
 nvidia-smi
 
-# Weights & Biases is optional. Without a key on the *pod* (having one on the
-# controller does nothing), wandb.init aborts the run before the first epoch --
-# an hours-long job lost to a missing credential. Degrade to no logging instead,
-# and say so, rather than failing at startup.
-wandb_override=()
-if ! grep -q api.wandb.ai "${NETRC:-$HOME/.netrc}" 2>/dev/null; then
-  echo "No api.wandb.ai entry in $HOME/.netrc on this pod; training without W&B logging."
+# Weights & Biases is required, and a key on the *pod* is what counts: having
+# one on the controller does nothing. This used to degrade to wandb=null so a
+# missing credential could not kill an hours-long job; the cost was that every
+# run in this repository's history logged to nowhere, because nothing ever
+# copied the netrc onto a pod in the first place. Check early -- before the
+# download and the equivalence check, so a refusal costs seconds -- and refuse
+# rather than shrug. Stage the credential with vast_pap_provision.sh, or pass
+# WANDB=off if you really mean to run without it.
+if [ "${WANDB:-on}" = "off" ]; then
+  echo "WANDB=off: training without W&B logging, by request."
   wandb_override=(wandb=null)
+elif grep -q api.wandb.ai "${NETRC:-$HOME/.netrc}" 2>/dev/null; then
+  wandb_override=()
+  echo "W&B credential found on this pod."
+else
+  echo "No api.wandb.ai entry in ${NETRC:-$HOME/.netrc} on this pod." >&2
+  echo "Copy your ~/.netrc to the pod (vast_pap_provision.sh stages it), or set" >&2
+  echo "WANDB=off to run without logging. Refusing to start blind." >&2
+  exit 1
 fi
 
 # Refuse to overwrite or resume: checkpoints from previous runs stay put.

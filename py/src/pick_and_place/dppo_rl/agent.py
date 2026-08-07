@@ -112,6 +112,7 @@ class PickAndPlacePPOImgAgent(TrainPPOImgDiffusionAgent):
             max_steps=int(cfg.env.max_episode_steps),
             seed_base=int(cfg.env.scene_seed_base),
             scene_appearance=parse_appearance(str(cfg.env.scene_appearance))[1],
+            dense_success_reward=bool(cfg.env.get("dense_success_reward", False)),
             shaping_weight=float(cfg.env.get("shaping_weight", 0.0)),
             gamma=float(cfg.train.gamma),
             privileged_obs=bool(cfg.env.get("privileged_obs", False)),
