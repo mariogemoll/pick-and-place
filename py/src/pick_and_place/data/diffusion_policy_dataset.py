@@ -24,6 +24,11 @@ from numpy.lib.format import open_memmap
 from tqdm import tqdm
 
 from pick_and_place.core.image_ops import resize_and_center_crop
+from pick_and_place.spec.action_encoding import (
+    ACTION_ENCODING_KEY,
+    ActionEncoding,
+    encode_actions,
+)
 
 STATE_FEATURE = "observation.state"
 ACTION_FEATURE = "action"
@@ -452,6 +457,7 @@ def export_diffusion_policy_dataset(
     policy_hz: int = DEFAULT_POLICY_HZ,
     max_episodes: int | None = None,
     workers: int = 1,
+    action_encoding: ActionEncoding = ActionEncoding.ABSOLUTE,
 ) -> dict[str, Any]:
     """Export Diffusion Policy arrays without modifying the LeRobot source.
 
@@ -459,6 +465,13 @@ def export_diffusion_policy_dataset(
     ``policy_hz``; every episode is decimated to episode-relative indices
     ``0, stride, 2 * stride, ...`` so the action chunks a model learns span the
     same wall-clock time the controller replays them over.
+
+    ``action_encoding`` chooses what the policy is asked to predict: the joint
+    command itself, or its offset from the joints measured on the same tick.
+    Deltas are fitted their own min-max bounds, which is the point of them --
+    a normalized unit then spans one tick's motion rather than a joint's whole
+    range. The choice is recorded in both the manifest and the normalization
+    archive, because every rollout path has to decode what was encoded here.
     """
     dataset_root = dataset_root.resolve()
     output_dir = output_dir.resolve()
@@ -520,7 +533,9 @@ def export_diffusion_policy_dataset(
     states_raw = states_raw[keep]
     actions_raw = actions_raw[keep]
     states, obs_min, obs_max = normalize_min_max(states_raw)
-    actions, action_min, action_max = normalize_min_max(actions_raw)
+    actions, action_min, action_max = normalize_min_max(
+        encode_actions(action_encoding, actions_raw, states_raw)
+    )
 
     building_dir.mkdir(parents=True)
     arrays_dir = building_dir / "arrays"
@@ -558,6 +573,11 @@ def export_diffusion_policy_dataset(
         obs_max=obs_max,
         action_min=action_min,
         action_max=action_max,
+        # Beside the bounds rather than only in the manifest: the bounds are
+        # what every rollout path loads, and reading the encoding from the same
+        # file is what stops a delta checkpoint being commanded as absolute
+        # joint positions.
+        **{ACTION_ENCODING_KEY: action_encoding.value},
     )
     shutil.rmtree(arrays_dir)
 
@@ -587,6 +607,12 @@ def export_diffusion_policy_dataset(
         "source_video_hw": source_video_hw,
         "image_transform": "aspect-fill resize followed by center crop",
         "state_action_normalization": "per-dimension min-max to [-1, 1]",
+        ACTION_ENCODING_KEY: action_encoding.value,
+        "action_semantics": (
+            "absolute joint command"
+            if action_encoding is ActionEncoding.ABSOLUTE
+            else "joint command minus the joints measured on the same control tick"
+        ),
         "state_dim": int(states.shape[1]),
         "action_dim": int(actions.shape[1]),
     }

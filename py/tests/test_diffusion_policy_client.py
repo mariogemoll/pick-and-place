@@ -16,6 +16,7 @@ import pytest
 from pick_and_place.policies import diffusion_policy_client
 from pick_and_place.data.diffusion_policy_dataset import normalize_min_max
 from pick_and_place.policies.diffusion_policy_client import DiffusionPolicyController, resolve_recording_hw
+from pick_and_place.spec.action_encoding import ActionEncoding
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
 
 SERVER_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "diffusion_policy_server.py"
@@ -104,6 +105,7 @@ write_message(stdout, {{
     "device": np.asarray("cpu"),
     "seed": np.asarray(0),
     "torch_version": np.asarray("0.0-fake"),
+    "action_encoding": np.asarray({encoding!r}),
 }})
 queries = 0
 while True:
@@ -122,11 +124,17 @@ while True:
 """
 
 
+def _fake_server_command(tmp_path: Path, encoding: str = "absolute") -> list[str]:
+    script = tmp_path / f"fake_server_{encoding}.py"
+    script.write_text(
+        FAKE_SERVER.format(server_dir=str(SERVER_SCRIPT.parent), encoding=encoding)
+    )
+    return [sys.executable, str(script)]
+
+
 @pytest.fixture
 def fake_server_command(tmp_path: Path) -> list[str]:
-    script = tmp_path / "fake_server.py"
-    script.write_text(FAKE_SERVER.format(server_dir=str(SERVER_SCRIPT.parent)))
-    return [sys.executable, str(script)]
+    return _fake_server_command(tmp_path)
 
 
 def _observation(value: float = 0.0) -> dict[str, np.ndarray]:
@@ -161,6 +169,49 @@ def test_controller_serves_chunks_and_requeries(fake_server_command: list[str]) 
         assert values == pytest.approx([1.0, 1.1, 2.0, 2.1])
     finally:
         controller.close()
+
+
+def test_controller_integrates_a_delta_onto_the_tick_it_is_commanded_on(tmp_path: Path) -> None:
+    controller = DiffusionPolicyController(
+        _fake_server_command(tmp_path, "delta"), act_steps=2
+    )
+    try:
+        assert controller.action_encoding is ActionEncoding.DELTA
+        # Query 1 returns rows 1.0 and 1.1, offsets rather than commands.
+        first = controller.act(_observation(1.0))
+        # The chunk was predicted from a state of 1.0; by the second tick the
+        # arm reads 5.0, and that is what the queued offset belongs to.
+        second = controller.act(_observation(5.0))
+    finally:
+        controller.close()
+
+    assert first[0] == pytest.approx(2.0)
+    assert second[0] == pytest.approx(6.1)
+    # Not 1.0 + 1.1: integrating a whole chunk from where it was predicted
+    # would leave the arm a chunk's worth of motion behind.
+    assert second[0] != pytest.approx(2.1)
+
+
+def test_controller_reads_a_delta_horizon_open_loop_for_diagnostics(tmp_path: Path) -> None:
+    controller = DiffusionPolicyController(
+        _fake_server_command(tmp_path, "delta"), act_steps=2
+    )
+    try:
+        commanded = controller.act(_observation(3.0))
+        prediction = controller.latest_prediction
+    finally:
+        controller.close()
+
+    assert prediction is not None
+    # latest_prediction is in joint units, so the first row is exactly what was
+    # commanded and the rest reads as if the arm never moved.
+    assert prediction[0][0] == pytest.approx(commanded[0])
+    assert prediction[1][0] == pytest.approx(3.0 + 1.1)
+
+
+def test_controller_rejects_a_server_whose_encoding_it_does_not_know(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="unknown action encoding"):
+        DiffusionPolicyController(_fake_server_command(tmp_path, "relative"))
 
 
 def test_controller_reset_discards_queued_actions(fake_server_command: list[str]) -> None:

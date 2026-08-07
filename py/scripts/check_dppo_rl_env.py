@@ -38,6 +38,8 @@ from pathlib import Path
 
 import numpy as np
 
+from pick_and_place.spec.action_encoding import ActionEncoding, read_action_encoding
+
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -78,6 +80,27 @@ def _parse_args() -> argparse.Namespace:
         "state dict holds actor/actor_ft/critic rather than pretraining EMA "
         "weights, so it is loaded after the model is built. Point --checkpoint at "
         "the pretrained policy either way: it defines the architecture.",
+    )
+    parser.add_argument(
+        "--act-steps",
+        type=int,
+        default=None,
+        help="executed actions per query, overriding the config's. The chunk "
+        "schedule is an operating point rather than a property of the "
+        "checkpoint, and it is not neutral between action encodings: an "
+        "absolute chunk commands the same joint targets however stale the "
+        "measurement is, while a delta chunk integrates onto whatever the arm "
+        "has actually reached, so its errors accumulate over the chunk.",
+    )
+    parser.add_argument(
+        "--expect-action-encoding",
+        choices=[encoding.value for encoding in ActionEncoding],
+        default=None,
+        help="fail unless the normalization archive declares this encoding. "
+        "Pairing a checkpoint with another export's bounds does not fail, it "
+        "quietly feeds the policy the wrong units, and a delta checkpoint "
+        "commanded as absolute joint positions is that failure with a new way "
+        "in. State what you expect and the run stops instead.",
     )
     parser.add_argument(
         "--stochastic",
@@ -127,6 +150,18 @@ def main() -> None:
     from pick_and_place.dppo_rl.vector_env import DppoVectorEnv
     from pick_and_place.sim.scene_appearance import parse_appearance
 
+    with np.load(args.normalization) as bounds:
+        action_encoding = read_action_encoding(bounds)
+    if (
+        args.expect_action_encoding is not None
+        and action_encoding.value != args.expect_action_encoding
+    ):
+        raise SystemExit(
+            f"{args.normalization} declares {action_encoding.value} actions, "
+            f"but {args.expect_action_encoding} was expected. The checkpoint and "
+            "the bounds it was fitted against have to move together."
+        )
+
     config = OmegaConf.load(args.config)
     config.base_policy_path = str(args.checkpoint)
     config.normalization_path = str(args.normalization)
@@ -145,7 +180,7 @@ def main() -> None:
         image_hw=(int(config.shape_meta.obs.rgb.shape[1]), int(config.shape_meta.obs.rgb.shape[2])),
         render_hw=tuple(args.render_hw or [int(value) for value in config.env.render_hw]),
         cond_steps=int(config.cond_steps),
-        act_steps=int(config.act_steps),
+        act_steps=int(args.act_steps if args.act_steps is not None else config.act_steps),
         control_hz=float(config.env.control_hz),
         max_steps=int(config.env.max_episode_steps),
         seed_base=int(
@@ -230,6 +265,7 @@ def main() -> None:
             "max_steps": env_config.max_steps,
             "scene_seed_base": env_config.seed_base,
             "scene_appearance": env_config.scene_appearance.name,
+            "action_encoding": action_encoding.value,
             "stochastic": args.stochastic,
             "sampling_std": (
                 args.sampling_std

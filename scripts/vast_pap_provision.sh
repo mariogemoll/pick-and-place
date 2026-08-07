@@ -55,12 +55,18 @@ else
   echo "No overlay tarball; running the committed tree." >&2
 fi
 
-base_python="python3"
-if [ -x /venv/main/bin/python ]; then
-  base_python="/venv/main/bin/python"
-fi
+# Pin the interpreter rather than inheriting the image's. vastai/pytorch:latest
+# currently ships Python 3.10 in /venv/main, and this package requires 3.12+
+# (lerobot 0.5.1), so inheriting it fails resolution outright -- and a template
+# that happens to satisfy the floor today would still let a bump change the
+# interpreter a run was measured on without anyone noticing.
+#
+# Not PYTHON_VERSION: the vastai/pytorch image exports that already, set to its
+# own 3.10, so an override named that is silently supplied by the environment.
+python_version="${PAP_PYTHON_VERSION:-3.12}"
 if [ ! -x "$venv/bin/python" ]; then
-  uv venv --python "$base_python" "$venv"
+  uv python install "$python_version"
+  uv venv --python "$python_version" "$venv"
 fi
 # Load-bearing for resolution, not just CUDA: without the overrides DPPO's own
 # pins conflict with this package and uv declares the requirements unsatisfiable.

@@ -14,6 +14,7 @@ from pick_and_place.data.diffusion_policy_dataset import (
     DEFAULT_POLICY_HZ,
     export_diffusion_policy_dataset,
 )
+from pick_and_place.spec.action_encoding import ActionEncoding, parse_action_encoding
 
 
 def main() -> None:
@@ -49,6 +50,15 @@ def main() -> None:
         default=2,
         help="parallel video decoding processes (default: 2)",
     )
+    parser.add_argument(
+        "--action-encoding",
+        choices=[encoding.value for encoding in ActionEncoding],
+        default=ActionEncoding.ABSOLUTE.value,
+        help=(
+            "what the policy predicts: the joint command itself, or its offset "
+            "from the joints measured on the same control tick (default: absolute)"
+        ),
+    )
     args = parser.parse_args()
 
     manifest = export_diffusion_policy_dataset(
@@ -58,6 +68,7 @@ def main() -> None:
         policy_hz=args.policy_hz,
         max_episodes=args.max_episodes,
         workers=args.workers,
+        action_encoding=parse_action_encoding(args.action_encoding),
     )
     print(json.dumps(manifest, indent=2, sort_keys=True))
 

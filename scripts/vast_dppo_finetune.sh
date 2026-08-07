@@ -70,6 +70,11 @@ artifact_s3="$bucket_root/diffusion-policy-data/$artifact_name.tar.zst"
 # blue-cube policy scored 0/4 contact attempts -- so it travels with the
 # checkpoint, not with the config file.
 scene_appearance="${SCENE_APPEARANCE:-blue-cube}"
+# What the base checkpoint predicts, stated rather than discovered. The bounds
+# file declares it and the environment obeys the file, so a mismatch never
+# raises -- the policy is simply commanded in the wrong units. Declaring it here
+# turns that into a failed pre-flight.
+action_encoding="${ACTION_ENCODING:-absolute}"
 
 run_name="${RUN_NAME:-dppo_ft_${base_run_name}_${base_epoch}_$(date +%Y%m%d)}"
 output_prefix="$bucket_root/outputs/$run_name"
@@ -416,6 +421,7 @@ fi
   --episodes "$preflight_episodes" \
   --n-envs "$n_envs" \
   --scene-appearance "$scene_appearance" \
+  --expect-action-encoding "$action_encoding" \
   --device cuda:0 \
   --output "$output_root/job-metadata/preflight.json"
 

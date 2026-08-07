@@ -188,6 +188,7 @@ def _diffusion_policy_metadata(controller: DiffusionPolicyController, args: argp
         "policy_hz": controller.policy_hz,
         "denoising_steps": controller.handshake["denoising_steps"],
         "sampler": controller.handshake["sampler"],
+        "action_encoding": controller.action_encoding.value,
         "checkpoint_epoch": controller.handshake["epoch"],
         "weights": "ema",
         "image_augmentation": False,

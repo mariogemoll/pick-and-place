@@ -12,6 +12,8 @@ from pick_and_place.dppo_rl.env import (
     unnormalize_action,
 )
 from pick_and_place.dppo_rl.vector_env import DppoVectorEnv
+from pick_and_place.spec.action_encoding import ACTION_ENCODING_KEY, ActionEncoding
+from pick_and_place.spec.controller import STATE_FEATURE
 
 OVERHEAD_VALUE = 20
 WRIST_VALUE = 10
@@ -38,14 +40,15 @@ class DummyRenderer:
         pass
 
 
-def _normalization(tmp_path):
-    path = tmp_path / "normalization.npz"
+def _normalization(tmp_path, action_encoding=ActionEncoding.ABSOLUTE):
+    path = tmp_path / f"normalization-{action_encoding.value}.npz"
     np.savez(
         path,
         obs_min=np.full(6, -100.0, dtype=np.float32),
         obs_max=np.full(6, 100.0, dtype=np.float32),
         action_min=np.full(6, -100.0, dtype=np.float32),
         action_max=np.full(6, 100.0, dtype=np.float32),
+        **{ACTION_ENCODING_KEY: action_encoding.value},
     )
     return path
 
@@ -115,6 +118,58 @@ def test_action_chunk_advances_one_control_tick_per_row(tmp_path):
         assert info["episode"].control_steps == 4
     finally:
         env.close()
+
+
+def test_an_absolute_chunk_is_commanded_as_it_is(tmp_path):
+    env = _env(tmp_path, act_steps=2, max_steps=10)
+    commanded, _ = _record_commands(env)
+    try:
+        env.reset()
+        env.step(np.full((2, 6), 0.5, dtype=np.float32))
+    finally:
+        env.close()
+
+    for command in commanded:
+        np.testing.assert_allclose(command, np.full(6, 50.0), atol=1e-4)
+
+
+def test_a_delta_chunk_is_integrated_onto_each_ticks_measured_joints(tmp_path):
+    env = _env(
+        tmp_path,
+        act_steps=2,
+        max_steps=10,
+        normalization_path=_normalization(tmp_path, ActionEncoding.DELTA),
+    )
+    commanded, measured = _record_commands(env)
+    try:
+        env.reset()
+        start = env._measured_joints.copy()
+        # +1.0 normalized is +100 raw against the bounds this test declares.
+        env.step(np.ones((2, 6), dtype=np.float32))
+    finally:
+        env.close()
+
+    np.testing.assert_allclose(commanded[0], start + 100.0, atol=1e-4)
+    # The arm moves under the first command, and the second row of the chunk is
+    # measured from where it ended up -- not from where the chunk was predicted.
+    assert np.any(np.abs(measured[0] - start) > 1e-3)
+    np.testing.assert_allclose(commanded[1], measured[0] + 100.0, atol=1e-4)
+
+
+def _record_commands(env):
+    """Capture what reaches the simulator, and what it reports back."""
+    commanded: list[np.ndarray] = []
+    measured: list[np.ndarray] = []
+    inner_step = env._env.step
+
+    def recording_step(action):
+        commanded.append(np.asarray(action, dtype=np.float64).copy())
+        result = inner_step(action)
+        measured.append(np.asarray(result[0][STATE_FEATURE], dtype=np.float64).copy())
+        return result
+
+    env._env.step = recording_step
+    return commanded, measured
 
 
 def test_reward_is_sparse_and_the_episode_restarts_on_truncation(tmp_path):

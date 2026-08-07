@@ -11,7 +11,9 @@ wrappers play for robomimic tasks, against :class:`PolicySimEnv`:
   the two cameras concatenated overhead-then-wrist on the channel axis, exactly
   as ``diffusion_policy_server`` feeds the same checkpoint in closed loop;
 - an action is a chunk of ``act_steps`` normalized six-dimensional joint
-  commands, executed one control tick apart;
+  commands, executed one control tick apart -- unnormalized with the export's
+  action bounds and, for a delta export, integrated onto the joints measured on
+  the tick each one is commanded on;
 - the reward is the sparse full-task one: ``1.0`` on the step where the success
   oracle confirms a settled placement, ``0.0`` everywhere else.
 
@@ -37,6 +39,7 @@ from pick_and_place.runtime.training_scenes import (
     TRAINING_SEED_BASE,
     SceneStream,
 )
+from pick_and_place.spec.action_encoding import decode_actions, read_action_encoding
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
 from pick_and_place.runtime.policy_sim import PolicySimEnv
 from pick_and_place.sim.scene_appearance import SceneAppearance
@@ -136,6 +139,11 @@ class DppoTaskEnv:
         self.obs_max = bounds["obs_max"].astype(np.float32)
         self.action_min = bounds["action_min"].astype(np.float32)
         self.action_max = bounds["action_max"].astype(np.float32)
+        # Read, never assumed: the bounds and the encoding are one contract, and
+        # decoding a delta as an absolute joint command does not fail, it just
+        # commands nonsense.
+        self.action_encoding = read_action_encoding(bounds)
+        self._measured_joints = np.zeros_like(self.obs_min)
         renderer = (
             {} if config.renderer_factory is None
             else {"renderer_factory": config.renderer_factory}
@@ -157,9 +165,13 @@ class DppoTaskEnv:
     def _record(self, observation: dict[str, np.ndarray]) -> None:
         overhead = np.asarray(observation[OVERHEAD_FEATURE], dtype=np.uint8)
         wrist = np.asarray(observation[WRIST_FEATURE], dtype=np.uint8)
+        # Kept in raw units as well as normalized: a delta action is defined
+        # against the measurement of the tick it is commanded on, so the next
+        # command needs this one unmapped.
+        self._measured_joints = np.asarray(observation[STATE_FEATURE], dtype=np.float32)
         self._history.append({
             "state": normalize_state(
-                np.asarray(observation[STATE_FEATURE], dtype=np.float32),
+                self._measured_joints,
                 self.obs_min,
                 self.obs_max,
             ).astype(np.float32),
@@ -195,6 +207,19 @@ class DppoTaskEnv:
             self._step / max(self.config.max_steps, 1),
         ], dtype=np.float32)
 
+    def _command(self, action: np.ndarray) -> np.ndarray:
+        """The joint command one normalized action stands for, right now.
+
+        Must be called before the tick it commands is stepped: for a delta
+        export it integrates onto the joints measured on that tick, which is
+        the pairing the demonstration recorded.
+        """
+        return decode_actions(
+            self.action_encoding,
+            unnormalize_action(action, self.action_min, self.action_max),
+            self._measured_joints,
+        )
+
     def _debug_step(
         self, chunk: np.ndarray
     ) -> tuple[dict[str, np.ndarray], float, bool, bool, dict[str, Any]]:
@@ -202,7 +227,7 @@ class DppoTaskEnv:
         reward = -float(np.abs(chunk[:, 0]).mean())
         for action in chunk:
             observation, _, terminated, truncated, info = self._env.step(
-                unnormalize_action(action, self.action_min, self.action_max)
+                self._command(action)
             )
             self._step = int(info["control_steps"])
             self._record(observation)
@@ -271,7 +296,7 @@ class DppoTaskEnv:
         terminated = truncated = False
         for action in chunk:
             observation, step_reward, terminated, truncated, info = self._env.step(
-                unnormalize_action(action, self.action_min, self.action_max)
+                self._command(action)
             )
             reward += float(step_reward)
             self._step = int(info["control_steps"])

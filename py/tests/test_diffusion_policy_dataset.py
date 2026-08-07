@@ -17,6 +17,7 @@ from pick_and_place.data.diffusion_policy_dataset import (
     export_diffusion_policy_dataset,
     normalize_min_max,
 )
+from pick_and_place.spec.action_encoding import ActionEncoding, read_action_encoding
 
 
 def test_normalize_min_max_uses_policy_range_and_preserves_constant_columns():
@@ -124,6 +125,8 @@ def test_export_writes_policy_arrays_normalization_and_camera_order(tmp_path, mo
         np.testing.assert_array_equal(normalization["obs_max"], [2.0, 14.0])
         np.testing.assert_array_equal(normalization["action_min"], [-2.0, 1.0])
         np.testing.assert_array_equal(normalization["action_max"], [2.0, 5.0])
+        assert read_action_encoding(normalization) is ActionEncoding.ABSOLUTE
+    assert manifest["action_encoding"] == "absolute"
     assert manifest["camera_features"] == list(CAMERA_FEATURES)
     assert manifest["fps"] == 10
     assert manifest["source_fps"] == 30
@@ -133,6 +136,43 @@ def test_export_writes_policy_arrays_normalization_and_camera_order(tmp_path, mo
 
     export_diffusion_policy_dataset(source, second_output, image_size=8)
     assert (second_output / "train.npz").read_bytes() == (output / "train.npz").read_bytes()
+
+
+def test_delta_export_fits_its_own_bounds_and_declares_the_encoding(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    output = tmp_path / "diffusion-policy-delta"
+    _write_tiny_dataset(source)
+    monkeypatch.setattr(
+        diffusion_policy_dataset,
+        "_write_camera_images",
+        lambda destination, *, channel_offset, **kwargs: [
+            source
+            / "videos"
+            / CAMERA_FEATURES[channel_offset // 3]
+            / "chunk-000"
+            / "file-000.mp4"
+        ],
+    )
+
+    manifest = export_diffusion_policy_dataset(
+        source, output, image_size=8, action_encoding=ActionEncoding.DELTA
+    )
+
+    # The two kept frames are (state, action) = ([0, 10], [-2, 1]) and
+    # ([2, 14], [2, 5]), so the deltas are [-2, -9] and [0, -9].
+    with np.load(output / "normalization.npz", allow_pickle=False) as normalization:
+        np.testing.assert_array_equal(normalization["action_min"], [-2.0, -9.0])
+        np.testing.assert_array_equal(normalization["action_max"], [0.0, -9.0])
+        # The states are untouched: only what the policy predicts changes.
+        np.testing.assert_array_equal(normalization["obs_min"], [0.0, 10.0])
+        np.testing.assert_array_equal(normalization["obs_max"], [2.0, 14.0])
+        assert read_action_encoding(normalization) is ActionEncoding.DELTA
+    with np.load(output / "train.npz", allow_pickle=False) as dataset:
+        # The whole point: a delta spans one tick's motion, so the normalized
+        # range is filled by that rather than by a joint's whole travel.
+        np.testing.assert_allclose(dataset["actions"], [[-1.0, -1.0], [1.0, -1.0]], atol=2e-6)
+    assert manifest["action_encoding"] == "delta"
+    assert "measured on the same control tick" in manifest["action_semantics"]
 
 
 def test_export_rejects_nonpositive_worker_count(tmp_path):

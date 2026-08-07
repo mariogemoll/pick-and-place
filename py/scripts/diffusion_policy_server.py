@@ -11,11 +11,17 @@ imports DPPO's dependencies. Every message is a 4-byte big-endian length prefix
 followed by an ``.npz`` payload.
 
 On startup the server writes one handshake message describing the loaded model
-(action horizon, dimensions, image size, checkpoint epoch). Afterwards each
-request message with ``state`` (raw hardware-frame joint values), ``overhead``
-and ``wrist`` (HxWx3 uint8 RGB) receives one reply with ``actions``: the full
-denoised action horizon in raw hardware units. End-of-file on stdin shuts the
-server down.
+(action horizon, dimensions, image size, checkpoint epoch, action encoding).
+Afterwards each request message with ``state`` (raw hardware-frame joint
+values), ``overhead`` and ``wrist`` (HxWx3 uint8 RGB) receives one reply with
+``actions``: the full denoised action horizon in the export's raw units.
+End-of-file on stdin shuts the server down.
+
+Those units are the encoding the dataset was exported with, which the handshake
+declares. For a delta export they are joint *offsets*, and the caller turns one
+into a command by adding the joints measured on the tick it commands -- which
+is where the offset was measured from, and is not something this server can do
+for the whole horizon because it has seen only the ticks up to now.
 
 State and action normalization uses the per-dimension min-max bounds saved by
 the dataset export (``normalization.npz``), applying exactly the exporter's
@@ -23,10 +29,10 @@ the dataset export (``normalization.npz``), applying exactly the exporter's
 by 255 internally, matching training. The EMA weights are loaded and image-shift
 augmentation is disabled, following DPPO's own evaluation configurations.
 
-Only the standard library and NumPy are imported at module scope so the
-protocol and normalization helpers stay importable (and testable) from any
-environment; Torch, Hydra, and the DPPO model modules load lazily in
-``load_model``.
+Only the standard library, NumPy and the dependency-free ``pick_and_place.spec``
+are imported at module scope, so the protocol and normalization helpers stay
+importable (and testable) from any environment; Torch, Hydra, and the DPPO model
+modules load lazily in ``load_model``.
 """
 
 from __future__ import annotations
@@ -39,6 +45,8 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 import numpy as np
+
+from pick_and_place.spec.action_encoding import ACTION_ENCODING_KEY, read_action_encoding
 
 
 def write_message(stream: BinaryIO, arrays: dict[str, np.ndarray]) -> None:
@@ -74,7 +82,11 @@ def normalize_state(state: np.ndarray, minimum: np.ndarray, maximum: np.ndarray)
 def unnormalize_actions(
     actions: np.ndarray, minimum: np.ndarray, maximum: np.ndarray
 ) -> np.ndarray:
-    """Invert :func:`normalize_state` for predicted actions."""
+    """Invert :func:`normalize_state` for predicted actions.
+
+    The result is in the export's raw units, which for a delta export are joint
+    offsets rather than joint commands.
+    """
     return (actions + 1.0) / 2.0 * (maximum - minimum + 1e-6) + minimum
 
 
@@ -185,6 +197,7 @@ def main() -> None:
     obs_max = bounds["obs_max"].astype(np.float32)
     action_min = bounds["action_min"].astype(np.float32)
     action_max = bounds["action_max"].astype(np.float32)
+    action_encoding = read_action_encoding(bounds)
 
     obs_dim = int(cfg.obs_dim)
     action_dim = int(cfg.action_dim)
@@ -231,6 +244,7 @@ def main() -> None:
             "image_height": np.asarray(image_height),
             "image_width": np.asarray(image_width),
             "denoising_steps": np.asarray(int(cfg.denoising_steps)),
+            ACTION_ENCODING_KEY: np.asarray(action_encoding.value),
             "sampler": np.asarray(sampler),
             "epoch": np.asarray(epoch),
             "device": np.asarray(device),
@@ -244,7 +258,7 @@ def main() -> None:
         f"predicts {int(cfg.horizon_steps)} actions, "
         f"configured default is {act_steps} actions/query at {policy_hz:g} Hz, "
         f"{image_width}x{image_height} images, "
-        f"{sampler} sampling",
+        f"{sampler} sampling, {action_encoding.value} actions",
         file=sys.stderr,
         flush=True,
     )

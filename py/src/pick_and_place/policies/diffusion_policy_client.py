@@ -15,6 +15,14 @@ the message contract.
 the controller queues the first ``act_steps`` actions and serves one per control
 tick, re-querying when the queue empties. Observation history is retained on
 every control tick, including while queued actions are being executed.
+
+The server answers in the units its dataset was exported with, so a delta
+export's horizon is joint offsets. The controller is where those become
+commands, and it integrates each one onto the joints measured on the tick it is
+served -- not onto the state the chunk was predicted from, which is up to
+``act_steps`` ticks of motion stale by the end of a chunk. Everything the
+controller hands out, ``act`` and the ``predict_horizon`` diagnostics alike, is
+in absolute joint units.
 """
 
 from __future__ import annotations
@@ -30,6 +38,11 @@ from typing import Any, BinaryIO
 
 import numpy as np
 
+from pick_and_place.spec.action_encoding import (
+    ACTION_ENCODING_KEY,
+    decode_actions,
+    parse_action_encoding,
+)
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, PolicyObservation, STATE_FEATURE, WRIST_FEATURE
 
 SERVER_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "diffusion_policy_server.py"
@@ -109,6 +122,13 @@ class DiffusionPolicyController:
             raise ValueError(f"policy_hz must be positive, got {self.policy_hz}")
         self.obs_dim = int(self.handshake["obs_dim"])
         self.action_dim = int(self.handshake["action_dim"])
+        try:
+            self.action_encoding = parse_action_encoding(
+                str(self.handshake[ACTION_ENCODING_KEY])
+            )
+        except (KeyError, ValueError):
+            self.close()
+            raise
         self.image_hw = (
             int(self.handshake["image_height"]),
             int(self.handshake["image_width"]),
@@ -253,6 +273,21 @@ class DiffusionPolicyController:
             raise self._server_exited() from None
         return np.asarray(self._receive()["actions"], dtype=np.float32)
 
+    def _horizon_in_joint_units(
+        self, actions: np.ndarray, state: np.ndarray
+    ) -> np.ndarray:
+        """A whole horizon read as joint commands, from one observation's state.
+
+        This is the open-loop reading of a chunk, for diagnostics that want the
+        prediction in the same units as the arm. Execution does not use it: it
+        decodes one action at a time, against the tick that action is commanded
+        on. The two agree exactly on the first row and diverge afterwards by
+        however far the arm has moved.
+        """
+        # np.array, not asarray: an absolute export decodes to the reply's own
+        # buffer, which the queued chunk also points into.
+        return np.array(decode_actions(self.action_encoding, actions, state), dtype=np.float32)
+
     def predict_horizon(
         self,
         observation: PolicyObservation,
@@ -269,7 +304,7 @@ class DiffusionPolicyController:
         actions = self._request_actions([current] * self.cond_steps, sampling_seed=sampling_seed)
         if actions.shape != (self.horizon_steps, self.action_dim):
             raise ValueError(f"server returned malformed actions with shape {actions.shape}")
-        return actions.copy()
+        return self._horizon_in_joint_units(actions, current["state"])
 
     def predict_horizon_from_history(
         self,
@@ -284,7 +319,7 @@ class DiffusionPolicyController:
         actions = self._request_actions(history, sampling_seed=sampling_seed)
         if actions.shape != (self.horizon_steps, self.action_dim):
             raise ValueError(f"server returned malformed actions with shape {actions.shape}")
-        return actions.copy()
+        return self._horizon_in_joint_units(actions, history[-1]["state"])
 
     def act(self, observation: PolicyObservation) -> np.ndarray:
         self.latest_prediction = None
@@ -296,9 +331,15 @@ class DiffusionPolicyController:
             actions = self._request_actions(history)
             if actions.ndim != 2 or actions.shape[0] < self.act_steps:
                 raise ValueError(f"server returned malformed actions with shape {actions.shape}")
-            self.latest_prediction = actions.copy()
+            self.latest_prediction = self._horizon_in_joint_units(actions, current["state"])
             self._queue.extend(actions[: self.act_steps])
-        return self._queue.popleft().copy()
+        # Decoded here rather than when the chunk was queued: a delta belongs to
+        # the joints measured on the tick it is commanded on, and this is that
+        # tick.
+        return np.array(
+            decode_actions(self.action_encoding, self._queue.popleft(), current["state"]),
+            dtype=np.float32,
+        )
 
     def close(self) -> None:
         if self._process.stdin is not None:
