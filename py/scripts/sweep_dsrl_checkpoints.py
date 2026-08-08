@@ -66,6 +66,22 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="score the base with its latent draw multiplied by each of these",
     )
+    parser.add_argument(
+        "--best-of-n",
+        type=int,
+        default=0,
+        help=(
+            "instead of playing the actor's mode, sample this many latent actions "
+            "and play the one the trained critic rates highest. The steerability "
+            "gate measured 31 percent of scenes flipping outcome on the noise draw "
+            "alone, with a per-scene hindsight ceiling of 0.827 against a 0.705 "
+            "base; a single-shot actor cannot reach that, but a critic that can "
+            "rank candidates at the state might. Only valid for an actor trained "
+            "with --observable-critic: a privileged critic reads simulator state "
+            "that does not exist at deployment, so ranking with it would not be a "
+            "policy."
+        ),
+    )
     parser.add_argument("--episodes", type=int, default=256)
     parser.add_argument("--n-envs", type=int, default=32)
     parser.add_argument("--scene-seed-base", type=int, default=6_000_000)
@@ -118,7 +134,7 @@ def main() -> None:
     from pick_and_place.dppo_rl.env import EnvConfig
     from pick_and_place.dppo_rl.vector_env import DppoVectorEnv
     from pick_and_place.dsrl.noise_policy import denoise, latent_shape, visual_features
-    from pick_and_place.dsrl.sac import LatentActor, SacConfig
+    from pick_and_place.dsrl.sac import LatentActor, SacConfig, TwinCritic
     from pick_and_place.sim.scene_appearance import parse_appearance
 
     with np.load(args.normalization) as bounds:
@@ -237,12 +253,45 @@ def main() -> None:
             actor = LatentActor(actor_config).to(device)
             actor.load_state_dict(state["actor"])
             actor.eval()
+            itr = int(path.stem.split("_")[1])
 
-            def steered(cond, actor=actor):
-                latent = actor.act(visual_features(model, cond), deterministic=True)
-                return denoise(model, cond, latent.view(-1, horizon_steps, action_dim))
+            if args.best_of_n < 2:
+                def steered(cond, actor=actor):
+                    latent = actor.act(visual_features(model, cond), deterministic=True)
+                    return denoise(model, cond, latent.view(-1, horizon_steps, action_dim))
 
-            run(f"itr-{int(path.stem.split('_')[1])}", steered)
+                run(f"itr-{itr}", steered)
+                continue
+
+            if actor_config.critic_feature_dim != actor_config.actor_feature_dim:
+                raise SystemExit(
+                    f"{path} was trained with a privileged critic "
+                    f"(critic dim {actor_config.critic_feature_dim} != actor dim "
+                    f"{actor_config.actor_feature_dim}). Ranking candidates with it "
+                    "would use simulator state that does not exist at deployment, so "
+                    "the result would not be a policy. Retrain with "
+                    "--observable-critic."
+                )
+            critic = TwinCritic(actor_config).to(device)
+            critic.load_state_dict(state["critic"])
+            critic.eval()
+
+            def ranked(cond, actor=actor, critic=critic):
+                """Sample n candidate noises, play the one the critic likes best."""
+                features = visual_features(model, cond)
+                batch = features.shape[0]
+                repeated = features.repeat_interleave(args.best_of_n, dim=0)
+                latents, _ = actor(repeated)
+                # Same features for actor and critic, which is what makes this a
+                # deployable ranking rather than an oracle.
+                values = critic(repeated, latents).min(dim=0).values
+                best = values.view(batch, args.best_of_n).argmax(dim=1)
+                chosen = latents.view(batch, args.best_of_n, -1)[
+                    torch.arange(batch, device=device), best
+                ]
+                return denoise(model, cond, chosen.view(-1, horizon_steps, action_dim))
+
+            run(f"itr-{itr}-best{args.best_of_n}", ranked)
     finally:
         venv.close()
 
