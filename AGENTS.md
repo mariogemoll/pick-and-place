@@ -253,16 +253,19 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   `rig` (follower, cameras, recalibration, operator alerts), `scene` (cube
   pinning, render size, appearance, preflight diagnostics), `dataset`. A flag
   two commands share is declared once, here, not agreed by hand in each.
-- **`dppo_rl/`** — fine-tuning the pretrained Diffusion Policy with PPO. **This
-  works on the recovery base** (preliminary, one seed): the 2026-08-08
-  recovery-base run under the braked configuration lifted 0.667 → 0.728 on 507
-  independent held-out scenes (McNemar p = 0.0022). The same configuration on
-  the absolute base was flat — the blocker was never the optimizer but the base
-  policy's failure structure: without retry demonstrations a missed grasp is
-  absorbing and the advantage signal has nothing to exploit. Read the August 8
-  sections of `docs/DPPO_RL_FINETUNING.md` before opening a new configuration;
-  the launcher defaults are the braked settings and the collapsing ones are
-  opt-in only.
+- **`dppo_rl/`** — fine-tuning the pretrained Diffusion Policy with PPO. **Works
+  as a train-and-select procedure on the recovery base, not as a reliable
+  optimizer**: across six seeds (2026-08-08) there is no average effect at any
+  fixed iteration, but four of six produced a significantly-better checkpoint at
+  seed-specific times, and the oracle-selected winner (seed 42, itr 60) validated
+  at **0.746 vs 0.684/0.674 for the recovery/absolute bases** on 512 scenes
+  untouched by training, selection, or prior scoring (McNemar p = 0.0032/0.0039)
+  — the strongest policy in the project. Two preconditions, both load-bearing:
+  the braked launcher defaults (zero collapses in six runs; the pre-brake
+  configuration collapsed twelve times), and a base policy whose failures are
+  recoverable — on the no-retry absolute base the same configuration is provably
+  flat. Read the August 8 sections of `docs/DPPO_RL_FINETUNING.md` before
+  opening a new configuration.
 
 ### Script categories
 
