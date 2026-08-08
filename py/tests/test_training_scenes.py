@@ -89,3 +89,18 @@ def test_manifests_on_disk_stay_loadable_after_the_sampler_refactor():
         (REPOSITORY_ROOT / "config/evaluation/canonical_100_v1.json.xz").read_bytes()
     )
     assert b"canonical_100_v1" in payload
+
+
+def test_rewind_replays_the_same_scenes():
+    """Scoring several policies in one process needs each to see the same scenes.
+
+    The stream is deliberately endless for training. Without a rewind, a second
+    policy scored in the same process is measured on different ground than the
+    first, and a difference in scene difficulty reads as a difference in policy.
+    """
+    from pick_and_place.runtime.training_scenes import SceneStream
+
+    stream = SceneStream(offset=1, stride=4, seed_base=6_000_000)
+    first = [stream.next().scenario_id for _ in range(5)]
+    stream.rewind()
+    assert [stream.next().scenario_id for _ in range(5)] == first

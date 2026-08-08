@@ -178,6 +178,10 @@ def main() -> None:
         outcomes: dict[str, bool] = {}
         episodes: list[dict] = []
         torch.manual_seed(args.seed)
+        # The scene stream is endless and only advances, so without this each
+        # policy after the first would be scored on different scenes and the
+        # comparison would not be paired at all.
+        venv.rewind()
         observation = venv.reset_arg()
         while len(episodes) < args.episodes:
             with torch.no_grad():
