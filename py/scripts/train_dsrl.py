@@ -49,6 +49,20 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--gradient-steps", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--action-magnitude", type=float, default=None)
+    parser.add_argument(
+        "--init-temperature",
+        type=float,
+        default=None,
+        help=(
+            "SAC's initial entropy weight. Not cosmetic on a 96-dimensional "
+            "latent: the target adds alpha * entropy to every bootstrap, and at "
+            "alpha 1 with entropy ~65 nats that is ~65 per step against a task "
+            "reward of at most 8, so the soft value is ~97 percent entropy bonus. "
+            "The auto-tuner does bring it down toward target_entropy, but "
+            "measured at ~0.835 per 600 gradient steps, which is hundreds of "
+            "iterations of fitting a value the task barely enters."
+        ),
+    )
     parser.add_argument("--buffer-capacity", type=int, default=None)
     parser.add_argument(
         "--scene-seed-base",
@@ -186,7 +200,9 @@ def main() -> None:
             gamma=float(config.dsrl.gamma),
             tau=float(config.dsrl.tau),
             target_entropy=float(config.dsrl.target_entropy),
-            init_temperature=float(config.dsrl.init_temperature),
+            init_temperature=_override(
+                args.init_temperature, float(config.dsrl.init_temperature)
+            ),
             n_critics=int(config.dsrl.n_critics),
             activation=str(config.dsrl.activation),
             device=args.device,

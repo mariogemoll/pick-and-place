@@ -106,6 +106,13 @@ batch_size="${BATCH_SIZE:-256}"
 # off the noise distribution it was trained under.
 action_magnitude="${ACTION_MAGNITUDE:-1.5}"
 buffer_capacity="${BUFFER_CAPACITY:-400000}"
+# SAC's initial entropy weight. The config's 1.0 follows the paper, whose
+# action spaces are far smaller than this 96-dimensional latent: measured
+# here, alpha 1 puts ~65 of entropy bonus into every bootstrapped target
+# against a task reward of at most 8 per step, so the soft value converges to
+# ~1000 of which the task is ~120. The auto-tuner corrects it at ~0.835 per
+# 600 gradient steps, which is ~735 iterations before it stops dominating.
+init_temperature="${INIT_TEMPERATURE:-}"
 # Give the critic privileged simulator state. The actor never sees it, so the
 # policy that deploys is unchanged; set to true to make the whole learner
 # transferable to hardware at the cost of a harder value-learning problem.
@@ -179,7 +186,11 @@ trap finalize EXIT
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y curl git unzip zstd libegl1 libgl1
+# libopengl0 is in AGENTS.md's list and its absence shows up as a repeated
+# "Failed to load library (libOpenGL.so.0)" during every rollout. Rendering
+# goes through EGL either way, so this is noise rather than a fault -- but it
+# is noise in the one log a failed run is read from.
+apt-get install -y curl git unzip zstd libegl1 libgl1 libopengl0
 if ! command -v aws >/dev/null; then
   aws_install_dir=$(mktemp -d)
   curl --fail --location --retry 3 --retry-all-errors \
@@ -490,6 +501,7 @@ set +e
   --batch-size "$batch_size" \
   --action-magnitude "$action_magnitude" \
   --buffer-capacity "$buffer_capacity" \
+  ${init_temperature:+--init-temperature "$init_temperature"} \
   --expect-action-encoding "$action_encoding" \
   ${critic_flag[@]+"${critic_flag[@]}"} \
   ${wandb_flag[@]+"${wandb_flag[@]}"} \
