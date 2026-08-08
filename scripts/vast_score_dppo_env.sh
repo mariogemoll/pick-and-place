@@ -22,6 +22,14 @@
 #   ssh <ssh-host> '... FT_RUN_NAME=dppo_ft_matched_std_20260808 FT_ITR=120 \
 #     SCORE_NAME=matched-std-itr120 bash /workspace/vast_score_dppo_env.sh'
 #
+# To score a DSRL-steered policy, add DSRL_RUN_NAME and DSRL_ITR instead. The
+# diffusion weights are the base checkpoint's, unchanged -- only the noise the
+# denoising chain starts from comes from the learned latent actor -- so the
+# pairing against the base score is even tighter than the DPPO one:
+#
+#   ssh <ssh-host> '... DSRL_RUN_NAME=dsrl_recovery_20260808 DSRL_ITR=2000 \
+#     SCORE_NAME=dsrl-itr2000 bash /workspace/vast_score_dppo_env.sh'
+#
 # BASE_EPOCH may name any epoch the pretraining run checkpointed, not just the
 # one it finished on, but only the finishing epoch has a recorded sha256; for
 # any other, pass BASE_POLICY_SHA256 as well.
@@ -76,6 +84,18 @@ ft_run_name="${FT_RUN_NAME:-}"
 ft_itr="${FT_ITR:-}"
 if [ -n "$ft_run_name" ] && [ -z "$ft_itr" ]; then
   echo "FT_RUN_NAME is set but FT_ITR is not; set FT_ITR to the iteration to score." >&2
+  exit 1
+fi
+# A DSRL run under outputs/ whose latent-noise actor steers the base checkpoint.
+# Empty scores whatever the DPPO variables above select.
+dsrl_run_name="${DSRL_RUN_NAME:-}"
+dsrl_itr="${DSRL_ITR:-}"
+if [ -n "$dsrl_run_name" ] && [ -z "$dsrl_itr" ]; then
+  echo "DSRL_RUN_NAME is set but DSRL_ITR is not; set DSRL_ITR to the iteration." >&2
+  exit 1
+fi
+if [ -n "$dsrl_run_name" ] && [ -n "$ft_run_name" ]; then
+  echo "DSRL steers frozen weights and FT_RUN_NAME replaces them; pick one." >&2
   exit 1
 fi
 
@@ -161,6 +181,33 @@ if [ -n "$ft_run_name" ]; then
   fi
 fi
 
+dsrl_actor=""
+if [ -n "$dsrl_run_name" ]; then
+  dsrl_actor="$workspace/artifacts/${dsrl_run_name}_dsrl_state_$dsrl_itr.pt"
+  if [ ! -f "$dsrl_actor" ]; then
+    # train_dsrl.py writes state_*.pt straight into its --output-dir, which the
+    # launcher places under dsrl/ rather than DPPO's finetune/<name>/<stamp>/.
+    mapfile -t dsrl_matches < <(aws s3 ls --recursive \
+      "$bucket_root/outputs/$dsrl_run_name/dsrl/" \
+      | awk -v itr="$dsrl_itr" '$4 ~ ("/state_" itr "[.]pt$") {print $3, $4}')
+    if [ "${#dsrl_matches[@]}" -ne 1 ]; then
+      echo "expected one state_$dsrl_itr.pt under $bucket_root/outputs/$dsrl_run_name/dsrl/," >&2
+      echo "found ${#dsrl_matches[@]}." >&2
+      exit 1
+    fi
+    dsrl_size="${dsrl_matches[0]%% *}"
+    dsrl_key="${dsrl_matches[0]#* }"
+    s3_bucket="${bucket_root#s3://}"
+    s3_bucket="${s3_bucket%%/*}"
+    aws s3 cp "s3://$s3_bucket/$dsrl_key" "$dsrl_actor" --only-show-errors
+    dsrl_local_size=$(stat -c %s "$dsrl_actor")
+    if [ "$dsrl_local_size" -ne "$dsrl_size" ]; then
+      echo "downloaded $dsrl_actor is $dsrl_local_size bytes, S3 lists $dsrl_size." >&2
+      exit 1
+    fi
+  fi
+fi
+
 # Gitignored build artifacts a clean clone lacks: the AprilTag textures are
 # generated, and the camera calibration is machine-local -- the scene is subtly
 # wrong without it and nothing else supplies it.
@@ -192,11 +239,14 @@ export DPPO_LOG_DIR="$workspace/unused" DPPO_DATA_DIR="$artifact_root" \
   --device cuda:0 \
   ${act_steps:+--act-steps "$act_steps"} \
   ${ft_checkpoint:+--finetuned-checkpoint "$ft_checkpoint"} \
+  ${dsrl_actor:+--dsrl-actor "$dsrl_actor"} \
   --output "$scores/$SCORE_NAME.json"
 
 aws s3 cp "$scores/$SCORE_NAME.json" \
   "$bucket_root/outputs/dppo-env-scores/$SCORE_NAME.json" --only-show-errors
-if [ -n "$ft_checkpoint" ]; then
+if [ -n "$dsrl_actor" ]; then
+  echo "Scored $dsrl_run_name itr $dsrl_itr steering $BASE_RUN_NAME epoch $base_epoch as $SCORE_NAME."
+elif [ -n "$ft_checkpoint" ]; then
   echo "Scored $ft_run_name itr $ft_itr (over $BASE_RUN_NAME epoch $base_epoch) as $SCORE_NAME."
 else
   echo "Scored $BASE_RUN_NAME epoch $base_epoch as $SCORE_NAME."

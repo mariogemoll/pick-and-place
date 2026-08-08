@@ -21,7 +21,8 @@ making it a leftover bucket: a module that needs two capabilities belongs there
 by construction. A module that reaches sideways for a fact or a contract is
 telling you the fact belongs in ``spec``.
 
-``dppo_rl`` sits above everything and is exempt.
+``dppo_rl`` and ``dsrl``, the two RL fine-tuning strands, sit above everything
+and are exempt.
 
 Run it from ``py/``:
 
@@ -41,7 +42,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1] / "src" / "pick_and_place"
 FOUNDATION = ("spec", "core")
 BRANCHES = ("planning", "perception", "sim", "hardware", "data", "policies")
 CONVERGENCE = ("runtime", "calibration", "analysis", "cli")
-EXEMPT = ("dppo_rl",)
+EXEMPT = ("dppo_rl", "dsrl")
 
 
 def is_violation(source: str, target: str) -> bool:

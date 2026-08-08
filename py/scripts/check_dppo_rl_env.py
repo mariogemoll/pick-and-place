@@ -82,6 +82,16 @@ def _parse_args() -> argparse.Namespace:
         "the pretrained policy either way: it defines the architecture.",
     )
     parser.add_argument(
+        "--dsrl-actor",
+        type=Path,
+        default=None,
+        help="a DSRL latent-noise actor to steer the pretrained policy with. The "
+        "diffusion weights are untouched -- only the noise the chain starts from "
+        "changes -- so --checkpoint still names the policy being scored and the "
+        "comparison against it is exactly paired. Mutually exclusive with "
+        "--finetuned-checkpoint, which changes the weights instead.",
+    )
+    parser.add_argument(
         "--act-steps",
         type=int,
         default=None,
@@ -193,6 +203,12 @@ def main() -> None:
         )[1],
     )
 
+    if args.dsrl_actor is not None and args.finetuned_checkpoint is not None:
+        raise SystemExit(
+            "--dsrl-actor steers frozen weights and --finetuned-checkpoint replaces "
+            "them; loading both would score a combination neither was trained as."
+        )
+
     torch.manual_seed(args.seed)
     model = hydra.utils.instantiate(config.model)
     if args.finetuned_checkpoint is not None:
@@ -207,6 +223,28 @@ def main() -> None:
     model.eval()
     device = torch.device(args.device)
 
+    steer = None
+    if args.dsrl_actor is not None:
+        from pick_and_place.dsrl.noise_policy import denoise, latent_shape, visual_features
+        from pick_and_place.dsrl.sac import LatentActor, SacConfig
+
+        state = torch.load(args.dsrl_actor, map_location=args.device, weights_only=True)
+        actor_config = SacConfig(**{**state["config"], "device": args.device})
+        actor = LatentActor(actor_config).to(device)
+        actor.load_state_dict(state["actor"])
+        actor.eval()
+        horizon_steps, action_dim = latent_shape(model)
+        print(
+            f"Steering with {args.dsrl_actor} (iteration {state.get('itr')}), "
+            f"action magnitude {actor_config.action_magnitude}."
+        )
+
+        def steer(cond: dict) -> torch.Tensor:
+            """Denoise from the actor's mode rather than from a random draw."""
+            latent = actor.act(visual_features(model, cond), deterministic=True)
+            noise = latent.view(-1, horizon_steps, action_dim)
+            return denoise(model, cond, noise)
+
     venv = DppoVectorEnv(env_config, args.n_envs, mujoco_gl=args.mujoco_gl)
     episodes: list[dict] = []
     started = time.perf_counter()
@@ -218,8 +256,13 @@ def main() -> None:
                     key: torch.from_numpy(observation[key]).float().to(device)
                     for key in ("state", "rgb")
                 }
-                samples = model(cond=cond, deterministic=not args.stochastic)
-            actions = samples.trajectories.cpu().numpy()[:, : env_config.act_steps]
+                if steer is None:
+                    trajectories = model(
+                        cond=cond, deterministic=not args.stochastic
+                    ).trajectories
+                else:
+                    trajectories = steer(cond)
+            actions = trajectories.cpu().numpy()[:, : env_config.act_steps]
             observation, _, terminated, truncated, infos = venv.step(actions)
             for index, done in enumerate(terminated | truncated):
                 if not done:
@@ -259,6 +302,7 @@ def main() -> None:
             "finetuned_checkpoint": (
                 None if args.finetuned_checkpoint is None else str(args.finetuned_checkpoint)
             ),
+            "dsrl_actor": None if args.dsrl_actor is None else str(args.dsrl_actor),
             "render_hw": list(env_config.render_hw),
             "act_steps": env_config.act_steps,
             "control_hz": env_config.control_hz,
