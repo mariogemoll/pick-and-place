@@ -220,6 +220,31 @@ fi
 git submodule update --init --recursive
 git rev-parse HEAD | tee "$output_root/job-metadata/repository-commit.txt"
 
+# This script is scp'd to /workspace while the Python it drives comes from the
+# checkout above, so the two can be different commits. That is not a harmless
+# skew: a launcher older than the code passes no flag for an option it has never
+# heard of, and the job trains at the config default while the operator believes
+# it is running what they typed. It cost exactly that here -- INIT_TEMPERATURE
+# was set on a copy predating the flag, and 200 iterations ran at alpha 1.0.
+#
+# Refuse rather than reconcile. Re-executing from the checkout would work but
+# has to happen after the output redirection above is already installed, which
+# duplicates the log through two tees.
+launcher_in_repo="$repo/scripts/vast_dsrl_finetune.sh"
+if [ -f "$launcher_in_repo" ] && ! cmp -s "$0" "$launcher_in_repo"; then
+  if [ "${ALLOW_LAUNCHER_MISMATCH:-false}" = "true" ]; then
+    echo "Launcher differs from $(git rev-parse --short HEAD); continuing by request."
+  else
+    echo "The launcher at $0 is not the one at $(git rev-parse --short HEAD)." >&2
+    echo "Copy it over and rerun:" >&2
+    echo "  scp scripts/vast_dsrl_finetune.sh <ssh-host>:/workspace/" >&2
+    echo "An older launcher does not fail on an option it lacks -- it drops the" >&2
+    echo "flag, and the run silently uses the config default instead." >&2
+    echo "Set ALLOW_LAUNCHER_MISMATCH=true to override deliberately." >&2
+    exit 1
+  fi
+fi
+
 venv="$workspace/venvs/pick-and-place"
 # The package needs Python >= 3.12 (lerobot 0.5.1 pins transformers 5.3.0), and
 # the image's bundled interpreter is whatever the image ships -- 3.10.12 on
