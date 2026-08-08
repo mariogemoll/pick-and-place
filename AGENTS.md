@@ -254,12 +254,15 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   pinning, render size, appearance, preflight diagnostics), `dataset`. A flag
   two commands share is declared once, here, not agreed by hand in each.
 - **`dppo_rl/`** — fine-tuning the pretrained Diffusion Policy with PPO. **This
-  did not work**: no configuration beat the pretrained policy in a paired
-  evaluation. Kept for a future attempt; do not treat it as a working path. The
-  optimizer question is closed — the last run (2026-08-08, matched density
-  floors) neither collapsed nor improved, with a healthy critic and a trust
-  region that never engaged. Do not open a new configuration without reading the
-  August 8 sections of `docs/DPPO_RL_FINETUNING.md` first.
+  works on the recovery base** (preliminary, one seed): the 2026-08-08
+  recovery-base run under the braked configuration lifted 0.667 → 0.728 on 507
+  independent held-out scenes (McNemar p = 0.0022). The same configuration on
+  the absolute base was flat — the blocker was never the optimizer but the base
+  policy's failure structure: without retry demonstrations a missed grasp is
+  absorbing and the advantage signal has nothing to exploit. Read the August 8
+  sections of `docs/DPPO_RL_FINETUNING.md` before opening a new configuration;
+  the launcher defaults are the braked settings and the collapsing ones are
+  opt-in only.
 
 ### Script categories
 
