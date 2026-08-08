@@ -111,8 +111,14 @@ target_kl="${TARGET_KL:-0.1}"
 # with the trust region provably disengaged (clipfrac ~0, early-stop never
 # firing), dropping this to 2 alongside max_grad_norm=1.0 is what turned twelve
 # consecutive collapses into a run that ended where it started. It bought
-# stability, not learning. See the 2026-08-08 matched-density section.
-update_epochs="${UPDATE_EPOCHS:-10}"
+# stability, not learning. See the 2026-08-08 matched-density section. The
+# default is that surviving value; 10 is the configuration that collapsed twelve
+# times, kept reachable only for deliberate replication.
+update_epochs="${UPDATE_EPOCHS:-2}"
+# Gradient-norm ceiling, the other half of the brakes. The fine-tuning config
+# does not define the key, so it goes through as a hydra append (+train.) and
+# train_agent.py reads it optionally. Empty disables clipping.
+max_grad_norm="${MAX_GRAD_NORM:-1.0}"
 # Exploration noise, in normalized action units. DPPO's 0.1 default is set for
 # robomimic's small end-effector deltas; here an action is an absolute joint
 # command spanning ~180 degrees, so 0.1 is ~9 degrees of jitter on every joint of
@@ -507,6 +513,7 @@ set +e
   train.n_critic_warmup_itr="$critic_warmup" \
   train.target_kl="$target_kl" \
   train.update_epochs="$update_epochs" \
+  ${max_grad_norm:++train.max_grad_norm="$max_grad_norm"} \
   train.augment="$augment" \
   env.scene_appearance="$scene_appearance" \
   env.dense_success_reward="$dense_success_reward" \
