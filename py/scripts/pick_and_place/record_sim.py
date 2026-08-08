@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import hashlib
+import math
 import multiprocessing
 import queue as queue_module
 import shutil
@@ -96,7 +97,11 @@ from pick_and_place.data.sim_dataset_staging import (
     next_episode_index,
     successful_episode_datasets,
 )
-from pick_and_place.core.workspace_bounds import is_cube_drop_allowed, sample_target_plate_yaw
+from pick_and_place.core.workspace_bounds import (
+    PAN_AXIS,
+    is_cube_drop_allowed,
+    sample_target_plate_yaw,
+)
 
 
 # ~8.5x the ~35 s nominal episode under libx264, so an episode that burns many
@@ -170,6 +175,7 @@ def run_recording(
     detector_crash_dump_dir: str | None = None,
     perturbed_fraction: float = 0.0,
     perturbation_magnitude_m: float = DEFAULT_MAGNITUDE_M,
+    perturbation_max_source_radius_m: float | None = None,
 ) -> int:
     """Record episodes pulled from ``index_source``; return the count saved.
 
@@ -311,23 +317,23 @@ def run_recording(
             orientation_index = (
                 sample.cube_orientation_index if sample is not None else int(rng.integers(24))
             )
+            episode_source = orient_cube(
+                source if source is not None else sample_cube(rng), orientation_index
+            )
             # Deliberate fumbles, on a minority of episodes. Drawn from a stream
             # keyed off the global episode index rather than from `rng`, so
-            # turning the fraction up or down leaves every other episode's poses
-            # untouched -- otherwise the two dataset arms would differ in their
-            # whole pose distribution and not just in the perturbations, and the
-            # comparison would be unpaired.
-            perturbation = None
-            if perturbed_fraction > 0.0:
-                perturb_rng = _perturbation_rng(seed, global_episode)
-                if perturb_rng.random() < perturbed_fraction:
-                    perturbation = GraspPerturbation.sample(
-                        perturb_rng, magnitude_m=perturbation_magnitude_m
-                    )
+            # turning the fraction or source-radius gate up or down leaves every
+            # episode's poses untouched. This keeps dataset arms paired: only the
+            # deliberate perturbation changes.
+            perturbation = _sample_grasp_perturbation(
+                seed,
+                global_episode,
+                episode_source,
+                fraction=perturbed_fraction,
+                magnitude_m=perturbation_magnitude_m,
+                max_source_radius_m=perturbation_max_source_radius_m,
+            )
             try:
-                episode_source = orient_cube(
-                    source if source is not None else sample_cube(rng), orientation_index
-                )
                 episode = prepare_episode(
                     rng,
                     episode_source,
@@ -501,6 +507,35 @@ def _perturbation_rng(root_seed: int | None, global_episode: int) -> np.random.G
     return np.random.default_rng(
         np.random.SeedSequence([root_seed, global_episode, PERTURBATION_SEED_SALT])
     )
+
+
+def _sample_grasp_perturbation(
+    root_seed: int | None,
+    global_episode: int,
+    source: CubePose,
+    *,
+    fraction: float,
+    magnitude_m: float,
+    max_source_radius_m: float | None,
+) -> GraspPerturbation | None:
+    """Sample the episode's fumble, optionally excluding distant cube starts.
+
+    The probability and direction retain the original salted stream and draw
+    order. The source-radius gate only suppresses a selected perturbation, so
+    every included episode gets exactly the perturbation it did before the gate
+    existed and every episode keeps its original pose stream.
+    """
+    if fraction <= 0.0:
+        return None
+    perturb_rng = _perturbation_rng(root_seed, global_episode)
+    selected = perturb_rng.random() < fraction
+    source_radius_m = math.hypot(source.x - PAN_AXIS[0], source.y - PAN_AXIS[1])
+    within_radius = (
+        max_source_radius_m is None or source_radius_m <= max_source_radius_m
+    )
+    if not selected or not within_radius:
+        return None
+    return GraspPerturbation.sample(perturb_rng, magnitude_m=magnitude_m)
 
 
 def find_wedged_workers(
@@ -716,6 +751,16 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--perturbation-max-source-radius",
+        type=float,
+        default=None,
+        help=(
+            "only perturb episodes whose cube starts at most this many metres "
+            "from the shoulder-pan axis (default: no radius limit). The pose and "
+            "salted perturbation draws remain unchanged for paired dataset arms"
+        ),
+    )
+    parser.add_argument(
         "--miscalibration",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -788,6 +833,11 @@ def main() -> None:
         parser.error("--viewer requires --workers 1")
     if args.first_episode is not None and args.first_episode < 0:
         parser.error("--first-episode must not be negative")
+    if (
+        args.perturbation_max_source_radius is not None
+        and args.perturbation_max_source_radius <= 0.0
+    ):
+        parser.error("--perturbation-max-source-radius must be positive")
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     base_root = (
@@ -837,6 +887,7 @@ def main() -> None:
         "max_attempts": args.max_attempts,
         "perturbed_fraction": args.perturbed_fraction,
         "perturbation_magnitude_m": args.perturbation_magnitude,
+        "perturbation_max_source_radius_m": args.perturbation_max_source_radius,
     }
     first_episode = (
         next_episode_index(episodes_root)
@@ -874,6 +925,7 @@ def main() -> None:
         detector_crash_dump_dir=args.detector_crash_dump_dir,
         perturbed_fraction=args.perturbed_fraction,
         perturbation_magnitude_m=args.perturbation_magnitude,
+        perturbation_max_source_radius_m=args.perturbation_max_source_radius,
     )
 
     print(

@@ -19,7 +19,10 @@ from record_sim import (  # noqa: E402
     PERTURBATION_SEED_SALT,
     _episode_rng,
     _perturbation_rng,
+    _sample_grasp_perturbation,
 )
+from pick_and_place.core.geometry import CubePose  # noqa: E402
+from pick_and_place.core.workspace_bounds import PAN_AXIS  # noqa: E402
 
 
 def _perturbed_indices(seed: int, count: int, fraction: float) -> list[int]:
@@ -81,3 +84,55 @@ def test_draws_are_uniform_enough_to_threshold():
     values = np.array([_perturbation_rng(1234, i).random() for i in range(4000)])
     assert 0.47 < values.mean() < 0.53
     assert values.min() < 0.01 and values.max() > 0.99
+
+
+def test_source_radius_gate_suppresses_only_far_band_perturbations():
+    seed = 20260807
+    index = _perturbed_indices(seed, 100, 0.25)[0]
+    near = CubePose(x=PAN_AXIS[0] + 0.329, y=PAN_AXIS[1], z=0.015)
+    far = CubePose(x=PAN_AXIS[0] + 0.331, y=PAN_AXIS[1], z=0.015)
+
+    near_draw = _sample_grasp_perturbation(
+        seed,
+        index,
+        near,
+        fraction=0.25,
+        magnitude_m=0.022,
+        max_source_radius_m=0.330,
+    )
+    far_draw = _sample_grasp_perturbation(
+        seed,
+        index,
+        far,
+        fraction=0.25,
+        magnitude_m=0.022,
+        max_source_radius_m=0.330,
+    )
+
+    assert near_draw is not None
+    assert far_draw is None
+
+
+def test_source_radius_gate_preserves_original_perturbation_draw():
+    seed = 20260807
+    index = _perturbed_indices(seed, 100, 0.25)[0]
+    source = CubePose(x=PAN_AXIS[0] + 0.2, y=PAN_AXIS[1], z=0.015)
+
+    unrestricted = _sample_grasp_perturbation(
+        seed,
+        index,
+        source,
+        fraction=0.25,
+        magnitude_m=0.022,
+        max_source_radius_m=None,
+    )
+    bounded = _sample_grasp_perturbation(
+        seed,
+        index,
+        source,
+        fraction=0.25,
+        magnitude_m=0.022,
+        max_source_radius_m=0.330,
+    )
+
+    assert bounded == unrestricted

@@ -3,9 +3,10 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-# Generate a recovery dataset, export it, and behavior-clone on it, on one rented
-# pod. Tests whether demonstrations containing a *retry* raise the imitation
-# ceiling: see docs/DATA_FLYWHEEL.md, "Sim-only recovery data".
+# Generate a recovery dataset, publish its LeRobot videos and training export,
+# and behavior-clone on it, on one rented pod. Tests whether demonstrations
+# containing a *retry* raise the imitation ceiling: see docs/DATA_FLYWHEEL.md,
+# "Sim-only recovery data".
 #
 #   scp scripts/vast_recovery_dataset.sh overlay.tar.gz ~/.netrc <ssh-host>:/workspace/
 #   scp -r ~/.aws <ssh-host>:/root/
@@ -32,7 +33,8 @@ export MUJOCO_GL=egl
 episodes="${EPISODES:-1000}"
 perturbed_fraction="${PERTURBED_FRACTION:-0.25}"
 perturbation_magnitude="${PERTURBATION_MAGNITUDE:-0.022}"
-run_name="${RUN_NAME:-recovery-$(date +%Y%m%d_%H%M%S)}"
+perturbation_max_source_radius="${PERTURBATION_MAX_SOURCE_RADIUS:-0.330}"
+run_name="${RUN_NAME:-recovery-far-clean-$(date +%Y%m%d_%H%M%S)}"
 # Generation is the parallel stage, and the binding resource is GPU memory, not
 # cores. Each worker holds its own EGL context with an 8192-square shadow map
 # (~268 MB) plus 1920x1080 8x-multisampled offscreen buffers, so roughly 400 MB
@@ -60,6 +62,7 @@ rerender_root="$workspace/datasets/${run_name}_rerender"
 blue_cube_root="$rerender_root/blue-cube"
 artifact_name="${run_name}-blue-cube"
 artifact_root="$workspace/artifacts/$artifact_name"
+lerobot_name="${artifact_name}-lerobot"
 output_root="$workspace/outputs/$run_name"
 output_prefix="$bucket_root/outputs/$run_name"
 job_log="$workspace/recovery-dataset.log"
@@ -143,7 +146,8 @@ for calibration in config/camera_extrinsics/overhead_camera.json \
   fi
 done
 
-stage 1 "generate $episodes episodes, perturbed fraction $perturbed_fraction"
+stage 1 "generate $episodes episodes, perturbed fraction $perturbed_fraction, " \
+  "max source radius $perturbation_max_source_radius m"
 # Counted, not merely "does the directory exist": a run whose workers died leaves
 # hundreds of *partial* episode directories that carry no meta/info.json and are
 # worth nothing. Skipping on the directory's presence made a failed run look
@@ -169,6 +173,7 @@ for attempt in 1 2 3; do
     --seed "$seed" \
     --perturbed-fraction "$perturbed_fraction" \
     --perturbation-magnitude "$perturbation_magnitude" \
+    --perturbation-max-source-radius "$perturbation_max_source_radius" \
     --dataset-root "$staging" \
     --repo-id "local/$run_name" || echo "recorder returned $?; will re-count"
 done
@@ -244,6 +249,30 @@ else
   echo "finalized dataset already exists; skipping."
 fi
 halt_if_stopping finalize
+
+stage 3b "publish the finalized LeRobot dataset, including videos"
+lerobot_tarball="$workspace/datasets/$lerobot_name.tar.zst"
+if ! aws s3 ls "$bucket_root/datasets/$lerobot_name.tar.zst" >/dev/null 2>&1; then
+  tar --use-compress-program='zstd -3 -T0' \
+    -cf "$lerobot_tarball" -C "$(dirname "$blue_cube_root")" "$(basename "$blue_cube_root")"
+  sha256sum "$lerobot_tarball" | awk '{print $1"  '"$lerobot_name"'.tar.zst"}' \
+    > "$lerobot_tarball.sha256"
+  aws s3 cp "$lerobot_tarball" \
+    "$bucket_root/datasets/$lerobot_name.tar.zst" --only-show-errors
+  aws s3 cp "$lerobot_tarball.sha256" \
+    "$bucket_root/datasets/$lerobot_name.tar.zst.sha256" --only-show-errors
+  local_sha256="$(sha256sum "$lerobot_tarball" | awk '{print $1}')"
+  published_sha256="$(aws s3 cp \
+    "$bucket_root/datasets/$lerobot_name.tar.zst" - --only-show-errors | sha256sum | awk '{print $1}')"
+  if [ "$local_sha256" != "$published_sha256" ]; then
+    echo "uploaded LeRobot archive checksum mismatch" >&2
+    exit 1
+  fi
+  echo "uploaded and verified $lerobot_name.tar.zst (videos and metadata)"
+else
+  echo "LeRobot dataset already published; skipping upload."
+fi
+halt_if_stopping videos
 
 stage 4 "export the 96x96 arrays"
 if [ ! -f "$artifact_root/train.npz" ]; then
