@@ -49,6 +49,28 @@ def set_cube_pose(model: mujoco.MjModel, data: mujoco.MjData, source: CubePose) 
     data.qvel[qvel_adr:qvel_adr + 6] = 0.0
 
 
+def get_cube_pose(model: mujoco.MjModel, data: mujoco.MjData) -> CubePose:
+    """Read ``pick_cube``'s current pose — the inverse of :func:`set_cube_pose`.
+
+    This is *ground truth*, which only sim has. The real rig only ever knows the
+    cube through overhead AprilTag localization, so nothing on the hardware path
+    may call this; it exists so a sim episode can re-plan against where the cube
+    actually ended up after being knocked, rather than where it was believed to
+    be before.
+
+    Yaw only, matching what :func:`cube_quat_from_pose` writes: the cube rests on
+    a face, so roll and pitch carry no information the planner uses, and reporting
+    a noisy near-zero for them would invite a caller to plan against it.
+    """
+    cube_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pick_cube")
+    jnt_adr = model.body_jntadr[cube_body_id]
+    qpos_adr = model.jnt_qposadr[jnt_adr]
+    x, y, z = (float(v) for v in data.qpos[qpos_adr:qpos_adr + 3])
+    w, qx, qy, qz = (float(v) for v in data.qpos[qpos_adr + 3:qpos_adr + 7])
+    yaw = math.atan2(2.0 * (w * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+    return CubePose(x=x, y=y, z=z, yaw=yaw)
+
+
 def placement_error(
     model: mujoco.MjModel,
     data: mujoco.MjData,

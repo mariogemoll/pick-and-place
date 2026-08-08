@@ -22,6 +22,7 @@ import numpy as np
 
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.core.kinematics import So101Kinematics
+from pick_and_place.core.grasp_perturbation import GraspPerturbation
 from pick_and_place.core.miscalibration import MiscalibrationDraw
 from pick_and_place.core.robot_dynamics import set_actuator_activation
 from pick_and_place.core.workspace_bounds import is_cube_drop_allowed, is_cube_pickup_allowed
@@ -69,6 +70,11 @@ class Episode:
     ``believed_source``/``believed_target`` are what the planner acted on; they
     differ from the true poses only when a ``miscalibration`` draw was injected
     (the ``trajectory`` is planned entirely in the believed frame).
+
+    ``grasp_perturbation``, when set, is a *deliberate* extra error folded into
+    ``believed_source`` only, so the first grasp misses and the recovery can be
+    recorded. Kept separate from ``miscalibration`` because that field means
+    "error the real rig exhibits" and is read as such downstream.
     """
 
     source: CubePose
@@ -88,6 +94,7 @@ class Episode:
     trajectory: Trajectory = field(repr=False)
     attempts: int = 1
     miscalibration: MiscalibrationDraw | None = None
+    grasp_perturbation: GraspPerturbation | None = None
 
     @property
     def grasp(self) -> GraspChoice:
@@ -112,6 +119,7 @@ def prepare_episode(
     free_grasp: bool = False,
     target_sampler: Callable[[np.random.Generator], CubePose] | None = None,
     miscalibration: MiscalibrationDraw | None = None,
+    grasp_perturbation: GraspPerturbation | None = None,
 ) -> Episode:
     """Sample poses and return the first collision-free pick-and-carry.
 
@@ -177,6 +185,14 @@ def prepare_episode(
             believed_target = miscalibration.believe_target(ep_target)
         else:
             believed_source, believed_target = ep_source, ep_target
+        # Layered on top of the belief rather than folded into it: the draw above
+        # models error the real rig exhibits, this is a deliberate fumble, and
+        # keeping them separate is what lets a dataset be split by perturbation
+        # type afterwards. Only the *source* is perturbed -- the fumble under
+        # study is the grasp, and a wrong drop target would fail the placement
+        # instead, which is a different episode.
+        if grasp_perturbation is not None:
+            believed_source = grasp_perturbation.apply(believed_source)
         if fixed_start:
             ep_start_joints, ep_start_gripper = dict(start_joints), float(start_gripper)
         else:
@@ -354,6 +370,7 @@ def prepare_episode(
                 trajectory=trajectory,
                 attempts=attempt,
                 miscalibration=miscalibration,
+                grasp_perturbation=grasp_perturbation,
             )
 
         if fixed_source and fixed_target:

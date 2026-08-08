@@ -77,6 +77,10 @@ from pick_and_place.cli.scene import (
 )
 from pick_and_place.spec.robot import CONTROL_HZ
 from pick_and_place.core.miscalibration import MiscalibrationDraw, MiscalibrationModel
+from pick_and_place.core.grasp_perturbation import (
+    DEFAULT_MAGNITUDE_M,
+    GraspPerturbation,
+)
 from pick_and_place.data.recording import RecordingSession
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
@@ -98,6 +102,11 @@ from pick_and_place.core.workspace_bounds import is_cube_drop_allowed, sample_ta
 # ~8.5x the ~35 s nominal episode under libx264, so an episode that burns many
 # trajectory resamples (up to --max-attempts) is not mistaken for a wedge.
 DEFAULT_EPISODE_TIMEOUT = 300.0
+
+# Salt distinguishing the fumble-or-not stream from the pose and domain streams
+# keyed off the same (seed, episode) pair. Arbitrary, and must not change: it is
+# part of what makes a recorded episode a pure function of its index.
+PERTURBATION_SEED_SALT = 0x50455254
 
 
 class _MockViewer:
@@ -159,6 +168,8 @@ def run_recording(
     max_attempts: int = 50,
     show_progress: bool = True,
     detector_crash_dump_dir: str | None = None,
+    perturbed_fraction: float = 0.0,
+    perturbation_magnitude_m: float = DEFAULT_MAGNITUDE_M,
 ) -> int:
     """Record episodes pulled from ``index_source``; return the count saved.
 
@@ -300,6 +311,19 @@ def run_recording(
             orientation_index = (
                 sample.cube_orientation_index if sample is not None else int(rng.integers(24))
             )
+            # Deliberate fumbles, on a minority of episodes. Drawn from a stream
+            # keyed off the global episode index rather than from `rng`, so
+            # turning the fraction up or down leaves every other episode's poses
+            # untouched -- otherwise the two dataset arms would differ in their
+            # whole pose distribution and not just in the perturbations, and the
+            # comparison would be unpaired.
+            perturbation = None
+            if perturbed_fraction > 0.0:
+                perturb_rng = _perturbation_rng(seed, global_episode)
+                if perturb_rng.random() < perturbed_fraction:
+                    perturbation = GraspPerturbation.sample(
+                        perturb_rng, magnitude_m=perturbation_magnitude_m
+                    )
             try:
                 episode_source = orient_cube(
                     source if source is not None else sample_cube(rng), orientation_index
@@ -313,6 +337,7 @@ def run_recording(
                     verbose=False,
                     include_environment=True,
                     miscalibration=draw,
+                    grasp_perturbation=perturbation,
                     max_attempts=max_attempts,
                 )
             except EpisodeSamplingError as exc:
@@ -376,6 +401,21 @@ def run_recording(
             metadata["cube_start_roll"] = float(episode.source.roll)
             metadata["cube_start_pitch"] = float(episode.source.pitch)
             metadata["cube_orientation_index"] = orientation_index
+            # Recorded on every episode, perturbed or not, so the fraction can be
+            # swept later by filtering the dataset instead of regenerating it --
+            # and so a downstream reader can tell a clean episode from a recovered
+            # one, which the frames alone do not reveal.
+            metadata["grasp_perturbation_kind"] = (
+                perturbation.kind if perturbation is not None else "none"
+            )
+            if perturbation is not None:
+                metadata.update(
+                    {
+                        f"grasp_perturbation_{key}": value
+                        for key, value in perturbation.as_metadata().items()
+                        if key != "kind"
+                    }
+                )
             if draw is not None:
                 metadata.update(
                     {
@@ -446,6 +486,21 @@ def _episode_rng(root_seed: int | None, global_episode: int) -> np.random.Genera
 def _domain_seed(root_seed: int | None, global_episode: int) -> int:
     """Stable per-episode seed for domain sampling, independent of pose draws."""
     return domain_seed(root_seed, global_episode)
+
+
+def _perturbation_rng(root_seed: int | None, global_episode: int) -> np.random.Generator:
+    """Deterministic stream deciding whether episode ``global_episode`` is fumbled.
+
+    Salted so it is independent of the pose and domain streams. That independence
+    is the point: changing ``--perturbed-fraction`` must not move any other
+    episode's cube, or the perturbed and unperturbed dataset arms would differ in
+    their entire pose distribution and the comparison would stop being paired.
+    """
+    if root_seed is None:
+        return np.random.default_rng()
+    return np.random.default_rng(
+        np.random.SeedSequence([root_seed, global_episode, PERTURBATION_SEED_SALT])
+    )
 
 
 def find_wedged_workers(
@@ -634,6 +689,33 @@ def main() -> None:
     )
     parser.add_argument("--viewer", action="store_true", help="open the 3D MuJoCo viewer")
     parser.add_argument(
+        "--perturbed-fraction",
+        type=float,
+        default=0.0,
+        help=(
+            "fraction of episodes given a deliberate grasp fumble to recover from "
+            "(default: 0.0, off). The planner aims at a displaced *believed* cube, "
+            "misses, shoves the cube, and re-picks from where it actually ended up "
+            "-- recorded as one episode. Keep it a minority (0.2-0.3): too many and "
+            "the policy may learn that botching is survivable and get sloppier on "
+            "the first attempt, which is the main risk here and is worth sweeping "
+            "rather than guessing. The choice is recorded per episode as "
+            "grasp_perturbation_kind, so a generated dataset can be re-filtered to "
+            "a lower fraction without regenerating it"
+        ),
+    )
+    parser.add_argument(
+        "--perturbation-magnitude",
+        type=float,
+        default=DEFAULT_MAGNITUDE_M,
+        help=(
+            "planar magnitude of the injected belief error, metres (default: "
+            f"{DEFAULT_MAGNITUDE_M}). Measured to miss reliably from 0.022 upward; "
+            "the cube's 15 mm half-width is a floor, not the answer, because the "
+            "planner re-selects among grasp candidates and absorbs part of it"
+        ),
+    )
+    parser.add_argument(
         "--miscalibration",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -753,6 +835,8 @@ def main() -> None:
         "miscalibration": args.miscalibration,
         "domain_randomization": _configured_file(args.domain_randomization),
         "max_attempts": args.max_attempts,
+        "perturbed_fraction": args.perturbed_fraction,
+        "perturbation_magnitude_m": args.perturbation_magnitude,
     }
     first_episode = (
         next_episode_index(episodes_root)
@@ -788,6 +872,8 @@ def main() -> None:
         speed=args.speed,
         max_attempts=args.max_attempts,
         detector_crash_dump_dir=args.detector_crash_dump_dir,
+        perturbed_fraction=args.perturbed_fraction,
+        perturbation_magnitude_m=args.perturbation_magnitude,
     )
 
     print(

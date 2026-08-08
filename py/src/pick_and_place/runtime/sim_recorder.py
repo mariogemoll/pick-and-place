@@ -59,7 +59,8 @@ from pick_and_place.runtime.sim_wrist_servo import SimWristServo
 from pick_and_place.runtime.wrist_mixed_view import close_mixed
 from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
 from pick_and_place.sim.domain_randomization import reload_renderer_textures
-from pick_and_place.sim.model import build_model, get_joint, placement_error
+from pick_and_place.policies.policy_evaluation import TaskOracleConfig
+from pick_and_place.sim.model import build_model, get_cube_pose, get_joint, placement_error
 from pick_and_place.spec.robot import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 
@@ -72,6 +73,14 @@ OVERHEAD_CAMERA = "overhead_camera"
 SHADOW_MAP_SIZE = 8192
 OFFSCREEN_SAMPLES = 8
 SHADOW_CONE_SCALE = 0.4
+
+# Cube height above which the grasp is judged to have taken, used only to decide
+# whether a fumbled pick needs re-picking. Taken from the oracle's own lift
+# milestone rather than chosen here, so "held" during recording means the same
+# thing as "lifted" when the episode is scored; a local threshold would drift
+# from it silently.
+_ORACLE = TaskOracleConfig()
+_HELD_MIN_Z_M = _ORACLE.resting_height_m + _ORACLE.lift_clearance_m
 
 @dataclasses.dataclass(frozen=True)
 class RecordEpisodeResult:
@@ -330,6 +339,19 @@ def record_episode(
         if belief.closed_loop
         else None
     )
+    # Checkpoints exist because the plan may be wrong, and there are two ways for
+    # that to be true. A miscalibration draw is the original one: the belief error
+    # is real, so the descent servos and every phase boundary replans from
+    # readback. A deliberate grasp perturbation is the other: the plan is wrong
+    # *by construction*, and without checkpoints the arm would fly the rest of it
+    # blind -- carrying nothing, dropping nothing -- and the episode would be
+    # unusable rather than a recovery demonstration.
+    #
+    # These were one flag until now, which coupled replanning to servoing. They
+    # are not the same capability, and this task wants replanning *without* a
+    # servo: the servo follows a fresh sighting every tick and would steer the
+    # jaws back onto the true cube, correcting away the very fumble being staged.
+    run_checkpoints = belief.closed_loop or episode.grasp_perturbation is not None
     plant = SimPlant(
         model=model,
         data=data,
@@ -375,7 +397,7 @@ def record_episode(
             completed = phase.name
             remaining_phases = current_traj.phases[1:]
 
-            if servo is None:
+            if not run_checkpoints:
                 # Pure feedforward playback: the vetted plan needs no
                 # checkpoints, so just advance phase by phase.
                 current_traj = dataclasses.replace(current_traj, phases=remaining_phases)
@@ -413,6 +435,43 @@ def record_episode(
                 status = "success"
                 break
 
+            # Did the grasp actually take? Every branch below this point assumes
+            # the cube is in the jaws and continues to carry and drop, so a
+            # fumbled grasp otherwise produces an episode that carries nothing,
+            # drops nothing, and is recorded as a success -- which is how a
+            # perturbed episode would quietly poison the dataset.
+            #
+            # Judged from ground truth rather than the gripper encoder. The real
+            # rig has only the encoder, and `_pickup_report` in the hardware
+            # executor deliberately refuses to branch on it because the jaws read
+            # open when they jam; sim knows where the cube is, so it can decide
+            # this exactly. The threshold is the oracle's own lift criterion, so
+            # "held" here means the same thing it means when the episode is
+            # scored.
+            if run_checkpoints and completed in ("lift", "recovery_lift"):
+                cube_now = get_cube_pose(model, data)
+                held = cube_now.z >= _HELD_MIN_Z_M
+                if not held:
+                    if verbose:
+                        print(
+                            f"Grasp missed (cube at z={cube_now.z * 1000:.1f} mm, "
+                            f"needs {_HELD_MIN_Z_M * 1000:.1f}); "
+                            "re-picking from where the cube actually is."
+                        )
+                    # The retry has to re-localize. `tracked_source` still holds
+                    # the perturbed belief that caused the miss, and re-planning
+                    # against it would aim at the same empty spot forever. This
+                    # is where the injected error expires -- the recovery is
+                    # planned against the cube's real pose, which is also what
+                    # makes the fumble transient rather than a permanent bias.
+                    tracked_source = cube_now
+                    tracked_grasp = None
+                    # completed_phase_name=None is the planner's "plan a whole
+                    # fresh pick from the current arm state" branch: approach,
+                    # descent, grasp, lift, carry, drop, retreat, with grasp
+                    # candidates regenerated from the pose above and every
+                    # candidate preflighted. No new planning code is needed.
+                    completed = None
             if verbose:
                 print(f"Replanning remaining trajectory after {completed}...")
             candidate = replan_from_checkpoint(
