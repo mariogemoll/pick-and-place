@@ -106,9 +106,12 @@ critic_warmup="${CRITIC_WARMUP:-10}"
 target_kl="${TARGET_KL:-0.1}"
 # Gradient steps per iteration is update_epochs x minibatches. PPO's trust region
 # cannot restrain this policy -- measured approx_kl runs 1e-8..3e-4 against a 0.1
-# target while behaviour collapses, because a 0.1 likelihood floor treats ~9
-# degrees of joint motion as one standard deviation -- so step count and step
-# size are the only working brakes.
+# target while behaviour collapses -- so step count and step size are the only
+# working brakes. That was a suspicion when it was written and is now measured:
+# with the trust region provably disengaged (clipfrac ~0, early-stop never
+# firing), dropping this to 2 alongside max_grad_norm=1.0 is what turned twelve
+# consecutive collapses into a run that ended where it started. It bought
+# stability, not learning. See the 2026-08-08 matched-density section.
 update_epochs="${UPDATE_EPOCHS:-10}"
 # Exploration noise, in normalized action units. DPPO's 0.1 default is set for
 # robomimic's small end-effector deltas; here an action is an absolute joint
@@ -117,10 +120,24 @@ update_epochs="${UPDATE_EPOCHS:-10}"
 # which leaves PPO with no reward signal at all.
 sampling_std="${SAMPLING_STD:-0.01}"
 # The *likelihood* floor is a different quantity with a different job: DPPO clips
-# the std used to evaluate Gaussian log-probabilities for numerical stability,
-# and the paper says to keep it at 0.1. Lowering it with the exploration floor
-# makes the densities ~10x narrower, so PPO's importance ratios explode across 5
-# denoising steps x 16 horizon x 6 dimensions. Keep the two decoupled.
+# the std used to evaluate Gaussian log-probabilities, and the paper's text says
+# to keep it at 0.1. This used to say "keep the two decoupled, or PPO's
+# importance ratios explode across 5 denoising steps x 16 horizon x 6
+# dimensions". Both halves of that were tested on 2026-08-08 and neither
+# survived:
+#
+#   - Ratios did not explode at a matched 0.01/0.01 with update_epochs=2 and
+#     max_grad_norm=1.0. No NaN, clipfrac never above 0.0034.
+#   - Matching the floors does not buy a working trust region either. It was
+#     supposed to lift approx_kl into robomimic's 1e-4..1e-2 band, since a floor
+#     10x too wide under-reports KL ~100x. Measured: ~1e-6 decaying to ~2e-7, and
+#     the early-stop never fired in 100 iterations against target_kl=0.02.
+#
+# So the decoupling is a free choice, not a safety rule, and neither setting
+# rescues the policy gradient: the matched run neither collapsed nor improved
+# (0.742 base, 0.730 at itr 120, McNemar p = 0.88). Upstream's released configs
+# never actually run a 10x decoupling; the two arms that learn use 0.1/0.1.
+# Default stays at 0.1 only because every run before that one used it.
 logprob_std="${LOGPROB_STD:-0.1}"
 # Image-shift augmentation during the update. In behavior cloning a shifted
 # image keeps a fixed target action, so it regularizes; in PPO it breaks the
@@ -510,7 +527,10 @@ if [ "$train_status" -ne 0 ]; then
   exit "$train_status"
 fi
 
-checkpoint=$(find "$output_root/finetune" -type f -name 'state_*.pt' -print | sort | tail -1)
+# Version sort, not lexicographic: with three-digit iteration counts a plain sort
+# puts state_90.pt after state_120.pt, so the run reports and hashes the wrong
+# file as its final checkpoint.
+checkpoint=$(find "$output_root/finetune" -type f -name 'state_*.pt' -print | sort -V | tail -1)
 if [ -z "$checkpoint" ]; then
   echo "Fine-tuning returned success without writing a checkpoint." >&2
   exit 1

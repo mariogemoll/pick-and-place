@@ -255,7 +255,11 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   two commands share is declared once, here, not agreed by hand in each.
 - **`dppo_rl/`** — fine-tuning the pretrained Diffusion Policy with PPO. **This
   did not work**: no configuration beat the pretrained policy in a paired
-  evaluation. Kept for a future attempt; do not treat it as a working path.
+  evaluation. Kept for a future attempt; do not treat it as a working path. The
+  optimizer question is closed — the last run (2026-08-08, matched density
+  floors) neither collapsed nor improved, with a healthy critic and a trust
+  region that never engaged. Do not open a new configuration without reading the
+  August 8 sections of `docs/DPPO_RL_FINETUNING.md` first.
 
 ### Script categories
 
