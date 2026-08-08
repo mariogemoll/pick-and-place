@@ -5,6 +5,16 @@
 # W&B 0.17, which conflicts with the version required by the main package. Keep
 # the upstream package otherwise unchanged while using the shared runtime.
 torch==2.13.0
+# Pinned *with* torch, not left to resolve on its own. torchvision carries
+# compiled extensions linked against a specific torch ABI, and nothing in the
+# dependency graph ties the two together: resolution picked 0.25.0 (built for
+# torch ~2.10) alongside torch 2.13, which imports fine and then dies with
+# "operator torchvision::nms does not exist" the moment anything touches it.
+#
+# Nothing in training notices, because DPPO reads exported npz arrays. Dataset
+# *recording* does: lerobot's io_utils imports torchvision at module scope, so
+# every record_sim worker died on its first episode.
+torchvision==0.28.0
 av==15.1.0
 matplotlib==3.10.5
 wandb==0.24.1
