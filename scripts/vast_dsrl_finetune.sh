@@ -210,10 +210,28 @@ git submodule update --init --recursive
 git rev-parse HEAD | tee "$output_root/job-metadata/repository-commit.txt"
 
 venv="$workspace/venvs/pick-and-place"
-base_python="python3"
-if [ -x /venv/main/bin/python ]; then
-  base_python="/venv/main/bin/python"
+# The package needs Python >= 3.12 (lerobot 0.5.1 pins transformers 5.3.0), and
+# the image's bundled interpreter is whatever the image ships -- 3.10.12 on
+# vastai/pytorch:latest, which resolves to "your requirements are unsatisfiable"
+# several minutes into provisioning. Test the candidates rather than assume one,
+# and let uv fetch a managed 3.13 when none is new enough.
+base_python="${BASE_PYTHON:-}"
+if [ -z "$base_python" ]; then
+  for candidate in /venv/main/bin/python python3; do
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    if "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else 1)' \
+         2>/dev/null; then
+      base_python="$candidate"
+      break
+    fi
+  done
 fi
+if [ -z "$base_python" ]; then
+  echo "No interpreter on this image is >= 3.12; installing a managed 3.13."
+  uv python install 3.13
+  base_python="3.13"
+fi
+echo "Building the venv on $base_python."
 if [ ! -x "$venv/bin/python" ]; then
   uv venv --python "$base_python" "$venv"
 fi
