@@ -25,22 +25,26 @@ export MUJOCO_GL=egl
 : "${VAST_INSTANCE_ID:?}"
 
 bucket_root="s3://allyouneed/pick-and-place"
-base_run="dp_blue_cube_1000/pretrain/so101_pre_diffusion_unet_img_to2_ta16_te2_td100/2026-07-31_04-01-38_42"
+# Which policy to measure. The default is the checkpoint the scene-difficulty
+# and chunk-length sweeps in docs/POLICY_FAILURE_ANATOMY.md were run on; any
+# other pretrain run can be measured by pointing BASE_RUN at its output prefix.
+# A checkpoint and the normalization it was trained against must travel
+# together: normalization is per-dataset min-max, so pairing a checkpoint with
+# another dataset's statistics silently mis-scales every observation and action
+# rather than failing, and the sweep still produces plausible-looking numbers.
+base_run="${BASE_RUN:-dp_blue_cube_1000/pretrain/so101_pre_diffusion_unet_img_to2_ta16_te2_td100/2026-07-31_04-01-38_42}"
 base_epoch="${BASE_EPOCH:-1500}"
 base_policy_s3="$bucket_root/outputs/$base_run/checkpoint/state_$base_epoch.pt"
-declare -A base_policy_sha=(
-  [1500]="4bbcdc552942456dc76bd2911f57e808da5314505ae15e8581bd3bdcfbb57846"
-  [200]="a3c50124d6897aa41951178d8d54f574aac22119c09e668262d28b74c5faa153"
-)
-base_policy_sha256="${base_policy_sha[$base_epoch]}"
-artifact_s3="$bucket_root/diffusion-policy-data/blue-cube-1000-10hz-96x96"
-normalization_sha256="138facc5ff6611e2a82e607dc3658a2b2cd50a12e6d91d7a7051da38d16482d4"
+# The dataset export the policy was trained on, which is where normalization.npz
+# comes from. ARTIFACT_NAME must name the export used for BASE_RUN.
+artifact_name="${ARTIFACT_NAME:-blue-cube-1000-10hz-96x96}"
+artifact_s3="$bucket_root/diffusion-policy-data/$artifact_name"
 
 run_name="${RUN_NAME:-scene_difficulty_$(date +%Y%m%d_%H%M%S)}"
 output_prefix="$bucket_root/outputs/$run_name"
 workspace="/workspace"
 repo="$workspace/pick-and-place"
-artifact_root="$workspace/artifacts/blue-cube-1000-10hz-96x96"
+artifact_root="$workspace/artifacts/$artifact_name"
 base_policy="$workspace/artifacts/state_$base_epoch.pt"
 output_root="$workspace/outputs/$run_name"
 job_log="$workspace/scene-difficulty.log"
@@ -134,13 +138,27 @@ else
 fi
 
 venv="$workspace/venvs/pick-and-place"
-base_python="python3"
-if [ -x /venv/main/bin/python ]; then
-  base_python="/venv/main/bin/python"
+# Pin the interpreter rather than inheriting the image's, the same way
+# vast_pap_provision.sh does. vastai/pytorch:latest ships CPython 3.10 at
+# /venv/main/bin/python, and this package floors at 3.12 (lerobot 0.5.1), so
+# inheriting it fails resolution outright -- which is exactly how this script
+# failed the first time it was pointed at a current image.
+#
+# Not PYTHON_VERSION: that name is already exported by the image, set to its own
+# 3.10, so an override called that is silently supplied by the environment.
+python_version="${PAP_PYTHON_VERSION:-3.12}"
+# Recreating on a version mismatch keeps the "every step is idempotent" promise
+# honest: a venv left behind by an earlier run on the wrong interpreter would
+# otherwise satisfy the -x test and fail the install again on every retry.
+if [ -x "$venv/bin/python" ] && ! "$venv/bin/python" -c "import sys; raise SystemExit(
+    0 if tuple(map(int, '$python_version'.split('.'))) <= sys.version_info[:2] else 1)"; then
+  echo "Existing venv is $("$venv/bin/python" -V); rebuilding on $python_version."
+  rm -rf "$venv"
 fi
 if [ ! -x "$venv/bin/python" ]; then
-  uv venv --python "$base_python" "$venv"
+  uv venv --python "$python_version" "$venv"
 fi
+"$venv/bin/python" -V
 # Load-bearing for resolution, not just CUDA: without the overrides DPPO's own
 # pins conflict with this package and uv declares the requirements unsatisfiable.
 uv pip install --python "$venv/bin/python" \
@@ -182,19 +200,71 @@ fi
 
 mkdir -p "$artifact_root"
 aws s3 cp "$base_policy_s3" "$base_policy" --only-show-errors
-aws s3 cp "$artifact_s3/normalization.npz" "$artifact_root/normalization.npz" --only-show-errors
-aws s3 cp "$artifact_s3/export.json" "$artifact_root/export.json" --only-show-errors
+# The checkpoint checksum comes from whichever source has it. It used to be a
+# hardcoded per-epoch map, which meant a checkpoint outside that map could not
+# be measured at all; but the older runs the map covers never published one, so
+# the map cannot simply be replaced either. Newer training jobs write
+# state_<epoch>.pt.sha256 under the run root's job-metadata/, so prefer that,
+# fall back to the map, and refuse to run unverified -- a truncated download
+# still loads and still produces plausible-looking success rates.
+declare -A known_policy_sha=(
+  [dp_blue_cube_1000:1500]="4bbcdc552942456dc76bd2911f57e808da5314505ae15e8581bd3bdcfbb57846"
+  [dp_blue_cube_1000:200]="a3c50124d6897aa41951178d8d54f574aac22119c09e668262d28b74c5faa153"
+)
+base_policy_sha256="${BASE_POLICY_SHA256:-}"
+if [ -z "$base_policy_sha256" ]; then
+  published="$bucket_root/outputs/${base_run%%/*}/job-metadata/state_$base_epoch.pt.sha256"
+  if aws s3 cp "$published" "$base_policy.sha256.published" --only-show-errors 2>/dev/null; then
+    base_policy_sha256=$(cut -d' ' -f1 "$base_policy.sha256.published")
+    echo "Using published checkpoint checksum from $published."
+  else
+    base_policy_sha256="${known_policy_sha[${base_run%%/*}:$base_epoch]:-}"
+  fi
+fi
+if [ -z "$base_policy_sha256" ]; then
+  echo "No checksum for state_$base_epoch.pt of ${base_run%%/*}; pass BASE_POLICY_SHA256." >&2
+  exit 1
+fi
 echo "$base_policy_sha256  $base_policy" | sha256sum --check
-echo "$normalization_sha256  $artifact_root/normalization.npz" | sha256sum --check
+
+# Dataset exports are published only as <name>.tar.zst; the loose per-file
+# directories this used to copy normalization.npz and export.json from no longer
+# exist, so the download failed outright. Stream the tarball, verify it, and
+# take the two files out of it.
+artifact_tarball="$workspace/artifacts/$artifact_name.tar.zst"
+if [ ! -f "$artifact_root/normalization.npz" ]; then
+  aws s3 cp "$artifact_s3.tar.zst" "$artifact_tarball" --only-show-errors
+  aws s3 cp "$artifact_s3.tar.zst.sha256" "$artifact_tarball.sha256.published" --only-show-errors
+  echo "$(cut -d' ' -f1 "$artifact_tarball.sha256.published")  $artifact_tarball" | sha256sum --check
+  # Only these two members. The archive also carries train.npz, 5.4 GB
+  # uncompressed, which this sweep never opens: it instantiates config.model
+  # alone and sets DPPO_DATA_DIR to a placeholder purely so hydra can resolve.
+  tar --use-compress-program=unzstd -xf "$artifact_tarball" -C "$workspace/artifacts" \
+    "$artifact_name/normalization.npz" "$artifact_name/export.json"
+  rm -f "$artifact_tarball"
+fi
+for required in normalization.npz export.json; do
+  if [ ! -f "$artifact_root/$required" ]; then
+    echo "artifact $artifact_name is missing $required after extraction" >&2
+    exit 1
+  fi
+done
 cp "$artifact_root/export.json" "$output_root/job-metadata/dataset-export.json"
+sha256sum "$artifact_root/normalization.npz" \
+  | tee "$output_root/job-metadata/normalization-sha256.txt"
 
 "$venv/bin/python" py/scripts/render_apriltag_textures.py --all-defaults
+# The three machine-local calibrations are absent from a fresh clone but backed
+# up in the bucket, so fetch them rather than failing and making the caller do
+# it by hand.
 for calibration in config/camera_extrinsics/overhead_camera.json \
                    config/camera_intrinsics/overhead_camera.json \
                    config/camera_intrinsics/wrist_camera.json; do
   if [ ! -f "$repo/$calibration" ]; then
-    echo "missing machine-local calibration on the pod: $calibration" >&2
-    exit 1
+    mkdir -p "$(dirname "$repo/$calibration")"
+    aws s3 cp "$bucket_root/config-backup/${calibration#config/}" \
+      "$repo/$calibration" --only-show-errors
+    echo "Fetched $calibration from config-backup."
   fi
 done
 
