@@ -85,6 +85,17 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="fail unless the bounds declare this encoding",
     )
+    parser.add_argument(
+        "--fixed-temperature",
+        type=float,
+        default=None,
+        help=(
+            "hold SAC's entropy weight here instead of tuning it toward "
+            "target_entropy. The auto-tuner has been measured oscillating on this "
+            "96-dimensional latent, swinging entropy tens of nats between logs, "
+            "which moves the sampling distribution faster than the critic follows."
+        ),
+    )
     parser.add_argument("--wandb", action="store_true", help="log to Weights & Biases")
     return parser.parse_args()
 
@@ -200,9 +211,12 @@ def main() -> None:
             gamma=float(config.dsrl.gamma),
             tau=float(config.dsrl.tau),
             target_entropy=float(config.dsrl.target_entropy),
-            init_temperature=_override(
-                args.init_temperature, float(config.dsrl.init_temperature)
+            init_temperature=(
+                args.fixed_temperature
+                if args.fixed_temperature is not None
+                else _override(args.init_temperature, float(config.dsrl.init_temperature))
             ),
+            auto_temperature=args.fixed_temperature is None,
             n_critics=int(config.dsrl.n_critics),
             activation=str(config.dsrl.activation),
             device=args.device,

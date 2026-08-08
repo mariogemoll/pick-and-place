@@ -85,6 +85,13 @@ class SacConfig:
     # actor toward the widest distribution the tanh allows.
     target_entropy: float = 0.0
     init_temperature: float = 1.0
+    # Whether the temperature is tuned toward ``target_entropy`` or held where it
+    # starts. Auto-tuning is standard SAC and is what the paper implies, but on
+    # this 96-dimensional latent it has been measured chasing its tail: entropy
+    # swung 33 -> -0.6 -> 3.4 -> -22 -> 20.6 nats across one run while the
+    # temperature tracked it, which changes the sampling distribution faster
+    # than the critic can follow. Holding it removes one feedback loop.
+    auto_temperature: bool = True
     n_critics: int = 2
     # Tanh, per the paper's Table 3, not the ReLU that SAC implementations
     # usually default to.
@@ -254,12 +261,13 @@ class LatentSac:
         for parameter in self.critic.parameters():
             parameter.requires_grad_(True)
 
-        temperature_loss = -(
-            self.log_temperature * (log_prob.detach() + self.config.target_entropy)
-        ).mean()
-        self.temperature_optimizer.zero_grad(set_to_none=True)
-        temperature_loss.backward()
-        self.temperature_optimizer.step()
+        if self.config.auto_temperature:
+            temperature_loss = -(
+                self.log_temperature * (log_prob.detach() + self.config.target_entropy)
+            ).mean()
+            self.temperature_optimizer.zero_grad(set_to_none=True)
+            temperature_loss.backward()
+            self.temperature_optimizer.step()
 
         with torch.no_grad():
             for online, target_parameter in zip(

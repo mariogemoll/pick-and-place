@@ -113,6 +113,9 @@ buffer_capacity="${BUFFER_CAPACITY:-400000}"
 # ~1000 of which the task is ~120. The auto-tuner corrects it at ~0.835 per
 # 600 gradient steps, which is ~735 iterations before it stops dominating.
 init_temperature="${INIT_TEMPERATURE:-}"
+# Hold the entropy weight instead of tuning it. Set this or INIT_TEMPERATURE,
+# not both: the auto-tuner has been measured oscillating here.
+fixed_temperature="${FIXED_TEMPERATURE:-}"
 # Give the critic privileged simulator state. The actor never sees it, so the
 # policy that deploys is unchanged; set to true to make the whole learner
 # transferable to hardware at the cost of a harder value-learning problem.
@@ -527,6 +530,7 @@ set +e
   --action-magnitude "$action_magnitude" \
   --buffer-capacity "$buffer_capacity" \
   ${init_temperature:+--init-temperature "$init_temperature"} \
+  ${fixed_temperature:+--fixed-temperature "$fixed_temperature"} \
   --expect-action-encoding "$action_encoding" \
   ${critic_flag[@]+"${critic_flag[@]}"} \
   ${wandb_flag[@]+"${wandb_flag[@]}"} \
