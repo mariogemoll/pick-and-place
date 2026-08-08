@@ -159,6 +159,81 @@ def test_final_action_clip_is_applied():
     assert actions.abs().max().item() <= 0.01
 
 
+# -- the subclass production actually instantiates ----------------------------
+
+
+class _VpgShapedDiffusion(_TestableDiffusion):
+    """A model with ``DiffusionVPG``'s p_mean_var contract, not the base class's.
+
+    Two differences, both of which broke the first pod run. It returns
+    ``(mu, logvar, etas)`` rather than a pair, and it takes ``deterministic`` --
+    which under DDIM decides whether ``etas`` is zero or ``self.eta(cond)``, and
+    ``etas`` enters the *mean*. Passing the wrong one does not raise; it traces
+    a different trajectory than the scorer does.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.deterministic_calls: list[bool] = []
+
+    def p_mean_var(self, x, t, cond, index=None, use_base_policy=False, deterministic=False):
+        del use_base_policy
+        self.deterministic_calls.append(deterministic)
+        mean, logvar = super().p_mean_var(x, t, cond, index=index)
+        # Stand in for the eta term: nonzero only when not deterministic, and
+        # large enough that a wrong call is visible rather than a rounding tick.
+        if not deterministic:
+            mean = mean + 0.5
+        return mean, logvar, torch.zeros_like(mean)
+
+
+def _vpg_model():
+    model = _VpgShapedDiffusion(
+        network=_StubNetwork(),
+        horizon_steps=HORIZON_STEPS,
+        obs_dim=OBS_DIM,
+        action_dim=ACTION_DIM,
+        denoising_steps=20,
+        use_ddim=True,
+        ddim_steps=4,
+        device="cpu",
+    )
+    model.eval()
+    return model
+
+
+def test_denoise_handles_the_three_value_return():
+    """The base class returns a pair; VPG and PPO return (mu, logvar, etas)."""
+    model = _vpg_model()
+    actions = denoise(model, _cond(), torch.randn((BATCH, HORIZON_STEPS, ACTION_DIM)))
+    assert actions.shape == (BATCH, HORIZON_STEPS, ACTION_DIM)
+
+
+def test_denoise_asks_for_the_deterministic_branch():
+    """Omitting it silently traces a different trajectory than the scorer.
+
+    `check_dppo_rl_env.py` evaluates with deterministic=True, so the latent
+    space DSRL learns over has to be defined against that same branch.
+    """
+    model = _vpg_model()
+    denoise(model, _cond(), torch.randn((BATCH, HORIZON_STEPS, ACTION_DIM)))
+    assert model.deterministic_calls
+    assert all(model.deterministic_calls)
+
+
+def test_the_deterministic_branch_actually_changes_the_result():
+    """Guards the test above from passing on a model where the flag is inert."""
+    model = _vpg_model()
+    cond = _cond()
+    noise = torch.randn((BATCH, HORIZON_STEPS, ACTION_DIM))
+    steered = denoise(model, cond, noise)
+
+    stochastic = _vpg_model()
+    original = stochastic.p_mean_var
+    stochastic.p_mean_var = lambda **kwargs: original(**{**kwargs, "deterministic": False})
+    assert not torch.allclose(steered, denoise(stochastic, cond, noise))
+
+
 # -- the features the latent actor reads --------------------------------------
 
 

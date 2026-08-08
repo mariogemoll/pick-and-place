@@ -31,6 +31,7 @@ Two things are exposed:
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 import torch
@@ -156,18 +157,36 @@ def denoise(model: Any, cond: dict[str, torch.Tensor], noise: torch.Tensor) -> t
     if tuple(noise.shape) != expected:
         raise ValueError(f"noise must be {expected}, got {tuple(noise.shape)}")
 
+    # ``deterministic`` is not cosmetic here, and omitting it does not raise.
+    # Under DDIM, ``DiffusionVPG.p_mean_var`` sets ``etas`` to zero when it is
+    # true and to ``self.eta(cond)`` when it is false -- and ``etas`` decides
+    # ``sigma``, which enters the *mean* through
+    # ``dir_xt = (1 - alpha_prev - sigma^2).sqrt() * noise``. With the config's
+    # ``base_eta: 1`` the two settings therefore trace different trajectories,
+    # and the wrong one would be a silently different policy rather than an
+    # error. True is what ``check_dppo_rl_env.py`` scores with, so it is what
+    # the latent space has to be defined against.
+    #
+    # The base ``DiffusionModel`` accepts no such argument and returns a pair,
+    # while the VPG and PPO subclasses take it and return ``(mu, logvar, etas)``.
+    # Both are supported by reading the signature rather than the class.
+    signature = inspect.signature(model.p_mean_var)
+    extra = {"deterministic": True} if "deterministic" in signature.parameters else {}
+
     x = noise.to(device=model.betas.device, dtype=torch.float32)
     timesteps = model.ddim_t
     for index, timestep in enumerate(timesteps):
-        mean, _ = model.p_mean_var(
+        predicted = model.p_mean_var(
             x=x,
             t=make_timesteps(batch, timestep, x.device),
             cond=cond,
             index=make_timesteps(batch, index, x.device),
+            **extra,
         )
-        # DDIM at eta = 0: the posterior standard deviation is identically zero,
-        # so the sample is its mean and the chunk is a function of x_T alone.
-        x = mean
+        # DDIM with eta pinned to zero: the posterior standard deviation is
+        # identically zero, so the sample is its mean and the chunk is a
+        # function of x_T alone.
+        x = predicted[0]
         if model.final_action_clip_value is not None and index == len(timesteps) - 1:
             x = torch.clamp(x, -model.final_action_clip_value, model.final_action_clip_value)
     return x
