@@ -264,8 +264,12 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   the braked launcher defaults (zero collapses in six runs; the pre-brake
   configuration collapsed twelve times), and a base policy whose failures are
   recoverable — on the no-retry absolute base the same configuration is provably
-  flat. Read the August 8 sections of `docs/DPPO_RL_FINETUNING.md` before
-  opening a new configuration.
+  flat. **The gain is a fixed increment, not a fraction of the remaining gap**:
+  the same procedure from an undertrained base (epoch 150, 0.492) gained the same
+  ~7 points and validated at 0.561, so a weaker start ends weaker roughly one for
+  one and headroom is not the constraint (2026-08-09, 24 cells, none
+  significant). Read the August 8–9 sections of `docs/DPPO_RL_FINETUNING.md`
+  before opening a new configuration.
 
 ### Script categories
 
