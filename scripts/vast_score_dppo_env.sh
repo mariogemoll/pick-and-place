@@ -22,6 +22,10 @@
 #   ssh <ssh-host> '... FT_RUN_NAME=dppo_ft_matched_std_20260808 FT_ITR=120 \
 #     SCORE_NAME=matched-std-itr120 bash /workspace/vast_score_dppo_env.sh'
 #
+# BASE_EPOCH may name any epoch the pretraining run checkpointed, not just the
+# one it finished on, but only the finishing epoch has a recorded sha256; for
+# any other, pass BASE_POLICY_SHA256 as well.
+#
 # Run vast_pap_provision.sh first. Everything that decides what is measured --
 # scenes, sampler, torch seed, episode count -- is pinned below or passed in, so
 # two invocations differing only in the checkpoint differ only in the weights.
@@ -58,6 +62,14 @@ act_steps="${ACT_STEPS:-}"
 # Seeds torch's sampling. Deterministic denoising still starts from a random
 # latent, so fixing this is what makes two checkpoints differ only by weights.
 seed="${SEED:-0}"
+# The expected sha256 of the base checkpoint. The pretraining launcher records
+# one only for the epoch it was asked to finish on, so scoring an intermediate
+# epoch -- an undertrained checkpoint, say, chosen for the headroom it leaves --
+# has no recorded hash to check against and must state the expected one here.
+# The check itself is not optional: aws does not verify a multipart download, so
+# a truncated checkpoint scores as a policy that has forgotten the task rather
+# than as a failed transfer.
+base_policy_sha256="${BASE_POLICY_SHA256:-}"
 # A DPPO fine-tuning run under outputs/ whose weights are scored on top of the
 # base checkpoint. Empty scores the base checkpoint itself.
 ft_run_name="${FT_RUN_NAME:-}"
@@ -103,18 +115,20 @@ if [ ! -f "$checkpoint" ]; then
     fi
     base_run_dir="${base_run_dirs[0]}"
   fi
-  aws s3 cp "$pretrain_prefix/$base_run_dir/checkpoint/state_$base_epoch.pt" \
-    "$checkpoint" --only-show-errors
-  # aws does not verify a multipart download, so a truncated checkpoint would
-  # score as a policy that has forgotten the task rather than as a failed copy.
-  expected=$(aws s3 cp \
-    "$bucket_root/outputs/$BASE_RUN_NAME/job-metadata/state_$base_epoch.pt.sha256" - \
-    2>/dev/null | awk '{print $1}')
-  if [ -z "$expected" ]; then
-    echo "no recorded sha256 for $BASE_RUN_NAME epoch $base_epoch" >&2
+  # Resolve the expected hash before spending the download: an explicit override
+  # first, then the hash the pretraining launcher recorded beside its own run.
+  recorded_sha="$bucket_root/outputs/$BASE_RUN_NAME/job-metadata/state_$base_epoch.pt.sha256"
+  if [ -z "$base_policy_sha256" ]; then
+    base_policy_sha256=$(aws s3 cp "$recorded_sha" - 2>/dev/null | awk '{print $1}')
+  fi
+  if [ -z "$base_policy_sha256" ]; then
+    echo "no expected sha256 for $BASE_RUN_NAME epoch $base_epoch, and none recorded at" >&2
+    echo "$recorded_sha -- pass BASE_POLICY_SHA256 to state what you expect." >&2
     exit 1
   fi
-  echo "$expected  $checkpoint" | sha256sum --check
+  aws s3 cp "$pretrain_prefix/$base_run_dir/checkpoint/state_$base_epoch.pt" \
+    "$checkpoint" --only-show-errors
+  echo "$base_policy_sha256  $checkpoint" | sha256sum --check
 fi
 
 ft_checkpoint=""
