@@ -179,6 +179,7 @@ class PolicySimEnv(gym.Env):
         renderer_factory: RendererFactory = mujoco.Renderer,
         scene_appearance: SceneAppearance | None = None,
         terminate_on_success: bool = True,
+        include_images: bool = True,
     ) -> None:
         super().__init__()
         image_height, image_width = image_hw
@@ -192,6 +193,7 @@ class PolicySimEnv(gym.Env):
         self.model, self.data = build_policy_sim_model(render_height, render_width)
         self._renderer_factory = renderer_factory
         self._renderer: Any | None = None
+        self.include_images = include_images
         self._randomizer = DomainRandomizer(self.model)
         # A policy must be rolled out in the appearance it was trained on: the
         # blue-cube checkpoints see a recoloured cube that the compiled scene,
@@ -220,26 +222,28 @@ class PolicySimEnv(gym.Env):
         action_low = sim_frame_to_real(low_arm, ctrl_range[GRIPPER_INDEX, 0]).astype(np.float32)
         action_high = sim_frame_to_real(high_arm, ctrl_range[GRIPPER_INDEX, 1]).astype(np.float32)
         self.action_space = spaces.Box(low=action_low, high=action_high, dtype=np.float32)
-        self.observation_space = spaces.Dict({
+        observation_spaces = {
             STATE_FEATURE: spaces.Box(
                 low=-np.inf,
                 high=np.inf,
                 shape=(len(JOINT_NAMES),),
                 dtype=np.float32,
             ),
-            OVERHEAD_FEATURE: spaces.Box(
+        }
+        if include_images:
+            observation_spaces[OVERHEAD_FEATURE] = spaces.Box(
                 low=0,
                 high=255,
                 shape=(image_height, image_width, 3),
                 dtype=np.uint8,
-            ),
-            WRIST_FEATURE: spaces.Box(
+            )
+            observation_spaces[WRIST_FEATURE] = spaces.Box(
                 low=0,
                 high=255,
                 shape=(image_height, image_width, 3),
                 dtype=np.uint8,
-            ),
-        })
+            )
+        self.observation_space = spaces.Dict(observation_spaces)
 
         cube_body = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "pick_cube")
         cube_joint = self.model.body_jntadr[cube_body]
@@ -366,17 +370,20 @@ class PolicySimEnv(gym.Env):
         return image
 
     def _observation(self) -> dict[str, np.ndarray]:
+        observation = {
+            STATE_FEATURE: sim_state_to_real(
+                self.data.qpos[self._joint_qpos_adr], self._joint_offsets_rad()
+            ),
+        }
+        if not self.include_images:
+            return observation
         # Preserve the existing interactive runner's render order so deterministic
         # per-frame domain noise maps to the same camera on both code paths.
         wrist = self._render_camera("wrist_camera")
         overhead = self._render_camera("overhead_camera")
-        return {
-            STATE_FEATURE: sim_state_to_real(
-                self.data.qpos[self._joint_qpos_adr], self._joint_offsets_rad()
-            ),
-            OVERHEAD_FEATURE: overhead,
-            WRIST_FEATURE: wrist,
-        }
+        observation[OVERHEAD_FEATURE] = overhead
+        observation[WRIST_FEATURE] = wrist
+        return observation
 
     def _contact_facts(self) -> tuple[bool, bool]:
         robot_cube_contact = False

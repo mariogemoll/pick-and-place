@@ -70,6 +70,27 @@ def test_visual_env_exposes_only_deployable_observation_and_privileged_info():
         env.close()
 
 
+def test_state_only_env_does_not_create_a_renderer():
+    def fail_renderer(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("state-only observations must not render cameras")
+
+    env = PolicySimEnv(
+        image_hw=(16, 16),
+        render_hw=(32, 32),
+        renderer_factory=fail_renderer,
+        include_images=False,
+    )
+    try:
+        observation, _ = env.reset(options={"scenario": _scenario()})
+
+        assert set(observation) == {STATE_FEATURE}
+        assert env.observation_space.contains(observation)
+        env.step(observation[STATE_FEATURE])
+    finally:
+        env.close()
+
+
 def test_reset_reproduces_explicit_scenario_state():
     env = PolicySimEnv(
         image_hw=(16, 16),
