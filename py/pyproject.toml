@@ -23,6 +23,7 @@ dependencies = [
     "scipy",
     "sounddevice",
     "tqdm",
+    "wandb",
 ]
 
 [tool.ruff]
