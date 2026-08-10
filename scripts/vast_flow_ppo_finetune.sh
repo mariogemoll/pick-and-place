@@ -174,7 +174,13 @@ if [ ! -d "$repo/.git" ]; then
   git clone --recurse-submodules https://github.com/mariogemoll/pick-and-place.git "$repo"
 fi
 cd "$repo"
-git checkout "${REPO_REF:-HEAD}" 2>/dev/null || true
+# A silent fallback to whatever the clone happened to check out would let a run
+# be measured on different code than the one that launched it, which is exactly
+# the class of mistake the provenance metadata below exists to rule out.
+if [ -n "${REPO_REF:-}" ]; then
+  git fetch --quiet origin "$REPO_REF"
+  git checkout --quiet FETCH_HEAD
+fi
 git submodule update --init --recursive
 git rev-parse HEAD | tee "$output_root/job-metadata/repository-commit.txt"
 
