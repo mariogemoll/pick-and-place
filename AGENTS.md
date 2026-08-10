@@ -264,8 +264,16 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   renders and a rollout costs about a second. Its objective is **speed, not
   success**: the base places at a median 81 ticks with 0.94 success, so the
   dense return has range to move in where the success rate has almost none.
-  Gate and score it with `check_flow_rl_env.py`; no fine-tuning result exists
-  yet. The **visual Diffusion Policy** uses DPPO's own diffusion model, and
+  Gate and score it with `check_flow_rl_env.py`. **It does not work yet**: PPO
+  degrades the policy at every step size tried (0.92 to 0.66 over 121 iterations
+  at lr 3e-6; 0.92 to 0.14 over 301 at 3e-7, so a smaller step only postpones
+  it), and it does so with the trust region engaging, the critic explaining 70%
+  of return variance, and no log-probability clamping — none of which the visual
+  strand ever achieved. The leading untested suspect is that the likelihood
+  floor is three to six times wider than the SDE's own per-step standard
+  deviation. No fine-tuned checkpoint is worth scoring; see
+  `docs/FLOW_RL_STATUS.md`. The **visual Diffusion Policy** uses DPPO's own
+  diffusion model, and
   **works as a train-and-select procedure on the recovery base, not as a reliable
   optimizer**: across six seeds (2026-08-08) there is no average effect at any
   fixed iteration, but four of six produced a significantly-better checkpoint at
