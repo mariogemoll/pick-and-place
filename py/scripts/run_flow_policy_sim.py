@@ -20,7 +20,12 @@ import numpy as np
 import torch
 
 from pick_and_place.core.rotations import quat_wxyz_to_rotation_6d
-from pick_and_place.policies.flow_matching import FlowModel, generate, load_model
+from pick_and_place.policies.flow_matching import (
+    VelocityModel,
+    generate,
+    load_model,
+)
+from pick_and_place.policies.diffusion_policy_unet import FlowConditionalUnet1D
 from pick_and_place.runtime.policy_sim import PolicySimEnv
 from pick_and_place.runtime.recorded_scenes import recorded_episode_scenario
 from pick_and_place.runtime.training_scenes import training_scenario
@@ -30,9 +35,9 @@ ENTER_KEYS = frozenset({257, 335})
 
 def normalize(values: np.ndarray, minimum: np.ndarray, maximum: np.ndarray) -> np.ndarray:
     span = maximum - minimum
-    return np.where(span > 1e-6, 2 * (values - minimum) / np.where(span > 1e-6, span, 1) - 1, 0).astype(
-        np.float32
-    )
+    return np.where(
+        span > 1e-6, 2 * (values - minimum) / np.where(span > 1e-6, span, 1) - 1, 0
+    ).astype(np.float32)
 
 
 def unnormalize(values: np.ndarray, minimum: np.ndarray, maximum: np.ndarray) -> np.ndarray:
@@ -68,7 +73,14 @@ class StateFlowPolicy:
     """Turn simulator observations into a queue of generated joint commands."""
 
     def __init__(
-        self, model: FlowModel, manifest: dict[str, Any], bounds: dict[str, np.ndarray], *, act_steps: int, integration_steps: int, seed: int
+        self,
+        model: VelocityModel,
+        manifest: dict[str, Any],
+        bounds: dict[str, np.ndarray],
+        *,
+        act_steps: int,
+        integration_steps: int,
+        seed: int,
     ) -> None:
         if manifest.get("endpoint_semantics") != "absolute joint command":
             raise ValueError("the simulator runner requires absolute joint commands")
@@ -77,9 +89,20 @@ class StateFlowPolicy:
         self.prediction_steps = int(manifest["prediction_steps"])
         self.observation_dim = int(manifest["observation_dim"])
         self.endpoint_dim = int(manifest["endpoint_dim"])
-        expected_input = self.prediction_steps * self.endpoint_dim + model.time_embedding_dim + self.observation_steps * self.observation_dim
-        if (model.input_dim, model.output_dim) != (expected_input, self.prediction_steps * self.endpoint_dim):
+        expected_input = (
+            self.prediction_steps * self.endpoint_dim
+            + model.time_embedding_dim
+            + self.observation_steps * self.observation_dim
+        )
+        if (model.input_dim, model.output_dim) != (
+            expected_input,
+            self.prediction_steps * self.endpoint_dim,
+        ):
             raise ValueError("checkpoint dimensions do not match the export")
+        if isinstance(model, FlowConditionalUnet1D) and (
+            model.prediction_steps != self.prediction_steps or model.action_dim != self.endpoint_dim
+        ):
+            raise ValueError("U-Net temporal dimensions do not match the export")
         if not 1 <= act_steps <= self.prediction_steps or integration_steps < 1:
             raise ValueError("invalid action or integration horizon")
         self.minimum = bounds["observation_min"]
@@ -105,9 +128,15 @@ class StateFlowPolicy:
         while len(self.history) < self.observation_steps:
             self.history.appendleft(self.history[0].copy())
         if not self.actions:
-            generated = generate(
-                self.model, torch.from_numpy(np.stack(self.history).reshape(1, -1)), self.integration_steps
-            )[0].cpu().numpy()
+            generated = (
+                generate(
+                    self.model,
+                    torch.from_numpy(np.stack(self.history).reshape(1, -1)),
+                    self.integration_steps,
+                )[0]
+                .cpu()
+                .numpy()
+            )
             clipped = np.clip(generated, -1, 1)
             self.clipped_fraction = float(np.mean(generated != clipped))
             commands = unnormalize(
@@ -174,19 +203,30 @@ def main() -> None:
             scenario = training_scenario(index)
             return replace(scenario, max_steps=args.steps) if args.steps is not None else scenario
         return recorded_episode_scenario(
-            manifest["source_dataset"], index, control_hz=float(manifest["policy_hz"]), max_steps=args.steps
+            manifest["source_dataset"],
+            index,
+            control_hz=float(manifest["policy_hz"]),
+            max_steps=args.steps,
         )
 
     scenario_index = args.episode_index if args.episode_index is not None else args.scenario_index
-    recorded_position = recorded_indices.index(scenario_index) if args.episode_index is not None else None
+    recorded_position = (
+        recorded_indices.index(scenario_index) if args.episode_index is not None else None
+    )
     scenario = make_scenario(scenario_index)
     if scenario.control_hz != float(manifest["policy_hz"]):
         raise ValueError("export and scenario control rates do not match")
     policy = StateFlowPolicy(
-        load_model(args.checkpoint, select_device(args.device)), manifest, bounds,
-        act_steps=args.act_steps, integration_steps=args.integration_steps, seed=args.seed,
+        load_model(args.checkpoint, select_device(args.device)),
+        manifest,
+        bounds,
+        act_steps=args.act_steps,
+        integration_steps=args.integration_steps,
+        seed=args.seed,
     )
-    env = PolicySimEnv(image_hw=(96, 96), render_hw=(args.render_height, args.render_width), include_images=False)
+    env = PolicySimEnv(
+        image_hw=(96, 96), render_hw=(args.render_height, args.render_width), include_images=False
+    )
     observation, info = env.reset(options={"scenario": scenario})
     resample_requested = threading.Event()
     context = nullcontext(None)
@@ -196,7 +236,9 @@ def main() -> None:
         context = mujoco.viewer.launch_passive(
             env.model,
             env.data,
-            key_callback=lambda keycode: resample_requested.set() if keycode in ENTER_KEYS else None,
+            key_callback=lambda keycode: (
+                resample_requested.set() if keycode in ENTER_KEYS else None
+            ),
         )
     try:
         with context as viewer:
@@ -221,7 +263,9 @@ def main() -> None:
                     time.sleep(1 / scenario.control_hz)
                     continue
                 started = time.perf_counter()
-                observation, _, terminated, truncated, info = env.step(policy.act(observation, info))
+                observation, _, terminated, truncated, info = env.step(
+                    policy.act(observation, info)
+                )
                 if terminated or truncated:
                     print(format_episode_result(env.episode_result()))
                 if viewer is not None:

@@ -7,6 +7,7 @@ name = "pick-and-place"
 version = "0.0.0"
 dependencies = [
     "av",
+    "einops",
     "fpdf",
     "gymnasium",
     "imageio[ffmpeg]",

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Small conditional flow-matching model and training loop."""
+"""Conditional flow-matching models, training, and sampling."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from pathlib import Path
 
 import numpy as np
 import torch
+
+from pick_and_place.policies.diffusion_policy_unet import FlowConditionalUnet1D
 
 
 class FlowModel(torch.nn.Module):
@@ -40,6 +42,9 @@ class FlowModel(torch.nn.Module):
 
     def forward(self, values: torch.Tensor) -> torch.Tensor:
         return self.net(values)
+
+
+VelocityModel = FlowModel | FlowConditionalUnet1D
 
 
 def embed_time(time: torch.Tensor, dimension: int) -> torch.Tensor:
@@ -89,7 +94,7 @@ def train_model(
     dataset_path: str | Path,
     validation_path: str | Path | None = None,
     *,
-    num_epochs: int = 20,
+    num_updates: int = 20_000,
     batch_size: int = 256,
     learning_rate: float = 0.003,
     min_learning_rate: float | None = None,
@@ -97,14 +102,20 @@ def train_model(
     hidden_dim: int = 256,
     hidden_layers: int = 2,
     time_embedding_dim: int = 32,
+    architecture: str = "unet1d",
+    prediction_steps: int = 16,
+    unet_down_dims: tuple[int, ...] = (64, 128, 256),
+    unet_kernel_size: int = 5,
+    unet_groups: int = 8,
     device: str | torch.device = "cpu",
     seed: int = 0,
     observation_augmentation: Callable[[torch.Tensor], torch.Tensor] | None = None,
     validation_interval: int = 1,
     metrics_callback: Callable[[int, dict[str, float]], None] | None = None,
-    checkpoint_callback: Callable[[int, FlowModel, list[float], list[float]], None] | None = None,
-) -> tuple[FlowModel, list[float], list[float]]:
-    """Fit a conditional velocity field to prepared numeric examples."""
+    checkpoint_callback: Callable[[int, VelocityModel, list[float], list[float]], None]
+    | None = None,
+) -> tuple[VelocityModel, list[float], list[float]]:
+    """Fit a conditional velocity field for an explicit number of optimizer updates."""
     torch.manual_seed(seed)
     observations, data = load_examples(dataset_path)
     if validation_path is not None:
@@ -115,15 +126,33 @@ def train_model(
             raise ValueError("training and validation data dimensions must match")
     if validation_interval < 1:
         raise ValueError("validation_interval must be positive")
+    if num_updates < 1 or batch_size < 1:
+        raise ValueError("num_updates and batch_size must be positive")
     device = torch.device(device)
     observations, data = observations.to(device), data.to(device)
-    model = FlowModel(
-        input_dim=data.shape[1] + time_embedding_dim + observations.shape[1],
-        output_dim=data.shape[1],
-        hidden_dim=hidden_dim,
-        hidden_layers=hidden_layers,
-        time_embedding_dim=time_embedding_dim,
-    ).to(device)
+    if architecture == "mlp":
+        model: VelocityModel = FlowModel(
+            input_dim=data.shape[1] + time_embedding_dim + observations.shape[1],
+            output_dim=data.shape[1],
+            hidden_dim=hidden_dim,
+            hidden_layers=hidden_layers,
+            time_embedding_dim=time_embedding_dim,
+        )
+    elif architecture == "unet1d":
+        if prediction_steps < 1 or data.shape[1] % prediction_steps:
+            raise ValueError("data dimension must be divisible by prediction_steps")
+        model = FlowConditionalUnet1D(
+            action_dim=data.shape[1] // prediction_steps,
+            observation_dim=observations.shape[1],
+            prediction_steps=prediction_steps,
+            time_embedding_dim=time_embedding_dim,
+            down_dims=unet_down_dims,
+            kernel_size=unet_kernel_size,
+            groups=unet_groups,
+        )
+    else:
+        raise ValueError(f"unknown architecture: {architecture}")
+    model = model.to(device)
     minimum = learning_rate if min_learning_rate is None else min_learning_rate
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
     training_losses: list[float] = []
@@ -137,53 +166,85 @@ def train_model(
         validation_time = torch.rand(len(validation_data), 1, generator=generator).to(device)
         validation_noise = torch.randn(validation_data.shape, generator=generator).to(device)
 
-    for epoch in range(num_epochs):
+    permutation = torch.randperm(len(data), device=device)
+    batch_start = 0
+    for update in range(num_updates):
         rate = learning_rate_at_step(
-            epoch, num_steps=num_epochs, peak=learning_rate, minimum=minimum, warmup_steps=warmup_steps
+            update,
+            num_steps=num_updates,
+            peak=learning_rate,
+            minimum=minimum,
+            warmup_steps=warmup_steps,
         )
         optimizer.param_groups[0]["lr"] = rate
         model.train()
-        total_loss = 0.0
-        for indices in torch.randperm(len(data), device=device).split(batch_size):
-            endpoints = data[indices]
-            conditions = observations[indices]
-            if observation_augmentation is not None:
-                conditions = observation_augmentation(conditions)
-            time = torch.rand(len(endpoints), 1, device=device)
-            noise = torch.randn_like(endpoints)
-            values = time * endpoints + (1 - time) * noise
-            prediction = model(torch.cat((values, embed_time(time, time_embedding_dim), conditions), dim=1))
-            loss = torch.mean((prediction - (endpoints - noise)) ** 2)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item() * len(indices)
-        train_loss = total_loss / len(data)
+        if batch_start >= len(data):
+            permutation = torch.randperm(len(data), device=device)
+            batch_start = 0
+        indices = permutation[batch_start : batch_start + batch_size]
+        batch_start += len(indices)
+        endpoints = data[indices]
+        conditions = observations[indices]
+        if observation_augmentation is not None:
+            conditions = observation_augmentation(conditions)
+        time = torch.rand(len(endpoints), 1, device=device)
+        noise = torch.randn_like(endpoints)
+        values = time * endpoints + (1 - time) * noise
+        prediction = predict_velocity(model, values, time, conditions)
+        loss = torch.mean((prediction - (endpoints - noise)) ** 2)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        train_loss = loss.item()
         training_losses.append(train_loss)
         metrics = {"train/loss": train_loss, "learning_rate": rate}
         validate = validation_path is not None and (
-            (epoch + 1) % validation_interval == 0 or epoch == num_epochs - 1
+            (update + 1) % validation_interval == 0 or update == num_updates - 1
         )
         if validate:
             model.eval()
             with torch.no_grad():
-                values = validation_time * validation_data + (1 - validation_time) * validation_noise
-                prediction = model(
-                    torch.cat(
-                        (values, embed_time(validation_time, time_embedding_dim), validation_observations), dim=1
+                squared_error = 0.0
+                for validation_indices in torch.arange(len(validation_data)).split(batch_size):
+                    endpoints = validation_data[validation_indices]
+                    time = validation_time[validation_indices]
+                    noise = validation_noise[validation_indices]
+                    values = time * endpoints + (1 - time) * noise
+                    prediction = predict_velocity(
+                        model,
+                        values,
+                        time,
+                        validation_observations[validation_indices],
                     )
-                )
-                validation_loss = torch.mean((prediction - (validation_data - validation_noise)) ** 2).item()
+                    squared_error += torch.sum((prediction - (endpoints - noise)) ** 2).item()
+                validation_loss = squared_error / validation_data.numel()
             validation_losses.append(validation_loss)
             metrics["validation/loss"] = validation_loss
         if metrics_callback is not None:
-            metrics_callback(epoch + 1, metrics)
+            metrics_callback(update + 1, metrics)
         if checkpoint_callback is not None:
-            checkpoint_callback(epoch + 1, model, training_losses, validation_losses)
+            checkpoint_callback(update + 1, model, training_losses, validation_losses)
     return model, training_losses, validation_losses
 
 
-def generate(model: FlowModel, observations: torch.Tensor, num_steps: int = 100) -> torch.Tensor:
+def predict_velocity(
+    model: VelocityModel,
+    values: torch.Tensor,
+    time: torch.Tensor,
+    observations: torch.Tensor,
+) -> torch.Tensor:
+    """Apply either velocity architecture through its common flattened boundary."""
+    if isinstance(model, FlowConditionalUnet1D):
+        sequence = values.reshape(len(values), model.prediction_steps, model.action_dim)
+        return model(sequence, time, observations).reshape_as(values)
+    return model(
+        torch.cat((values, embed_time(time, model.time_embedding_dim), observations), dim=1)
+    )
+
+
+def generate(
+    model: VelocityModel, observations: torch.Tensor, num_steps: int = 100
+) -> torch.Tensor:
     """Sample by Euler integration from Gaussian noise."""
     observation_dim = model.input_dim - model.output_dim - model.time_embedding_dim
     if observations.ndim != 2 or observations.shape[1] != observation_dim:
@@ -196,16 +257,44 @@ def generate(model: FlowModel, observations: torch.Tensor, num_steps: int = 100)
     time = torch.zeros(len(observations), 1, device=parameter.device)
     with torch.no_grad():
         for _ in range(num_steps):
-            velocity = model(torch.cat((values, embed_time(time, model.time_embedding_dim), observations), dim=1))
+            velocity = predict_velocity(model, values, time, observations)
             values = values + velocity / num_steps
             time = time + 1 / num_steps
     return values
 
 
-def load_model(checkpoint: str | Path, device: str | torch.device = "cpu") -> FlowModel:
+def model_checkpoint_config(model: VelocityModel) -> tuple[str, dict[str, object]]:
+    """Return the architecture tag and constructor arguments stored in a checkpoint."""
+    if isinstance(model, FlowConditionalUnet1D):
+        return "unet1d", {
+            "action_dim": model.action_dim,
+            "observation_dim": model.observation_dim,
+            "prediction_steps": model.prediction_steps,
+            "time_embedding_dim": model.time_embedding_dim,
+            "down_dims": model.down_dims,
+            "kernel_size": model.kernel_size,
+            "groups": model.groups,
+        }
+    return "mlp", {
+        "input_dim": model.input_dim,
+        "output_dim": model.output_dim,
+        "hidden_dim": model.hidden_dim,
+        "hidden_layers": model.hidden_layers,
+        "time_embedding_dim": model.time_embedding_dim,
+    }
+
+
+def load_model(checkpoint: str | Path, device: str | torch.device = "cpu") -> VelocityModel:
     """Load a flow-matching checkpoint."""
     contents = torch.load(Path(checkpoint), map_location=device, weights_only=True)
-    model = FlowModel(**contents["model_config"]).to(device)
+    model_type = contents.get("model_type", "mlp")
+    if model_type == "mlp":
+        model: VelocityModel = FlowModel(**contents["model_config"])
+    elif model_type == "unet1d":
+        model = FlowConditionalUnet1D(**contents["model_config"])
+    else:
+        raise ValueError(f"unknown checkpoint model type: {model_type}")
+    model = model.to(device)
     model.load_state_dict(contents["model"])
     model.eval()
     return model
