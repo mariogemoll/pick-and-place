@@ -253,8 +253,20 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   `rig` (follower, cameras, recalibration, operator alerts), `scene` (cube
   pinning, render size, appearance, preflight diagnostics), `dataset`. A flag
   two commands share is declared once, here, not agreed by hand in each.
-- **`dppo_rl/`** — fine-tuning the pretrained Diffusion Policy with PPO. **Works
-  as a train-and-select procedure on the recovery base, not as a reliable
+- **`dppo_rl/`** — fine-tuning a pretrained policy with PPO. Two families run
+  through one episode loop, reward and scene stream; `observations.py` holds
+  what each is shown and what its normalized action means. The **state flow
+  policy** substitutes only the transition kernel (`flow_ppo.py`, over the actor
+  adapter in `flow_actor.py`): integrating a flow ODE has no per-step likelihood
+  for PPO to differentiate, while the SDE with the same marginals does, and its
+  noise schedule vanishes as the chain ends so exploration never lands
+  undiminished on the emitted action. It reads privileged task state, so nothing
+  renders and a rollout costs about a second. Its objective is **speed, not
+  success**: the base places at a median 81 ticks with 0.94 success, so the
+  dense return has range to move in where the success rate has almost none.
+  Gate and score it with `check_flow_rl_env.py`; no fine-tuning result exists
+  yet. The **visual Diffusion Policy** uses DPPO's own diffusion model, and
+  **works as a train-and-select procedure on the recovery base, not as a reliable
   optimizer**: across six seeds (2026-08-08) there is no average effect at any
   fixed iteration, but four of six produced a significantly-better checkpoint at
   seed-specific times, and the oracle-selected winner (seed 42, itr 60) validated

@@ -1,0 +1,217 @@
+# SPDX-FileCopyrightText: 2026 Mario Gemoll
+# SPDX-License-Identifier: 0BSD
+
+# PPO fine-tuning of the state-conditioned flow-matching policy on the full
+# simulated pick-and-place task. Adapted from ft_ppo_so101_unet_img.yaml, which
+# fine-tunes the visual Diffusion Policy through the same agent, environment and
+# reward. Two things differ, and everything else is deliberately identical so
+# the two strands stay comparable:
+#
+# - the actor is the behavior-cloned flow velocity field, sampled through the
+#   SDE that shares the trained ODE's marginals (see dppo_rl.flow_ppo). The
+#   pretrained weights are used as behavior cloning left them;
+# - the observation is privileged task state, so nothing renders. A rollout is
+#   MuJoCo physics and a 4.07M-parameter U-Net, with no cameras in the loop.
+defaults:
+  - _self_
+
+hydra:
+  run:
+    dir: ${logdir}
+
+_target_: pick_and_place.dppo_rl.agent.PickAndPlaceFlowPPOAgent
+
+name: so101_ft_ppo_flow_ta${horizon_steps}_te${act_steps}_tf${flow_steps}_tdf${ft_denoising_steps}
+logdir: ${oc.env:DPPO_LOG_DIR}/finetune/${name}/${now:%Y-%m-%d}_${now:%H-%M-%S}_${seed}
+# The behavior-cloned flow checkpoint this fine-tune starts from.
+base_policy_path: ${oc.env:DPPO_BASE_POLICY}
+# The export it was trained against. Its normalization bounds map what the
+# policy sees and unmap what it commands, so the two must always travel
+# together: pairing a checkpoint with another export does not fail, it feeds the
+# policy the wrong units.
+flow_export_path: ${oc.env:DPPO_DATA_DIR}
+
+seed: 42
+device: cuda:0
+# Six robot coordinates, cube position, the first two columns of the cube's
+# rotation matrix, and the target's planar position.
+obs_dim: 17
+action_dim: 6
+cond_steps: 2
+horizon_steps: 16
+
+# Eight of the sixteen predicted actions are executed per query, the schedule
+# the 188/200 closed-loop selection was measured with.
+act_steps: 8
+
+# Euler integration steps, and how many of them carry gradient. Ten is the
+# operating point a paired 20-scene gate selected: it matched 100-step success
+# and was 7.65 times faster. Fine-tuning the last five mirrors DPPO's own pixel
+# configs -- the early steps carry the coarse chunk shape behavior cloning
+# already got right.
+flow_steps: 10
+ft_denoising_steps: 5
+
+env:
+  name: so101_pick_and_place_flow
+  n_envs: 32
+  # Control ticks per episode. 150 at 10 Hz is 15 s, the same episode budget the
+  # frozen 30 Hz evaluation manifests allow with 450 steps.
+  max_episode_steps: 150
+  control_hz: 10.0
+  # Training scenes come from this seed stream. 6,000,000 selected this policy's
+  # checkpoint and 7,000,000 is reserved for its one untouched validation, so
+  # both stay disjoint from what training sees.
+  scene_seed_base: 5000000
+  # Pay the success reward for every control tick the cube stays settled on
+  # target, running the episode out instead of ending it at the placement. The
+  # sparse alternative returns exactly 0.0 or 1.0 per episode, which is the
+  # maximum-variance form the return can take and asks the critic to regress a
+  # Bernoulli. Every run of the visual strand that improved used this.
+  dense_success_reward: True
+  shaping_weight: 0.0
+  # Emit privileged simulator state for the asymmetric critic below. The flow
+  # actor already sees the cube and the target; what this adds is the contact
+  # and grasp flags, the gripper-to-cube distance and the elapsed fraction,
+  # which are what a value function most needs and a policy cannot use.
+  privileged_obs: True
+  # Diagnostic only; see EnvConfig.debug_action_reward.
+  debug_action_reward: False
+  save_video: False
+  # Under the dense reward the agent computes `max(chunk reward) / act_steps`,
+  # so a threshold of 1.0 reads as "some chunk in which the cube was on target
+  # for all act_steps ticks". That is close to the oracle's dwell-confirmed
+  # definition but not equal to it, so only the paired oracle in
+  # check_flow_rl_env.py is the measurement.
+  best_reward_threshold_for_success: ${eval:'1.0 if ${env.dense_success_reward} else 1 / ${act_steps}'}
+
+shape_meta:
+  obs:
+    state:
+      shape: [17]
+    # Critic-only. Cube pose, target, their difference and planar distance,
+    # gripper-to-cube distance, contact/grasp/open flags, elapsed fraction.
+    privileged:
+      shape: [13]
+  action:
+    shape: [6]
+
+wandb:
+  entity: null
+  project: pick-and-place-flow-rl
+  run: ${now:%H-%M-%S}_${name}
+
+train:
+  n_train_itr: 121
+  n_critic_warmup_itr: 20
+  # Model steps per environment per iteration. Twenty chunks of eight ticks is
+  # 160 ticks, slightly over one episode, so an iteration is about
+  # n_envs episodes.
+  n_steps: 40
+  gamma: 0.999
+  # No images to shift.
+  augment: False
+  grad_accumulate: 1
+  # The braked configuration: the visual strand collapsed twelve consecutive
+  # times before it and has not collapsed since. Fewer off-policy epochs and a
+  # gradient-norm ceiling are the two settings that did it; the trust region
+  # provably never engaged, so the clip ratio and target KL cannot have.
+  actor_lr: 3e-6
+  actor_weight_decay: 0
+  actor_lr_scheduler:
+    first_cycle_steps: ${train.n_train_itr}
+    warmup_steps: 10
+    min_lr: 3e-6
+  critic_lr: 1e-3
+  critic_weight_decay: 0
+  critic_lr_scheduler:
+    first_cycle_steps: ${train.n_train_itr}
+    warmup_steps: 10
+    min_lr: 1e-3
+  save_model_freq: 10
+  val_freq: 10
+  render:
+    freq: 1
+    num: 0
+  # PPO specific
+  reward_scale_running: True
+  reward_scale_const: 1.0
+  gae_lambda: 0.95
+  batch_size: 500
+  # DPPO asserts this divides n_envs, and the launcher overrides n_envs, so it
+  # is derived rather than pinned.
+  logprob_batch_size: ${eval:'4 * ${env.n_envs}'}
+  update_epochs: 2
+  max_grad_norm: 1.0
+  vf_coef: 0.5
+  target_kl: 0.02
+  # The gradient is scored on the actions that were actually executed. Left at
+  # its upstream default of 4 it excludes ticks 5-8 of every chunk, which moved
+  # the cube and changed the reward -- a bias, not extra variance.
+  reward_horizon: ${act_steps}
+
+model:
+  _target_: pick_and_place.dppo_rl.flow_ppo.FlowPPO
+  flow_steps: ${flow_steps}
+  # Scale of the sampling SDE's noise, in normalized action units at flow time
+  # zero; the schedule takes it to zero as the chain ends. Exploration has to be
+  # large enough that same-scene rollouts differ in return and small enough that
+  # the policy still solves the task -- one normalized unit is roughly 89
+  # degrees of joint 1, so this is not a knob to set generously. Measure it with
+  # check_flow_rl_env.py --stochastic before a run. Measured on 32 scenes of the
+  # training stream, the base policy scores 0.875/0.844/0.844/0.812/0.750
+  # settled placements at 0.01/0.03/0.05/0.1/0.2 -- the flow sampler degrades
+  # far more gracefully than DDIM with a constant floor did, because the noise
+  # schedule vanishes as the chain ends. Across three sampling seeds, 0.03 and
+  # 0.1 both leave about a quarter of scenes producing both outcomes, but the
+  # spread in control steps -- which is exactly what the dense reward pays out
+  # -- is four times larger at 0.1.
+  sampling_noise_scale: 0.1
+  # Floor on the standard deviation the log-probabilities are computed with,
+  # kept separate from sampling as the DPPO paper's sigma_min^prob is. It is
+  # numerical, and the number comes from arithmetic rather than taste:
+  # PPODiffusion clamps every log-probability to at most 2, a Gaussian's peak
+  # log-density is -log(sigma * sqrt(2 pi)), and those are equal at sigma =
+  # 0.054. Below that the clamp binds, and a clamped log-probability is
+  # identical for the old and new policies -- the importance ratio then reads
+  # exactly 1 however far the policy has moved. 0.06 is the tightest floor that
+  # stays clear of it, and being tight matters: approximate KL scales as
+  # 1/sigma^2, so this sees 2.8 times more of a given behavior change than the
+  # upstream default of 0.1 would. check_flow_rl_env.py and the trainer both log
+  # the clamped fraction, which must stay at zero.
+  min_logprob_denoising_std: 0.06
+  # Clamp the emitted chunk onto the normalized action bounds, which is what the
+  # closed-loop runner does before unnormalizing. Sampling is clipped there
+  # while the Gaussian likelihood is not, so the gripper dimension -- effectively
+  # binary, and therefore often at a bound -- has a biased gradient.
+  final_action_clip_value: 1.0
+  randn_clip_value: 3
+  # HP to tune
+  gamma_denoising: 0.99
+  clip_ploss_coef: 0.01
+  clip_ploss_coef_base: 0.001
+  clip_ploss_coef_rate: 3
+  learn_eta: False
+  # The weights are loaded by the actor below, from the flow checkpoint's own
+  # format; DPPO's loader expects its own pretraining checkpoints.
+  network_path: null
+  actor:
+    _target_: pick_and_place.dppo_rl.flow_actor.load_flow_actor
+    checkpoint_path: ${base_policy_path}
+    export_dir: ${flow_export_path}
+    device: ${device}
+  # Asymmetric critic: privileged state in, value out. The flow actor is
+  # unaffected -- it reads `state` alone -- so the policy that ships is
+  # unchanged.
+  critic:
+    _target_: pick_and_place.dppo_rl.privileged_critic.PrivilegedCritic
+    privileged_dim: ${shape_meta.obs.privileged.shape[0]}
+    cond_steps: ${cond_steps}
+    mlp_dims: [256, 256, 256]
+    activation_type: Mish
+    residual_style: True
+  ft_denoising_steps: ${ft_denoising_steps}
+  horizon_steps: ${horizon_steps}
+  obs_dim: ${obs_dim}
+  action_dim: ${action_dim}
+  device: ${device}

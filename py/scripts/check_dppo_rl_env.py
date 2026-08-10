@@ -147,6 +147,7 @@ def main() -> None:
     )
 
     from pick_and_place.dppo_rl.env import EnvConfig
+    from pick_and_place.dppo_rl.observations import CameraObservation
     from pick_and_place.dppo_rl.vector_env import DppoVectorEnv
     from pick_and_place.sim.scene_appearance import parse_appearance
 
@@ -176,7 +177,7 @@ def main() -> None:
     OmegaConf.resolve(config)
 
     env_config = EnvConfig(
-        normalization_path=args.normalization,
+        observation=CameraObservation(normalization_path=args.normalization),
         image_hw=(int(config.shape_meta.obs.rgb.shape[1]), int(config.shape_meta.obs.rgb.shape[2])),
         render_hw=tuple(args.render_hw or [int(value) for value in config.env.render_hw]),
         cond_steps=int(config.cond_steps),
