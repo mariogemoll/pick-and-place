@@ -405,6 +405,7 @@ class PolicySimEnv(gym.Env):
 
     def _task_state(self) -> TaskState:
         cube_position = self.data.qpos[self._cube_qpos_adr : self._cube_qpos_adr + 3]
+        cube_orientation = self.data.qpos[self._cube_qpos_adr + 3 : self._cube_qpos_adr + 7]
         cube_velocity = self.data.qvel[self._cube_dof_adr : self._cube_dof_adr + 6]
         robot_cube_contact, grasped = self._contact_facts()
         unexpected_collision = any(
@@ -423,6 +424,7 @@ class PolicySimEnv(gym.Env):
         )
         return TaskState(
             cube_position_m=tuple(float(value) for value in cube_position),
+            cube_orientation_wxyz=tuple(float(value) for value in cube_orientation),
             cube_linear_velocity_m_s=tuple(float(value) for value in cube_velocity[:3]),
             cube_angular_velocity_rad_s=tuple(float(value) for value in cube_velocity[3:]),
             target_xy_m=tuple(float(value) for value in self._target_xy),

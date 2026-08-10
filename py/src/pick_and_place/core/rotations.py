@@ -24,6 +24,20 @@ def mat_to_quat_wxyz(matrix: NDArray) -> NDArray:
     return quat if quat[0] >= 0.0 else -quat
 
 
+def quat_wxyz_to_rotation_6d(quaternion: NDArray) -> NDArray:
+    """Convert wxyz quaternion(s) to the first two rotation-matrix columns.
+
+    The output order is column-by-column: ``[r00, r10, r20, r01, r11, r21]``.
+    This is deliberately not the row-major flattening of ``matrix[:, :2]``.
+    """
+    quaternion = np.asarray(quaternion)
+    if quaternion.shape[-1:] != (4,):
+        raise ValueError("quaternion must end in four wxyz components")
+    xyzw = quaternion[..., [1, 2, 3, 0]]
+    matrix = Rotation.from_quat(xyzw).as_matrix()
+    return np.concatenate((matrix[..., :, 0], matrix[..., :, 1]), axis=-1)
+
+
 def quat_angle_deg(q0: NDArray, q1: NDArray) -> float:
     """Return the shortest angular distance between two wxyz quaternions."""
     r0 = Rotation.from_quat([q0[1], q0[2], q0[3], q0[0]])

@@ -203,6 +203,7 @@ class TaskState:
     cube_linear_velocity_m_s: tuple[float, float, float]
     cube_angular_velocity_rad_s: tuple[float, float, float]
     target_xy_m: tuple[float, float]
+    cube_orientation_wxyz: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
     robot_cube_contact: bool = False
     grasped: bool = False
     gripper_open: bool = False

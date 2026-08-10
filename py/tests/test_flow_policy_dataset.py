@@ -4,12 +4,33 @@
 import numpy as np
 
 from pick_and_place.data.flow_policy_dataset import (
+    OBSERVATION_NAMES,
     EpisodeValues,
     make_examples,
     normalize,
     prepare_splits,
     split_episode_indices,
 )
+from pick_and_place.core.rotations import quat_wxyz_to_rotation_6d
+
+
+def test_identity_quaternion_rotation_6d_is_flattened_column_by_column() -> None:
+    rotation_6d = quat_wxyz_to_rotation_6d(np.array([1.0, 0.0, 0.0, 0.0]))
+
+    np.testing.assert_array_equal(rotation_6d, [1, 0, 0, 0, 1, 0])
+
+
+def test_rotation_6d_observation_schema_has_17_values_per_timestep() -> None:
+    assert len(OBSERVATION_NAMES) == 17
+    assert OBSERVATION_NAMES[9:15] == (
+        "cube_rotation_column_0_x",
+        "cube_rotation_column_0_y",
+        "cube_rotation_column_0_z",
+        "cube_rotation_column_1_x",
+        "cube_rotation_column_1_y",
+        "cube_rotation_column_1_z",
+    )
+    assert 2 * len(OBSERVATION_NAMES) == 34
 
 
 def test_make_examples_pads_only_within_episode() -> None:

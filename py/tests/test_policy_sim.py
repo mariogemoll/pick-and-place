@@ -65,6 +65,7 @@ def test_visual_env_exposes_only_deployable_observation_and_privileged_info():
         np.testing.assert_array_equal(observation[WRIST_FEATURE], 10)
         np.testing.assert_array_equal(observation[OVERHEAD_FEATURE], 20)
         assert "cube_position_m" in info["task_state"]
+        assert "cube_orientation_wxyz" in info["task_state"]
         assert "task_state" not in observation
     finally:
         env.close()
@@ -105,6 +106,23 @@ def test_reset_reproduces_explicit_scenario_state():
 
         np.testing.assert_array_equal(first_observation[STATE_FEATURE], second_observation[STATE_FEATURE])
         assert first_info["task_state"] == second_info["task_state"]
+    finally:
+        env.close()
+
+
+def test_task_state_reads_current_cube_orientation() -> None:
+    env = PolicySimEnv(
+        image_hw=(16, 16),
+        render_hw=(32, 32),
+        renderer_factory=DummyRenderer,
+        include_images=False,
+    )
+    try:
+        env.reset(options={"scenario": _scenario()})
+        orientation_wxyz = np.array([0.5, 0.5, 0.5, 0.5])
+        env.data.qpos[env._cube_qpos_adr + 3 : env._cube_qpos_adr + 7] = orientation_wxyz
+
+        np.testing.assert_allclose(env._task_state().cube_orientation_wxyz, orientation_wxyz)
     finally:
         env.close()
 

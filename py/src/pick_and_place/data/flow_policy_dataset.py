@@ -16,14 +16,28 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
+from pick_and_place.core.rotations import quat_wxyz_to_rotation_6d
 from pick_and_place.spec.robot import JOINT_NAMES
 
 STATE_FEATURE = "observation.state"
 ENVIRONMENT_FEATURE = "observation.environment_state"
 ACTION_FEATURE = "action"
-FORMAT_VERSION = "flow-policy-state-v1"
+FORMAT_VERSION = "flow-policy-state-v2"
 
-OBSERVATION_NAMES = (*JOINT_NAMES, "cube_x", "cube_y", "cube_z", "target_x", "target_y")
+OBSERVATION_NAMES = (
+    *JOINT_NAMES,
+    "cube_x",
+    "cube_y",
+    "cube_z",
+    "cube_rotation_column_0_x",
+    "cube_rotation_column_0_y",
+    "cube_rotation_column_0_z",
+    "cube_rotation_column_1_x",
+    "cube_rotation_column_1_y",
+    "cube_rotation_column_1_z",
+    "target_x",
+    "target_y",
+)
 
 
 @dataclass(frozen=True)
@@ -247,7 +261,11 @@ def _load_episodes(
         keep = start + np.arange(0, length, frame_stride, dtype=np.int64)
         target = np.array([row["target_x"], row["target_y"]], dtype=np.float32)
         targets = np.broadcast_to(target, (len(keep), 2))
-        observations = np.concatenate((states[keep], environment[keep, :3], targets), axis=1)
+        cube_positions = environment[keep, :3]
+        cube_rotations = quat_wxyz_to_rotation_6d(environment[keep, 3:7])
+        observations = np.concatenate(
+            (states[keep], cube_positions, cube_rotations, targets), axis=1
+        )
         episodes.append(
             EpisodeValues(
                 episode_index=int(row["episode_index"]),
@@ -309,8 +327,19 @@ def export_flow_policy_dataset(
     if tuple(features[ACTION_FEATURE].get("names", ())) != JOINT_NAMES:
         raise ValueError("action names do not match the project's joint order")
     environment_names = tuple(features[ENVIRONMENT_FEATURE].get("names", ()))
-    if environment_names[:3] != ("cube_x", "cube_y", "cube_z"):
-        raise ValueError("environment state must begin with cube_x, cube_y, cube_z")
+    expected_environment_names = (
+        "cube_x",
+        "cube_y",
+        "cube_z",
+        "cube_qw",
+        "cube_qx",
+        "cube_qy",
+        "cube_qz",
+    )
+    if environment_names[:7] != expected_environment_names:
+        raise ValueError(
+            "environment state must begin with cube XYZ followed by its WXYZ quaternion"
+        )
 
     rows, metadata_paths = _episode_rows(dataset_root)
     if max_episodes is not None:
@@ -349,6 +378,9 @@ def export_flow_policy_dataset(
         "condition_dim": int(training["observations"].shape[1]),
         "output_dim": int(training["data"].shape[1]),
         "observation_names": list(OBSERVATION_NAMES),
+        "cube_rotation_representation": (
+            "first two rotation-matrix columns, concatenated column-by-column"
+        ),
         "endpoint_names": list(JOINT_NAMES),
         "endpoint_semantics": "absolute joint command",
         "normalization": "per-dimension training-split min-max to [-1, 1]",
