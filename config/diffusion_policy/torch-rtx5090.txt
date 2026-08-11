@@ -15,6 +15,18 @@ torch==2.13.0
 # *recording* does: lerobot's io_utils imports torchvision at module scope, so
 # every record_sim worker died on its first episode.
 torchvision==0.28.0
+# Same ABI trap as torchvision, one layer down. Resolution picked torchcodec
+# 0.10.0 (2026-01-22, built for torch ~2.9) against torch 2.13, and its shared
+# object fails to load with "undefined symbol: _ZN3c1013MessageLoggerC1EPKciib".
+# 0.15.0 shipped a week after torch 2.13.0 and loads.
+#
+# lerobot's fallback does not save you: get_safe_default_codec() selects
+# torchcodec whenever `find_spec` finds the package, so a *broken* install is
+# chosen over pyav rather than falling back to it. Nor is pyav a way out --
+# lerobot decodes through torchvision.io.VideoReader, which no longer exists in
+# torchvision 0.28. Video decoding therefore has exactly one working path, and
+# this pin is it.
+torchcodec==0.15.0
 av==15.1.0
 matplotlib==3.10.5
 wandb==0.24.1
