@@ -215,8 +215,10 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
 - **`policies/`** — controller implementations and the contract they are scored
   against: `policy_controllers`, `policy`, `policy_evaluation` (frozen scenario
   manifests in `config/evaluation/` and a success oracle),
-  `diffusion_policy_pretrain`, `diffusion_policy_client`. ACT and SmolVLA are
-  *evaluated* here but trained externally via the `lerobot` CLI.
+  `diffusion_policy_pretrain`, `diffusion_policy_client`, and the state-only
+  flow-matching policy (`flow_matching`, `flow_policy`,
+  `diffusion_policy_unet`). ACT and SmolVLA are *evaluated* here but trained
+  externally via the `lerobot` CLI.
 - **`runtime/`** — running an episode. `executor` orchestrates one: it opens the
   cameras, ramps the arm onto the start pose, and then alternates between
   `phase_playback` (the tick loop — evaluate the phase, step physics, command
@@ -273,8 +275,8 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
 
 - **Run the task** — `pick_and_place/{sim,real,record_sim,record_teleop,finalize_sim_dataset}.py`
 - **Run a policy** — `run_policy_{sim,real}.py`, `eval_policy_sim.py`,
-  `eval_scripted_parallel.py`, `compare_policy_evaluations.py`,
-  `generate_scenario_manifest.py`
+  `run_flow_policy_sim.py`, `eval_scripted_parallel.py`,
+  `compare_policy_evaluations.py`, `generate_scenario_manifest.py`
 - **Datasets** — `combine_datasets.py`, `consolidate_datasets.py`,
   `split_train_val_episodes.py`, `convert_dataset_resolution.py`,
   `keep_successful_episodes.py`, `select_episodes.py`,
@@ -294,6 +296,46 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
 
 Scripts should parse arguments and delegate. Stable algorithms, file formats,
 and calibration logic belong in the package even when a CLI is the only caller.
+
+### Current state flow policy
+
+The selected state-only flow checkpoint as of 2026-08-10 is the 30,000-update
+temporal 1D U-Net with cube-symmetry augmentation:
+
+```text
+s3://allyouneed/pick-and-place/outputs/flow-policy-unet1d-rot6-cubeaug-30k-seed0/checkpoint.pt
+```
+
+Its matching export is:
+
+```text
+s3://allyouneed/pick-and-place/flow-policy-data/flow-policy-state-recovery-far-clean-993ep-rot6-cubeaug-val10/
+```
+
+The checkpoint SHA-256 is
+`9ce2818a6c23676fe4c352ddff49ad991e22847548a48d30010dd323c5601247`.
+Do not run it with a different export: `export.json` and `normalization.npz` are
+part of the model contract.
+
+The deployment operating point is predict 16, execute 8, and integrate the flow
+with 10 Euler steps. A paired 20-scene check found the same 19/20 success at 10
+and 100 steps, while 10 steps was 7.65 times faster. On 200 development-selection
+scenes from seed stream 6,000,000, it scored **188/200 settled placements
+(94.0%)**, with 11.35 mm median and 18.74 mm p90 final planar error. This is a
+selection result, not the untouched seed-7,000,000 validation result; do not
+promote the 94% number to a final benchmark until that one-time evaluation runs.
+
+Use `py/scripts/run_flow_policy_sim.py` for an interactive or headless rollout.
+Pass `--integration-steps 10 --act-steps 8`; the script's older integration-step
+default is 100. Full provenance and episode records are at:
+
+```text
+s3://allyouneed/pick-and-place/outputs/flow-policy-unet1d-rot6-cubeaug-30k-seed0/evaluation-selection-seed6m-20260810/
+```
+
+Read `docs/FLOW_POLICY.md` for the matched augmentation experiment and 100,000-
+update overfitting result, and `docs/POLICY_EVALUATION.md` before running the
+untouched validation stream.
 
 ## Mesh pipeline
 
