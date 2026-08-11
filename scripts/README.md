@@ -132,6 +132,27 @@ tokenizer, the camera keys, the quantile stats and the VRAM ceiling all fail in
 the first few steps or not at all, so that stage turns an overnight failure into
 a two-minute one.
 
+### Which cube variant
+
+`ARTIFACT_NAME` defaults to `two-variant-1000-as-recorded-lerobot` — the
+**AprilTag** half of the two-variant pair, not the blue one the Diffusion Policy
+and flow policy were trained on. That is deliberate, and it is the opposite of
+the choice `SIM2REAL.md` reaches for those policies:
+
+- The physical cube carries AprilTags, so the tagged variant is the only one
+  with a path to the real arm. A blue-cube policy cannot be deployed.
+- The contrast argument against the tagged cube (0.159 overhead against blue's
+  0.522) was measured at 96x96 for small CNN encoders. pi0.5 sees 224x224 —
+  5.4x the pixels — through a pretrained SigLIP, and AprilTags are exactly the
+  high-frequency texture a large pretrained encoder is good at. Whether that
+  holds is one of the things this run is for.
+
+The cost is that a tagged-cube result is **not** directly comparable to the flow
+policy's 0.71, which was trained on blue: appearance is confounded with
+architecture. Train `two-variant-1000-blue-cube-lerobot` for the clean
+comparison — the two variants share states, actions and phase spans bit for bit
+and differ only at the cube's pixels.
+
 ### Sizing the run
 
 The episodes are 9.72 s each, so 1000 of them is 2.70 hours of data — the low
