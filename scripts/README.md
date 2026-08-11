@@ -83,3 +83,47 @@ lost; the tally is.
 published artifact. Its header documents the hyperparameters that are
 load-bearing and the ones that were tried and reverted; read it before changing
 anything.
+
+## LoRA-finetuning pi0.5
+
+`vast_pi05_lora_train.sh` finetunes `lerobot/pi05_base` on the recorded LeRobot
+dataset, on the same rented 5090 the Diffusion Policy runs use:
+
+```sh
+RUN_NAME=<fresh> HF_TOKEN=<token> scripts/vast_pi05_lora_train.sh
+```
+
+pi0.5 is a 3.3B-parameter VLA and a full finetune is sized for an 80 GB card, so
+a 5090 can only run it with adapters. That is not purely a concession to the
+hardware — 1000 episodes of a single prompt is thin evidence for moving 3.3B
+parameters, and this task already has an overfitting result on record in
+`docs/FLOW_POLICY.md`.
+
+Three things about the configuration are load-bearing:
+
+- **The adapter targets come from the policy.** `_get_default_peft_targets()` in
+  lerobot's `modeling_pi05.py` puts LoRA on the action expert's q/v projections
+  and trains `state_proj`, `action_in_proj`, `action_out_proj` and the
+  action-time MLPs in full. Those projections carry the 6-DOF joint mapping,
+  which has no pretrained equivalent. Leaving `--peft.target_modules` unset is
+  what selects them; setting it silently replaces them.
+- **`--policy.pretrained_path` loads weights only.** Feature names then come
+  from the dataset, so `observation.images.overhead` and `.wrist` pass straight
+  through and no `--rename_map` is involved — which is why this cannot repeat
+  the SmolVLA camera-ordering bug. The cost is that every stored config value
+  reverts to its class default, so `n_action_steps` and `empty_cameras` have to
+  be passed explicitly.
+- **The dataset is already in pi0.5's preferred form.** pi0.5 normalizes state
+  and action with quantiles, and `meta/stats.json` carries `q01`/`q99`, so
+  neither a stats recompute nor a `MEAN_STD` override is needed. The launcher
+  asserts this before building the model rather than discovering it on the first
+  batch.
+
+The run opens with a five-step smoke stage into a throwaway directory. The gated
+tokenizer, the camera keys, the quantile stats and the VRAM ceiling all fail in
+the first few steps or not at all, so that stage turns an overnight failure into
+a two-minute one.
+
+`STEPS` defaults to 10,000 rather than the 30,000 the upstream LIBERO recipe
+uses: LIBERO is a multi-task benchmark and this is one prompt over one task.
+Extend and resume if the loss is still moving.
