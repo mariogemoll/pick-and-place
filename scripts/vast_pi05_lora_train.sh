@@ -69,6 +69,18 @@ n_action_steps="${N_ACTION_STEPS:-10}"
 # slot is padded empty. Same reason the LIBERO recipe passes empty_cameras=1.
 empty_cameras="${EMPTY_CAMERAS:-1}"
 
+# lerobot/pi05_base moves independently of the pinned lerobot. Its commit
+# 7de663972b (2026-06-03, "Add relative action processor steps") added a
+# relative_actions_processor step to policy_preprocessor.json, and lerobot
+# 0.5.1's registry has no such step -- loading HEAD dies in
+# make_pre_post_processors with "Processor step not found in registry".
+#
+# a538eb2732 is the commit before it and carries the six steps 0.5.1 knows.
+# from_pretrained accepts a revision but no config field exposes one, so the
+# revision is materialized to a directory and passed as a path. Unpinning
+# lerobot instead is not the cheap way out: 0.5.1 pins transformers==5.3.0.
+checkpoint_revision="${CHECKPOINT_REVISION:-a538eb2732}"
+
 # Smoke stage: a handful of real steps into a throwaway directory before the
 # paid run. It proves the gated tokenizer resolves, the camera keys match, the
 # quantile stats satisfy the normalizer and the batch fits in VRAM. Every one of
@@ -81,6 +93,7 @@ repo="$workspace/pick-and-place"
 venv="$workspace/venvs/pick-and-place"
 artifact_root="$workspace/artifacts/$artifact_name"
 output_root="$workspace/outputs/$run_name"
+checkpoint_dir="$workspace/pi05_base_pinned"
 job_log="$workspace/training-job.log"
 
 mkdir -p "$workspace/artifacts" "$output_root/job-metadata"
@@ -194,6 +207,14 @@ if missing:
 print("Quantile stats present for state and action.")
 PY
 
+"$venv/bin/python" - "$checkpoint_revision" "$checkpoint_dir" <<'PY'
+import sys
+from huggingface_hub import snapshot_download
+revision, target = sys.argv[1], sys.argv[2]
+print("pinned checkpoint at", snapshot_download("lerobot/pi05_base", revision=revision, local_dir=target))
+PY
+echo "$checkpoint_revision" > "$output_root/job-metadata/checkpoint-revision.txt"
+
 git -C "$repo" rev-parse HEAD | tee "$output_root/job-metadata/repository-commit.txt"
 cp "$0" "$output_root/job-metadata/launcher.sh"
 
@@ -201,7 +222,7 @@ train_args=(
   --dataset.repo_id="$artifact_name"
   --dataset.root="$artifact_root"
   --policy.type=pi05
-  --policy.pretrained_path=lerobot/pi05_base
+  --policy.pretrained_path="$checkpoint_dir"
   --policy.n_action_steps="$n_action_steps"
   --policy.empty_cameras="$empty_cameras"
   --policy.gradient_checkpointing=true

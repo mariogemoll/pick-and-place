@@ -113,6 +113,14 @@ Three things about the configuration are load-bearing:
   the SmolVLA camera-ordering bug. The cost is that every stored config value
   reverts to its class default, so `n_action_steps` and `empty_cameras` have to
   be passed explicitly.
+- **The base checkpoint is pinned to a revision.** `lerobot/pi05_base` moves
+  independently of the pinned `lerobot`, and its commit `7de663972b`
+  (2026-06-03) added a `relative_actions_processor` step that 0.5.1's registry
+  does not know, so loading HEAD fails in `make_pre_post_processors`. The
+  launcher materializes `a538eb2732`, the commit before it, and passes it as a
+  path — `from_pretrained` takes a revision but no config field exposes one.
+  Unpinning `lerobot` is the expensive direction: 0.5.1 pins
+  `transformers==5.3.0`.
 - **The dataset is already in pi0.5's preferred form.** pi0.5 normalizes state
   and action with quantiles, and `meta/stats.json` carries `q01`/`q99`, so
   neither a stats recompute nor a `MEAN_STD` override is needed. The launcher
