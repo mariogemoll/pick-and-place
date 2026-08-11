@@ -164,6 +164,44 @@ architecture. Train `two-variant-1000-blue-cube-lerobot` for the clean
 comparison — the two variants share states, actions and phase spans bit for bit
 and differ only at the cube's pixels.
 
+### Running a finished checkpoint in the sim
+
+The adapter is 5 MB and the base is 14.5 GB, so both are needed. Materialize the
+base at the revision the run recorded, then point the sim runner at the adapter:
+
+```sh
+python -c "from huggingface_hub import snapshot_download; \
+  snapshot_download('lerobot/pi05_base', revision='a538eb2732', \
+  local_dir='$PAP_DATA_ROOT/pi05_base_pinned')"
+
+aws s3 sync s3://allyouneed/pick-and-place/outputs/<run>/train/checkpoints/020000 \
+  "$PAP_DATA_ROOT/<run>-020000"
+
+mjpython py/scripts/run_policy_sim.py \
+  --checkpoint "$PAP_DATA_ROOT/<run>-020000/pretrained_model" \
+  --base-checkpoint "$PAP_DATA_ROOT/pi05_base_pinned" \
+  --device mps
+```
+
+`--base-checkpoint` (or `PAP_PI05_BASE`) is required off the training box:
+`adapter_config.json` records the base as the absolute path that box used.
+
+Three things to expect:
+
+- **It is slow.** pi0.5 is 3.3B parameters; on an M1 expect seconds per
+  inference. `n_action_steps=10` means one inference per ten control ticks, so a
+  30 Hz episode still runs far below real time. Fine for watching behavior,
+  useless for timing.
+- **Memory.** The checkpoint records `dtype: bfloat16` (6.6 GB of weights);
+  float32 needs 13.2 GB. Both fit a 32 GB machine, neither fits 16 GB
+  comfortably alongside MuJoCo.
+- **`mjpython`, not `python`,** for anything opening a viewer on macOS, or pass
+  `--no-viewer`.
+
+The checkpoint's recorded image shape is the dataset's 720x960, so the sim
+renders at that and pi0.5 downsamples to 224x224 internally. That is what it
+trained on; do not "optimize" it by rendering at 224.
+
 ### Sizing the run
 
 The episodes are 9.72 s each, so 1000 of them is 2.70 hours of data — the low
