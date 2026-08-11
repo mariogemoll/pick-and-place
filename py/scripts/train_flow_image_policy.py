@@ -121,6 +121,11 @@ def main() -> None:
     )
     parser.add_argument("--amp", action="store_true", default=True)
     parser.add_argument("--no-amp", dest="amp", action="store_false")
+    # Matching train_flow_policy.py: logging is opt-in through --wandb-project,
+    # so a run without it stays offline rather than half-configured.
+    parser.add_argument("--wandb-project")
+    parser.add_argument("--wandb-entity")
+    parser.add_argument("--wandb-run-name")
     args = parser.parse_args()
 
     args.output.mkdir(parents=True, exist_ok=True)
@@ -176,110 +181,147 @@ def main() -> None:
         for _ in range(args.validation_batches)
     ] if len(export.validation_frames) >= args.batch_size else []
 
+    wandb_run = None
+    if args.wandb_project:
+        import wandb
+
+        wandb_run = wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            name=args.wandb_run_name or args.output.name,
+            config=vars(args)
+            | {
+                "export": str(args.export.resolve()),
+                "output": str(args.output.resolve()),
+                "device": str(device),
+                "parameters": parameters,
+                "image_hw": list(export.image_hw),
+                "cameras": export.cameras,
+            },
+        )
+
     history: list[dict] = []
     started = time.time()
-    for update in range(args.updates):
-        rate = learning_rate_at_step(
-            update,
-            num_steps=args.updates,
-            peak=args.learning_rate,
-            minimum=args.min_learning_rate,
-            warmup_steps=args.warmup_steps,
-        )
-        optimizer.param_groups[0]["lr"] = rate
-        model.train()
-
-        frames = np.sort(rng.choice(export.training_frames, size=args.batch_size, replace=False))
-        raw_images, raw_states, raw_chunks = export.batch(frames)
-        images = prepare_images(raw_images, device, mean, std)
-        if args.random_shift:
-            images = random_shift(images, args.random_shift, shift_generator)
-        states = torch.from_numpy(raw_states).to(device)
-        endpoints = torch.from_numpy(raw_chunks).to(device)
-
-        time_sample = torch.rand(len(endpoints), 1, 1, device=device)
-        noise = torch.randn_like(endpoints)
-        values = time_sample * endpoints + (1 - time_sample) * noise
-        with autocast:
-            prediction = model(values, time_sample.reshape(-1, 1), images, states)
-            loss = torch.mean((prediction.float() - (endpoints - noise)) ** 2)
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        optimizer.step()
-
-        if (update + 1) % args.log_interval == 0:
-            print(
-                f"update {update + 1:>6}/{args.updates}  loss {loss.item():.5f}  "
-                f"lr {rate:.2e}  {(time.time() - started) / (update + 1) * 1000:.0f} ms/update",
-                flush=True,
+    try:
+        for update in range(args.updates):
+            rate = learning_rate_at_step(
+                update,
+                num_steps=args.updates,
+                peak=args.learning_rate,
+                minimum=args.min_learning_rate,
+                warmup_steps=args.warmup_steps,
             )
+            optimizer.param_groups[0]["lr"] = rate
+            model.train()
 
-        validate = validation_batches and (
-            (update + 1) % args.validation_interval == 0 or update == args.updates - 1
-        )
-        if validate:
-            model.eval()
-            total = 0.0
-            with torch.no_grad():
-                for index, batch_frames in enumerate(validation_batches):
-                    v_images, v_states, v_chunks = export.batch(batch_frames)
-                    v_endpoints = torch.from_numpy(v_chunks).to(device)
-                    generator = torch.Generator(device="cpu").manual_seed(args.seed * 1000 + index)
-                    v_time = torch.rand(len(v_endpoints), 1, 1, generator=generator).to(device)
-                    v_noise = torch.randn(
-                        v_endpoints.shape, generator=generator
-                    ).to(device)
-                    v_values = v_time * v_endpoints + (1 - v_time) * v_noise
-                    with autocast:
-                        v_prediction = model(
-                            v_values,
-                            v_time.reshape(-1, 1),
-                            prepare_images(v_images, device, mean, std),
-                            torch.from_numpy(v_states).to(device),
-                        )
-                    total += torch.mean(
-                        (v_prediction.float() - (v_endpoints - v_noise)) ** 2
-                    ).item()
-            validation_loss = total / len(validation_batches)
-            row = {"update": update + 1, "train_loss": loss.item(), "validation_loss": validation_loss}
-            history.append(row)
-            print(f"  validation @ {update + 1}: {validation_loss:.5f}", flush=True)
-            with (args.output / "history.json").open("w") as file:
-                json.dump(history, file, indent=2)
+            frames = np.sort(rng.choice(export.training_frames, size=args.batch_size, replace=False))
+            raw_images, raw_states, raw_chunks = export.batch(frames)
+            images = prepare_images(raw_images, device, mean, std)
+            if args.random_shift:
+                images = random_shift(images, args.random_shift, shift_generator)
+            states = torch.from_numpy(raw_states).to(device)
+            endpoints = torch.from_numpy(raw_chunks).to(device)
 
-        if (update + 1) % args.checkpoint_interval == 0 or update == args.updates - 1:
-            torch.save(
-                {
-                    "model": model.state_dict(),
-                    "model_type": "flow_image_unet1d",
-                    "model_config": model_config(model),
-                    "update": update + 1,
-                    "export": str(args.export),
-                    "observation_steps": args.observation_steps,
-                    "prediction_steps": args.prediction_steps,
-                    "seed": args.seed,
-                    "random_shift": args.random_shift,
-                    "resumed_from": str(args.resume) if args.resume else None,
-                },
-                args.output / f"checkpoint-{update + 1:06d}.pt",
+            time_sample = torch.rand(len(endpoints), 1, 1, device=device)
+            noise = torch.randn_like(endpoints)
+            values = time_sample * endpoints + (1 - time_sample) * noise
+            with autocast:
+                prediction = model(values, time_sample.reshape(-1, 1), images, states)
+                loss = torch.mean((prediction.float() - (endpoints - noise)) ** 2)
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            optimizer.step()
+
+            if (update + 1) % args.log_interval == 0:
+                print(
+                    f"update {update + 1:>6}/{args.updates}  loss {loss.item():.5f}  "
+                    f"lr {rate:.2e}  {(time.time() - started) / (update + 1) * 1000:.0f} ms/update",
+                    flush=True,
+                )
+                if wandb_run is not None:
+                    wandb_run.log(
+                        {
+                            "train/loss": loss.item(),
+                            "train/learning_rate": rate,
+                            "train/ms_per_update": (time.time() - started) / (update + 1) * 1000,
+                        },
+                        step=update + 1,
+                    )
+
+            validate = validation_batches and (
+                (update + 1) % args.validation_interval == 0 or update == args.updates - 1
             )
-            torch.save(
-                {
-                    "model": model.state_dict(),
-                    "model_type": "flow_image_unet1d",
-                    "model_config": model_config(model),
-                    "update": update + 1,
-                    "export": str(args.export),
-                    "observation_steps": args.observation_steps,
-                    "prediction_steps": args.prediction_steps,
-                    "seed": args.seed,
-                    "random_shift": args.random_shift,
-                    "resumed_from": str(args.resume) if args.resume else None,
-                },
-                args.output / "checkpoint.pt",
-            )
+            if validate:
+                model.eval()
+                total = 0.0
+                with torch.no_grad():
+                    for index, batch_frames in enumerate(validation_batches):
+                        v_images, v_states, v_chunks = export.batch(batch_frames)
+                        v_endpoints = torch.from_numpy(v_chunks).to(device)
+                        generator = torch.Generator(device="cpu").manual_seed(args.seed * 1000 + index)
+                        v_time = torch.rand(len(v_endpoints), 1, 1, generator=generator).to(device)
+                        v_noise = torch.randn(
+                            v_endpoints.shape, generator=generator
+                        ).to(device)
+                        v_values = v_time * v_endpoints + (1 - v_time) * v_noise
+                        with autocast:
+                            v_prediction = model(
+                                v_values,
+                                v_time.reshape(-1, 1),
+                                prepare_images(v_images, device, mean, std),
+                                torch.from_numpy(v_states).to(device),
+                            )
+                        total += torch.mean(
+                            (v_prediction.float() - (v_endpoints - v_noise)) ** 2
+                        ).item()
+                validation_loss = total / len(validation_batches)
+                row = {"update": update + 1, "train_loss": loss.item(), "validation_loss": validation_loss}
+                history.append(row)
+                print(f"  validation @ {update + 1}: {validation_loss:.5f}", flush=True)
+                if wandb_run is not None:
+                    # Logged for the record, not for selection. POLICY_RESULTS.md
+                    # has held-out loss plateauing while closed-loop success kept
+                    # climbing for ~900 epochs; the score series is the signal.
+                    wandb_run.log({"validation/loss": validation_loss}, step=update + 1)
+                with (args.output / "history.json").open("w") as file:
+                    json.dump(history, file, indent=2)
 
-    print(f"done in {(time.time() - started) / 60:.1f} min", flush=True)
+            if (update + 1) % args.checkpoint_interval == 0 or update == args.updates - 1:
+                torch.save(
+                    {
+                        "model": model.state_dict(),
+                        "model_type": "flow_image_unet1d",
+                        "model_config": model_config(model),
+                        "update": update + 1,
+                        "export": str(args.export),
+                        "observation_steps": args.observation_steps,
+                        "prediction_steps": args.prediction_steps,
+                        "seed": args.seed,
+                        "random_shift": args.random_shift,
+                        "resumed_from": str(args.resume) if args.resume else None,
+                    },
+                    args.output / f"checkpoint-{update + 1:06d}.pt",
+                )
+                torch.save(
+                    {
+                        "model": model.state_dict(),
+                        "model_type": "flow_image_unet1d",
+                        "model_config": model_config(model),
+                        "update": update + 1,
+                        "export": str(args.export),
+                        "observation_steps": args.observation_steps,
+                        "prediction_steps": args.prediction_steps,
+                        "seed": args.seed,
+                        "random_shift": args.random_shift,
+                        "resumed_from": str(args.resume) if args.resume else None,
+                    },
+                    args.output / "checkpoint.pt",
+                )
+
+        print(f"done in {(time.time() - started) / 60:.1f} min", flush=True)
+    finally:
+        if wandb_run is not None:
+            wandb_run.finish()
 
 
 if __name__ == "__main__":
