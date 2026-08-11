@@ -106,8 +106,15 @@ finalize() {
   cp "$job_log" "$output_root/job-metadata/training-job.log"
   synced=false
   for attempt in $(seq 1 10); do
-    if aws s3 sync "$output_root" "$output_prefix" --only-show-errors; then
-      pending=$(aws s3 sync "$output_root" "$output_prefix" --dryrun --only-show-errors)
+    # --no-follow-symlinks, and warnings filtered out of the verification.
+    # wandb leaves train/wandb/debug-internal.log as a dangling symlink; aws s3
+    # sync then warns "File does not exist" *and* exits non-zero, while the
+    # dry-run prints the same warning on stdout. Without both guards a complete
+    # upload reads as a failure whose retry can never succeed, and a finished
+    # run reports "Final S3 sync could not be verified".
+    if aws s3 sync "$output_root" "$output_prefix" --no-follow-symlinks --only-show-errors; then
+      pending=$(aws s3 sync "$output_root" "$output_prefix" --no-follow-symlinks \
+        --dryrun --only-show-errors | grep -v '^warning:' || true)
       if [ -z "$pending" ]; then
         synced=true
         break
@@ -255,7 +262,7 @@ nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader \
 echo "=== Smoke stage passed ==="
 
 ( while sleep 900; do
-    aws s3 sync "$output_root" "$output_prefix" --only-show-errors
+    aws s3 sync "$output_root" "$output_prefix" --no-follow-symlinks --only-show-errors
   done ) &
 sync_pid=$!
 
