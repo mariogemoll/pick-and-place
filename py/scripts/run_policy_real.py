@@ -20,14 +20,22 @@ control tick it snapshots the latest overhead and wrist frames, reads the
 follower's joints, asks the selected controller for an action, and streams it back
 to the arm as position targets.
 
-It is *simpler* than the sim run on the proprioception side because no frame
-conversion is needed. The follower already reports and accepts the exact real
-frame the dataset was recorded in — arm joints in degrees, gripper as a 0-100
-position — which is the frame the learned state and action live in. So the
-follower's reading is the observation state verbatim, and the predicted action
-is sent verbatim (clamped to the joint limits). There are no sim→real offsets
-and no radians anywhere on the policy path; MuJoCo is loaded only to derive
-those joint limits and the neutral start pose.
+By default it is *simpler* than the sim run on the proprioception side. The
+follower already reports and accepts the exact real frame the dataset was
+recorded in — arm joints in degrees, gripper as a 0-100 position — so for a
+checkpoint fine-tuned on this rig's own recordings the follower's reading is the
+observation state verbatim and the predicted action is sent verbatim, clamped to
+the joint limits. No radians appear anywhere on the policy path; MuJoCo is
+loaded only to derive those limits and the neutral start pose.
+
+**A checkpoint trained in simulation needs two corrections that a real-trained
+one must not get.** It learned a world where the state, the images and the
+command all agree, and on hardware they do not: the servo readback differs from
+the model frame by the session's joint zeros, which drift day to day, and the
+joint settles a fitted tracking bias away from whatever it was commanded. Pass
+``--joint-zeros`` and ``--tracking-bias-scale 1`` to correct both. They compose
+on the command — a joint settles at model angle ``command + zero + bias`` — and
+the joint zeros additionally shift the state the policy is shown.
 
 The cameras do need conversion: each raw, lens-distorted frame is undistorted
 with its calibrated intrinsics, center-cropped to the policy's aspect ratio, and
@@ -111,6 +119,7 @@ from pick_and_place.core.joint_frames import (
     clamp_and_warn,
     follower_clamp_limits,
     joints_to_action,
+    load_joint_zero_offsets,
     sim_frame_to_real,
 )
 from pick_and_place.hardware.follower import make_so101_follower
@@ -206,6 +215,18 @@ def main() -> None:
         type=int,
         default=0,
         help="stop after this many control ticks (0 = run until Ctrl-C)",
+    )
+    parser.add_argument(
+        "--joint-zeros",
+        type=Path,
+        default=None,
+        help=(
+            "session joint-zero calibration (config/joint_zeros.json) to map the "
+            "servo readback into the model frame before the policy sees it, and "
+            "the policy's action back before it is sent. Required for a "
+            "sim-trained checkpoint; omit for one fine-tuned on real recordings, "
+            "which learned the servo frame directly"
+        ),
     )
     parser.add_argument(
         "--tracking-bias-scale",
@@ -415,6 +436,16 @@ def main() -> None:
     )
     if args.tracking_bias_scale:
         print(f"Compensating the fitted servo tracking bias at {args.tracking_bias_scale:g}x.")
+    # A servo readback and the model frame differ by the session's joint zeros,
+    # which drift day to day. A checkpoint fine-tuned on this rig's own
+    # recordings learned the servo frame and wants none of this; one trained in
+    # simulation learned a world where the state, the images and the command all
+    # agree, and on hardware they do not until the zeros are applied.
+    joint_zero_offsets = np.zeros(len(JOINT_NAMES))
+    if args.joint_zeros is not None:
+        offsets = load_joint_zero_offsets(args.joint_zeros)
+        joint_zero_offsets = np.array([offsets.get(name, 0.0) for name in JOINT_NAMES])
+        print(f"Applying session joint zeros from {args.joint_zeros}: {offsets}")
     neutral_real = sim_frame_to_real(NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER)
     rest_real = sim_frame_to_real(REST_ARM_JOINTS, REST_GRIPPER)
 
@@ -764,8 +795,12 @@ def main() -> None:
             wrist_rgb = policy_frame(wrist_rgb, wrist_undistort_map)
 
             state = action_to_joints(follower.get_observation(), neutral_real).astype(np.float32)
+            # `state` stays in the servo frame for the velocity cap, the safety
+            # checks and the log, because that is what the hardware reported.
+            # Only the policy sees the model frame.
+            policy_state = (state + joint_zero_offsets).astype(np.float32)
             observation = {
-                STATE_FEATURE: state,
+                STATE_FEATURE: policy_state,
                 OVERHEAD_FEATURE: overhead_rgb,
                 WRIST_FEATURE: wrist_rgb,
             }
@@ -777,7 +812,7 @@ def main() -> None:
             if chunked_controller is None:
                 assert predict_action is not None
                 lerobot_observation = {
-                    STATE_FEATURE: state,
+                    STATE_FEATURE: policy_state,
                     overhead_key: overhead_rgb,
                     wrist_key: wrist_rgb,
                 }
@@ -795,10 +830,15 @@ def main() -> None:
             else:
                 action_real = policy.act(observation)
             infer_seconds += time.monotonic() - infer_start
-            # Subtract before clamping, so the joint limits still bind what is
-            # actually sent, and before the velocity cap, so the cap bounds real
-            # travel rather than the uncompensated request.
-            target = clamp_and_warn(action_real - tracking_bias, clamp_low, clamp_high, clip_warned)
+            # Both corrections land on the command, and compose: a joint settles
+            # at model angle ``command + zero_offset + tracking_bias``, so
+            # reaching the policy's target means subtracting both. Before
+            # clamping, so the joint limits still bind what is actually sent,
+            # and before the velocity cap, so the cap bounds real travel rather
+            # than the uncorrected request.
+            target = clamp_and_warn(
+                action_real - joint_zero_offsets - tracking_bias, clamp_low, clamp_high, clip_warned
+            )
             # Velocity cap: never command an arm joint more than one tick's worth
             # of travel beyond where the arm actually is. This bounds both speed
             # and the servo's position error regardless of what the policy asks
