@@ -558,6 +558,7 @@ def main() -> None:
             instruction=args.instruction,
             n_action_steps=args.n_action_steps,
             temporal_ensemble_coeff=args.temporal_ensemble_coeff,
+            base_checkpoint=args.base_checkpoint,
         )
         config = controller.policy.config
         if hasattr(config, "chunk_size") and hasattr(config, "n_action_steps"):

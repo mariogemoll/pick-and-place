@@ -92,6 +92,7 @@ class LeRobotPolicyController:
         instruction: str = DEFAULT_INSTRUCTION,
         n_action_steps: int | None = None,
         temporal_ensemble_coeff: float | None = None,
+        base_checkpoint: str | None = None,
     ) -> "LeRobotPolicyController":
         resolved_hw, image_keys = resolve_checkpoint_cameras(checkpoint, override_hw=image_hw)
         policy, preprocessor, postprocessor = make_policy(
@@ -101,6 +102,7 @@ class LeRobotPolicyController:
             device,
             n_action_steps=n_action_steps,
             temporal_ensemble_coeff=temporal_ensemble_coeff,
+            base_checkpoint=base_checkpoint,
         )
         return cls(
             policy=policy,

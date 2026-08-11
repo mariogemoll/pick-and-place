@@ -425,6 +425,7 @@ def main() -> None:
             instruction=args.instruction,
             n_action_steps=args.n_action_steps,
             temporal_ensemble_coeff=args.temporal_ensemble_coeff,
+            base_checkpoint=args.base_checkpoint,
         )
         controller_metadata = _lerobot_metadata(controller)
     elif args.controller == "diffusion-policy":
