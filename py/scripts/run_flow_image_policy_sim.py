@@ -27,11 +27,15 @@ from typing import Any
 import numpy as np
 import torch
 
-from pick_and_place.policies.flow_image_policy import FlowImagePolicyController
+from pick_and_place.policies.flow_image_policy import (
+    FlowImagePolicyController,
+    summarize_smoothness,
+)
 from pick_and_place.runtime.policy_sim import PolicySimEnv
 from pick_and_place.runtime.training_scenes import training_scenario
 from pick_and_place.sim.scene_appearance import parse_appearance
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, WRIST_FEATURE
+from pick_and_place.spec.robot import GRIPPER_INDEX
 
 ENTER_KEYS = frozenset({257, 335})
 
@@ -90,6 +94,14 @@ def main() -> None:
     parser.add_argument("--act-steps", type=int, default=8)
     parser.add_argument("--integration-steps", type=int, default=10)
     parser.add_argument("--policy-seed", type=int, default=0)
+    parser.add_argument(
+        "--noise-correlation",
+        type=float,
+        default=0.0,
+        help="how much of the previous query's noise to carry into the next, from 0 "
+        "(independent draws) to 1 (reused wherever the horizons overlap). Correlating "
+        "the draws keeps consecutive chunks in the same mode (default: 0)",
+    )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--scene-appearance", default=None)
     parser.add_argument("--output", type=Path, default=None)
@@ -114,6 +126,7 @@ def main() -> None:
         integration_steps=args.integration_steps,
         device=torch.device(args.device),
         seed=args.policy_seed,
+        noise_correlation=args.noise_correlation,
     )
     appearance = None
     if args.scene_appearance:
@@ -157,6 +170,8 @@ def main() -> None:
                 policy.reset()
                 skip_requested.clear()
                 frames: list[np.ndarray] = []
+                commands: list[np.ndarray] = []
+                requeried: list[bool] = []
                 for _ in range(scenario.max_steps):
                     if skip_requested.is_set():
                         break
@@ -164,6 +179,8 @@ def main() -> None:
                     if args.save_video is not None:
                         frames.append(observation_frame(observation))
                     action = policy.act(observation)
+                    commands.append(action)
+                    requeried.append(policy.latest_prediction is not None)
                     observation, _, terminated, truncated, info = env.step(action)
                     if viewer is not None:
                         if not viewer.is_running():
@@ -188,6 +205,9 @@ def main() -> None:
                 milestones = info["milestones"]
                 success = bool(info["success"])
                 successes += success
+                smoothness = summarize_smoothness(
+                    np.stack(commands), np.array(requeried), joints=GRIPPER_INDEX
+                )
                 records.append(
                     {
                         "scenario_id": scenario.scenario_id,
@@ -195,6 +215,7 @@ def main() -> None:
                         "control_steps": int(info["control_steps"]),
                         "milestones": milestones,
                         "clipped_fraction": policy.clipped_fraction,
+                        "smoothness": smoothness,
                     }
                 )
                 print(
@@ -218,14 +239,26 @@ def main() -> None:
         "act_steps": args.act_steps,
         "integration_steps": args.integration_steps,
         "scene_appearance": args.scene_appearance or "as-compiled",
+        "noise_correlation": args.noise_correlation,
         "successes": successes,
         "success_rate": successes / completed,
         "lifted": sum(r["milestones"]["cube_lifted"] for r in records),
         "contact_attempted": sum(r["milestones"]["pickup_contact_attempted"] for r in records),
+        "smoothness": {
+            key: float(np.mean([r["smoothness"][key] for r in records]))
+            for key in records[0]["smoothness"]
+        },
         "episodes": records,
     }
     print(f"\n{successes}/{completed} = {successes / completed:.1%} success")
     print(f"lifted {summary['lifted']}, contact attempted {summary['contact_attempted']}")
+    smoothness = summary["smoothness"]
+    print(
+        f"per-tick joint step: {smoothness['mean_step_deg']:.2f} deg mean, "
+        f"{smoothness['interior_step_deg']:.2f} within a chunk vs "
+        f"{smoothness['boundary_step_deg']:.2f} at replan boundaries "
+        f"(worst {smoothness['max_step_deg']:.2f})"
+    )
     if args.output is not None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         with args.output.open("w") as file:

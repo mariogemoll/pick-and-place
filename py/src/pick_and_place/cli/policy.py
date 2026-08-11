@@ -177,3 +177,12 @@ def add_flow_image_arguments(parser: argparse.ArgumentParser) -> None:
         default=0,
         help="Torch seed for the flow's noise draw (default: 0)",
     )
+    parser.add_argument(
+        "--flow-noise-correlation",
+        type=float,
+        default=0.0,
+        help="how much of the previous query's noise to carry into the next, from 0 "
+        "(independent draws) to 1 (reused wherever the horizons overlap). Correlating "
+        "the draws keeps consecutive chunks in the same mode, which smooths the motion "
+        "at replan boundaries (default: 0)",
+    )

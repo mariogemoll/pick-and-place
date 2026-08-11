@@ -70,16 +70,47 @@ def stack_cameras(observation: PolicyObservation) -> np.ndarray:
     return np.concatenate((np.moveaxis(overhead, -1, 0), np.moveaxis(wrist, -1, 0)), axis=0)
 
 
+def carry_noise(
+    previous: torch.Tensor | None,
+    fresh: torch.Tensor,
+    independent: torch.Tensor,
+    *,
+    shift: int,
+    correlation: float,
+) -> torch.Tensor:
+    """Blend the previous horizon's noise into a fresh draw.
+
+    Successive queries predict overlapping stretches of time, offset by
+    ``shift`` executed actions, but draw independent noise — so each query can
+    land in a different one of several equally valid modes, and the arm lurches
+    where the chunks meet. Shifting the previous draw back into alignment and
+    mixing it in correlates the latent the model starts from, which keeps
+    consecutive chunks in the same mode.
+
+    ``correlation`` is the weight on the carried noise, from 0 (independent
+    draws) to 1 (reuse wherever the horizons overlap). The mix is spherical, so
+    the result stays a standard normal sample whatever the weight: that is the
+    distribution the velocity field was trained to transport.
+    """
+    if previous is None or correlation <= 0:
+        return fresh
+    carried = torch.roll(previous, shifts=-shift, dims=1)
+    # The steps rolled off the end have no counterpart in the previous horizon.
+    carried[:, -shift:] = independent[:, -shift:]
+    return correlation * carried + (1 - correlation**2) ** 0.5 * fresh
+
+
 def generate_horizon(
     model: FlowImageUnet1D,
     images: torch.Tensor,
     states: torch.Tensor,
     *,
     integration_steps: int,
+    noise: torch.Tensor,
 ) -> np.ndarray:
-    """Integrate the velocity field from noise into one normalized action horizon."""
+    """Integrate the velocity field from ``noise`` into one action horizon."""
+    values = noise
     device = images.device
-    values = torch.randn(1, model.prediction_steps, model.action_dim, device=device)
     time = torch.zeros(1, 1, device=device)
     with torch.no_grad():
         condition = model.encode_observation(images, states)
@@ -88,6 +119,31 @@ def generate_horizon(
             values = values + velocity / integration_steps
             time = time + 1 / integration_steps
     return values[0].cpu().numpy()
+
+
+def summarize_smoothness(
+    commands: np.ndarray, requeried: np.ndarray, *, joints: int
+) -> dict[str, float]:
+    """Compare how far the arm is asked to jump within a chunk versus across one.
+
+    ``commands`` is the sequence actually sent, one row per tick, and
+    ``requeried`` marks the ticks whose command came from a freshly generated
+    horizon. A policy whose chunks disagree at the seam shows a larger step on
+    those ticks than on the ticks inside a chunk; equal figures mean the seams
+    are invisible and any remaining roughness is not a replanning artifact.
+    """
+    steps = np.abs(np.diff(commands[:, :joints], axis=0)).max(axis=1)
+    # Row i of ``steps`` is the move onto tick i + 1, so the boundary flags line
+    # up with the commands from the second tick onward.
+    seam = requeried[1:]
+    interior = steps[~seam]
+    boundary = steps[seam]
+    return {
+        "mean_step_deg": float(steps.mean()) if steps.size else 0.0,
+        "interior_step_deg": float(interior.mean()) if interior.size else 0.0,
+        "boundary_step_deg": float(boundary.mean()) if boundary.size else 0.0,
+        "max_step_deg": float(steps.max()) if steps.size else 0.0,
+    }
 
 
 class FlowImagePolicyController:
@@ -104,6 +160,7 @@ class FlowImagePolicyController:
         seed: int,
         policy_hz: float,
         image_hw: tuple[int, int],
+        noise_correlation: float = 0.0,
     ) -> None:
         if act_steps < 1 or act_steps > model.prediction_steps:
             raise ValueError(
@@ -112,6 +169,8 @@ class FlowImagePolicyController:
             )
         if integration_steps < 1:
             raise ValueError("integration_steps must be positive")
+        if not 0.0 <= noise_correlation <= 1.0:
+            raise ValueError(f"noise_correlation must be in [0, 1], got {noise_correlation}")
         self.model = model
         self.device = device
         self.act_steps = act_steps
@@ -129,7 +188,9 @@ class FlowImagePolicyController:
         self.states: deque[np.ndarray] = deque(maxlen=model.observation_steps)
         self.actions: deque[np.ndarray] = deque()
         self.clipped_fraction = 0.0
+        self.noise_correlation = noise_correlation
         self.latest_prediction: np.ndarray | None = None
+        self.previous_noise: torch.Tensor | None = None
         self.reset()
 
     @classmethod
@@ -142,6 +203,7 @@ class FlowImagePolicyController:
         integration_steps: int,
         device: torch.device,
         seed: int = 0,
+        noise_correlation: float = 0.0,
     ) -> FlowImagePolicyController:
         """Load a checkpoint together with the dataset export it was trained on.
 
@@ -160,6 +222,7 @@ class FlowImagePolicyController:
             seed=seed,
             policy_hz=float(manifest["fps"]),
             image_hw=(height, width),
+            noise_correlation=noise_correlation,
         )
 
     @property
@@ -175,7 +238,21 @@ class FlowImagePolicyController:
         self.states.clear()
         self.actions.clear()
         self.latest_prediction = None
+        self.previous_noise = None
         torch.manual_seed(self.seed)
+
+    def _draw_noise(self) -> torch.Tensor:
+        """The starting sample for one query, correlated with the last if asked."""
+        shape = (1, self.model.prediction_steps, self.model.action_dim)
+        noise = carry_noise(
+            self.previous_noise,
+            torch.randn(*shape, device=self.device),
+            torch.randn(*shape, device=self.device),
+            shift=self.act_steps,
+            correlation=self.noise_correlation,
+        )
+        self.previous_noise = noise
+        return noise
 
     def _observation_batch(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Normalize the observation history into the model's input tensors."""
@@ -207,7 +284,11 @@ class FlowImagePolicyController:
         if not self.actions:
             images, states = self._observation_batch()
             generated = generate_horizon(
-                self.model, images, states, integration_steps=self.integration_steps
+                self.model,
+                images,
+                states,
+                integration_steps=self.integration_steps,
+                noise=self._draw_noise(),
             )
             clipped = np.clip(generated, -1, 1)
             self.clipped_fraction = float(np.mean(generated != clipped))

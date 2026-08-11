@@ -16,7 +16,9 @@ from pick_and_place.policies.dataset_export import (
 )
 from pick_and_place.policies.flow_image_policy import (
     FlowImagePolicyController,
+    carry_noise,
     stack_cameras,
+    summarize_smoothness,
 )
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
 
@@ -196,3 +198,72 @@ def test_export_readers_load_the_manifest_and_the_bounds(tmp_path):
     loaded = load_bounds(tmp_path)
     assert set(loaded) == set(bounds)
     assert np.array_equal(loaded["action_max"], bounds["action_max"])
+
+
+def test_carried_noise_keeps_the_overlapping_steps_and_refreshes_the_tail():
+    previous = torch.arange(PREDICTION_STEPS, dtype=torch.float32).reshape(1, -1, 1)
+    previous = previous.expand(1, PREDICTION_STEPS, ACTION_DIM).contiguous()
+    fresh = torch.full_like(previous, -1.0)
+    independent = torch.full_like(previous, 99.0)
+    shift = 2
+
+    carried = carry_noise(previous, fresh, independent, shift=shift, correlation=1.0)
+
+    # Step i of the new horizon is step i + shift of the old one, so the two
+    # queries start from the same latent wherever they describe the same time.
+    assert torch.allclose(carried[0, : PREDICTION_STEPS - shift, 0], previous[0, shift:, 0])
+    assert torch.allclose(carried[0, PREDICTION_STEPS - shift :, 0], independent[0, -shift:, 0])
+
+
+def test_uncorrelated_noise_is_the_fresh_draw():
+    previous = torch.ones(1, PREDICTION_STEPS, ACTION_DIM)
+    fresh = torch.zeros(1, PREDICTION_STEPS, ACTION_DIM)
+    independent = torch.full((1, PREDICTION_STEPS, ACTION_DIM), 5.0)
+
+    assert torch.equal(carry_noise(previous, fresh, independent, shift=2, correlation=0.0), fresh)
+    assert torch.equal(carry_noise(None, fresh, independent, shift=2, correlation=1.0), fresh)
+
+
+def test_partly_carried_noise_stays_a_standard_normal_sample():
+    torch.manual_seed(0)
+    shape = (1, PREDICTION_STEPS, ACTION_DIM)
+    variances = []
+    for _ in range(400):
+        carried = carry_noise(
+            torch.randn(*shape),
+            torch.randn(*shape),
+            torch.randn(*shape),
+            shift=2,
+            correlation=0.6,
+        )
+        variances.append(float(carried.var()))
+    # The spherical mix preserves unit variance, which is what the velocity
+    # field was trained to transport.
+    assert abs(np.mean(variances) - 1.0) < 0.05
+
+
+def test_noise_correlation_must_be_a_fraction():
+    with pytest.raises(ValueError, match="noise_correlation"):
+        FlowImagePolicyController(
+            StubModel(),
+            make_bounds(),
+            act_steps=2,
+            integration_steps=INTEGRATION_STEPS,
+            device=torch.device("cpu"),
+            seed=0,
+            policy_hz=10.0,
+            image_hw=IMAGE_HW,
+            noise_correlation=1.5,
+        )
+
+
+def test_smoothness_separates_seam_steps_from_interior_steps():
+    # Two joints, flat within each chunk and jumping 10 degrees at the seam.
+    commands = np.array([[0.0, 0.0], [0.0, 0.0], [10.0, 0.0], [10.0, 0.0]], dtype=np.float32)
+    requeried = np.array([True, False, True, False])
+
+    summary = summarize_smoothness(commands, requeried, joints=2)
+
+    assert summary["interior_step_deg"] == 0.0
+    assert summary["boundary_step_deg"] == 10.0
+    assert summary["max_step_deg"] == 10.0

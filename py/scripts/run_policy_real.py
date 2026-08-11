@@ -166,6 +166,7 @@ def launch_flow_image_controller(
         integration_steps=args.flow_integration_steps,
         device=device,
         seed=args.flow_seed,
+        noise_correlation=args.flow_noise_correlation,
     )
     if override_hw is not None and override_hw != controller.image_hw:
         parser.error(
