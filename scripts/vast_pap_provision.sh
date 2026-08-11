@@ -10,6 +10,8 @@
 #   scp scripts/vast_pap_provision.sh overlay.tar.gz ~/.netrc <ssh-host>:/workspace/
 #   ssh <ssh-host> 'bash /workspace/vast_pap_provision.sh'
 #
+# Set PAP_BRANCH to run a pod on a pushed branch rather than main.
+#
 # The netrc carries the Weights & Biases credential. Copy it every time: the job
 # launchers look for it on the *pod*, and having one on the controller does
 # nothing. Nothing used to put it there, so every run in this repository's
@@ -46,8 +48,15 @@ if [ ! -d "$repo/.git" ]; then
   git clone --recurse-submodules https://github.com/mariogemoll/pick-and-place.git "$repo"
 fi
 cd "$repo"
+# PAP_BRANCH runs a pod on work that is not on main yet -- an experiment branch,
+# say -- without falling back to the overlay for code that is already pushed.
+if [ -n "${PAP_BRANCH:-}" ]; then
+  git fetch origin "$PAP_BRANCH" || { echo "BRANCH_FETCH_FAILED $PAP_BRANCH"; exit 1; }
+  git checkout -B "$PAP_BRANCH" "origin/$PAP_BRANCH" || { echo "BRANCH_CHECKOUT_FAILED"; exit 1; }
+fi
 git submodule update --init --recursive
 git rev-parse HEAD
+git rev-parse --abbrev-ref HEAD
 
 # The clone is only as current as origin/main; anything committed locally but
 # unpushed, or still uncommitted, arrives in the overlay. Without it a pod can
