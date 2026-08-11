@@ -180,11 +180,18 @@ aws s3 sync s3://allyouneed/pick-and-place/outputs/<run>/train/checkpoints/02000
 mjpython py/scripts/run_policy_sim.py \
   --checkpoint "$PAP_DATA_ROOT/<run>-020000/pretrained_model" \
   --base-checkpoint "$PAP_DATA_ROOT/pi05_base_pinned" \
+  --recording-hw 720 960 \
   --device mps
 ```
 
-`--base-checkpoint` (or `PAP_PI05_BASE`) is required off the training box:
-`adapter_config.json` records the base as the absolute path that box used.
+Two flags are not optional here:
+
+- `--base-checkpoint` (or `PAP_PI05_BASE`) is required off the training box:
+  `adapter_config.json` records the base as the absolute path that box used.
+- `--recording-hw` is required for any non-Diffusion-Policy controller, which
+  otherwise reads it from the export beside its normalization file. Pass the
+  resolution the checkpoint's *source dataset* was recorded at — 720x960 for the
+  sim datasets, 480x640 for `real-20260701`.
 
 Three things to expect:
 
