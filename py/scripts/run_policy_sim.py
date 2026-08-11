@@ -229,7 +229,11 @@ def _place_cube(data: mujoco.MjData, qadr: int, dofadr: int, pose: CubePose) -> 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    add_policy_arguments(parser)
+    # Default to the checkpoint's own n_action_steps, as eval_policy_sim.py
+    # already does. The 100 that add_policy_arguments otherwise supplies matches
+    # ACT's chunk and is larger than pi0.5's 50, so it turned every pi0.5
+    # rollout into an argument error unless the flag was passed by hand.
+    add_policy_arguments(parser, n_action_steps_default=None)
     add_diffusion_policy_arguments(parser)
     add_render_size_arguments(parser)
     add_cube_pose_arguments(parser, source_default=(0.22, 0.0))
