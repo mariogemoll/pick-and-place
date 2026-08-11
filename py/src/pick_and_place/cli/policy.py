@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Flags for choosing a policy and for the Diffusion Policy server.
+"""Flags for choosing a policy and for configuring how it is queried.
 
 Shared by the sim runner, the hardware runner and the evaluation harness, which
 must agree on what a checkpoint is and how it is queried or their numbers cannot
@@ -142,4 +142,38 @@ def add_diffusion_policy_arguments(
         default=None,
         help="sample with DDIM using this many steps instead of the trained DDPM "
         "schedule; much faster, but not the training sampler, so not for headline runs",
+    )
+
+
+def add_flow_image_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add the flags that configure the image-conditioned flow policy.
+
+    The checkpoint holds only weights, so ``--flow-export`` names the dataset
+    export it was trained against: the normalization bounds, the control rate and
+    the input resolution all come from there.
+    """
+    parser.add_argument(
+        "--flow-export",
+        type=Path,
+        default=None,
+        help="dataset export directory the checkpoint was trained on "
+        "(holds export.json and normalization.npz)",
+    )
+    parser.add_argument(
+        "--flow-act-steps",
+        type=int,
+        default=8,
+        help="executed actions per policy query (default: 8)",
+    )
+    parser.add_argument(
+        "--flow-integration-steps",
+        type=int,
+        default=10,
+        help="Euler steps used to integrate the flow (default: 10)",
+    )
+    parser.add_argument(
+        "--flow-seed",
+        type=int,
+        default=0,
+        help="Torch seed for the flow's noise draw (default: 0)",
     )

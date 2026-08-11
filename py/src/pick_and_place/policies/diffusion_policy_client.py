@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import argparse
 import io
-import json
 import struct
 import subprocess
 from collections import deque
@@ -38,6 +37,7 @@ from typing import Any, BinaryIO
 
 import numpy as np
 
+from pick_and_place.policies.dataset_export import resolve_recording_hw
 from pick_and_place.spec.action_encoding import (
     ACTION_ENCODING_KEY,
     decode_actions,
@@ -46,31 +46,6 @@ from pick_and_place.spec.action_encoding import (
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, PolicyObservation, STATE_FEATURE, WRIST_FEATURE
 
 SERVER_SCRIPT = Path(__file__).resolve().parents[3] / "scripts" / "diffusion_policy_server.py"
-def resolve_recording_hw(
-    normalization: str | Path,
-    override: tuple[int, int] | None = None,
-) -> tuple[int, int]:
-    """Resolve the intermediate video size used by a Diffusion Policy dataset export."""
-    if override is not None:
-        height, width = override
-        if height < 1 or width < 1:
-            raise ValueError("recording height and width must be positive")
-        return (height, width)
-
-    export_path = Path(normalization).parent / "export.json"
-    if not export_path.exists():
-        raise FileNotFoundError(
-            f"no export.json beside {normalization}; pass the recording height and width"
-        )
-    with export_path.open() as file:
-        export = json.load(file)
-    if "source_video_hw" not in export:
-        raise ValueError(
-            f"{export_path} predates source_video_hw; pass the resolution its source "
-            "dataset's videos were recorded at"
-        )
-    height, width = export["source_video_hw"]
-    return (int(height), int(width))
 
 
 def write_message(stream: BinaryIO, arrays: dict[str, np.ndarray]) -> None:

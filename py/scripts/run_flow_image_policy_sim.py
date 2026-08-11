@@ -20,7 +20,6 @@ import itertools
 import json
 import threading
 import time
-from collections import deque
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
@@ -28,28 +27,13 @@ from typing import Any
 import numpy as np
 import torch
 
-from pick_and_place.policies.flow_image_encoder import FlowImageUnet1D
+from pick_and_place.policies.flow_image_policy import FlowImagePolicyController
 from pick_and_place.runtime.policy_sim import PolicySimEnv
 from pick_and_place.runtime.training_scenes import training_scenario
 from pick_and_place.sim.scene_appearance import parse_appearance
-from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
+from pick_and_place.spec.controller import OVERHEAD_FEATURE, WRIST_FEATURE
 
 ENTER_KEYS = frozenset({257, 335})
-
-IMAGE_MEAN = (0.485, 0.456, 0.406)
-IMAGE_STD = (0.229, 0.224, 0.225)
-
-
-def normalize(values: np.ndarray, minimum: np.ndarray, maximum: np.ndarray) -> np.ndarray:
-    span = maximum - minimum
-    return np.where(
-        span > 1e-6, 2 * (values - minimum) / np.where(span > 1e-6, span, 1) - 1, 0
-    ).astype(np.float32)
-
-
-def unnormalize(values: np.ndarray, minimum: np.ndarray, maximum: np.ndarray) -> np.ndarray:
-    span = maximum - minimum
-    return np.where(span > 1e-6, (values + 1) / 2 * span + minimum, minimum).astype(np.float32)
 
 
 def write_video(path: Path, frames: list[np.ndarray], fps: float) -> None:
@@ -84,103 +68,6 @@ def observation_frame(observation: dict[str, np.ndarray]) -> np.ndarray:
         ),
         axis=1,
     )
-
-
-def load_checkpoint(path: Path, device: torch.device) -> FlowImageUnet1D:
-    contents = torch.load(path, map_location=device, weights_only=False)
-    if contents.get("model_type") != "flow_image_unet1d":
-        raise ValueError(f"{path} is not an image flow checkpoint")
-    model = FlowImageUnet1D(**contents["model_config"]).to(device)
-    model.load_state_dict(contents["model"])
-    model.eval()
-    return model
-
-
-class ImageFlowPolicy:
-    """Turn simulator observations into a queue of generated joint commands."""
-
-    def __init__(
-        self,
-        model: FlowImageUnet1D,
-        bounds: dict[str, np.ndarray],
-        *,
-        act_steps: int,
-        integration_steps: int,
-        device: torch.device,
-        seed: int,
-    ) -> None:
-        self.model = model
-        self.device = device
-        self.act_steps = act_steps
-        self.integration_steps = integration_steps
-        self.seed = seed
-        self.observation_min = bounds["obs_min"]
-        self.observation_max = bounds["obs_max"]
-        self.action_min = bounds["action_min"]
-        self.action_max = bounds["action_max"]
-        self.mean = torch.tensor(IMAGE_MEAN, device=device).view(1, 3, 1, 1)
-        self.std = torch.tensor(IMAGE_STD, device=device).view(1, 3, 1, 1)
-        self.images: deque[np.ndarray] = deque(maxlen=model.observation_steps)
-        self.states: deque[np.ndarray] = deque(maxlen=model.observation_steps)
-        self.actions: deque[np.ndarray] = deque()
-        self.clipped_fraction = 0.0
-        self.reset()
-
-    def reset(self) -> None:
-        self.images.clear()
-        self.states.clear()
-        self.actions.clear()
-        torch.manual_seed(self.seed)
-
-    def _pack(self, observation: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
-        # The export concatenates cameras on the channel axis in
-        # camera_features order: overhead first, then wrist.
-        overhead = np.asarray(observation[OVERHEAD_FEATURE], dtype=np.uint8)
-        wrist = np.asarray(observation[WRIST_FEATURE], dtype=np.uint8)
-        stacked = np.concatenate(
-            (np.moveaxis(overhead, -1, 0), np.moveaxis(wrist, -1, 0)), axis=0
-        )
-        state = normalize(
-            np.asarray(observation[STATE_FEATURE], dtype=np.float32),
-            self.observation_min,
-            self.observation_max,
-        )
-        return stacked, state
-
-    def act(self, observation: dict[str, np.ndarray], info: dict[str, Any]) -> np.ndarray:
-        del info
-        images, state = self._pack(observation)
-        self.images.append(images)
-        self.states.append(state)
-        while len(self.images) < self.model.observation_steps:
-            self.images.appendleft(self.images[0].copy())
-            self.states.appendleft(self.states[0].copy())
-
-        if not self.actions:
-            image_batch = torch.from_numpy(np.stack(self.images)[None]).to(self.device)
-            steps, channels = image_batch.shape[1], image_batch.shape[2]
-            floats = image_batch.float().div_(255.0).reshape(-1, 3, *image_batch.shape[-2:])
-            floats = ((floats - self.mean) / self.std).reshape(
-                1, steps, channels, *image_batch.shape[-2:]
-            )
-            state_batch = torch.from_numpy(np.stack(self.states)[None]).to(self.device)
-
-            values = torch.randn(
-                1, self.model.prediction_steps, self.model.action_dim, device=self.device
-            )
-            time = torch.zeros(1, 1, device=self.device)
-            with torch.no_grad():
-                condition = self.model.encode_observation(floats, state_batch)
-                for _ in range(self.integration_steps):
-                    velocity = self.model.unet(values, time, condition)
-                    values = values + velocity / self.integration_steps
-                    time = time + 1 / self.integration_steps
-            generated = values[0].cpu().numpy()
-            clipped = np.clip(generated, -1, 1)
-            self.clipped_fraction = float(np.mean(generated != clipped))
-            commands = unnormalize(clipped, self.action_min, self.action_max)
-            self.actions.extend(commands[: self.act_steps])
-        return self.actions.popleft()
 
 
 def main() -> None:
@@ -220,29 +107,20 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    with (args.export / "export.json").open() as file:
-        manifest = json.load(file)
-    image_hw = tuple(int(value) for value in manifest["image_size"])
-    with np.load(args.export / "normalization.npz", allow_pickle=False) as archive:
-        bounds = {
-            name: np.asarray(archive[name], dtype=np.float32)
-            for name in ("obs_min", "obs_max", "action_min", "action_max")
-        }
-
-    device = torch.device(args.device)
-    model = load_checkpoint(args.checkpoint, device)
+    policy = FlowImagePolicyController.from_export(
+        args.checkpoint,
+        args.export,
+        act_steps=args.act_steps,
+        integration_steps=args.integration_steps,
+        device=torch.device(args.device),
+        seed=args.policy_seed,
+    )
     appearance = None
     if args.scene_appearance:
         _, appearance = parse_appearance(args.scene_appearance)
 
-    env = PolicySimEnv(image_hw=image_hw, render_hw=(1080, 1920), scene_appearance=appearance)
-    policy = ImageFlowPolicy(
-        model,
-        bounds,
-        act_steps=args.act_steps,
-        integration_steps=args.integration_steps,
-        device=device,
-        seed=args.policy_seed,
+    env = PolicySimEnv(
+        image_hw=policy.image_hw, render_hw=(1080, 1920), scene_appearance=appearance
     )
 
     if args.save_video is not None:
@@ -285,7 +163,7 @@ def main() -> None:
                     started = time.perf_counter()
                     if args.save_video is not None:
                         frames.append(observation_frame(observation))
-                    action = policy.act(observation, info)
+                    action = policy.act(observation)
                     observation, _, terminated, truncated, info = env.step(action)
                     if viewer is not None:
                         if not viewer.is_running():

@@ -6,10 +6,13 @@
 
 ``--controller lerobot`` (the default) runs ACT, SmolVLA, or another LeRobot
 checkpoint. ``--controller diffusion-policy`` runs the same out-of-process
-Diffusion Policy controller as ``run_policy_sim.py``, whose observations are
-sampled at the policy's trained
-rate and live camera frames are reduced through the dataset export's recorded
-video resolution before reaching the model's input resolution.
+Diffusion Policy controller as ``run_policy_sim.py``. ``--controller flow-image``
+runs an image-conditioned flow policy in this process, from a checkpoint and the
+dataset export it was trained on (``--flow-export``).
+
+Both of the latter two are queried at the policy's trained rate, and their live
+camera frames are reduced through the dataset export's recorded video resolution
+before reaching the model's input resolution.
 
 The hardware counterpart to ``run_policy_sim.py``. Where the sim run renders MuJoCo
 cameras and integrates physics, this reads two real cameras and a real arm: each
@@ -78,9 +81,15 @@ from pick_and_place.core.camera_calibration import (
     load_camera_intrinsics,
     load_local_camera_intrinsics,
 )
+from pick_and_place.policies.dataset_export import resolve_recording_hw
 from pick_and_place.policies.diffusion_policy_client import DiffusionPolicyController
+from pick_and_place.policies.flow_image_policy import FlowImagePolicyController
 from pick_and_place.planning.episode_sampling import sample_hunt_pose, sample_near_neutral
-from pick_and_place.cli.policy import add_diffusion_policy_arguments, add_policy_arguments
+from pick_and_place.cli.policy import (
+    add_diffusion_policy_arguments,
+    add_flow_image_arguments,
+    add_policy_arguments,
+)
 from pick_and_place.cli.rig import (
     add_drop_zone_arguments,
     add_follower_arguments,
@@ -125,6 +134,45 @@ from pick_and_place.spec.robot import (
 # ``--settle-speed`` continuously for this long before the placement counts as
 # finished, so a momentary pause mid-retreat does not end the attempt early.
 SETTLE_STILL_HOLD = 1.0
+
+
+def launch_flow_image_controller(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+    *,
+    override_hw: tuple[int, int] | None,
+    default_checkpoint: str,
+) -> tuple[FlowImagePolicyController, tuple[int, int]]:
+    """Validate the flow-policy arguments and load the controller."""
+    if args.checkpoint == default_checkpoint:
+        parser.error(
+            "--checkpoint (a checkpoint-*.pt file) is required for the flow-image controller"
+        )
+    if args.flow_export is None:
+        parser.error("--flow-export is required for the flow-image controller")
+    try:
+        recording_hw = resolve_recording_hw(
+            args.flow_export / "normalization.npz", args.recording_hw
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        parser.error(str(exc))
+
+    device = select_device(args.device)
+    print(f"Loading the flow policy {args.checkpoint} on {device}...")
+    controller = FlowImagePolicyController.from_export(
+        args.checkpoint,
+        args.flow_export,
+        act_steps=args.flow_act_steps,
+        integration_steps=args.flow_integration_steps,
+        device=device,
+        seed=args.flow_seed,
+    )
+    if override_hw is not None and override_hw != controller.image_hw:
+        parser.error(
+            f"--image-height/--image-width {override_hw} do not match the "
+            f"model's trained image size {controller.image_hw}"
+        )
+    return controller, recording_hw
 
 
 def _drain_stdin_lines() -> bool:
@@ -215,8 +263,9 @@ class ActionLog:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    add_policy_arguments(parser)
+    add_policy_arguments(parser, controllers=("lerobot", "diffusion-policy", "flow-image"))
     add_diffusion_policy_arguments(parser)
+    add_flow_image_arguments(parser)
     add_follower_arguments(parser)
     add_rig_camera_arguments(parser, workspace_camera=True)
     parser.add_argument(
@@ -362,21 +411,30 @@ def main() -> None:
         parser.error("pass both --image-height and --image-width, or neither")
     override_hw = (args.image_height, args.image_width) if all(override) else None
 
-    diffusion_policy_controller = None
+    # Both in-repo controllers predict an action horizon and hand it out over the
+    # following ticks; the LeRobot path is queried one action at a time.
+    chunked_controller = None
     recording_hw = None
     if args.controller == "diffusion-policy":
-        diffusion_policy_controller, recording_hw = DiffusionPolicyController.launch_from_args(
+        chunked_controller, recording_hw = DiffusionPolicyController.launch_from_args(
             parser,
             args,
             override_hw=override_hw,
             default_checkpoint=DEFAULT_CHECKPOINT,
         )
-        img_h, img_w = diffusion_policy_controller.image_hw
+    elif args.controller == "flow-image":
+        chunked_controller, recording_hw = launch_flow_image_controller(
+            parser, args, override_hw=override_hw, default_checkpoint=DEFAULT_CHECKPOINT
+        )
+    if chunked_controller is not None:
+        img_h, img_w = chunked_controller.image_hw
         overhead_key, wrist_key = OVERHEAD_FEATURE, WRIST_FEATURE
-        control_hz = diffusion_policy_controller.policy_hz
+        control_hz = chunked_controller.policy_hz
     else:
         if args.recording_hw is not None:
-            parser.error("--recording-hw only applies to the diffusion-policy controller")
+            parser.error(
+                "--recording-hw only applies to the diffusion-policy and flow-image controllers"
+            )
         (img_h, img_w), (overhead_key, wrist_key) = resolve_checkpoint_cameras(
             args.checkpoint, override_hw=override_hw
         )
@@ -394,7 +452,7 @@ def main() -> None:
     )
     if recording_hw is not None:
         print(
-            f"Downsampling live frames through the Diffusion Policy dataset's "
+            f"Downsampling live frames through the training dataset's "
             f"{recording_hw[1]}x{recording_hw[0]} recording resolution."
         )
     print(f"Policy control rate: {control_hz:g} Hz.")
@@ -457,7 +515,7 @@ def main() -> None:
         )
         return center_crop_and_resize(recorded, img_w, img_h, cv2)
 
-    if diffusion_policy_controller is None:
+    if chunked_controller is None:
         policy, preprocessor, postprocessor = make_policy(
             args.checkpoint,
             (img_h, img_w),
@@ -467,10 +525,10 @@ def main() -> None:
             temporal_ensemble_coeff=args.temporal_ensemble_coeff,
         )
     else:
-        policy = diffusion_policy_controller
+        policy = chunked_controller
         preprocessor = postprocessor = None
     policy.reset()
-    if diffusion_policy_controller is not None:
+    if args.controller == "diffusion-policy":
         print(
             f"Policy chunks: predicts {policy.horizon_steps}, "
             f"executes {policy.act_steps} before re-query "
@@ -478,13 +536,20 @@ def main() -> None:
             f"({policy.handshake['denoising_steps']} denoising steps, "
             f"epoch {policy.handshake['epoch']} checkpoint)."
         )
+    elif chunked_controller is not None:
+        print(
+            f"Policy chunks: predicts {policy.prediction_steps}, "
+            f"executes {policy.act_steps} before re-query "
+            f"with {policy.observation_steps} observation steps "
+            f"({policy.integration_steps} flow integration steps)."
+        )
     elif hasattr(policy.config, "chunk_size") and hasattr(policy.config, "n_action_steps"):
         print(
             f"Policy chunks: predicts {policy.config.chunk_size}, "
             f"executes {policy.config.n_action_steps} before re-query."
         )
     if (
-        diffusion_policy_controller is None
+        chunked_controller is None
         and getattr(policy.config, "temporal_ensemble_coeff", None) is not None
     ):
         print(f"Temporal ensembling coeff: {policy.config.temporal_ensemble_coeff}")
@@ -503,7 +568,7 @@ def main() -> None:
         log_dir = args.action_log / datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         action_log = ActionLog(log_dir)
         print(f"Logging per-attempt actions and raw chunks to {log_dir}")
-        if diffusion_policy_controller is not None:
+        if chunked_controller is not None:
             print("Diffusion Policy action logs include every raw predicted horizon.")
         elif hasattr(policy, "predict_action_chunk"):
             _predict_action_chunk = policy.predict_action_chunk
@@ -757,7 +822,7 @@ def main() -> None:
                 overhead_writer.append_data(overhead_rgb)
 
             infer_start = time.monotonic()
-            if diffusion_policy_controller is None:
+            if chunked_controller is None:
                 assert predict_action is not None
                 lerobot_observation = {
                     STATE_FEATURE: state,
@@ -798,7 +863,7 @@ def main() -> None:
             # model's freshest prediction for this very tick, so its gap to the
             # returned (ensembled) action is the ensemble lag.
             chunk_real = None
-            if diffusion_policy_controller is not None and policy.latest_prediction is not None:
+            if chunked_controller is not None and policy.latest_prediction is not None:
                 chunk_real = policy.latest_prediction.copy()
                 raw_lag = float(
                     np.max(np.abs(chunk_real[0, :GRIPPER_INDEX] - action_real[:GRIPPER_INDEX]))
@@ -1148,8 +1213,8 @@ def main() -> None:
                 print(f"Warning: could not release torque: {exc}")
         print("Disconnecting hardware...")
         follower.disconnect()
-        if diffusion_policy_controller is not None:
-            diffusion_policy_controller.close()
+        if chunked_controller is not None:
+            chunked_controller.close()
     print(f"Ran {tick} control ticks.")
 
 
