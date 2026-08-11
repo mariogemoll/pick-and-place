@@ -104,6 +104,16 @@ def main() -> None:
     )
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--scene-appearance", default=None)
+    parser.add_argument(
+        "--tracking-bias-scale",
+        type=float,
+        default=0.0,
+        help=(
+            "inject the fitted servo tracking bias, so a commanded joint settles "
+            "where the real one does; 1.0 is the measured arm (7.9 mm at the "
+            "gripper reaching down), 0 disables"
+        ),
+    )
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument(
         "--viewer",
@@ -133,7 +143,10 @@ def main() -> None:
         _, appearance = parse_appearance(args.scene_appearance)
 
     env = PolicySimEnv(
-        image_hw=policy.image_hw, render_hw=(1080, 1920), scene_appearance=appearance
+        image_hw=policy.image_hw,
+        render_hw=(1080, 1920),
+        scene_appearance=appearance,
+        tracking_bias_scale=args.tracking_bias_scale,
     )
 
     if args.save_video is not None:
