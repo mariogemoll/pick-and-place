@@ -14,6 +14,7 @@ import pytest
 from pick_and_place.core.robot_dynamics import (
     load_robot_dynamics_config,
     set_actuator_activation,
+    tracking_bias_deg,
     tracking_bias_rad,
     tracking_bias_vector,
 )
@@ -134,3 +135,14 @@ def test_the_bias_moves_the_gripper_in_space(settled_scene, config: dict) -> Non
         positions.append(data.body("gripper").xpos.copy())
     displacement = float(np.linalg.norm(positions[1] - positions[0]))
     assert displacement > 0.005, "the fitted bias should move the gripper by millimetres"
+
+
+def test_the_hardware_frame_bias_is_the_fit_verbatim(config: dict) -> None:
+    """The arm maps between frames by a radian conversion and nothing else, so
+    the hardware runner needs the fitted degrees unchanged."""
+    degrees = tracking_bias_deg(config)
+    assert degrees["shoulder_lift"] == pytest.approx(
+        config["joints"]["shoulder_lift"]["steady_state_bias"]
+    )
+    for name, value in tracking_bias_rad(config).items():
+        assert math.degrees(value) == pytest.approx(degrees[name])

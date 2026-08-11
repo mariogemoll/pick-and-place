@@ -55,9 +55,24 @@ def tracking_bias_rad(config: dict, *, scale: float = 1.0) -> dict[str, float]:
     hardware's 0-100 position units, so converting its value as an angle would
     be a unit error for a term worth 0.1 of those units anyway.
     """
+    return {
+        name: math.radians(value) for name, value in tracking_bias_deg(config, scale=scale).items()
+    }
+
+
+def tracking_bias_deg(config: dict, *, scale: float = 1.0) -> dict[str, float]:
+    """The same bias in the hardware frame, which is where it was fitted.
+
+    The arm joints map between frames by nothing but a degree-to-radian
+    conversion, so this is the more primitive of the two. It is what the
+    hardware runner needs: subtracting it from a command makes the servo settle
+    on what the policy asked for instead of a bias away from it, which is the
+    correction that makes a real arm behave like the simulated one a policy was
+    trained against.
+    """
     joints = config["joints"]
     return {
-        name: math.radians(float(joints[name]["steady_state_bias"]) * scale)
+        name: float(joints[name]["steady_state_bias"]) * scale
         for name in ARM_JOINT_NAMES
         if name in joints
     }

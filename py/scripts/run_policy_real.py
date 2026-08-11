@@ -100,6 +100,11 @@ from pick_and_place.cli.rig import (
 from pick_and_place.runtime.action_log import ActionLog
 from pick_and_place.runtime.frame_reader import open_frame_reader
 from pick_and_place.runtime.ramp import ramp_follower
+from pick_and_place.core.robot_dynamics import (
+    load_robot_dynamics_config,
+    tracking_bias_deg,
+    tracking_bias_vector,
+)
 from pick_and_place.spec.robot import CONTROL_HZ, GRIPPER_INDEX, JOINT_NAMES
 from pick_and_place.core.joint_frames import (
     action_to_joints,
@@ -201,6 +206,16 @@ def main() -> None:
         type=int,
         default=0,
         help="stop after this many control ticks (0 = run until Ctrl-C)",
+    )
+    parser.add_argument(
+        "--tracking-bias-scale",
+        type=float,
+        default=0.0,
+        help=(
+            "compensate the fitted servo steady-state bias, so a joint settles on "
+            "the commanded angle rather than 2.16 deg (shoulder_lift) away from "
+            "it; 1.0 is the measured arm, 0 sends the policy's action verbatim"
+        ),
     )
     parser.add_argument(
         "--max-joint-speed",
@@ -391,6 +406,15 @@ def main() -> None:
     kinematics = derive_kinematics(model)
     clamp_low, clamp_high = follower_clamp_limits(kinematics)
     clip_warned: set[str] = set()
+    # A real servo settles a fitted bias away from what it was commanded, which
+    # simulation does not reproduce, so a policy trained there aims short on
+    # hardware. Subtracting it makes the arm land where the policy asked.
+    tracking_bias = tracking_bias_vector(
+        tracking_bias_deg(load_robot_dynamics_config(), scale=args.tracking_bias_scale),
+        JOINT_NAMES,
+    )
+    if args.tracking_bias_scale:
+        print(f"Compensating the fitted servo tracking bias at {args.tracking_bias_scale:g}x.")
     neutral_real = sim_frame_to_real(NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER)
     rest_real = sim_frame_to_real(REST_ARM_JOINTS, REST_GRIPPER)
 
@@ -771,7 +795,10 @@ def main() -> None:
             else:
                 action_real = policy.act(observation)
             infer_seconds += time.monotonic() - infer_start
-            target = clamp_and_warn(action_real, clamp_low, clamp_high, clip_warned)
+            # Subtract before clamping, so the joint limits still bind what is
+            # actually sent, and before the velocity cap, so the cap bounds real
+            # travel rather than the uncompensated request.
+            target = clamp_and_warn(action_real - tracking_bias, clamp_low, clamp_high, clip_warned)
             # Velocity cap: never command an arm joint more than one tick's worth
             # of travel beyond where the arm actually is. This bounds both speed
             # and the servo's position error regardless of what the policy asks
