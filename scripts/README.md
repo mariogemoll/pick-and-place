@@ -124,6 +124,24 @@ tokenizer, the camera keys, the quantile stats and the VRAM ceiling all fail in
 the first few steps or not at all, so that stage turns an overnight failure into
 a two-minute one.
 
-`STEPS` defaults to 10,000 rather than the 30,000 the upstream LIBERO recipe
-uses: LIBERO is a multi-task benchmark and this is one prompt over one task.
-Extend and resume if the loss is still moving.
+### Sizing the run
+
+The episodes are 9.72 s each, so 1000 of them is 2.70 hours of data — the low
+end of the 1–20 hour band Physical Intelligence reports as sufficient, not above
+it. The advice that these models need only tens of episodes comes from tasks
+with 30–60 s episodes; fifty of these would be eight minutes. `real-20260701` is
+18 minutes in total, already below the band, which is the main argument against
+finetuning on it alone.
+
+So the budget is spent on steps, not on episodes. `lerobot-train` counts steps,
+which makes epoch coverage easy to misjudge:
+
+| batch | steps | samples | epochs over `as-recorded` |
+| ---: | ---: | ---: | ---: |
+| 16 | 10,000 | 160,000 | 0.55 |
+| 16 | 20,000 | 320,000 | 1.10 |
+| 32 | 20,000 | 640,000 | 2.19 |
+
+`STEPS` therefore defaults to 20,000 rather than the LIBERO recipe's 30,000:
+that recipe runs batch 64, so cutting the step count without accounting for the
+batch would have trained on barely half an epoch.

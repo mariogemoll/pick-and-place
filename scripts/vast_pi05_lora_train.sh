@@ -42,11 +42,17 @@ artifact_prefix="$bucket_root/datasets"
 run_name="${RUN_NAME:?set RUN_NAME to a fresh, never-used output name}"
 output_prefix="$bucket_root/outputs/$run_name"
 
-# Steps, not epochs: lerobot-train counts steps. 10k is a deliberate reduction
-# from the 30k the LIBERO recipe uses -- LIBERO is a multi-task benchmark and
-# this is one prompt over one task. Extend and resume if the loss is still
-# moving rather than paying for 30k up front.
-steps="${STEPS:-10000}"
+# Steps, not epochs: lerobot-train counts steps, so the epoch coverage has to be
+# worked out by hand. This dataset is 291,618 frames, so batch 16 x 20,000 steps
+# is 1.1 passes over it -- 10,000 steps would not have completed even one.
+#
+# The instinct to cut below the LIBERO recipe's 30,000 because this is a single
+# task is right about LIBERO and wrong about the arithmetic: LIBERO runs batch
+# 64, four times this one. Judge the budget in samples seen, not in steps.
+steps="${STEPS:-20000}"
+# 16 is the safe starting point on a 32 GB card at 224x224 with three image
+# slots. The smoke stage reports peak VRAM; if there is headroom, 32 doubles
+# the epoch coverage for the same step count.
 batch_size="${BATCH_SIZE:-16}"
 learning_rate="${LEARNING_RATE:-1e-4}"
 lora_rank="${LORA_RANK:-16}"
