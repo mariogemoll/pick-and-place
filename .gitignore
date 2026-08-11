@@ -30,3 +30,8 @@ pnpm-lock.yaml
 /py/out/
 /.cache/
 /py/.cache/
+# wandb writes run directories under the process's cwd, which for these
+# trainers is py/. Its blobs are far over the 40 KB file ceiling, and that
+# check walks the whole history, so one committed run would be permanent.
+/wandb/
+/py/wandb/
