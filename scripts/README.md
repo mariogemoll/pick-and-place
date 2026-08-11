@@ -102,11 +102,22 @@ parameters, and this task already has an overfitting result on record in
 Three things about the configuration are load-bearing:
 
 - **The adapter targets come from the policy.** `_get_default_peft_targets()` in
-  lerobot's `modeling_pi05.py` puts LoRA on the action expert's q/v projections
-  and trains `state_proj`, `action_in_proj`, `action_out_proj` and the
-  action-time MLPs in full. Those projections carry the 6-DOF joint mapping,
-  which has no pretrained equivalent. Leaving `--peft.target_modules` unset is
-  what selects them; setting it silently replaces them.
+  lerobot's `modeling_pi05.py` adapts the action expert's q/v projections along
+  with `state_proj`, `action_in_proj`, `action_out_proj` and the action-time
+  MLPs. Those projections carry the 6-DOF joint mapping, which has no
+  pretrained equivalent, so they have to be trainable. They are adapted with
+  LoRA rather than fully fine-tuned — `modules_to_save` is empty in the emitted
+  `adapter_config.json`, so all 1,287,168 trainable parameters are rank-16
+  adapters and nothing is trained densely. Leaving `--peft.target_modules`
+  unset is what selects this set; setting it replaces the whole regex.
+
+- **A checkpoint is not self-contained.** `adapter_model.safetensors` is 5 MB
+  and means nothing without its base. The emitted `adapter_config.json` records
+  `base_model_name_or_path` as the *absolute path the pod used*
+  (`/workspace/pi05_base_pinned`), so loading the checkpoint anywhere else
+  fails until that path exists or the field is repointed. The run's
+  `job-metadata/checkpoint-revision.txt` records which `lerobot/pi05_base`
+  revision to materialize there.
 - **`--policy.pretrained_path` loads weights only.** Feature names then come
   from the dataset, so `observation.images.overhead` and `.wrist` pass straight
   through and no `--rename_map` is involved — which is why this cannot repeat

@@ -11,11 +11,15 @@
 # without overfitting -- see the 100,000-update result in docs/FLOW_POLICY.md.
 #
 # The adapter targets come from the policy, not from here. pi0.5 ships
-# _get_default_peft_targets() (modeling_pi05.py): LoRA on the action expert's
-# q/v projections, plus full training of state_proj, action_in_proj,
-# action_out_proj and the action-time MLPs. Those projections carry the 6-DOF
-# joint mapping, which is exactly the part with no pretrained equivalent, so
-# they must train in full. Leave --peft.target_modules unset to get them.
+# _get_default_peft_targets() (modeling_pi05.py), which adapts the action
+# expert's q/v projections *and* state_proj, action_in_proj, action_out_proj
+# and the action-time MLPs. Those projections carry the 6-DOF joint mapping,
+# the part with no pretrained equivalent, so they must be trainable.
+#
+# They are adapted with LoRA, not fully fine-tuned: modules_to_save is empty in
+# the emitted adapter_config.json, so every trainable weight is a rank-16
+# adapter and nothing is trained densely. Leave --peft.target_modules unset to
+# get this set; setting it silently replaces the whole regex.
 #
 # Launch:
 #   scp scripts/vast_pi05_lora_train.sh <ssh-host>:/workspace/
