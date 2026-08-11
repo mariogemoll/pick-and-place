@@ -163,7 +163,15 @@ if aws s3 ls "$output_prefix/" | grep -q .; then
   exit 1
 fi
 
-if [ ! -f "$artifact_root/meta/info.json" ]; then
+# Discover before downloading. The archive's internal directory name is not the
+# artifact name -- two-variant-1000-as-recorded-lerobot.tar.zst unpacks to
+# `as-recorded` -- so a guard keyed on "$artifact_root/meta/info.json" never
+# matches an already-unpacked dataset and re-fetches 2.4 GB on every run.
+find_dataset() {
+  find "$workspace/artifacts" -maxdepth 3 -path '*/meta/info.json' -print -quit 2>/dev/null
+}
+
+if [ -z "$(find_dataset)" ]; then
   archive="$artifact_prefix/$artifact_name.tar.zst"
   staging="$workspace/artifacts"
   aws s3 cp "$archive" "$staging/$artifact_name.tar.zst" --only-show-errors
@@ -175,17 +183,13 @@ if [ ! -f "$artifact_root/meta/info.json" ]; then
   rm -f "$staging/$artifact_name.tar.zst" "$staging/$artifact_name.tar.zst.sha256"
 fi
 
-# The archive's internal directory name is not guaranteed to equal the artifact
-# name, so locate the dataset by the file that defines one.
-if [ ! -f "$artifact_root/meta/info.json" ]; then
-  found=$(find "$workspace/artifacts" -maxdepth 3 -path '*/meta/info.json' -print -quit)
-  if [ -z "$found" ]; then
-    echo "No LeRobot dataset (meta/info.json) found under $workspace/artifacts." >&2
-    exit 1
-  fi
-  artifact_root=$(dirname "$(dirname "$found")")
-  echo "Using dataset at $artifact_root"
+found=$(find_dataset)
+if [ -z "$found" ]; then
+  echo "No LeRobot dataset (meta/info.json) found under $workspace/artifacts." >&2
+  exit 1
 fi
+artifact_root=$(dirname "$(dirname "$found")")
+echo "Using dataset at $artifact_root"
 
 # pi0.5 normalizes state and action with quantiles, so q01/q99 must be present.
 # Checking here beats the alternative, which is a ValueError on the first batch
