@@ -69,17 +69,35 @@ def _replace_batch_norm(module: nn.Module) -> None:
             _replace_batch_norm(child)
 
 
-class CameraEncoder(nn.Module):
-    """One shared ResNet18 trunk reduced to spatial-softmax keypoints."""
+#: Output channels of the ResNet18 residual stages, indexed by stage count.
+_STAGE_CHANNELS = {1: 64, 2: 128, 3: 256, 4: 512}
 
-    def __init__(self, keypoints: int = 32, pretrained: bool = False) -> None:
+
+class CameraEncoder(nn.Module):
+    """One shared ResNet18 trunk reduced to spatial-softmax keypoints.
+
+    ``trunk_stages`` drops residual stages from the end. Stopping after
+    ``layer3`` doubles the keypoint map -- 14x14 rather than 7x7 at 224 px --
+    which is the grid the spatial softmax localizes over. It removes 75% of the
+    trunk's weights but only ~9% of its time, ResNet stages being designed to
+    cost roughly equal compute; the finer map is the reason to do it, not speed.
+    """
+
+    def __init__(
+        self, keypoints: int = 32, pretrained: bool = False, trunk_stages: int = 4
+    ) -> None:
         super().__init__()
+        if trunk_stages not in _STAGE_CHANNELS:
+            raise ValueError(f"trunk_stages must be one of {sorted(_STAGE_CHANNELS)}")
         from torchvision.models import ResNet18_Weights, resnet18
 
         backbone = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1 if pretrained else None)
         _replace_batch_norm(backbone)
-        self.trunk = nn.Sequential(*list(backbone.children())[:-2])
-        self.project = nn.Conv2d(512, keypoints, kernel_size=1)
+        # children(): conv1, bn1, relu, maxpool, layer1..layer4, avgpool, fc.
+        self.trunk_stages = trunk_stages
+        kept = list(backbone.children())[: 4 + trunk_stages]
+        self.trunk = nn.Sequential(*kept)
+        self.project = nn.Conv2d(_STAGE_CHANNELS[trunk_stages], keypoints, kernel_size=1)
         self.spatial_softmax = SpatialSoftmax(keypoints)
         self.feature_dim = keypoints * 2
 
@@ -106,6 +124,7 @@ class FlowImageUnet1D(nn.Module):
         cameras: int = 2,
         keypoints: int = 32,
         pretrained_backbone: bool = False,
+        trunk_stages: int = 4,
         time_embedding_dim: int = 32,
         down_dims: tuple[int, ...] = (64, 128, 256),
         kernel_size: int = 5,
@@ -121,8 +140,11 @@ class FlowImageUnet1D(nn.Module):
         self.cameras = cameras
         self.keypoints = keypoints
         self.pretrained_backbone = pretrained_backbone
+        self.trunk_stages = trunk_stages
 
-        self.encoder = CameraEncoder(keypoints=keypoints, pretrained=pretrained_backbone)
+        self.encoder = CameraEncoder(
+            keypoints=keypoints, pretrained=pretrained_backbone, trunk_stages=trunk_stages
+        )
         vision_dim = self.encoder.feature_dim * cameras * observation_steps
         self.observation_dim = vision_dim + state_dim * observation_steps
 
@@ -177,6 +199,7 @@ def model_config(model: FlowImageUnet1D) -> dict[str, object]:
         "cameras": model.cameras,
         "keypoints": model.keypoints,
         "pretrained_backbone": model.pretrained_backbone,
+        "trunk_stages": model.trunk_stages,
         "time_embedding_dim": model.time_embedding_dim,
         "down_dims": model.unet.down_dims,
         "kernel_size": model.unet.kernel_size,

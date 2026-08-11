@@ -88,6 +88,14 @@ def main() -> None:
     parser.add_argument("--prediction-steps", type=int, default=16)
     parser.add_argument("--keypoints", type=int, default=32)
     parser.add_argument("--pretrained-backbone", action="store_true")
+    parser.add_argument(
+        "--trunk-stages",
+        type=int,
+        default=4,
+        choices=(1, 2, 3, 4),
+        help="ResNet18 residual stages to keep; 3 stops after layer3 and doubles "
+        "the keypoint map the spatial softmax localizes over (default: 4)",
+    )
     parser.add_argument("--validation-fraction", type=float, default=0.1)
     parser.add_argument("--validation-interval", type=int, default=2_000)
     parser.add_argument("--validation-batches", type=int, default=40)
@@ -142,6 +150,7 @@ def main() -> None:
         cameras=export.cameras,
         keypoints=args.keypoints,
         pretrained_backbone=args.pretrained_backbone,
+        trunk_stages=args.trunk_stages,
     ).to(device)
     if args.resume is not None:
         restored = torch.load(args.resume, map_location=device, weights_only=False)
