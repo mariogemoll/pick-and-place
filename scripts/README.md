@@ -267,6 +267,23 @@ batch would have trained on barely half an epoch.
 
 ## Finetuning SmolVLA
 
+> **Result: 32/100 on `canonical_100_v1`** (20,000 steps, batch 64, 4.39 epochs,
+> ~$2.40), against π₀.₅'s 0/100 on the same dataset and harness. So a VLA does
+> learn this task, and the π₀.₅ result was a misconfiguration rather than a
+> verdict — at π₀.₅'s exact sample count (5,000 steps, 1.10 epochs) SmolVLA also
+> scores 0/8 and cannot move the cube.
+>
+> **It is still not the right tool here.** DPPO scores 0.746 and the flow policy
+> 0.71, both for less compute. 0.32 understates SmolVLA — tagged cube against
+> their blue, 4.39 epochs, no tuning — but every one of those is fixed by
+> spending *more*, and they already win for *less*, so the gap in
+> cost-effectiveness only widens. **Do not run more VLA experiments in
+> simulation for this task.**
+>
+> The one live argument is sim2real: `real-20260701` is 18 minutes, far below
+> the 1–20 h band, and web-scale plus SO-100/SO-101 pretraining is a plausible
+> route to transferring from that little. That needs the real arm to score.
+
 `vast_smolvla_train.sh` is the cheap retry of the question the pi0.5 run left
 open, on the same rented 5090:
 
