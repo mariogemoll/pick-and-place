@@ -214,6 +214,29 @@ The checkpoint's recorded image shape is the dataset's 720x960, so the sim
 renders at that and pi0.5 downsamples to 224x224 internally. That is what it
 trained on; do not "optimize" it by rendering at 224.
 
+### Scoring the checkpoints
+
+`vast_pi05_eval.sh` scores checkpoints on the frozen manifests, fetching them
+from S3 if the pod does not already hold them:
+
+```sh
+RUN_NAME=<training run> STEPS="020000 014000" scripts/vast_pi05_eval.sh
+```
+
+Each checkpoint gets `smoke_v1` first — eight scenarios, a couple of minutes —
+and only reaches `canonical_100_v1` if that passes. Everything that goes wrong
+here goes wrong on the first scenario, so paying for a hundred of them before
+finding out is pure waste.
+
+Note that `eval_policy_sim.py` deliberately takes neither `--recording-hw` nor a
+default `--n-action-steps`: it reads both from the checkpoint. The training
+launcher needs the first and the sim runner needed the second, so it is easy to
+carry them over by habit and get an argument error.
+
+Scoring several steps is worth the extra minutes. Loss flattens well before the
+last checkpoint, so the final one is not automatically the best, and the ladder
+is already on disk.
+
 ### Sizing the run
 
 The episodes are 9.72 s each, so 1000 of them is 2.70 hours of data — the low
