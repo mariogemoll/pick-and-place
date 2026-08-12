@@ -117,6 +117,7 @@ from pick_and_place.core.robot_dynamics import (
     tracking_bias_deg,
     tracking_bias_vector,
 )
+from pick_and_place.planning.motion import ramp_setpoints
 from pick_and_place.spec.robot import CONTROL_HZ, GRIPPER_INDEX, JOINT_NAMES
 from pick_and_place.core.joint_frames import (
     action_to_joints,
@@ -294,6 +295,18 @@ def main() -> None:
         help="sounddevice input name or index (default: system input device)",
     )
     parser.add_argument(
+        "--send-substeps",
+        type=int,
+        default=3,
+        help=(
+            "sends per policy query. The policy emits setpoints at its own rate "
+            "(10 Hz for the flow policies), which leaves the servos one step per "
+            "period to chase and nothing in between; splitting it into this many "
+            "equal sends spreads the same travel with a fraction of the per-send "
+            "jump. 1 sends the undivided step (default: 3, i.e. 30 Hz sends)"
+        ),
+    )
+    parser.add_argument(
         "--measure-scene",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -385,6 +398,8 @@ def main() -> None:
         parser.error("--workspace-camera requires --record-video")
     if args.record_audio and args.record_video is None:
         parser.error("--record-audio requires --record-video")
+    if args.send_substeps < 1:
+        parser.error(f"--send-substeps must be at least 1, got {args.send_substeps}")
 
     override = (args.image_height, args.image_width)
     if any(override) and not all(override):
@@ -436,6 +451,11 @@ def main() -> None:
             f"{recording_hw[1]}x{recording_hw[0]} recording resolution."
         )
     print(f"Policy control rate: {control_hz:g} Hz.")
+    if args.send_substeps > 1:
+        print(
+            f"Ramping each setpoint over {args.send_substeps} sends "
+            f"({control_hz * args.send_substeps:g} Hz to the servos)."
+        )
 
     # MuJoCo is used only for the joint limits (to clamp commands) and to map the
     # neutral sim pose into the real frame for the start ramp — never stepped.
@@ -801,6 +821,9 @@ def main() -> None:
         still_since = None
         prev_arm = None
         prev_t = None
+        # Where the ramp to each new setpoint starts. None until the first send of
+        # the attempt, which ramps from the arm's measured pose instead.
+        last_sent = None
         announced = False
         raw_lag = None  # newest chunk's first action vs the ensembled one, deg
         while True:
@@ -867,7 +890,24 @@ def main() -> None:
                 commanded[:GRIPPER_INDEX] = state[:GRIPPER_INDEX] + np.clip(
                     arm_delta, -max_step, max_step
                 )
-            follower.send_action(joints_to_action(commanded))
+            # One setpoint per policy period would be a single step the servos chase
+            # and then hold, so the arm tracks a staircase. Ramp to it across the
+            # period instead, pacing the sends to absolute deadlines so the extra
+            # sends consume the period's slack rather than adding to it. Total travel
+            # per period — and so the velocity cap above — is unchanged.
+            sends = ramp_setpoints(last_sent if last_sent is not None else state,
+                                   commanded, args.send_substeps)
+            sub_period = period / len(sends)
+            for i, setpoint in enumerate(sends, start=1):
+                # The gripper takes its new value on the first send: like the
+                # velocity cap above, opening and closing stay timely.
+                setpoint[GRIPPER_INDEX] = commanded[GRIPPER_INDEX]
+                follower.send_action(joints_to_action(setpoint))
+                if i < len(sends):
+                    slack = (next_tick + i * sub_period) - time.monotonic()
+                    if slack > 0:
+                        time.sleep(slack)
+            last_sent = commanded.copy()
 
             # Drain the chunk captured during this tick's inference (if any) and
             # unnormalize the whole (chunk, dim) sequence in one pass — the
