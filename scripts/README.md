@@ -264,3 +264,125 @@ which makes epoch coverage easy to misjudge:
 `STEPS` therefore defaults to 20,000 rather than the LIBERO recipe's 30,000:
 that recipe runs batch 64, so cutting the step count without accounting for the
 batch would have trained on barely half an epoch.
+
+## Finetuning SmolVLA
+
+`vast_smolvla_train.sh` is the cheap retry of the question the pi0.5 run left
+open, on the same rented 5090:
+
+```sh
+RUN_NAME=<fresh> scripts/vast_smolvla_train.sh
+```
+
+No `HF_TOKEN`. SmolVLA tokenizes through `HuggingFaceTB/SmolVLM2-500M-Video-Instruct`,
+which is public, so the gated-checkpoint dance pi0.5 needs for
+`google/paligemma-3b-pt-224` is simply absent.
+
+### Why this and not another pi0.5 run
+
+pi0.5 scored 0/100, and its notes argue that was a misconfiguration rather than
+a verdict. SmolVLA tests the same hypothesis for about a third of the price, and
+its shape fits the objection better:
+
+| | pi0.5 | SmolVLA |
+| --- | ---: | ---: |
+| total parameters | 4,144,691,984 | 450,046,176 |
+| trainable | 1,287,168 (0.031%) | 99,880,992 (22.2%) |
+| how | rank-16 LoRA, `modules_to_save` empty | dense, no adapters |
+| epochs at the default budget | 1.10 | 6.58 |
+
+The pi0.5 notes single out `state_proj`, `action_in_proj` and `action_out_proj`
+— the projections carrying the 6-DOF joint mapping, the part with no pretrained
+equivalent — as having been adapted at rank 16 rather than trained. SmolVLA
+trains `state_proj` densely (`train_state_proj` defaults true) along with the
+whole action expert, while `freeze_vision_encoder` and `train_expert_only` keep
+the pretrained VLM intact. That is the recipe SmolVLA was designed around, taken
+as-is.
+
+`smolvla_base` is also pretrained largely on community LeRobot datasets recorded
+on SO-100/SO-101 arms — this arm, these joint names, this action space. pi0.5's
+pretraining mix is broader and further away.
+
+### What is load-bearing in the configuration
+
+- **`--dataset.image_transforms.enable=true`.** lerobot defaults this to false,
+  the pi0.5 run took the default, and it scored 0/100. On this task the image
+  flow policy measured **3/20 without random-shift augmentation against 20/20
+  with it** on otherwise identical runs. This is the single knob most likely to
+  decide the result.
+- **`n_action_steps` must be passed.** SmolVLA defaults it to the full chunk of
+  50, which is 1.67 seconds open-loop at `CONTROL_HZ` 30 — the same trap pi0.5
+  has. The launcher pins 10, about a third of a second, near the flow policy's
+  eight-tick execution horizon, so the closed-loop reaction rates of the
+  policies being ranked are comparable.
+- **No `--rename_map`.** SmolVLA's *base* config declares `camera1`/`camera2`/
+  `camera3` at 256x256, which invites renaming the dataset's cameras to match.
+  Do not: lerobot rebuilds `input_features` from the dataset, the names only
+  determine the order image tokens are stacked in, and keeping
+  `observation.images.overhead`/`.wrist` is what lets
+  `resolve_checkpoint_cameras` match them **by name** rather than by position.
+  Renaming is what produced the camera-ordering bug (fixed in `735a621`).
+  Note the dataset lists **wrist before overhead**, so that is the stacking
+  order; it is self-consistent because inference looks each frame up by key.
+- **MEAN_STD, not quantiles.** SmolVLA normalizes state and action with
+  mean/std, so the launcher's precondition check looks for those. pi0.5's checks
+  `q01`/`q99`. Copying that check across would pass on a dataset that then fails
+  on the first batch.
+- **`empty_cameras` stays 0.** pi0.5 reserves three image slots and needs one
+  padded; SmolVLA's finetune declares exactly the two the dataset has, so
+  nothing is missing and nothing needs padding.
+- **bf16 comes from the environment, not the config.** `--policy.use_amp` is
+  *not* wired into the `Accelerator` lerobot builds — `lerobot_train.py` calls
+  `Accelerator()` with no `mixed_precision`, so accelerate falls back to
+  `ACCELERATE_MIXED_PRECISION`, default `no`. Without the launcher exporting it
+  the run is fp32. Set `MIXED_PRECISION=no` to compare.
+
+### Sizing
+
+The same arithmetic as the pi0.5 section, at SmolVLA's batch size:
+
+| batch | steps | samples | epochs over `as-recorded` |
+| ---: | ---: | ---: | ---: |
+| 64 | 10,000 | 640,000 | 2.19 |
+| 64 | 30,000 | 1,920,000 | 6.58 |
+| 128 | 30,000 | 3,840,000 | 13.17 |
+
+`STEPS` defaults to 30,000 because that is also SmolVLA's own
+`scheduler_decay_steps`, so the cosine decay lands at the end of the run rather
+than being truncated mid-schedule. Change one and consider the other.
+
+### Rent in Europe, and check the driver
+
+Two host properties are not negotiable, and both have cost a rented hour:
+
+- **Driver 580 or newer.** The pinned `torch==2.13.0+cu130` needs it. On an
+  older driver `vast_pap_provision.sh` silently falls back to `torch 2.10.0+cu128`,
+  and the pinned `torchvision==0.28.0` — built for 2.13 — then dies with
+  `RuntimeError: operator torchvision::nms does not exist`. Filter offers on
+  `driver_version` before renting.
+- **A European host.** The `allyouneed` bucket is in **eu-north-1**. From
+  Romania the 2.4 GB dataset pulls at ~100 MB/s, in 23 seconds. A California
+  host advertising 1509 Mbps delivered 85 KB/s against the same bucket, which is
+  eight hours for the same file.
+
+Advertised `inet_down` is not evidence. Measure it on the rented host before
+staging a workload:
+
+```sh
+aws s3 cp s3://allyouneed/pick-and-place/datasets/<artifact>.tar.zst /tmp/probe.bin
+```
+
+### Scoring the checkpoints
+
+`vast_smolvla_eval.sh` mirrors the pi0.5 one — `smoke_v1` first, then
+`canonical_100_v1`, and it syncs results to S3 before you can destroy the pod:
+
+```sh
+RUN_NAME=<training run> STEPS="030000 020000" scripts/vast_smolvla_eval.sh
+```
+
+It needs no `--base-checkpoint`: SmolVLA trains without adapters, so a
+checkpoint is a complete model rather than a 5 MB diff against a 14.5 GB base.
+
+**Sync before teardown.** The pi0.5 evaluation artifacts no longer exist because
+a pod was destroyed before its results reached S3.
