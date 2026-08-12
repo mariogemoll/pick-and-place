@@ -91,10 +91,14 @@ def main() -> None:
     parser.add_argument(
         "--trunk-stages",
         type=int,
-        default=4,
+        default=3,
         choices=(1, 2, 3, 4),
-        help="ResNet18 residual stages to keep; 3 stops after layer3 and doubles "
-        "the keypoint map the spatial softmax localizes over (default: 4)",
+        help="ResNet18 residual stages to keep; 3 stops after layer3, halving the "
+        "model and doubling the keypoint map the spatial softmax localizes over "
+        "(default: 3). Pass 4 for the full trunk. Note this is the default for "
+        "*new runs* only -- CameraEncoder still defaults to 4, because "
+        "checkpoints written before the flag existed carry no trunk_stages in "
+        "their model_config and must keep loading as full trunks.",
     )
     parser.add_argument("--validation-fraction", type=float, default=0.1)
     parser.add_argument("--validation-interval", type=int, default=2_000)
