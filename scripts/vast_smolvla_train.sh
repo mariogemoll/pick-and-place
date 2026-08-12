@@ -71,10 +71,19 @@ batch_size="${BATCH_SIZE:-64}"
 save_freq="${SAVE_FREQ:-5000}"
 seed="${SEED:-1000}"
 # The dataset decodes two 720x960 h264 streams per sample, so at batch 64 a step
-# needs 128 random-access frame decodes. That, not the GPU, is the likely
-# bottleneck; the smoke stage prints s/step so it can be checked rather than
-# assumed. Sized from the pod's core count at run time.
-num_workers="${NUM_WORKERS:-$(( $(nproc) > 16 ? 16 : $(nproc) ))}"
+# needs 128 random-access frame decodes. That, and not the GPU, is the
+# bottleneck: measured on a 5090, a step takes 1.23s while the same forward and
+# backward on synthetic batches takes 0.416s, so two thirds of every step is
+# spent waiting for frames. lerobot 0.5.1 cannot move this to NVDEC --
+# decode_video_frames_torchcodec takes no device and its docstring warns that
+# CUDA decode in a dataloader worker raises CUDA initialization errors.
+#
+# 16 is not a throughput choice, it is a ceiling. `nproc` reports the *host's*
+# cores (256 on the box this was measured on) while the container's RAM is
+# capped far lower, and 48 workers prefetching 720x960 frames gets the run
+# OOM-killed. Raise NUM_WORKERS only with the container's memory limit in hand,
+# not its core count.
+num_workers="${NUM_WORKERS:-16}"
 
 # Passed explicitly because SmolVLA defaults n_action_steps to the full chunk of
 # 50, which is open-loop for 1.67 seconds at CONTROL_HZ 30 -- the same trap the
@@ -267,6 +276,12 @@ train_args=(
 
 echo "=== Smoke stage: $smoke_steps steps, batch $batch_size, $num_workers workers, ${ACCELERATE_MIXED_PRECISION} ==="
 rm -rf "$workspace/smolvla-smoke"
+# Sample VRAM *during* the stage and keep the peak. Reading it afterwards
+# reports whatever is left once the process has exited, which is 0 MiB.
+( while sleep 2; do
+    nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits
+  done ) > "$workspace/vram-samples.txt" &
+vram_pid=$!
 smoke_start=$(date +%s)
 "$venv/bin/lerobot-train" \
   "${train_args[@]}" \
@@ -276,7 +291,11 @@ smoke_start=$(date +%s)
   --output_dir="$workspace/smolvla-smoke" \
   2>&1 | tee "$output_root/job-metadata/smoke.log"
 smoke_elapsed=$(( $(date +%s) - smoke_start ))
-nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader \
+kill "$vram_pid" 2>/dev/null || true
+wait "$vram_pid" 2>/dev/null || true
+sort -n "$workspace/vram-samples.txt" | tail -1 \
+  | awk -v total="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1)" \
+    '{print "peak VRAM during smoke: "$1" MiB of "total" MiB"}' \
   | tee "$output_root/job-metadata/smoke-vram.txt"
 
 # The smoke stage pays the model build and the dataset scan once, so its wall
@@ -289,15 +308,18 @@ import re, sys
 
 log, elapsed, steps, batch = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 text = open(log, errors="replace").read()
-# lerobot logs a per-step "updt_s" (update time) alongside the loss.
-samples = [float(m) for m in re.findall(r"updt_s[:=]\s*([0-9.]+)", text)]
-if len(samples) >= 3:
-    # Drop the first: it carries cudnn autotuning and the first CUDA graph.
-    per_step = sum(samples[1:]) / len(samples[1:])
-    source = f"{len(samples) - 1} logged updt_s values"
+# lerobot drives the loop with tqdm, so the rate arrives as "N.NNs/step" in the
+# progress bar and there is no per-step field to average. tqdm's figure is a
+# running mean over the whole loop, so the last one is the best available and
+# still carries the first step's cudnn autotuning and worker spin-up amortized
+# over smoke_steps -- an overestimate that shrinks as smoke_steps grows.
+rates = [float(m) for m in re.findall(r"([0-9.]+)s/step", text)]
+if rates:
+    per_step = rates[-1]
+    source = f"tqdm running mean over {steps} steps (warmup included; an overestimate)"
 else:
     per_step = elapsed / max(steps, 1)
-    source = f"wall clock over {elapsed}s (includes model build; an overestimate)"
+    source = f"wall clock over {elapsed}s (includes model build; a large overestimate)"
 hours = per_step * steps / 3600
 print(f"per-step estimate: {per_step:.3f}s, from {source}")
 print(f"projected: {steps} steps ~ {hours:.1f}h, {steps * batch:,} samples")
