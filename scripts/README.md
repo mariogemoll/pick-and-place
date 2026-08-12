@@ -7,6 +7,11 @@ Long-running jobs: recording datasets, and training a policy on a rented GPU.
 Everything here assumes `PAP_DATA_ROOT` points at a directory outside the
 repository, and that the Python environment is the one `AGENTS.md` describes.
 
+Anything that compiles a MuJoCo scene also needs the generated AprilTag
+textures, which are not in the repository — see "The simulator needs generated
+AprilTag textures" in `AGENTS.md`. `vast_pap_provision.sh` renders them, so
+rented pods are covered; a fresh local clone is not.
+
 ## Does the cube's appearance decide whether the policy learns?
 
 The working Diffusion Policy is trained on a blue cube. The physical cube
