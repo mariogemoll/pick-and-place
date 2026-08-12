@@ -28,7 +28,20 @@ venv="$workspace/venvs/pick-and-place"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
+# build-essential and the gcc runtime libraries are not optional, even though
+# the image ships a compiler. lerobot pulls in pynput, which pulls in evdev,
+# which has no wheel and compiles against linux/input.h. On vastai/pytorch the
+# gcc that is already installed is broken -- cc1 dies with "libisl.so.23:
+# cannot open shared object file", then with libmpfr.so.6 once that is fixed --
+# so the reinstall is what makes it work, not the install.
 apt-get install -y curl git unzip zstd libegl1 libgl1
+apt-get install -y --reinstall build-essential linux-libc-dev libisl23 libmpfr6 libmpc3 libgmp10
+echo 'int main(){return 0;}' > /tmp/cc-probe.c
+if ! cc /tmp/cc-probe.c -o /tmp/cc-probe; then
+  echo "The C compiler cannot link; evdev will fail to build. Refusing to continue." >&2
+  exit 1
+fi
+rm -f /tmp/cc-probe.c /tmp/cc-probe
 if ! command -v aws >/dev/null; then
   aws_install_dir=$(mktemp -d)
   curl --fail --location --retry 3 --retry-all-errors \
