@@ -6,9 +6,14 @@
 # LoRA-finetune pi0.5 on a rented RTX 5090 from the recorded LeRobot dataset.
 #
 # pi0.5 is a 3.3B-parameter VLA; a full finetune is sized for an 80 GB card and
-# does not fit a 5090. LoRA does, and is the better match for this task anyway:
-# 1000 episodes of a single prompt is not enough signal to move 3.3B parameters
-# without overfitting -- see the 100,000-update result in docs/FLOW_POLICY.md.
+# does not fit a 5090. LoRA does, and openpi documents it as a supported mode
+# (>22.5 GB against >70 GB for a full finetune).
+#
+# The first run of this recipe scored 0/100 on canonical_100_v1. Two causes are
+# suspected, both accidents of a default rather than decisions: no image
+# augmentation, and 1.10 epochs. Both are addressed below. Read the run's notes
+# before spending on this again -- the flow policy reaches 0.71 and DPPO 0.746
+# on this task for a fraction of the time and cost.
 #
 # The adapter targets come from the policy, not from here. pi0.5 ships
 # _get_default_peft_targets() (modeling_pi05.py), which adapts the action
@@ -236,6 +241,13 @@ cp "$0" "$output_root/job-metadata/launcher.sh"
 train_args=(
   --dataset.repo_id="$artifact_name"
   --dataset.root="$artifact_root"
+  # lerobot defaults image_transforms to enable=false, and the first run here
+  # took that default and scored 0/100. On this task, random-shift augmentation
+  # is the single most load-bearing knob for an image-conditioned policy: an
+  # earlier image flow policy measured 3/20 without it against 20/20 with it, on
+  # otherwise identical runs. lerobot's set includes RandomAffine with translate
+  # 0.05, which at 720x960 is a shift of the same order.
+  --dataset.image_transforms.enable=true
   --policy.type=pi05
   --policy.pretrained_path="$checkpoint_dir"
   --policy.n_action_steps="$n_action_steps"

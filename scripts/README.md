@@ -91,6 +91,13 @@ anything.
 
 ## LoRA-finetuning pi0.5
 
+> **The first run of this scored 0/100 on `canonical_100_v1`.** It took
+> lerobot's `image_transforms.enable=false` default and trained 1.10 epochs;
+> both are now believed to be the cause, and the launcher enables augmentation.
+> Weigh a retry against what already works: the flow policy reaches 0.71 and
+> DPPO 0.746 on this task for a fraction of the time and cost.
+
+
 `vast_pi05_lora_train.sh` finetunes `lerobot/pi05_base` on the recorded LeRobot
 dataset, on the same rented 5090 the Diffusion Policy runs use:
 
@@ -101,10 +108,9 @@ RUN_NAME=<fresh> HF_TOKEN=<token> scripts/vast_pi05_lora_train.sh
 pi0.5 is a 3.3B-parameter VLA and a full finetune is sized for an 80 GB card, so
 a 5090 can only run it with adapters. That is not purely a concession to the
 hardware — 1000 episodes of a single prompt is thin evidence for moving 3.3B
-parameters, and this task already has an overfitting result on record in
-`docs/FLOW_POLICY.md`.
+parameters for a task an analytic planner already solves exactly.
 
-Three things about the configuration are load-bearing:
+Five things about the configuration are load-bearing:
 
 - **The adapter targets come from the policy.** `_get_default_peft_targets()` in
   lerobot's `modeling_pi05.py` adapts the action expert's q/v projections along
@@ -153,7 +159,7 @@ a two-minute one.
 `ARTIFACT_NAME` defaults to `two-variant-1000-as-recorded-lerobot` — the
 **AprilTag** half of the two-variant pair, not the blue one the Diffusion Policy
 and flow policy were trained on. That is deliberate, and it is the opposite of
-the choice `SIM2REAL.md` reaches for those policies:
+the choice made for those policies:
 
 - The physical cube carries AprilTags, so the tagged variant is the only one
   with a path to the real arm. A blue-cube policy cannot be deployed.
