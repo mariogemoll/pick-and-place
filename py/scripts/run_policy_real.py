@@ -59,6 +59,10 @@ camera extrinsics are solved at startup and checked for drift between attempts.
 Timed-out attempts return to neutral and retry. ``--loop`` continues after a
 success instead of exiting.
 
+That scoring reads the tagged cube's pose, so ``--no-measure-scene`` is needed for
+a policy trained on the plain blue cube, which has none: attempts then run
+unscored and the operator judges them.
+
 Safety: the arm ramps smoothly from wherever it is parked onto each start pose
 before the policy takes over, and on exit (success, Ctrl-C or step budget) it
 parks NEUTRAL -> REST and releases torque. Every command is clamped to the
@@ -288,6 +292,18 @@ def main() -> None:
         "--audio-device",
         default=None,
         help="sounddevice input name or index (default: system input device)",
+    )
+    parser.add_argument(
+        "--measure-scene",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "locate the cube and drop zone overhead and detect success automatically. "
+            "Requires the tagged cube, whose pose the overhead camera can read. Pass "
+            "--no-measure-scene for a plain blue cube, which has no measurable pose: "
+            "the rollout then runs once, unscored, and the operator judges it "
+            "(default: enabled)"
+        ),
     )
     parser.add_argument(
         "--loop",
@@ -619,10 +635,11 @@ def main() -> None:
         audio_note = " with audio" if args.record_audio else ""
         print(f"Recording the {cams} cameras{audio_note} to {record_dir}")
 
-    # ACT uses the tagged cube for automatic attempt setup and success checks.
-    # The Diffusion Policy's plain blue cube has no measurable pose, so its rollout
-    # is unmeasured.
-    measure_scene = args.controller == "lerobot"
+    # Automatic attempt setup and success checks read the tagged cube's pose from the
+    # overhead camera, so they are available to any controller trained against it —
+    # what decides this is the cube in the scene, not which policy is driving. A plain
+    # blue cube has no measurable pose and has to be scored by the operator.
+    measure_scene = args.measure_scene
     rng = np.random.default_rng()
     from pick_and_place.calibration.camera_compare import load_intrinsics
     from pick_and_place.calibration.cam_align_solve import (
@@ -1141,7 +1158,15 @@ def main() -> None:
                 break
             if not measure_scene:
                 print(f"Unmeasured rollout ended: {outcome}.")
-                break
+                if not args.loop:
+                    break
+                go_neutral()
+                try:
+                    input("Reset the scene, then press Enter for the next attempt "
+                          "(Ctrl-C to stop)...")
+                except EOFError:
+                    break
+                continue
             if outcome == "timeout":
                 print(f"TIMEOUT — no success within {args.attempt_timeout:.0f}s. "
                       "Returning to neutral and retrying.")
