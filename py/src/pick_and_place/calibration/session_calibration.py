@@ -426,22 +426,24 @@ def _look_for_cube(
     config: CalibrationConfig,
     rng: np.random.Generator,
 ) -> CubePose | None:
-    """Locate the cube overhead, panning the arm clear of the camera between tries.
+    """Locate the cube overhead, panning the arm clear of the camera first.
 
-    After the arm relocates the cube (or parks afterward) it can sit between the
-    fixed overhead camera and the cube, so a single look fails even though the
-    cube is right there. Like the scripted run, retry from fresh wide
-    shoulder-pan search poses that swing the arm out of the way. Returns an
-    in-zone cube pose, or None if none is found within ``hunt_tries``.
+    Wherever the arm is parked — the startup pose, or over the cube after a
+    relocation — it can sit between the fixed overhead camera and the cube, so a
+    look taken without moving it can fail, or worse, localize a partly occluded
+    cube slightly off. Every look therefore starts from a fresh wide shoulder-pan
+    search pose that swings the arm out of the way, then lets the camera settle.
+    The localized pose is the ground truth for every sample at this position, so
+    a biased fix here biases them all coherently. Returns an in-zone cube pose,
+    or None if none is found within ``hunt_tries``.
     """
     for attempt in range(config.hunt_tries):
         if viewer is not None and not viewer.is_running():
             return None
-        if attempt > 0:
-            arm, grip = sample_hunt_pose(rng)
-            print(f"Look {attempt + 1}/{config.hunt_tries}: panning to clear the overhead view...")
-            _move_arm_to(follower, arm, grip, model, data, qpos_addrs, viewer, config)
-            time.sleep(0.5)  # let the camera settle
+        arm, grip = sample_hunt_pose(rng)
+        print(f"Look {attempt + 1}/{config.hunt_tries}: panning to clear the overhead view...")
+        _move_arm_to(follower, arm, grip, model, data, qpos_addrs, viewer, config)
+        time.sleep(0.5)  # let the camera settle
         cube = track_cube(overhead_cap, camera_name, model, data, config.cube_search_timeout_s)
         if cube is not None:
             return cube
@@ -602,6 +604,22 @@ def run_session_calibration(
     visited: set[tuple[int, int]] = set()
     result: FitResult | None = None
     positions = 0
+
+    # Cue the first position like every later one. Radius spread is what conditions
+    # the parallel-axis lift/elbow/wrist_flex split, and each later position is
+    # chosen to spread away from those already visited — so an unguided first
+    # position anchors the whole spread wherever the cube happened to be left.
+    first_bin = _suggest_bin(visited, kinematics)
+    if first_bin is not None:
+        first_target = _bin_center_pose(kinematics, first_bin)
+        live = getattr(viewer, "user_scn", None) is not None
+        where = "the green box in the viewer" if live else _describe_bin(first_bin)
+        if _prompt_with_live_cube(
+            viewer,
+            f"Place the cube at {where}, then Enter (q to stop): ",
+            desired=first_target, track=track_live, prompt=prompt,
+        ):
+            raise RuntimeError("stopped before any cube position was measured")
 
     while positions < config.max_positions:
         cube = _look_for_cube(
