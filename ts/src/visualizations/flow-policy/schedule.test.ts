@@ -8,6 +8,10 @@ import type { FlowTrace } from './trace';
 
 const SAMPLE = 0.5;
 const FLOW = 1;
+// Eight ticks per horizon in the test trace, so this beat runs them at 10 Hz.
+const EXECUTE = 0.8;
+const HOLD = 0.25;
+const CYCLE = SAMPLE + FLOW + HOLD + EXECUTE + HOLD + HOLD;
 
 // Only the fields the schedule reads; the arrays are irrelevant to timing.
 function trace(overrides: Partial<FlowTrace> = {}): FlowTrace {
@@ -30,23 +34,28 @@ function trace(overrides: Partial<FlowTrace> = {}): FlowTrace {
   };
 }
 
-const options = { sampleSeconds: SAMPLE, flowSeconds: FLOW };
+const options = {
+  sampleSeconds: SAMPLE, flowSeconds: FLOW, executeSeconds: EXECUTE, holdSeconds: HOLD
+};
 
 describe('buildSchedule', () => {
-  it('gives every horizon a sample, flow and execute beat in order', () => {
+  it('runs the same beats for every horizon, in order', () => {
     const schedule = buildSchedule(trace(), options);
-    expect(schedule.map(segment => segment.phase)).toEqual([
-      'sample', 'flow', 'execute',
-      'sample', 'flow', 'execute',
-      'sample', 'flow', 'execute'
-    ]);
-    expect(schedule.map(segment => segment.chunk)).toEqual([0, 0, 0, 1, 1, 1, 2, 2, 2]);
+    const phases = ['sample', 'flow', 'flow', 'execute', 'execute', 'execute'];
+    const beats = ['hold', 'run', 'hold', 'run', 'fade', 'clear'];
+
+    expect(schedule.map(segment => segment.phase))
+      .toEqual([...phases, ...phases, ...phases]);
+    expect(schedule.map(segment => segment.beat))
+      .toEqual([...beats, ...beats, ...beats]);
+    expect(schedule.map(segment => segment.chunk))
+      .toEqual([0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2]);
   });
 
-  it('advances the replay only during execute', () => {
+  it('advances the replay only while executing, never on a hold', () => {
     const schedule = buildSchedule(trace(), options);
     for (const segment of schedule) {
-      if (segment.phase === 'execute') {
+      if (segment.phase === 'execute' && segment.beat === 'run') {
         expect(segment.endTick).toBeGreaterThan(segment.startTick);
       } else {
         expect(segment.endTick).toBe(segment.startTick);
@@ -56,29 +65,22 @@ describe('buildSchedule', () => {
 
   it('runs the last horizon out to the end of the recording', () => {
     const schedule = buildSchedule(trace(), options);
-    const last = schedule[schedule.length - 1];
-    expect(last.startTick).toBe(16);
-    expect(last.endTick).toBe(24);
+    const last = schedule
+      .filter(segment => segment.phase === 'execute' && segment.beat === 'run').pop();
+    expect(last?.startTick).toBe(16);
+    expect(last?.endTick).toBe(24);
   });
 
-  it('integrates faster than it executes, and barely pauses to sample', () => {
-    // With no overrides the durations are derived from the trace, so this holds
-    // whatever the control rate and chunk size are.
-    const schedule = buildSchedule(trace());
-    const [sample, flow, execute] = schedule;
-
-    expect(flow.duration).toBeLessThan(execute.duration);
-    expect(sample.duration).toBeLessThan(flow.duration / 2);
+  it('spends a second on each of the flow and execute beats by default', () => {
+    expect(buildSchedule(trace()).slice(0, 6).map(segment => segment.duration))
+      .toEqual([0.5, 1, 0.5, 1, 0.5, 0.5]);
   });
 
-  it('scales the beats with the control rate', () => {
-    const slow = buildSchedule(trace({ fps: 5 }));
-    const fast = buildSchedule(trace({ fps: 20 }));
-
-    // Halving the rate doubles the execution window, and the flow beat follows.
-    expect(slow[1].duration).toBeCloseTo(fast[1].duration * 4);
-    expect(slow[1].duration).toBeLessThan(slow[2].duration);
-    expect(fast[1].duration).toBeLessThan(fast[2].duration);
+  it('keeps the same cycle whatever the control rate', () => {
+    for (const fps of [5, 10, 20]) {
+      // Three horizons of 0.5 + 1 + 0.5 + 1 + 0.5 + 0.5 seconds.
+      expect(scheduleDuration(buildSchedule(trace({ fps })))).toBeCloseTo(3 * 4);
+    }
   });
 
   it('lays segments end to end with no gaps', () => {
@@ -88,8 +90,37 @@ describe('buildSchedule', () => {
         schedule[index - 1].start + schedule[index - 1].duration
       );
     }
-    // Three horizons: 3 * (0.5 + 1) beats, plus 24 ticks of execution at 10 Hz.
-    expect(scheduleDuration(schedule)).toBeCloseTo(3 * (SAMPLE + FLOW) + 2.4);
+    expect(scheduleDuration(schedule)).toBeCloseTo(3 * CYCLE);
+  });
+});
+
+describe('buildSchedule, continuous', () => {
+  const continuous = { ...options, mode: 'continuous' } as const;
+
+  it('gives each horizon a single execute beat and nothing else', () => {
+    const schedule = buildSchedule(trace(), continuous);
+    expect(schedule.map(segment => segment.phase)).toEqual(['execute', 'execute', 'execute']);
+    expect(schedule.map(segment => segment.beat)).toEqual(['run', 'run', 'run']);
+  });
+
+  it('runs at the rate the rollout was recorded at', () => {
+    // Eight ticks per horizon at 10 Hz, so 0.8 seconds each.
+    const schedule = buildSchedule(trace(), continuous);
+    expect(schedule.map(segment => segment.duration)).toEqual([0.8, 0.8, 0.8]);
+    expect(scheduleDuration(buildSchedule(trace({ fps: 20 }), continuous))).toBeCloseTo(1.2);
+  });
+
+  it('covers the same ticks as the stepped schedule', () => {
+    const schedule = buildSchedule(trace(), continuous);
+    expect(schedule[0].startTick).toBe(0);
+    expect(schedule[schedule.length - 1].endTick).toBe(24);
+  });
+
+  it('shows every horizon finished, with the arm moving throughout', () => {
+    const schedule = buildSchedule(trace(), continuous);
+    const moment = momentAt(schedule, 0.4);
+    expect(moment).toMatchObject({ chunk: 0, phase: 'execute', opacity: 1 });
+    expect(moment.tickFloat).toBeCloseTo(4);
   });
 });
 
@@ -106,20 +137,48 @@ describe('momentAt', () => {
     expect(momentAt(schedule, SAMPLE + 0.5)).toMatchObject({ phase: 'flow', tickFloat: 0 });
   });
 
+  it('sits on the finished horizon through the hold after the flow', () => {
+    expect(momentAt(schedule, SAMPLE + FLOW + HOLD / 2)).toMatchObject({
+      chunk: 0, phase: 'flow', beat: 'hold', progress: 1, opacity: 1, tickFloat: 0
+    });
+  });
+
+  it('fades the executed horizon out instead of dwelling on it', () => {
+    const fadeStart = SAMPLE + FLOW + HOLD + EXECUTE;
+    // The arm stays where the horizon left it while the horizon dissolves.
+    expect(momentAt(schedule, fadeStart)).toMatchObject({
+      chunk: 0, phase: 'execute', beat: 'fade', progress: 1, tickFloat: 8
+    });
+    expect(momentAt(schedule, fadeStart + HOLD / 2).opacity).toBeCloseTo(0.5);
+    expect(momentAt(schedule, fadeStart + HOLD).opacity).toBe(0);
+  });
+
+  it('leaves the grid empty until the next horizon is drawn', () => {
+    const clearStart = SAMPLE + FLOW + HOLD + EXECUTE + HOLD;
+    expect(momentAt(schedule, clearStart + HOLD / 2)).toMatchObject({
+      chunk: 0, beat: 'clear', opacity: 0, tickFloat: 8
+    });
+    expect(momentAt(schedule, clearStart + HOLD + 0.01)).toMatchObject({
+      chunk: 1, phase: 'sample', opacity: 1
+    });
+  });
+
   it('walks the arm across the horizon during execute', () => {
-    const executeStart = SAMPLE + FLOW;
+    const executeStart = SAMPLE + FLOW + HOLD;
     expect(momentAt(schedule, executeStart).tickFloat).toBeCloseTo(0);
     expect(momentAt(schedule, executeStart + 0.4).tickFloat).toBeCloseTo(4);
     expect(momentAt(schedule, executeStart + 0.79).tickFloat).toBeCloseTo(7.9);
   });
 
-  it('reports progress through the current phase', () => {
-    expect(momentAt(schedule, SAMPLE / 2).progress).toBeCloseTo(0.5);
+  it('reports progress through the integration', () => {
     expect(momentAt(schedule, SAMPLE + FLOW / 4).progress).toBeCloseTo(0.25);
+    expect(momentAt(schedule, SAMPLE + FLOW / 2).progress).toBeCloseTo(0.5);
+    // The noise draw is instant, so its beat is finished from the first frame.
+    expect(momentAt(schedule, SAMPLE / 2).progress).toBe(1);
   });
 
   it('moves on to the next horizon after one finishes executing', () => {
-    const secondChunk = SAMPLE + FLOW + 0.8;
+    const secondChunk = CYCLE;
     expect(momentAt(schedule, secondChunk + 0.01)).toMatchObject({ chunk: 1, phase: 'sample' });
   });
 
@@ -127,6 +186,7 @@ describe('momentAt', () => {
     const moment = momentAt(schedule, 999);
     expect(moment.chunk).toBe(2);
     expect(moment.phase).toBe('execute');
+    expect(moment.beat).toBe('clear');
     expect(moment.tickFloat).toBe(24);
   });
 });

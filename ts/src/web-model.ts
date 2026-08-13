@@ -50,11 +50,41 @@ export interface WebBody {
   geometries: WebGeometry[];
 }
 
+/**
+ * Calibrated pinhole intrinsics for a camera, as measured on the real rig.
+ * Only `fovy_deg` has an equivalent in three.js; the rest is carried so the
+ * manifest stays the single source of truth for the camera.
+ */
+export interface WebCameraIntrinsics {
+  model: string;
+  width: number;
+  height: number;
+  camera_matrix: number[][];
+  dist_coeffs: number[];
+  rms_reproj_px: number;
+  n_views: number;
+  sheet_scale: number;
+  fovy_deg: number;
+  fovx_deg: number;
+}
+
+export interface WebCamera {
+  name: string;
+  /** Body the camera is mounted on; its pose below is in that body's frame. */
+  body: string;
+  position: [number, number, number];
+  quaternion: [number, number, number, number];
+  /** Vertical field of view in degrees. */
+  fovy: number;
+  intrinsics?: WebCameraIntrinsics;
+}
+
 export interface WebModel {
   format: 'pick-and-place-web-model';
   version: 2;
   materials: Record<string, [number, number, number, number]>;
   bodies: WebBody[];
+  cameras: WebCamera[];
 }
 
 export interface BuiltWebModel {
@@ -287,6 +317,37 @@ export function buildWebModel(
     materialsByName,
     ready: Promise.all(meshLoads).then(() => undefined)
   };
+}
+
+export function cameraByName(model: WebModel, name: string): WebCamera {
+  const camera = model.cameras.find(candidate => candidate.name === name);
+  if (camera === undefined) {
+    throw new Error(`Model has no camera named "${name}"`);
+  }
+  return camera;
+}
+
+/**
+ * A three.js camera holding the manifest camera's pose, expressed in its
+ * mounting body's frame: add it to that body's group and it rides along.
+ *
+ * MuJoCo and three.js agree on the camera frame — looking down local -Z with
+ * +Y up — so the pose transfers directly, only the quaternion needs its
+ * MuJoCo (w, x, y, z) order swapped for three.js's (x, y, z, w).
+ *
+ * The aspect is left at 1: the policy's square input comes from an aspect-fill
+ * resize plus a center crop, which keeps the full vertical field of view and
+ * trims the horizontal one, so a square render at `fovy` frames it the same.
+ */
+export function createWebCamera(
+  camera: WebCamera,
+  near = 0.005,
+  far = 20
+): THREE.PerspectiveCamera {
+  const perspective = new THREE.PerspectiveCamera(camera.fovy, 1, near, far);
+  perspective.position.set(...camera.position);
+  setQuaternion(perspective, camera.quaternion);
+  return perspective;
 }
 
 export function setJointAngle(

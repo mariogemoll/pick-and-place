@@ -3,23 +3,20 @@
 
 import { replacePlaceholder } from '../grasp-pose-shared/ui';
 
+// Captions sit in the same order as the cameras the strip renders.
+export const CAMERA_CAPTIONS = ['overhead', 'wrist'] as const;
+
 export interface FlowPolicyDom {
   root: HTMLDivElement;
   viewport: HTMLDivElement;
+  cameras: HTMLDivElement;
   panelHost: HTMLDivElement;
   label: HTMLDivElement;
   status: HTMLDivElement;
+  phaseRow: HTMLDivElement;
   phases: Record<string, HTMLSpanElement>;
   playPauseButton: HTMLButtonElement;
-}
-
-function cameraPlaceholder(name: string): HTMLDivElement {
-  const box = document.createElement('div');
-  box.className = 'flow-policy-viz-camera';
-  const caption = document.createElement('span');
-  caption.textContent = name;
-  box.appendChild(caption);
-  return box;
+  modeButton: HTMLButtonElement;
 }
 
 export function buildUi(parent: HTMLElement): FlowPolicyDom {
@@ -39,7 +36,13 @@ export function buildUi(parent: HTMLElement): FlowPolicyDom {
 
   const cameras = document.createElement('div');
   cameras.className = 'flow-policy-viz-cameras';
-  cameras.append(cameraPlaceholder('overhead'), cameraPlaceholder('wrist'));
+  for (let index = 0; index < CAMERA_CAPTIONS.length; index++) {
+    const caption = document.createElement('span');
+    caption.className = 'flow-policy-viz-camera-caption';
+    caption.style.left = `${(index * 100) / CAMERA_CAPTIONS.length}%`;
+    caption.textContent = CAMERA_CAPTIONS[index];
+    cameras.appendChild(caption);
+  }
   scene.appendChild(cameras);
 
   const side = document.createElement('div');
@@ -75,15 +78,24 @@ export function buildUi(parent: HTMLElement): FlowPolicyDom {
 
   const overlay = document.createElement('div');
   overlay.className = 'viz-playback-overlay';
+  const controls = document.createElement('div');
+  controls.className = 'flow-policy-viz-controls';
   const playPauseButton = document.createElement('button');
   playPauseButton.className = 'viz-button viz-button-primary viz-play-button';
   playPauseButton.type = 'button';
   playPauseButton.textContent = 'Pause';
   playPauseButton.setAttribute('aria-label', 'Pause rollout');
-  overlay.appendChild(playPauseButton);
+  const modeButton = document.createElement('button');
+  modeButton.className = 'viz-button viz-play-button flow-policy-viz-mode-button';
+  modeButton.type = 'button';
+  controls.append(playPauseButton, modeButton);
+  overlay.appendChild(controls);
   viewport.appendChild(overlay);
 
   replacePlaceholder(parent, root);
 
-  return { root, viewport, panelHost, label, status, phases, playPauseButton };
+  return {
+    root, viewport, cameras, panelHost, label, status,
+    phaseRow, phases, playPauseButton, modeButton
+  };
 }

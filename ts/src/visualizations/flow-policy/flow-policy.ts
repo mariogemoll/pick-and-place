@@ -4,18 +4,26 @@
 // A recorded flow-policy rollout, replayed one horizon at a time.
 //
 // The policy works in chunks: draw noise, integrate it into a 16-step horizon,
-// execute the first 8 of those steps, repeat. The visualization walks that
-// cycle beat by beat, holding the arm still while a horizon is being generated
-// and moving it only while that horizon is being executed, so each phase is
-// watchable on its own.
+// execute the first 8 of those steps, repeat. Stepped, the visualization walks
+// that cycle beat by beat, holding the arm still while a horizon is being
+// generated and moving it only while that horizon is being executed, so each
+// phase is watchable on its own. Continuous drops the beats and plays the
+// rollout at its recorded rate, showing only each finished horizon.
 
 import * as THREE from 'three';
 
 import { ARM_JOINT_NAMES } from '../../ik/kinematics';
-import { loadWebModel } from '../../web-model';
+import { cameraByName, createWebCamera, loadWebModel, type WebModel } from '../../web-model';
 import { createEpisodeReplayScene } from '../episode-replay/scene';
+import { createCameraStrip } from './camera-strip';
 import { createFlowPanel, type FlowPanel } from './flow-panel';
-import { buildSchedule, momentAt, scheduleDuration, type Segment } from './schedule';
+import {
+  buildSchedule,
+  momentAt,
+  scheduleDuration,
+  type ScheduleMode,
+  type Segment
+} from './schedule';
 import { type FlowTrace, frame, parseFlowTrace, pathState } from './trace';
 import { buildUi } from './ui';
 
@@ -35,6 +43,7 @@ export interface FlowPolicyVisualization {
 export interface FlowPolicyOptions {
   modelBasePath?: string;
   modelUrl?: string;
+  environmentModelUrl?: string;
   traceUrls?: string[];
 }
 
@@ -50,22 +59,63 @@ function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
 
+// Hangs a camera off the body it is bolted to in the manifest, so it tracks
+// that body as the arm moves instead of being re-posed every frame.
+function mountCamera(
+  bodies: Map<string, THREE.Group>,
+  model: WebModel,
+  name: string
+): THREE.PerspectiveCamera {
+  const definition = cameraByName(model, name);
+  const body = bodies.get(definition.body);
+  if (body === undefined) {
+    throw new Error(`Scene has no body "${definition.body}" to mount ${name} on`);
+  }
+  const camera = createWebCamera(definition);
+  body.add(camera);
+  return camera;
+}
+
 export async function FlowPolicy(
   parent: HTMLElement,
   options: FlowPolicyOptions = {}
 ): Promise<FlowPolicyVisualization> {
-  const model = await loadWebModel(options.modelUrl);
+  const [model, environmentModel] = await Promise.all([
+    loadWebModel(options.modelUrl),
+    loadWebModel(options.environmentModelUrl ?? '/environment.json')
+  ]);
   const traces = await loadTraces(options.traceUrls ?? DEFAULT_TRACE_URLS);
-  const schedules: Segment[][] = traces.map(trace => buildSchedule(trace));
-  const durations = schedules.map(scheduleDuration);
+  // Both timings are laid out up front; switching modes is then just a matter
+  // of reading from the other one.
+  const schedules: Record<ScheduleMode, Segment[][]> = {
+    stepped: traces.map(trace => buildSchedule(trace, { mode: 'stepped' })),
+    continuous: traces.map(trace => buildSchedule(trace, { mode: 'continuous' }))
+  };
+  const durations: Record<ScheduleMode, number[]> = {
+    stepped: schedules.stepped.map(scheduleDuration),
+    continuous: schedules.continuous.map(scheduleDuration)
+  };
 
   const ui = buildUi(parent);
-  const vizScene = createEpisodeReplayScene(ui.viewport, model, options.modelBasePath);
+  // The overhead camera hangs off the environment's mast, and the workspace
+  // frame it looks down on is what the real camera sees, so the environment
+  // comes into the scene rather than the camera being placed in mid-air.
+  const vizScene = createEpisodeReplayScene(ui.viewport, model, {
+    modelBasePath: options.modelBasePath,
+    environmentModel
+  });
   const panel: FlowPanel = createFlowPanel(ui.panelHost);
+
+  // Order matches CAMERA_CAPTIONS in the UI.
+  const cameraStrip = createCameraStrip(ui.cameras, [
+    mountCamera(vizScene.environmentBodies, environmentModel, 'overhead_camera'),
+    mountCamera(vizScene.bodies, model, 'wrist_camera')
+  ]);
 
   let traceIndex = 0;
   let seconds = 0;
   let playing = true;
+  let mode: ScheduleMode = 'stepped';
   let previousFrameTime: number | null = null;
 
   // Reused so the animation does not allocate a horizon per rendered frame,
@@ -104,7 +154,8 @@ export async function FlowPolicy(
 
   const applyTime = (value: number): void => {
     const trace = traces[traceIndex];
-    const { chunk, phase, progress, tickFloat } = momentAt(schedules[traceIndex], value);
+    const { beat, chunk, opacity, phase, progress, tickFloat } =
+      momentAt(schedules[mode][traceIndex], value);
     if (chunk < 0) { return; }
 
     applyScene(trace, tickFloat);
@@ -125,14 +176,17 @@ export async function FlowPolicy(
 
     panel.draw({
       values: blended.subarray(0, from.length),
-      trail: pathState(trace, chunk, 0),
+      // The trail is where the integration started; without an integration to
+      // watch there is nothing for it to say.
+      trail: mode === 'stepped' ? pathState(trace, chunk, 0) : null,
       steps: trace.steps,
       joints: trace.joints,
       actSteps: trace.actSteps,
-      executingStep: phase === 'execute'
+      executingStep: phase === 'execute' && beat === 'run'
         ? Math.min(Math.floor(tickFloat - trace.chunkTicks[chunk]), trace.actSteps - 1)
         : -1,
       progress: integration,
+      opacity,
       phase
     });
 
@@ -148,6 +202,8 @@ export async function FlowPolicy(
     ui.label.textContent = `Rollout ${traceIndex + 1} / ${traces.length}`;
     ui.playPauseButton.textContent = playing ? 'Pause' : 'Play';
     ui.playPauseButton.setAttribute('aria-label', `${playing ? 'Pause' : 'Play'} rollout`);
+    ui.modeButton.textContent = mode === 'stepped' ? 'Run continuously' : 'Step through';
+    ui.phaseRow.hidden = mode === 'continuous';
   };
   const setPlaying = (next: boolean): void => {
     playing = next;
@@ -155,18 +211,36 @@ export async function FlowPolicy(
     renderPlayback();
   };
 
+  // Switching modes lands on the same horizon rather than restarting, so the
+  // rollout carries on from where it was being watched.
+  const setMode = (next: ScheduleMode): void => {
+    const { chunk } = momentAt(schedules[mode][traceIndex], seconds);
+    mode = next;
+    seconds = schedules[mode][traceIndex]
+      .find(segment => segment.chunk === chunk)?.start ?? 0;
+    previousFrameTime = null;
+    applyTime(seconds);
+    renderPlayback();
+  };
+
   applyTime(seconds);
   renderPlayback();
 
   const playPauseListener = (): void => { setPlaying(!playing); };
+  const modeListener = (): void => {
+    setMode(mode === 'stepped' ? 'continuous' : 'stepped');
+  };
   ui.playPauseButton.addEventListener('click', playPauseListener);
+  ui.modeButton.addEventListener('click', modeListener);
 
   const resizeObserver = new ResizeObserver(() => {
     vizScene.resize();
     panel.resize();
+    cameraStrip.resize();
   });
   resizeObserver.observe(ui.viewport);
   resizeObserver.observe(ui.panelHost);
+  resizeObserver.observe(ui.cameras);
 
   let animationFrameId = 0;
   let destroyed = false;
@@ -176,7 +250,7 @@ export async function FlowPolicy(
     if (playing) {
       if (previousFrameTime !== null) {
         seconds += (time - previousFrameTime) / 1000;
-        if (seconds >= durations[traceIndex]) {
+        if (seconds >= durations[mode][traceIndex]) {
           traceIndex = (traceIndex + 1) % traces.length;
           seconds = 0;
         }
@@ -187,6 +261,7 @@ export async function FlowPolicy(
     }
     vizScene.orbitControls.update();
     vizScene.renderer.render(vizScene.scene, vizScene.camera);
+    cameraStrip.render(vizScene.scene);
   }
   animationFrameId = window.requestAnimationFrame(animate);
 
@@ -196,7 +271,9 @@ export async function FlowPolicy(
       window.cancelAnimationFrame(animationFrameId);
       resizeObserver.disconnect();
       ui.playPauseButton.removeEventListener('click', playPauseListener);
+      ui.modeButton.removeEventListener('click', modeListener);
       panel.destroy();
+      cameraStrip.destroy();
       vizScene.destroy();
       ui.root.remove();
     }

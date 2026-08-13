@@ -51,6 +51,11 @@ export interface FlowPanelFrame {
   executingStep: number;
   /** How far the integration has run, 0 at the noise draw, 1 at the sample. */
   progress: number;
+  /**
+   * How visible this horizon is. The grid it lives on is always drawn; the
+   * values on it fade out once the horizon has been executed.
+   */
+  opacity: number;
   /** Which beat of the cycle this frame belongs to. */
   phase: 'sample' | 'flow' | 'execute';
 }
@@ -94,7 +99,9 @@ function drawFrame(
   height: number,
   frame: FlowPanelFrame
 ): void {
-  const { steps, joints, values, trail, actSteps, executingStep, progress, phase } = frame;
+  const {
+    steps, joints, values, trail, actSteps, executingStep, progress, opacity, phase
+  } = frame;
   const { cellWidth, rowHeight, plotLeft, plotTop } = geometry(width, height, steps, joints);
 
   context.clearRect(0, 0, width, height);
@@ -111,7 +118,9 @@ function drawFrame(
     flow: `integrating, t = ${progress.toFixed(2)}`,
     execute: `executing ${actSteps} of ${steps}`
   }[phase];
+  context.globalAlpha = opacity;
   context.fillText(headline, width - PADDING, PADDING + HEADER_HEIGHT / 2);
+  context.globalAlpha = 1;
 
   // The executed prefix of the horizon, behind everything else.
   context.fillStyle = COLORS.executingFill;
@@ -155,6 +164,9 @@ function drawFrame(
       context.lineTo(centerX, valueY(TRACK_MIN, rowTop, rowHeight));
       context.stroke();
 
+      // Everything from here on belongs to the horizon itself, so it fades
+      // with it; the grid it is drawn on stays.
+      context.globalAlpha = opacity;
       const index = step * joints + joint;
       if (trail !== null) {
         const fromY = valueY(trail[index], rowTop, rowHeight);
@@ -177,11 +189,14 @@ function drawFrame(
         Math.PI * 2
       );
       context.fill();
+      context.globalAlpha = 1;
     }
   }
 
-  // The step whose command the arm is following right now.
+  // The step whose command the arm is following right now. It is gone the
+  // moment execution ends rather than dwelling on the last step.
   if (executingStep >= 0 && executingStep < steps) {
+    context.globalAlpha = opacity;
     context.strokeStyle = COLORS.executing;
     context.lineWidth = 1.5;
     context.strokeRect(
@@ -190,6 +205,7 @@ function drawFrame(
       cellWidth - COLUMN_GAP,
       rowHeight * joints
     );
+    context.globalAlpha = 1;
   }
 }
 

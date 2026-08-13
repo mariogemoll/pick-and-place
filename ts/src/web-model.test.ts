@@ -5,7 +5,15 @@ import * as THREE from 'three';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { type LoadedMesh, type LoadedMeshSet,loadMesh, loadMeshSet } from './mesh-loader';
-import { buildWebModel, type WebBody, type WebGeometry, type WebModel } from './web-model';
+import {
+  buildWebModel,
+  cameraByName,
+  createWebCamera,
+  type WebBody,
+  type WebCamera,
+  type WebGeometry,
+  type WebModel
+} from './web-model';
 
 vi.mock('./mesh-loader', () => ({
   loadMesh: vi.fn(),
@@ -38,8 +46,8 @@ function makeBody(overrides: Partial<WebBody>): WebBody {
   };
 }
 
-function makeModel(bodies: WebBody[]): WebModel {
-  return { format: 'pick-and-place-web-model', version: 2, materials: {}, bodies };
+function makeModel(bodies: WebBody[], cameras: WebCamera[] = []): WebModel {
+  return { format: 'pick-and-place-web-model', version: 2, materials: {}, bodies, cameras };
 }
 
 beforeEach(() => {
@@ -113,5 +121,67 @@ describe('buildWebModel mesh resolution', () => {
     expect(mockedLoadMeshSet).toHaveBeenCalledWith('/so101_assets/gripper.glb');
     expect(built.bodies.has('arm')).toBe(false);
     expect(built.bodies.has('gripper')).toBe(true);
+  });
+});
+
+function makeCamera(overrides: Partial<WebCamera>): WebCamera {
+  return {
+    name: 'camera',
+    body: 'mount',
+    position: [0, 0, 0],
+    quaternion: [1, 0, 0, 0],
+    fovy: 45,
+    ...overrides
+  };
+}
+
+describe('cameraByName', () => {
+  it('finds the camera', () => {
+    const model = makeModel([], [makeCamera({ name: 'wrist_camera', fovy: 46.9 })]);
+    expect(cameraByName(model, 'wrist_camera').fovy).toBeCloseTo(46.9);
+  });
+
+  it('throws when the model has no such camera', () => {
+    expect(() => cameraByName(makeModel([]), 'wrist_camera')).toThrow(/wrist_camera/);
+  });
+});
+
+describe('createWebCamera', () => {
+  it('takes the vertical field of view straight from the manifest', () => {
+    expect(createWebCamera(makeCamera({ fovy: 47.2 })).fov).toBeCloseTo(47.2);
+  });
+
+  it('looks down its own -Z, as MuJoCo cameras do', () => {
+    const direction = createWebCamera(makeCamera({}))
+      .getWorldDirection(new THREE.Vector3());
+    expect(direction.x).toBeCloseTo(0);
+    expect(direction.y).toBeCloseTo(0);
+    expect(direction.z).toBeCloseTo(-1);
+  });
+
+  it('reads the quaternion in MuJoCo (w, x, y, z) order', () => {
+    // A quarter turn about +X, which swings the view direction from -Z to +Y.
+    const quarterTurn = Math.SQRT1_2;
+    const camera = createWebCamera(makeCamera({ quaternion: [quarterTurn, quarterTurn, 0, 0] }));
+
+    const direction = camera.getWorldDirection(new THREE.Vector3());
+    expect(direction.x).toBeCloseTo(0);
+    expect(direction.y).toBeCloseTo(1);
+    expect(direction.z).toBeCloseTo(0);
+  });
+
+  it('rides the body it is added to', () => {
+    const model = makeModel(
+      [makeBody({ name: 'mount', position: [0, 0, 0.5] })],
+      [makeCamera({ position: [0, 0, -0.02] })]
+    );
+    const built = buildWebModel(model);
+    const camera = createWebCamera(cameraByName(model, 'camera'));
+    const mount = built.bodies.get('mount');
+    expect(mount).toBeDefined();
+    mount?.add(camera);
+
+    const position = camera.getWorldPosition(new THREE.Vector3());
+    expect(position.z).toBeCloseTo(0.48);
   });
 });

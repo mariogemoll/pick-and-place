@@ -1624,24 +1624,32 @@ input[type="range"]:active::-moz-range-thumb {
   pointer-events: none;
 }
 
+/* One canvas across the row; the camera strip scissors a square view into the
+   left and right halves, so the captions are placed on the same halves. */
 .flow-policy-viz-cameras {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--viz-gap-md);
+  position: relative;
+  height: 150px;
 }
 
-.flow-policy-viz-camera {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  aspect-ratio: 1 / 1;
-  max-height: 120px;
-  background: var(--viz-surface-muted);
-  border: 1px dashed var(--viz-border);
-  border-radius: var(--viz-radius-sm);
-  color: var(--viz-muted);
+.flow-policy-viz-cameras-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.flow-policy-viz-camera-caption {
+  position: absolute;
+  z-index: 1;
+  top: 0.4rem;
+  padding: 0.15rem 0.4rem;
+  margin-left: 0.4rem;
+  background: rgb(0 0 0 / 45%);
+  color: #fff;
   font-family: var(--viz-font-mono);
-  font-size: 0.75rem;
+  font-size: 0.7rem;
+  border-radius: var(--viz-radius-sm, 4px);
+  pointer-events: none;
 }
 
 .flow-policy-viz-side {
@@ -1649,6 +1657,27 @@ input[type="range"]:active::-moz-range-thumb {
   flex-direction: column;
   gap: var(--viz-gap-md);
   min-width: 0;
+}
+
+.flow-policy-viz-controls {
+  display: flex;
+  gap: var(--viz-gap-sm);
+}
+
+.flow-policy-viz-mode-button {
+  min-width: 9rem;
+  color: #fff;
+  background: rgb(15 23 42 / 55%);
+  border-color: rgb(255 255 255 / 35%);
+}
+
+.flow-policy-viz-mode-button:hover {
+  background: rgb(15 23 42 / 75%);
+  border-color: rgb(255 255 255 / 55%);
+}
+
+.flow-policy-viz-phases[hidden] {
+  display: none;
 }
 
 .flow-policy-viz-status {

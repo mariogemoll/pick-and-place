@@ -58,7 +58,9 @@ export async function EpisodeReplay(
   const durations = episodes.map(episode => (episode.nframes - 1) / episode.fps);
 
   const ui = buildUi(parent);
-  const vizScene = createEpisodeReplayScene(ui.viewport, model, options.modelBasePath);
+  const vizScene = createEpisodeReplayScene(ui.viewport, model, {
+    modelBasePath: options.modelBasePath
+  });
 
   let episodeIndex = 0;
   let episodeSeconds = 0;

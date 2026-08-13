@@ -5,9 +5,16 @@
 // works: draw noise, integrate it into a horizon, then execute that horizon's
 // actions while the world moves.
 //
-// The noise draw gets its own beat because it is its own step, but only just
-// long enough to register: it is where the flow starts, at t = 0, so anything
-// more than a glimpse reads as a stall before the integration.
+// Stepped, every horizon gets the same four-second cycle: half a second
+// holding the fresh noise, a second of integration, half a second frozen on
+// the horizon it produced, a second of execution, then the horizon fading out
+// over half a second and half a second of empty grid before the next draw. The
+// rhythm is the same for every horizon, and the holds give each result a beat
+// to be looked at before the next step overwrites it.
+//
+// Continuous drops all of that: each horizon is shown finished and executed
+// straight away, at the rate it was recorded at, so the rollout runs as the
+// policy actually ran it.
 //
 // This is deliberately not wall-clock faithful. The real sampler runs between
 // two control ticks, far too fast to watch, so sampling and integration get
@@ -18,9 +25,23 @@ import type { FlowTrace } from './trace';
 
 export type Phase = 'sample' | 'flow' | 'execute';
 
+/**
+ * What a beat does with its phase: `run` produces the phase's result, `hold`
+ * sits on it, `fade` dissolves it away, and `clear` is the empty grid left
+ * behind.
+ */
+export type Beat = 'run' | 'hold' | 'fade' | 'clear';
+
+/**
+ * `stepped` walks the cycle beat by beat; `continuous` shows each horizon
+ * finished and executes it at the recorded control rate.
+ */
+export type ScheduleMode = 'stepped' | 'continuous';
+
 export interface Segment {
   chunk: number;
   phase: Phase;
+  beat: Beat;
   /** Seconds from the start of the rollout. */
   start: number;
   duration: number;
@@ -32,55 +53,70 @@ export interface Segment {
 export interface Moment {
   chunk: number;
   phase: Phase;
-  /** 0 to 1 within the current phase. */
+  beat: Beat;
+  /** 0 to 1 within the current phase; 1 once the phase has produced its result. */
   progress: number;
+  /** How visible the horizon is: 1 until it fades out, 0 on the empty grid. */
+  opacity: number;
   /** Where the arm stands, in fractional replay ticks. */
   tickFloat: number;
 }
 
 export interface ScheduleOptions {
+  mode?: ScheduleMode;
   /** Beat spent holding the fresh noise draw before integrating. */
   sampleSeconds?: number;
   /** Beat spent integrating noise into the horizon. */
   flowSeconds?: number;
+  /** Beat spent walking the arm through the horizon's actions. */
+  executeSeconds?: number;
+  /**
+   * The half-beat: holding the noise draw, holding the finished horizon,
+   * fading that horizon out, and the empty grid before the next draw.
+   */
+  holdSeconds?: number;
 }
 
-// Just long enough for the noise to register as its own step.
-const DEFAULT_SAMPLE_SECONDS = 0.12;
-
-// The integration is drawn as a fraction of the window its horizon is then
-// executed over, so generating a chunk always visibly outruns running it --
-// which is the true relationship, the real sampler finishing between two ticks.
-const FLOW_FRACTION_OF_EXECUTION = 0.55;
+const DEFAULT_BEAT_SECONDS = 1;
+const DEFAULT_HOLD_SECONDS = 0.5;
 
 export function buildSchedule(trace: FlowTrace, options: ScheduleOptions = {}): Segment[] {
-  const sampleSeconds = options.sampleSeconds ?? DEFAULT_SAMPLE_SECONDS;
-  const executionWindow = trace.actSteps / trace.fps;
-  const flowSeconds = options.flowSeconds ?? FLOW_FRACTION_OF_EXECUTION * executionWindow;
+  const holdSeconds = options.holdSeconds ?? DEFAULT_HOLD_SECONDS;
+  // The noise draw is instant, so its beat is a hold on the draw from the start.
+  const sampleSeconds = options.sampleSeconds ?? holdSeconds;
+  const flowSeconds = options.flowSeconds ?? DEFAULT_BEAT_SECONDS;
+  const executeSeconds = options.executeSeconds ?? DEFAULT_BEAT_SECONDS;
 
   const segments: Segment[] = [];
   let start = 0;
+  const push = (
+    chunk: number, phase: Phase, beat: Beat, duration: number,
+    startTick: number, endTick: number
+  ): void => {
+    segments.push({ chunk, phase, beat, start, duration, startTick, endTick });
+    start += duration;
+  };
+
   for (let chunk = 0; chunk < trace.chunks; chunk++) {
     const startTick = trace.chunkTicks[chunk];
     // A horizon runs until the next one is generated; the last runs to the end
     // of what was recorded, which is where the episode terminated.
     const endTick = chunk + 1 < trace.chunks ? trace.chunkTicks[chunk + 1] : trace.frames - 1;
 
-    for (const [phase, duration] of [
-      ['sample', sampleSeconds],
-      ['flow', flowSeconds],
-      ['execute', Math.max(endTick - startTick, 0) / trace.fps]
-    ] as [Phase, number][]) {
-      segments.push({
-        chunk,
-        phase,
-        start,
-        duration,
-        startTick,
-        endTick: phase === 'execute' ? endTick : startTick
-      });
-      start += duration;
+    if ((options.mode ?? 'stepped') === 'continuous') {
+      push(chunk, 'execute', 'run', Math.max(endTick - startTick, 0) / trace.fps,
+        startTick, endTick);
+      continue;
     }
+
+    push(chunk, 'sample', 'hold', sampleSeconds, startTick, startTick);
+    push(chunk, 'flow', 'run', flowSeconds, startTick, startTick);
+    push(chunk, 'flow', 'hold', holdSeconds, startTick, startTick);
+    push(chunk, 'execute', 'run', executeSeconds, startTick, endTick);
+    // The horizon is spent once it has been executed, so it dissolves instead
+    // of sitting there with the last step still marked.
+    push(chunk, 'execute', 'fade', holdSeconds, endTick, endTick);
+    push(chunk, 'execute', 'clear', holdSeconds, endTick, endTick);
   }
   return segments;
 }
@@ -94,8 +130,9 @@ export function scheduleDuration(schedule: Segment[]): number {
 /** Where playback stands at `seconds`, clamped to the ends of the schedule. */
 export function momentAt(schedule: Segment[], seconds: number): Moment {
   if (schedule.length === 0) {
-    return { chunk: -1, phase: 'sample', progress: 0, tickFloat: 0 };
+    return { chunk: -1, phase: 'sample', beat: 'clear', progress: 0, opacity: 0, tickFloat: 0 };
   }
+
   let index = 0;
   while (
     index + 1 < schedule.length &&
@@ -104,14 +141,18 @@ export function momentAt(schedule: Segment[], seconds: number): Moment {
     index++;
   }
   const segment = schedule[index];
-  const elapsed = seconds - segment.start;
-  const progress = segment.duration > 0
-    ? Math.min(Math.max(elapsed / segment.duration, 0), 1)
+  const elapsed = segment.duration > 0
+    ? Math.min(Math.max((seconds - segment.start) / segment.duration, 0), 1)
     : 1;
+  // Only a `run` beat is still working towards its result; the rest have it.
+  const progress = segment.beat === 'run' ? elapsed : 1;
+  const opacity = segment.beat === 'fade' ? 1 - elapsed : segment.beat === 'clear' ? 0 : 1;
   return {
     chunk: segment.chunk,
     phase: segment.phase,
+    beat: segment.beat,
     progress,
+    opacity,
     tickFloat: segment.startTick + (segment.endTick - segment.startTick) * progress
   };
 }
