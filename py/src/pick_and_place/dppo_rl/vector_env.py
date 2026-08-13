@@ -73,6 +73,13 @@ def _worker(
                 connection.send(("ok", None))
             elif command == "reset":
                 connection.send(("ok", env.reset(payload)))
+            elif command == "rewind":
+                # Put the worker's scene stream back at its first scene. Only
+                # evaluation uses this: a training run wants the endless stream,
+                # but scoring several policies in one process has to show each of
+                # them the same scenes or the comparison is not paired.
+                env.scene_stream.rewind()
+                connection.send(("ok", None))
             elif command == "step":
                 connection.send(("ok", env.step(payload)))
             elif command == "close":
@@ -156,6 +163,16 @@ class DppoVectorEnv:
         """
         if len(list(seeds)) != self.n_envs:
             raise ValueError("expected one seed per environment")
+
+    def rewind(self) -> None:
+        """Put every worker's scene stream back at its first scene.
+
+        Scoring several policies in one process is only a paired comparison if
+        each one is shown the same scenes; without this the stream keeps
+        advancing and the second policy is measured on harder or easier ground
+        than the first, which looks exactly like a difference in policy.
+        """
+        self._broadcast("rewind", [None] * self.n_envs)
 
     def reset_arg(
         self, options_list: Sequence[dict[str, Any]] | None = None

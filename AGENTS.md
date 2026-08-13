@@ -201,7 +201,7 @@ above, where work genuinely combines capabilities.
 `scripts/check_package_layering.py` enforces this in CI. When a module needs
 two capabilities it belongs in the convergence tier by construction; when it
 reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
-`dppo_rl/` sits above everything and is exempt.
+`dppo_rl/` and `dsrl/`, the two RL strands, sit above everything and are exempt.
 
 - **`spec/`** — the physical facts and the contracts every branch agrees on:
   the cube's size and face tag ids, the drop-zone and corner plate sizes, the
@@ -303,6 +303,17 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   was excluded from the gradient — and is now bound to `act_steps`; the fix is
   correct and made no measurable difference. Read the August 8–9 sections of
   `docs/DPPO_RL_FINETUNING.md` before opening a new configuration.
+- **`dsrl/`** — the second RL strand: freeze the Diffusion Policy entirely and
+  learn which input noise it denoises from
+  ([arXiv:2506.15799](https://arxiv.org/abs/2506.15799)). `noise_policy`
+  presents the checkpoint as the deterministic `a = pi_dp(s, w)` and exposes the
+  frozen visual features its own U-Net conditions on; `sac` is soft actor-critic
+  over that latent-noise space; `replay` caches those features rather than
+  pixels, which is what makes an off-policy buffer affordable; `trainer` joins
+  them to the unchanged `dppo_rl` environment; `steerability` measures the
+  precondition the method rests on — that the noise moves the action at all.
+  The base weights are loaded read-only, so
+  unlike DPPO a bad run cannot degrade the policy. Read `docs/RL_DSRL.md` first.
 
 ### Script categories
 
@@ -423,9 +434,13 @@ surface in `git status`, not because they are still a valid place to write.
   `scripts/check_package_layering.py`. A module that needs two capability
   branches moves up to the convergence tier; a fact two branches share moves
   down to `spec`.
-- **`diffusion_policy_*` is the working policy; `dppo_*` is the failed RL
-  experiment.** Spell the prefix out — never `dp_`. `DPPO` in prose means
-  upstream `third_party/dppo` or the RL fine-tuning strand, nothing else.
+- **Spell policy prefixes out — never `dp_`.** `diffusion_policy_*` is the
+  behavior-cloned policy every RL strand starts from. `dppo_*` is the PPO
+  fine-tuning strand, and `DPPO` in prose means that or upstream
+  `third_party/dppo`, nothing else. `dsrl_*` is the latent-noise steering
+  strand, and `DSRL` in prose means that or the paper it implements. The two RL
+  strands share the environment and the scoring harness and change different
+  things, so a name that does not say which one is a name that will be misread.
 
 ## Known rough edges
 

@@ -96,6 +96,16 @@ class SceneStream:
     def next_index(self) -> int:
         return self.offset + self._drawn * self.stride
 
+    def rewind(self) -> None:
+        """Start again at this worker's first scene.
+
+        Training never wants this -- the stream is deliberately endless. Scoring
+        several policies in one process does: each has to be shown the same
+        scenes, or the comparison between them is unpaired and a difference in
+        scene difficulty reads as a difference in policy.
+        """
+        self._drawn = 0
+
     def next(self) -> EvaluationScenario:
         scenario = training_scenario(
             self.next_index,
