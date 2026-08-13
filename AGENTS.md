@@ -292,8 +292,17 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   the braked launcher defaults (zero collapses in six runs; the pre-brake
   configuration collapsed twelve times), and a base policy whose failures are
   recoverable — on the no-retry absolute base the same configuration is provably
-  flat. Read the August 8 sections of `docs/DPPO_RL_FINETUNING.md` before
-  opening a new configuration.
+  flat. **The gain is a fixed increment, not a fraction of the remaining gap**:
+  the same procedure from an undertrained base (epoch 150, 0.492) gained the same
+  ~7 points and validated at 0.561, so a weaker start ends weaker roughly one for
+  one and headroom is not the constraint (2026-08-09, 24 cells, none
+  significant). The procedure **replicates**: two independent six-seed matrices,
+  each selecting and validating on its own draws, landed at 0.746 and 0.740, so
+  ~0.74 is a property of the setup rather than a lucky seed. `reward_horizon`
+  was found defaulting to 4 against `act_steps` 8 — half of every executed chunk
+  was excluded from the gradient — and is now bound to `act_steps`; the fix is
+  correct and made no measurable difference. Read the August 8–9 sections of
+  `docs/DPPO_RL_FINETUNING.md` before opening a new configuration.
 
 ### Script categories
 

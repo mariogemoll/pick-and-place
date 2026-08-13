@@ -11,6 +11,24 @@
 #   scp scripts/vast_dppo_finetune.sh <ssh-host>:/workspace/
 #   ssh <ssh-host> 'VAST_INSTANCE_ID=... bash /workspace/vast_dppo_finetune.sh'
 #
+# THE DEFAULTS BELOW ARE NOT THE CONFIGURATION THAT WORKS. Only UPDATE_EPOCHS
+# and MAX_GRAD_NORM were moved to their braked values; five settings the six-seed
+# matrix ran are still at pre-brake defaults, and launching without them gives
+# ACTOR_LR 1e-5 on the sparse one-bit reward -- the regime that collapsed twelve
+# consecutive times. The configuration that produced every non-collapsing run in
+# this project's history, and the only one to beat a base in a paired evaluation:
+#
+#   SAMPLING_STD=0.01 LOGPROB_STD=0.01 UPDATE_EPOCHS=2 MAX_GRAD_NORM=1.0 \
+#   TARGET_KL=0.02 ACTOR_LR=3e-6 CRITIC_WARMUP=20 \
+#   DENSE_SUCCESS_REWARD=True AUGMENT=False \
+#   N_TRAIN_ITR=121 SAVE_MODEL_FREQ=10 VAL_FREQ=10 \
+#     bash /workspace/vast_dppo_finetune.sh seed=<n>
+#
+# The seed is a trailing hydra argument, not an environment variable -- there is
+# no SEED knob here, unlike the DSRL launcher. Note also that "$@" is expanded
+# before the two min_*_denoising_std flags, so those two can only be set through
+# SAMPLING_STD/LOGPROB_STD; a positional override of them is silently discarded.
+#
 # The starting policy is chosen by run name and epoch, and the dataset export
 # whose normalization bounds it was fitted against travels with it:
 #

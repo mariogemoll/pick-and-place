@@ -165,6 +165,18 @@ model:
   # likelihood behind the policy gradient is not, which biases that dimension's
   # gradient. Declared here so it can be overridden.
   denoised_clip_value: 1.0
+  # How many of the predicted actions the policy gradient backpropagates
+  # through. It must equal act_steps: those are the actions the environment
+  # actually executes, so they are exactly the ones that earned the advantage.
+  #
+  # PPODiffusion defaults this to 4 (diffusion_ppo.py:68) and nothing here set
+  # it, which is a defect rather than a choice. Both upstream arms that learn
+  # -- hopper and robomimic `can` -- run horizon_steps = act_steps = 4, so the
+  # default silently matches their executed chunk. Ours predicts 16 and
+  # executes 8, so the default credited the return earned by eight actions to
+  # the first four alone, and the second half of every executed chunk moved the
+  # reward while being invisible to the gradient that is supposed to shape it.
+  reward_horizon: ${act_steps}
   # HP to tune
   gamma_denoising: 0.99
   clip_ploss_coef: 0.01
