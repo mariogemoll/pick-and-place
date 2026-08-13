@@ -49,6 +49,12 @@ def add_policy_arguments(
         "Policy state_*.pt file",
     )
     parser.add_argument("--instruction", default=DEFAULT_INSTRUCTION, help="language task string")
+    parser.add_argument(
+        "--base-checkpoint",
+        default=None,
+        help="base model a LoRA checkpoint adapts, when the path recorded in its "
+        "adapter_config.json does not exist here (also PAP_PI05_BASE)",
+    )
     parser.add_argument("--device", default="auto", help="auto | cpu | mps | cuda")
     parser.add_argument(
         "--image-height",

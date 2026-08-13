@@ -23,6 +23,8 @@ stats, and the dataset stays in raw physical units.
 
 from __future__ import annotations
 
+import os
+
 from pick_and_place.spec.robot import JOINT_NAMES
 
 # Camera keys used only as a fallback for an un-finetuned base checkpoint, which
@@ -98,6 +100,37 @@ def resolve_checkpoint_cameras(
     return hw, keys
 
 
+def _peft_base_checkpoint(checkpoint: str, override: str | None) -> str | None:
+    """Resolve the base model a LoRA checkpoint sits on, or ``None`` if it is not one.
+
+    A PEFT checkpoint records its base in ``adapter_config.json`` as whatever
+    path the training box used -- an absolute path like
+    ``/workspace/pi05_base_pinned`` for the pi0.5 runs -- so a checkpoint copied
+    off that machine names a directory that does not exist here. ``override``,
+    or ``PAP_PI05_BASE``, repoints it; the run's
+    ``job-metadata/checkpoint-revision.txt`` records which ``lerobot/pi05_base``
+    revision to materialize, since the adapter is only valid against that one.
+    """
+    from pathlib import Path
+
+    if not (Path(checkpoint) / "adapter_config.json").is_file():
+        return None
+
+    from peft import PeftConfig
+
+    base = override or os.environ.get("PAP_PI05_BASE")
+    if base:
+        return base
+    recorded = PeftConfig.from_pretrained(checkpoint).base_model_name_or_path
+    if recorded and (Path(recorded).is_dir() or "/" not in recorded.strip("/")):
+        return recorded
+    raise FileNotFoundError(
+        f"{checkpoint} is a LoRA adapter whose base {recorded!r} is not present. "
+        "Materialize that checkpoint (see job-metadata/checkpoint-revision.txt "
+        "for the revision) and pass --base-checkpoint or set PAP_PI05_BASE."
+    )
+
+
 def make_policy(
     checkpoint: str,
     image_hw: tuple[int, int],
@@ -105,6 +138,7 @@ def make_policy(
     device,
     n_action_steps: int | None = None,
     temporal_ensemble_coeff: float | None = None,
+    base_checkpoint: str | None = None,
 ):
     """Load a LeRobot policy checkpoint with feature specs for our 6-DOF arm and
     two cameras, plus its pre/post-processors.
@@ -173,7 +207,18 @@ def make_policy(
         config.n_action_steps = n_action_steps
 
     policy_cls = get_policy_class(config.type)
-    policy = policy_cls.from_pretrained(checkpoint, config=config)
+    base = _peft_base_checkpoint(checkpoint, base_checkpoint)
+    if base is None:
+        policy = policy_cls.from_pretrained(checkpoint, config=config)
+    else:
+        # A LoRA checkpoint holds adapter_model.safetensors and no model
+        # weights, so the base has to be loaded first and the adapter applied
+        # on top. Merging is deliberately skipped: it would bake the adapter
+        # into a 14.5 GB copy for no inference benefit at this scale.
+        from peft import PeftModel
+
+        policy = policy_cls.from_pretrained(base, config=config)
+        policy = PeftModel.from_pretrained(policy, checkpoint)
     policy.to(device)
     policy.eval()
 
