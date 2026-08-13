@@ -16,6 +16,10 @@ import {
   initEpisodeReplayVisualization
 } from './visualizations/episode-replay';
 import {
+  type FlowPolicyVisualization,
+  initFlowPolicyVisualization
+} from './visualizations/flow-policy';
+import {
   type GraspAndLiftVisualization,
   initGraspAndLiftVisualization } from './visualizations/grasp-and-lift';
 import {
@@ -71,6 +75,7 @@ let canonicalGraspVisualization: CanonicalGraspVisualization | null = null;
 let robotViewerVisualizations: RobotViewerVisualization[] = [];
 let pickAndPlaceVisualization: PickAndPlaceVisualization | null = null;
 let episodeReplayVisualization: EpisodeReplayVisualization | null = null;
+let flowPolicyVisualization: FlowPolicyVisualization | null = null;
 
 function initialize(): void {
   const standardScenePanel = document.getElementById('standard-scene-visualization');
@@ -145,6 +150,16 @@ function initialize(): void {
 
     void initEpisodeReplayVisualization(episodeReplayPanel).then(viz => {
       episodeReplayVisualization = viz;
+    });
+  }
+
+  const flowPolicyPanel = document.getElementById('flow-policy-visualization');
+  if (flowPolicyPanel) {
+    flowPolicyVisualization?.destroy();
+    flowPolicyVisualization = null;
+
+    void initFlowPolicyVisualization(flowPolicyPanel).then(viz => {
+      flowPolicyVisualization = viz;
     });
   }
 

@@ -1582,3 +1582,123 @@ input[type="range"]:active::-moz-range-thumb {
     left: 0.5rem;
   }
 }
+
+.flow-policy-viz-root {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--viz-gap-lg);
+  max-width: 1100px;
+  margin: 0 auto;
+}
+
+.flow-policy-viz-scene {
+  display: flex;
+  flex-direction: column;
+  gap: var(--viz-gap-md);
+  min-width: 0;
+}
+
+.flow-policy-viz-viewport {
+  position: relative;
+  height: 400px;
+  background: var(--viz-canvas);
+  border: 0;
+  border-radius: var(--viz-radius-md);
+  overflow: hidden;
+}
+
+.flow-policy-viz-viewport canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.flow-policy-viz-label {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.75rem;
+  padding: 0.25rem 0.6rem;
+  background: rgb(0 0 0 / 45%);
+  color: #fff;
+  font-size: 0.8rem;
+  border-radius: var(--viz-radius-sm, 4px);
+  pointer-events: none;
+}
+
+.flow-policy-viz-cameras {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--viz-gap-md);
+}
+
+.flow-policy-viz-camera {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1 / 1;
+  max-height: 120px;
+  background: var(--viz-surface-muted);
+  border: 1px dashed var(--viz-border);
+  border-radius: var(--viz-radius-sm);
+  color: var(--viz-muted);
+  font-family: var(--viz-font-mono);
+  font-size: 0.75rem;
+}
+
+.flow-policy-viz-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--viz-gap-md);
+  min-width: 0;
+}
+
+.flow-policy-viz-status {
+  color: var(--viz-muted);
+  font-family: var(--viz-font-mono);
+  font-size: 0.75rem;
+}
+
+.flow-policy-viz-panel-host {
+  flex: 1;
+  min-height: 400px;
+  background: var(--viz-surface);
+  border: 1px solid var(--viz-border);
+  border-radius: var(--viz-radius-md);
+}
+
+.flow-policy-viz-panel {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+@media (width <= 900px) {
+  .flow-policy-viz-root {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .flow-policy-viz-viewport {
+    height: 320px;
+  }
+}
+
+.flow-policy-viz-phases {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--viz-gap-sm);
+}
+
+.flow-policy-viz-phase {
+  padding: 0.2rem 0.5rem;
+  background: var(--viz-surface-muted);
+  border: 1px solid var(--viz-border);
+  border-radius: var(--viz-radius-sm);
+  color: var(--viz-muted);
+  font-family: var(--viz-font-mono);
+  font-size: 0.72rem;
+}
+
+.flow-policy-viz-phase.is-active {
+  background: var(--viz-success-surface);
+  border-color: var(--viz-success-border);
+  color: var(--viz-success-text);
+}
