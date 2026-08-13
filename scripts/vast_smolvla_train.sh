@@ -102,6 +102,32 @@ num_workers="${NUM_WORKERS:-16}"
 # comparable across the policies being ranked.
 n_action_steps="${N_ACTION_STEPS:-10}"
 
+# torch.compile, off by default and worth measuring rather than assuming.
+# VLAFlowMatching.__init__ wraps both sample_actions and forward when this is
+# set, and SmolVLAPolicy.forward calls self.model.forward, so it reaches the
+# training loss and AOTAutograd carries it into the backward -- this is not an
+# inference-only switch.
+#
+# The case for it, measured on the 512x512 run: a step is 0.68s of which only
+# 0.06s waits for data, so the run is GPU-bound, and yet SM utilization averages
+# 60% (p10 13%, p90 98%) at 360W of a 600W limit with clocks unthrottled at
+# 2925MHz. The idle fraction is intra-step gaps, which is what max-autotune's
+# CUDA graphs are for. The ceiling is therefore about 1.65x and the realistic
+# figure well under that, because the AdamW update over 100M parameters sits
+# outside the compiled region.
+#
+# Two things make it safe to try here specifically: the dataset has exactly one
+# task string, so pad_language_to="longest" yields a constant sequence length,
+# and with a square dataset the image shape is constant too -- static shapes,
+# so no recompilation storm. Two things to weigh against it: max-autotune spends
+# minutes autotuning at startup, and enabling it also runs
+# set_float32_matmul_precision("high"), which switches fp32 matmuls to TF32 and
+# so changes numerics against every checkpoint trained without it.
+#
+# The smoke stage already reports s/step, so running it once each way costs
+# minutes and settles the question.
+compile_model="${COMPILE_MODEL:-false}"
+
 # SmolVLA feeds every camera through resize_with_pad() to
 # resize_imgs_with_padding, which is (512, 512): the frame is scaled down until
 # it fits inside a 512x512 box with its aspect ratio intact, then padded on the
@@ -321,6 +347,7 @@ train_args=(
   --policy.pretrained_path="$checkpoint_dir"
   --policy.n_action_steps="$n_action_steps"
   --policy.scheduler_decay_steps="$scheduler_decay_steps"
+  --policy.compile_model="$compile_model"
   --policy.device=cuda
   --policy.push_to_hub=false
   --batch_size="$batch_size"
