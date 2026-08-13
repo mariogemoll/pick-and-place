@@ -13,6 +13,18 @@
 # scenarios in: a checkpoint that will not resolve, missing scene assets, a
 # camera-key mismatch. Only then does canonical_100_v1 run.
 #
+# canonical_100_v1 is then sharded across SHARDS concurrent workers and merged,
+# which is what makes scoring a whole ladder affordable rather than only its
+# last rung. STEPS takes a list, so the usual invocation is every checkpoint:
+#
+#   RUN_NAME=<run> STEPS="005000 010000 015000 020000 025000 030000 \
+#     035000 040000 045000 050000" scripts/vast_smolvla_eval.sh
+#
+# Ranking checkpoints needs canonical_100_v1 at every rung. smoke_v1 cannot do
+# it -- the previous run's ladder differed by one episode in eight between its
+# 15,000- and 20,000-step checkpoints, which is noise -- so it stays the gate
+# and never the number.
+#
 # Unlike the pi0.5 equivalent this needs no --base-checkpoint. SmolVLA trains
 # without adapters (use_peft stays false), so a checkpoint is a complete model
 # and _peft_base_checkpoint() correctly finds no adapter_config.json to resolve.
@@ -77,14 +89,80 @@ score() {
   return $rc
 }
 
+# Score one manifest across concurrent workers and merge the shards.
+#
+# This is what makes a ladder affordable. Scoring is MuJoCo rendering with
+# occasional inference -- measured at 3-8% GPU and 2.1 GB VRAM -- so it is CPU
+# and render bound, and a hundred scenarios that take about an hour serially
+# take a few minutes across a dozen workers. The previous SmolVLA run could
+# only afford smoke_v1's eight scenarios per checkpoint, which its own notes
+# say is too few to rank them, which is why "is 20,000 steps the ceiling?" went
+# unanswered.
+#
+# Concurrency is bounded by VRAM before cores: each worker loads its own copy
+# of the model at ~2.1 GB, so a 32 GB card holds about a dozen alongside the
+# renderer. SHARDS is therefore a VRAM budget, not a core count -- the same
+# distinction NUM_WORKERS gets wrong in the training launcher.
+shards="${SHARDS:-8}"
+
+score_sharded() {
+  local step="$1" manifest="$2" tag="$3"
+  local total pids=() rc=0 index=0
+  total=$("$venv/bin/python" -c "
+import sys
+from pick_and_place.policies.policy_evaluation import ScenarioManifest
+print(len(ScenarioManifest.load('config/evaluation/$manifest').scenarios))
+") || return 1
+
+  echo "=== $tag: step $step on $manifest, $total scenarios across $shards shards ==="
+  rm -rf "${out:?}/$tag" "${out:?}/shards/$tag"
+  mkdir -p "$out/shards/$tag"
+
+  # Contiguous windows, sized like the merge tool's own test: the first
+  # remainder shards take one extra scenario so the union is exactly the suite.
+  while [ "$index" -lt "$shards" ]; do
+    local lo hi
+    lo=$(( index * total / shards ))
+    hi=$(( (index + 1) * total / shards ))
+    if [ "$hi" -gt "$lo" ]; then
+      # shellcheck disable=SC2086
+      "$venv/bin/python" py/scripts/eval_policy_sim.py \
+        --controller lerobot \
+        --checkpoint "$ckpts/$step/pretrained_model" \
+        --manifest "config/evaluation/$manifest" \
+        --output "$out/shards/$tag/$(printf '%02d' "$index")" \
+        --offset "$lo" --limit "$(( hi - lo ))" \
+        --device cuda $extra \
+        > "$out/shards/$tag/$(printf '%02d' "$index").log" 2>&1 &
+      pids+=($!)
+    fi
+    index=$(( index + 1 ))
+  done
+
+  for pid in "${pids[@]}"; do
+    wait "$pid" || rc=1
+  done
+  if [ "$rc" -ne 0 ]; then
+    echo "A shard of $tag failed; its log is under $out/shards/$tag." >&2
+    return 1
+  fi
+
+  # The merge refuses overlapping windows and shards that scored a different
+  # checkpoint, so a partial or stale set cannot become a headline number.
+  "$venv/bin/python" py/scripts/merge_evaluation_shards.py \
+    --output "$out/$tag" "$out/shards/$tag"/*/
+}
+
 status=0
 for step in $steps; do
+  # Serial, and first: eight scenarios cost a couple of minutes and catch the
+  # failures that would otherwise appear simultaneously in every shard.
   if ! score "$step" smoke_v1.json "smoke-$step"; then
     echo "Smoke scoring failed for $step; not spending $manifest on it." >&2
     status=1
     continue
   fi
-  score "$step" "$manifest" "headline-$step" || status=1
+  score_sharded "$step" "$manifest" "headline-$step" || status=1
 done
 
 aws s3 sync "$out" "$bucket_root/outputs/$run_name/evaluation" --no-follow-symlinks \
