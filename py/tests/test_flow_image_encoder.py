@@ -11,6 +11,7 @@ torch = pytest.importorskip("torch")
 pytest.importorskip("torchvision")
 
 from pick_and_place.policies.flow_image_encoder import (  # noqa: E402
+    CameraEncoder,
     FlowImageUnet1D,
     SpatialSoftmax,
     model_config,
@@ -116,6 +117,47 @@ def test_checkpoint_config_round_trips() -> None:
         assert torch.allclose(
             model(values, time, images, states), restored(values, time, images, states)
         )
+
+
+def test_truncated_trunk_doubles_the_keypoint_map() -> None:
+    """Stopping after layer3 is what buys the finer grid; check it, not the parameter count."""
+    full = CameraEncoder(keypoints=8, trunk_stages=4)
+    truncated = CameraEncoder(keypoints=8, trunk_stages=3)
+    images = torch.randn(2, 3, SIZE, SIZE)
+    assert full.trunk(images).shape[-2:] == (SIZE // 32, SIZE // 32)
+    assert truncated.trunk(images).shape[-2:] == (SIZE // 16, SIZE // 16)
+    # Same keypoint count out, so the U-Net's condition width is unchanged.
+    assert truncated(images).shape == full(images).shape
+    assert sum(p.numel() for p in truncated.parameters()) < sum(
+        p.numel() for p in full.parameters()
+    )
+
+
+def test_truncated_trunk_round_trips_through_the_checkpoint_config() -> None:
+    model = FlowImageUnet1D(
+        action_dim=ACTION_DIM,
+        state_dim=STATE_DIM,
+        prediction_steps=PREDICTION_STEPS,
+        observation_steps=OBSERVATION_STEPS,
+        cameras=CAMERAS,
+        keypoints=8,
+        trunk_stages=3,
+    )
+    config = model_config(model)
+    assert config["trunk_stages"] == 3
+    FlowImageUnet1D(**config).load_state_dict(model.state_dict())
+
+
+def test_checkpoints_without_trunk_stages_load_as_the_full_trunk() -> None:
+    """The 300,000-update artifact predates the flag; its config must still construct."""
+    config = model_config(build())
+    del config["trunk_stages"]
+    assert FlowImageUnet1D(**config).trunk_stages == 4
+
+
+def test_unknown_trunk_stage_count_is_rejected() -> None:
+    with pytest.raises(ValueError):
+        CameraEncoder(keypoints=8, trunk_stages=5)
 
 
 def test_wrong_image_shape_is_rejected() -> None:
