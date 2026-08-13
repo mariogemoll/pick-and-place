@@ -21,12 +21,14 @@ import json
 import threading
 import time
 from contextlib import nullcontext
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
 
+from pick_and_place.analysis.flow_trace_recording import FlowTraceRecording, encode
 from pick_and_place.policies.flow_image_policy import (
     FlowImagePolicyController,
     summarize_smoothness,
@@ -61,6 +63,35 @@ def write_video(path: Path, frames: list[np.ndarray], fps: float) -> None:
             writer.send(np.ascontiguousarray(frame))
     finally:
         writer.close()
+
+
+@dataclass
+class TraceCollector:
+    """Accumulate one rollout's replay state and integration paths."""
+
+    qpos: list[np.ndarray] = field(default_factory=list)
+    ticks: list[int] = field(default_factory=list)
+    paths: list[np.ndarray] = field(default_factory=list)
+    commands: list[np.ndarray] = field(default_factory=list)
+
+    def add_horizon(self, tick: int, policy: FlowImagePolicyController) -> None:
+        """Keep the horizon this tick generated, if it generated one at all."""
+        if policy.latest_path is None or policy.latest_prediction is None:
+            return
+        self.ticks.append(tick)
+        self.paths.append(policy.latest_path)
+        self.commands.append(policy.latest_prediction)
+
+    def build(self, *, fps: float, act_steps: int, target_xy: tuple[float, float]):
+        return FlowTraceRecording(
+            fps=fps,
+            act_steps=act_steps,
+            target_xy=target_xy,
+            qpos=np.stack(self.qpos),
+            chunk_ticks=np.array(self.ticks, dtype=np.uint32),
+            path=np.stack(self.paths),
+            commands=np.stack(self.commands),
+        )
 
 
 def observation_frame(observation: dict[str, np.ndarray]) -> np.ndarray:
@@ -106,6 +137,13 @@ def main() -> None:
     parser.add_argument("--scene-appearance", default=None)
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument(
+        "--record-trace",
+        type=Path,
+        default=None,
+        help="directory to write one .bin per scenario holding the replay state and the "
+        "flow integration path behind every generated horizon, for the web viewer",
+    )
+    parser.add_argument(
         "--viewer",
         action="store_true",
         help="watch the rollouts in the MuJoCo viewer, throttled to the control rate "
@@ -140,6 +178,8 @@ def main() -> None:
 
     if args.save_video is not None:
         args.save_video.mkdir(parents=True, exist_ok=True)
+    if args.record_trace is not None:
+        args.record_trace.mkdir(parents=True, exist_ok=True)
 
     skip_requested = threading.Event()
     viewer_context: Any = nullcontext(None)
@@ -174,15 +214,20 @@ def main() -> None:
                 frames: list[np.ndarray] = []
                 commands: list[np.ndarray] = []
                 requeried: list[bool] = []
-                for _ in range(scenario.max_steps):
+                trace = TraceCollector() if args.record_trace is not None else None
+                for tick in range(scenario.max_steps):
                     if skip_requested.is_set():
                         break
                     started = time.perf_counter()
                     if args.save_video is not None:
                         frames.append(observation_frame(observation))
+                    if trace is not None:
+                        trace.qpos.append(env.replay_qpos())
                     action = policy.act(observation)
                     commands.append(action)
                     requeried.append(policy.latest_prediction is not None)
+                    if trace is not None:
+                        trace.add_horizon(tick, policy)
                     observation, _, terminated, truncated, info = env.step(action)
                     if viewer is not None:
                         if not viewer.is_running():
@@ -198,6 +243,15 @@ def main() -> None:
                     # left out of the tally entirely.
                     print(f"{scenario.scenario_id}: skipped", flush=True)
                     continue
+                if trace is not None and trace.paths:
+                    recording = trace.build(
+                        fps=scenario.control_hz,
+                        act_steps=args.act_steps,
+                        target_xy=tuple(float(v) for v in scenario.target_position_m[:2]),
+                    )
+                    path = args.record_trace / f"{scenario.scenario_id}.bin"
+                    path.write_bytes(encode(recording))
+                    print(f"  wrote {path} ({path.stat().st_size / 1024:.0f} KB)", flush=True)
                 if frames:
                     write_video(
                         args.save_video / f"{scenario.scenario_id}.mp4",

@@ -144,6 +144,35 @@ def test_only_the_generating_tick_reports_a_prediction():
     assert controller.latest_prediction is None
 
 
+def test_the_generating_tick_reports_the_whole_integration_path():
+    controller = make_controller(act_steps=2)
+    controller.act(make_observation())
+
+    path = controller.latest_path
+    assert path is not None
+    # The noise it started from, then one state per Euler step.
+    assert path.shape == (INTEGRATION_STEPS + 1, PREDICTION_STEPS, ACTION_DIM)
+
+    controller.act(make_observation())
+    assert controller.latest_path is None
+
+
+def test_the_path_starts_at_the_noise_and_ends_at_the_reported_prediction():
+    controller = make_controller(act_steps=2, target=0.25)
+    controller.act(make_observation())
+    path, prediction = controller.latest_path, controller.latest_prediction
+    assert path is not None and prediction is not None
+
+    # The stub drives every sample onto its target after the first Euler step,
+    # so the first row is still the raw draw and the rest are already there.
+    assert not np.allclose(path[0], 0.25)
+    assert np.allclose(path[-1], 0.25)
+    # The last row is what the controller clips and unnormalizes into commands.
+    bounds = make_bounds()
+    expected = unnormalize(np.clip(path[-1], -1, 1), bounds["action_min"], bounds["action_max"])
+    assert np.allclose(prediction, expected)
+
+
 def test_the_first_observation_fills_the_missing_history():
     controller = make_controller()
     controller.act(make_observation())

@@ -108,17 +108,26 @@ def generate_horizon(
     integration_steps: int,
     noise: torch.Tensor,
 ) -> np.ndarray:
-    """Integrate the velocity field from ``noise`` into one action horizon."""
+    """Integrate the velocity field from ``noise`` into one action horizon.
+
+    Returns the whole integration path, shaped ``(integration_steps + 1,
+    prediction_steps, action_dim)``: the noise it started from, one row per
+    Euler step, and the sample at ``t = 1`` last. Callers that only want the
+    sample take the last row; the intermediate rows are what the flow looks
+    like mid-transport, which is otherwise unobservable from outside.
+    """
     values = noise
     device = images.device
     time = torch.zeros(1, 1, device=device)
+    path = [values[0]]
     with torch.no_grad():
         condition = model.encode_observation(images, states)
         for _ in range(integration_steps):
             velocity = model.unet(values, time, condition)
             values = values + velocity / integration_steps
             time = time + 1 / integration_steps
-    return values[0].cpu().numpy()
+            path.append(values[0])
+    return torch.stack(path).cpu().numpy()
 
 
 def summarize_smoothness(
@@ -190,6 +199,7 @@ class FlowImagePolicyController:
         self.clipped_fraction = 0.0
         self.noise_correlation = noise_correlation
         self.latest_prediction: np.ndarray | None = None
+        self.latest_path: np.ndarray | None = None
         self.previous_noise: torch.Tensor | None = None
         self.reset()
 
@@ -238,6 +248,7 @@ class FlowImagePolicyController:
         self.states.clear()
         self.actions.clear()
         self.latest_prediction = None
+        self.latest_path = None
         self.previous_noise = None
         torch.manual_seed(self.seed)
 
@@ -267,6 +278,7 @@ class FlowImagePolicyController:
         # Only the tick that generates a horizon reports one, so a caller logging
         # predictions records each horizon once rather than on every tick.
         self.latest_prediction = None
+        self.latest_path = None
         self.images.append(stack_cameras(observation))
         self.states.append(
             normalize(
@@ -283,13 +295,15 @@ class FlowImagePolicyController:
 
         if not self.actions:
             images, states = self._observation_batch()
-            generated = generate_horizon(
+            path = generate_horizon(
                 self.model,
                 images,
                 states,
                 integration_steps=self.integration_steps,
                 noise=self._draw_noise(),
             )
+            self.latest_path = path
+            generated = path[-1]
             clipped = np.clip(generated, -1, 1)
             self.clipped_fraction = float(np.mean(generated != clipped))
             commands = unnormalize(clipped, self.action_min, self.action_max)
