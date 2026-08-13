@@ -218,7 +218,19 @@ if [ "${WANDB:-on}" = "off" ]; then
   echo "WANDB=off: training without W&B logging, by request."
   wandb_args=(--wandb.enable=false)
 elif grep -q api.wandb.ai "${NETRC:-$HOME/.netrc}" 2>/dev/null; then
-  wandb_args=(--wandb.enable=true --wandb.project=pick-and-place)
+  # disable_artifact, because lerobot defaults it to false and that means every
+  # checkpoint save uploads the whole model to W&B. lerobot_train.py calls
+  # wandb_logger.log_policy(checkpoint_dir) after each save, and log_policy adds
+  # model.safetensors to a W&B artifact -- 1.2 GB a time for SmolVLA, so a
+  # 50,000-step run at SAVE_FREQ 5000 ships 12 GB nobody asked for. It filled
+  # the account once already. pi0.5 hid this: its PEFT branch uploads the 5 MB
+  # adapter instead of the model.
+  #
+  # The upload is pure duplication -- every checkpoint is already synced to S3,
+  # which is where vast_smolvla_eval.sh fetches from -- and it is called inside
+  # the training loop without a try/except, so a rejected upload takes the run
+  # down with it.
+  wandb_args=(--wandb.enable=true --wandb.project=pick-and-place --wandb.disable_artifact=true)
   echo "W&B credential found on this pod."
 else
   echo "No api.wandb.ai entry in ${NETRC:-$HOME/.netrc} on this pod." >&2
