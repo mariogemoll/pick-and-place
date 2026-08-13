@@ -462,30 +462,49 @@ Evidence that this does not matter much: both arms logged `loss:0.194` at step
 steps at three decimals under bf16 autocast, not a guarantee over 50,000, so
 the flag stays off by default and a ladder should not change it mid-run.
 
-### Batch 128 is not the lever, and the old +18% is stale
+### Batch size is not a throughput lever at all, above 32
 
-Compared on one host with both arms compiled:
+Swept on one host with synthetic batches -- no dataloader, so `num_workers` and
+the container memory limit cannot confound it:
 
-| | step | throughput | peak VRAM |
-| --- | ---: | ---: | ---: |
-| batch 64 | 0.6490 s | **98.6 samples/s** | 13,604 MiB |
-| batch 128 | 1.3800 s | 92.8 samples/s | 25,044 MiB |
+| batch | uncompiled samples/s | compiled samples/s | compiled peak VRAM |
+| ---: | ---: | ---: | ---: |
+| 16 | 126.5 | 213.0 | 3,918 MiB |
+| 32 | 167.4 | 225.8 | 6,789 MiB |
+| 64 | 168.4 | **229.4** | 11,662 MiB |
+| 128 | 165.7 | **230.2** | 22,262 MiB |
 
-Slightly *worse*, not the "+18% at batch 112" recorded earlier. That figure was
-measured while the run was decode bound, where a larger batch amortized decode
-stalls; once the 512x512 dataset and `torch.compile` have removed those, there
-is nothing left for batch size to recover.
+**Flat from 32 upward**, compiled and not. So batch size should be chosen on
+optimization grounds or for VRAM headroom, never for speed -- and batch 32
+gives 98.4% of the throughput for 58% of the memory. Only 16 is genuinely bad,
+at -7% compiled and -25% uncompiled. Compile's gain holds across the range
+(1.68x at 16, ~1.36x at 32-128), so it is not a batch-specific artifact.
 
-**And batch 128 was OOM-killed at step ~350**, `rc=137`, with nothing in the
-training log and nothing in the container's `dmesg` -- the exit code is the only
-evidence. Not VRAM: 25,044 MiB of 32,607 fits. It was the container's **57 GB
-cgroup limit**, against 16 workers prefetching batch-128 frames on a box whose
-`free` reports 440 GB and whose `nproc` reports 192, both the *host's*. Same
-trap as `num_workers`, sprung by a batch size instead. Read the real limit from
-`/sys/fs/cgroup/memory/memory.limit_in_bytes`.
+This **supersedes an earlier measurement here that reported batch 128 as 5.9%
+slower**. That arm was being OOM-killed while it was measured, so it recorded
+memory pressure rather than batch size. It also supersedes the much older "+18%
+at batch 112", which was measured while the run was decode bound and a larger
+batch amortized decode stalls.
 
 Compare throughput in **samples/s**, never s/step: a batch-128 step does twice
-the work, so s/step makes the larger batch look strictly worse by construction.
+the work, so s/step makes the larger batch look worse by construction. Halving
+the step count at double the batch is the same sample budget.
+
+**Watch the container memory limit rather than VRAM.** The OOM above was not
+VRAM -- 25,044 MiB of 32,607 fits -- but the container's **57 GB cgroup limit**,
+against 16 workers prefetching batch-128 frames on a box whose `free` reported
+440 GB and whose `nproc` reported 192, both the *host's*. `rc=137` was the only
+evidence: nothing in the training log, nothing in the container's `dmesg`. Read
+the real limit from `/sys/fs/cgroup/memory/memory.limit_in_bytes`.
+
+### A dud host stays a dud, so blocklist the machine
+
+Two offers rented hours apart, 41357771 and 45944050, both reported `running`
+and both refused the SSH key -- because they are the same physical machine,
+visible only as the same `public_ipaddr`. The dud rule says destroy and rent
+elsewhere, but "elsewhere" has to mean a different *machine*: the marketplace
+will happily re-offer the broken one under a new offer id. Record the IP of a
+dud and skip offers that resolve to it.
 
 ### Where a training step goes, and why quantizing the tower is not worth it
 
