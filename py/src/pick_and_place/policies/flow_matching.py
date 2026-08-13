@@ -242,6 +242,54 @@ def predict_velocity(
     )
 
 
+def flow_sde_transition(
+    values: torch.Tensor,
+    velocity: torch.Tensor,
+    time: torch.Tensor,
+    *,
+    step_size: float,
+    noise_scale: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Mean and standard deviation of one Euler-Maruyama step of the flow SDE.
+
+    Sampling a flow policy is ordinarily deterministic, which leaves a policy
+    gradient nothing to differentiate: every action is a fixed function of the
+    drawn latent. Replacing the probability-flow ODE with an SDE that has the
+    same marginals restores a density without changing what the model generates
+    in distribution.
+
+    For the Gaussian CondOT path this model was trained on, ``x_t = t z +
+    (1 - t) e``, the score follows from the learned velocity::
+
+        E[z | x_t] = x_t + (1 - t) v(x_t, t)
+        grad log p_t(x_t) = (t v(x_t, t) - x_t) / (1 - t)
+
+    and for any noise level ``sigma(t)`` the SDE
+    ``dx = [v + sigma^2/2 * grad log p_t] dt + sigma dW`` transports the same
+    marginals as ``dx = v dt``.
+
+    The noise level here is ``sigma(t) = noise_scale * sqrt(1 - t)``, which
+    cancels the score's ``1 / (1 - t)`` exactly -- so the drift correction stays
+    bounded at every flow time, including the last step, rather than being
+    clamped away. It also makes exploration large early and small late, leaving
+    the step that emits the action the quietest one. A constant floor across
+    every step is what made DPPO's default unusable on this task's absolute
+    joint commands: it dumps the full noise level onto the emitted action.
+    """
+    if not 0.0 < step_size <= 1.0:
+        raise ValueError("step_size must be in (0, 1]")
+    if noise_scale < 0.0:
+        raise ValueError("noise_scale must be non-negative")
+    if values.shape != velocity.shape:
+        raise ValueError("values and velocity must have the same shape")
+    remaining = torch.clamp(1.0 - time, min=0.0)
+    # sigma^2 / 2 * score, with the (1 - t) factors cancelled analytically.
+    drift_correction = 0.5 * noise_scale**2 * (time * velocity - values)
+    mean = values + (velocity + drift_correction) * step_size
+    standard_deviation = noise_scale * torch.sqrt(remaining * step_size)
+    return mean, standard_deviation.expand_as(mean)
+
+
 def generate(
     model: VelocityModel, observations: torch.Tensor, num_steps: int = 100
 ) -> torch.Tensor:

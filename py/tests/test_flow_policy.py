@@ -3,10 +3,16 @@
 
 from pathlib import Path
 
+import pytest
 import torch
 
 from pick_and_place.policies.diffusion_policy_unet import FlowConditionalUnet1D
-from pick_and_place.policies.flow_matching import generate, load_model, model_checkpoint_config
+from pick_and_place.policies.flow_matching import (
+    flow_sde_transition,
+    generate,
+    load_model,
+    model_checkpoint_config,
+)
 from pick_and_place.policies.flow_policy import CUBE_SYMMETRIES, CubeSymmetryAugmentation
 
 
@@ -85,3 +91,67 @@ def test_conditional_unet_checkpoint_round_trip_and_seeded_generation(tmp_path: 
     actual = generate(loaded, observations, num_steps=3)
 
     torch.testing.assert_close(actual, expected)
+
+
+def _gaussian_condot_velocity(values: torch.Tensor, time: torch.Tensor) -> torch.Tensor:
+    """Exact CondOT velocity carrying N(0, 1) noise to the target N(2, 0.5^2).
+
+    With ``x_t = t z + (1 - t) e`` and Gaussian ``z``, both the marginal and the
+    conditional expectation are closed forms, so this is the velocity a
+    perfectly trained model would predict -- which makes the sampler's own error
+    the only thing a test over it can measure.
+    """
+    mean, deviation = 2.0, 0.5
+    variance = (time * deviation) ** 2 + (1 - time) ** 2
+    expected_endpoint = mean + time * deviation**2 * (values - time * mean) / variance
+    return (expected_endpoint - values) / (1 - time)
+
+
+def _integrate(num_steps: int, noise_scale: float, seed: int) -> torch.Tensor:
+    generator = torch.Generator().manual_seed(seed)
+    values = torch.randn(20_000, 1, generator=generator)
+    step_size = 1.0 / num_steps
+    for step in range(num_steps):
+        time = torch.full((len(values), 1), step * step_size)
+        mean, deviation = flow_sde_transition(
+            values,
+            _gaussian_condot_velocity(values, time),
+            time,
+            step_size=step_size,
+            noise_scale=noise_scale,
+        )
+        values = mean + deviation * torch.randn(values.shape, generator=generator)
+    return values
+
+
+def test_the_flow_sde_transports_the_same_distribution_as_the_ode() -> None:
+    # The score correction is what makes this true: dropping it leaves the noise
+    # uncompensated and the sample distribution too wide.
+    deterministic = _integrate(num_steps=200, noise_scale=0.0, seed=0)
+    stochastic = _integrate(num_steps=200, noise_scale=0.5, seed=0)
+
+    for samples in (deterministic, stochastic):
+        assert samples.mean().item() == pytest.approx(2.0, abs=0.02)
+        assert samples.std().item() == pytest.approx(0.5, abs=0.02)
+
+
+def test_flow_sde_noise_vanishes_as_the_chain_ends() -> None:
+    values = torch.zeros(3, 2, 2)
+    velocity = torch.ones(3, 2, 2)
+    times = torch.tensor([0.0, 0.5, 1.0]).reshape(3, 1, 1)
+
+    mean, deviation = flow_sde_transition(
+        values, velocity, times, step_size=0.1, noise_scale=0.4
+    )
+
+    torch.testing.assert_close(
+        deviation[:, 0, 0], 0.4 * torch.sqrt(torch.tensor([0.1, 0.05, 0.0]))
+    )
+    # With no noise the step is plain Euler, and the correction scales with the
+    # square of the noise level rather than being clipped away.
+    plain, silent = flow_sde_transition(
+        values, velocity, times, step_size=0.1, noise_scale=0.0
+    )
+    torch.testing.assert_close(plain, values + velocity * 0.1)
+    assert torch.all(silent == 0.0)
+    torch.testing.assert_close(mean - plain, 0.5 * 0.4**2 * times * velocity * 0.1)

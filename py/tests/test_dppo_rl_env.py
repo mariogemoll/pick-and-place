@@ -5,9 +5,9 @@ import numpy as np
 import pytest
 
 from pick_and_place.data.diffusion_policy_dataset import normalize_min_max
-from pick_and_place.dppo_rl.env import (
-    DppoTaskEnv,
-    EnvConfig,
+from pick_and_place.dppo_rl.env import DppoTaskEnv, EnvConfig
+from pick_and_place.dppo_rl.observations import (
+    CameraObservation,
     normalize_state,
     unnormalize_action,
 )
@@ -55,7 +55,7 @@ def _normalization(tmp_path, action_encoding=ActionEncoding.ABSOLUTE):
 
 def _config(tmp_path, **overrides):
     defaults = {
-        "normalization_path": _normalization(tmp_path),
+        "observation": CameraObservation(normalization_path=_normalization(tmp_path)),
         "image_hw": (96, 96),
         "render_hw": (120, 160),
         "cond_steps": 2,
@@ -138,7 +138,9 @@ def test_a_delta_chunk_is_integrated_onto_each_ticks_measured_joints(tmp_path):
         tmp_path,
         act_steps=2,
         max_steps=10,
-        normalization_path=_normalization(tmp_path, ActionEncoding.DELTA),
+        observation=CameraObservation(
+            normalization_path=_normalization(tmp_path, ActionEncoding.DELTA)
+        ),
     )
     commanded, measured = _record_commands(env)
     try:

@@ -6,10 +6,11 @@
 This plays the part the vendored ``RobomimicImageWrapper`` and ``MultiStep``
 wrappers play for robomimic tasks, against :class:`PolicySimEnv`:
 
-- observations are ``{"state": (cond_steps, 6), "rgb": (cond_steps, 6, H, W)}``,
-  state min-max normalized to ``[-1, 1]`` with the training export's bounds and
-  the two cameras concatenated overhead-then-wrist on the channel axis, exactly
-  as ``diffusion_policy_server`` feeds the same checkpoint in closed loop;
+- an observation is ``cond_steps`` timesteps of whatever the configured
+  :mod:`~pick_and_place.dppo_rl.observations` codec packs -- cameras and
+  proprioception for the visual Diffusion Policy, privileged task state for the
+  flow policy -- normalized with the bounds of the export the policy was
+  trained against;
 - an action is a chunk of ``act_steps`` normalized six-dimensional joint
   commands, executed one control tick apart -- unnormalized with the export's
   action bounds and, for a delta export, integrated onto the joints measured on
@@ -17,9 +18,10 @@ wrappers play for robomimic tasks, against :class:`PolicySimEnv`:
 - the reward is the sparse full-task one: ``1.0`` on the step where the success
   oracle confirms a settled placement, ``0.0`` everywhere else.
 
-Rendering goes straight to the recording resolution the dataset's videos were
-written at, so the policy sees the same single area-downsample hop to 96x96 that
-its training frames went through.
+When the policy reads cameras, rendering goes straight to the recording
+resolution the dataset's videos were written at, so the policy sees the same
+single area-downsample hop to 96x96 that its training frames went through. A
+state policy renders nothing at all, which is most of what a rollout costs.
 """
 
 from __future__ import annotations
@@ -33,14 +35,15 @@ from typing import Any
 
 import numpy as np
 
+from pick_and_place.dppo_rl.observations import CameraObservation, FlowStateObservation
 from pick_and_place.runtime.training_scenes import (
     TRAINING_CONTROL_HZ,
     TRAINING_MAX_STEPS,
     TRAINING_SEED_BASE,
     SceneStream,
 )
-from pick_and_place.spec.action_encoding import decode_actions, read_action_encoding
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
+from pick_and_place.spec.robot import JOINT_NAMES
 from pick_and_place.runtime.policy_sim import PolicySimEnv
 from pick_and_place.sim.scene_appearance import SceneAppearance
 
@@ -50,25 +53,13 @@ RECORDING_HW = (720, 960)
 SUCCESS_REWARD = 1.0
 
 
-def normalize_state(
-    state: np.ndarray, minimum: np.ndarray, maximum: np.ndarray
-) -> np.ndarray:
-    """Apply the exporter's per-dimension min-max map to ``[-1, 1]``."""
-    return 2.0 * (state - minimum) / (maximum - minimum + 1e-6) - 1.0
-
-
-def unnormalize_action(
-    action: np.ndarray, minimum: np.ndarray, maximum: np.ndarray
-) -> np.ndarray:
-    """Invert :func:`normalize_state` for a predicted action."""
-    return (action + 1.0) / 2.0 * (maximum - minimum + 1e-6) + minimum
-
-
 @dataclass(frozen=True)
 class EnvConfig:
     """Everything a worker needs to build an identical environment."""
 
-    normalization_path: Path
+    observation: CameraObservation | FlowStateObservation
+    # The size the scene's cameras are resized to, and the size they render at.
+    # A state policy reads neither, but the scene still carries the cameras.
     image_hw: tuple[int, int] = (96, 96)
     render_hw: tuple[int, int] = RECORDING_HW
     cond_steps: int = 2
@@ -151,16 +142,8 @@ class DppoTaskEnv:
             control_hz=config.control_hz,
             max_steps=config.max_steps,
         )
-        bounds = np.load(config.normalization_path)
-        self.obs_min = bounds["obs_min"].astype(np.float32)
-        self.obs_max = bounds["obs_max"].astype(np.float32)
-        self.action_min = bounds["action_min"].astype(np.float32)
-        self.action_max = bounds["action_max"].astype(np.float32)
-        # Read, never assumed: the bounds and the encoding are one contract, and
-        # decoding a delta as an absolute joint command does not fail, it just
-        # commands nonsense.
-        self.action_encoding = read_action_encoding(bounds)
-        self._measured_joints = np.zeros_like(self.obs_min)
+        self.codec = config.observation.build()
+        self._measured_joints = np.zeros(len(JOINT_NAMES), dtype=np.float32)
         renderer = (
             {} if config.renderer_factory is None
             else {"renderer_factory": config.renderer_factory}
@@ -170,6 +153,7 @@ class DppoTaskEnv:
             render_hw=config.render_hw,
             scene_appearance=config.scene_appearance,
             terminate_on_success=not config.dense_success_reward,
+            include_images=config.observation.needs_images,
             **renderer,
         )
         self._history: deque[dict[str, np.ndarray]] = deque(maxlen=config.cond_steps)
@@ -180,28 +164,24 @@ class DppoTaskEnv:
 
     # -- observations ----------------------------------------------------
 
-    def _record(self, observation: dict[str, np.ndarray]) -> None:
-        overhead = np.asarray(observation[OVERHEAD_FEATURE], dtype=np.uint8)
-        wrist = np.asarray(observation[WRIST_FEATURE], dtype=np.uint8)
+    def _record(self, observation: dict[str, np.ndarray], info: dict[str, Any]) -> None:
         # Kept in raw units as well as normalized: a delta action is defined
         # against the measurement of the tick it is commanded on, so the next
         # command needs this one unmapped.
         self._measured_joints = np.asarray(observation[STATE_FEATURE], dtype=np.float32)
-        self._history.append({
-            "state": normalize_state(
-                self._measured_joints,
-                self.obs_min,
-                self.obs_max,
-            ).astype(np.float32),
-            # HWC per camera to the CHW pair the encoder expects.
-            "rgb": np.concatenate(
-                [overhead.transpose(2, 0, 1), wrist.transpose(2, 0, 1)], axis=0
-            ),
-        })
+        self._history.append(self.codec.observe(observation, info))
         if self.config.privileged_obs:
             self._history[-1]["privileged"] = self._privileged()
         if self._video_frames is not None:
-            self._video_frames.append(np.concatenate([overhead, wrist], axis=1))
+            self._video_frames.append(
+                np.concatenate(
+                    [
+                        np.asarray(observation[OVERHEAD_FEATURE], dtype=np.uint8),
+                        np.asarray(observation[WRIST_FEATURE], dtype=np.uint8),
+                    ],
+                    axis=1,
+                )
+            )
 
     def _privileged(self) -> np.ndarray:
         """Simulator facts that make the value function learnable.
@@ -232,11 +212,7 @@ class DppoTaskEnv:
         export it integrates onto the joints measured on that tick, which is
         the pairing the demonstration recorded.
         """
-        return decode_actions(
-            self.action_encoding,
-            unnormalize_action(action, self.action_min, self.action_max),
-            self._measured_joints,
-        )
+        return self.codec.command(action, self._measured_joints)
 
     def _debug_step(
         self, chunk: np.ndarray
@@ -248,7 +224,7 @@ class DppoTaskEnv:
                 self._command(action)
             )
             self._step = int(info["control_steps"])
-            self._record(observation)
+            self._record(observation, info)
             if terminated or truncated:
                 break
         summary = self._summary
@@ -279,7 +255,7 @@ class DppoTaskEnv:
         history = list(self._history)
         padding = [history[0]] * (self.config.cond_steps - len(history))
         history = padding + history
-        keys = ("state", "rgb", "privileged") if self.config.privileged_obs else ("state", "rgb")
+        keys = self.codec.keys + (("privileged",) if self.config.privileged_obs else ())
         return {key: np.stack([item[key] for item in history]) for key in keys}
 
     # -- episode loop ----------------------------------------------------
@@ -293,9 +269,9 @@ class DppoTaskEnv:
 
         scenario = self.scene_stream.next()
         self._step = 0
-        observation, _ = self._env.reset(options={"scenario": scenario})
+        observation, info = self._env.reset(options={"scenario": scenario})
         self._history.clear()
-        self._record(observation)
+        self._record(observation, info)
         self._summary = EpisodeSummary(scenario_id=scenario.scenario_id)
         return self._stacked()
 
@@ -325,7 +301,7 @@ class DppoTaskEnv:
             else:
                 reward += float(step_reward)
             self._step = int(info["control_steps"])
-            self._record(observation)
+            self._record(observation, info)
             if terminated or truncated:
                 break
         if self.config.shaping_weight != 0.0:

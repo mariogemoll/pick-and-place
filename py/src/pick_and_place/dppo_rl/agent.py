@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Bind the pick-and-place environment into DPPO's image PPO fine-tuner.
+"""Bind the pick-and-place environment into DPPO's PPO fine-tuner.
 
 ``TrainAgent.__init__`` builds its vectorized environment through the vendored
 ``env.gym_utils.make_async``, which only knows robomimic, d4rl, D3IL and
@@ -10,9 +10,12 @@ the official implementation is that the algorithm is theirs -- this substitutes
 the builder for the duration of that constructor and hands back
 :class:`DppoVectorEnv`.
 
-Hydra instantiates this class in place of
+Hydra instantiates one of these classes in place of
 ``agent.finetune.train_ppo_diffusion_img_agent.TrainPPOImgDiffusionAgent``; every
-other config key keeps its upstream meaning.
+other config key keeps its upstream meaning. That agent is the one both policy
+families use, including the state-only flow policy, because it is the variant
+that batches an arbitrary dictionary of observation keys rather than assuming
+``state`` alone -- which is what carries the privileged critic's input.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from agent.finetune import train_agent as dppo_train_agent
 from agent.finetune.train_ppo_diffusion_img_agent import TrainPPOImgDiffusionAgent
 
 from pick_and_place.dppo_rl.env import EnvConfig
+from pick_and_place.dppo_rl.observations import CameraObservation, FlowStateObservation
 from pick_and_place.dppo_rl.vector_env import DppoVectorEnv
 from pick_and_place.sim.scene_appearance import parse_appearance
 
@@ -98,31 +102,26 @@ class TimedVectorEnv:
         return result
 
 
-class PickAndPlacePPOImgAgent(TrainPPOImgDiffusionAgent):
-    """DPPO's image PPO agent over the simulated pick-and-place task."""
+def _shared_env_settings(cfg) -> dict[str, Any]:
+    """The environment settings both policy families read the same way."""
+    return {
+        "cond_steps": int(cfg.cond_steps),
+        "act_steps": int(cfg.act_steps),
+        "control_hz": float(cfg.env.control_hz),
+        "max_steps": int(cfg.env.max_episode_steps),
+        "seed_base": int(cfg.env.scene_seed_base),
+        "dense_success_reward": bool(cfg.env.get("dense_success_reward", False)),
+        "shaping_weight": float(cfg.env.get("shaping_weight", 0.0)),
+        "gamma": float(cfg.train.gamma),
+        "privileged_obs": bool(cfg.env.get("privileged_obs", False)),
+        "debug_action_reward": bool(cfg.env.get("debug_action_reward", False)),
+    }
 
-    def __init__(self, cfg):
-        env_config = EnvConfig(
-            normalization_path=Path(cfg.normalization_path),
-            image_hw=(int(cfg.shape_meta.obs.rgb.shape[1]), int(cfg.shape_meta.obs.rgb.shape[2])),
-            render_hw=tuple(int(value) for value in cfg.env.render_hw),
-            cond_steps=int(cfg.cond_steps),
-            act_steps=int(cfg.act_steps),
-            control_hz=float(cfg.env.control_hz),
-            max_steps=int(cfg.env.max_episode_steps),
-            seed_base=int(cfg.env.scene_seed_base),
-            scene_appearance=parse_appearance(str(cfg.env.scene_appearance))[1],
-            dense_success_reward=bool(cfg.env.get("dense_success_reward", False)),
-            shaping_weight=float(cfg.env.get("shaping_weight", 0.0)),
-            gamma=float(cfg.train.gamma),
-            privileged_obs=bool(cfg.env.get("privileged_obs", False)),
-            debug_action_reward=bool(cfg.env.get("debug_action_reward", False)),
-        )
-        if env_config.cond_steps != int(cfg.img_cond_steps):
-            raise ValueError(
-                "this environment stacks one camera history per state step, so "
-                "cond_steps and img_cond_steps must match"
-            )
+
+class _PickAndPlaceAgent(TrainPPOImgDiffusionAgent):
+    """Shared construction: substitute the environment, then let DPPO build."""
+
+    def _build(self, cfg, env_config: EnvConfig) -> None:
         mujoco_gl = cfg.env.get("mujoco_gl", "egl")
 
         def make_env(*args, **kwargs):
@@ -137,12 +136,6 @@ class PickAndPlacePPOImgAgent(TrainPPOImgDiffusionAgent):
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
             torch.backends.cudnn.benchmark = True
-        log.info(
-            f"Fine-tuning {cfg.base_policy_path} over {cfg.env.n_envs} environments "
-            f"at {env_config.control_hz:g} Hz, {cfg.act_steps} of {cfg.horizon_steps} "
-            f"actions executed per query, scene seed base {env_config.seed_base}, "
-            f"scene appearance {cfg.env.scene_appearance}."
-        )
 
     def run(self):
         try:
@@ -150,6 +143,56 @@ class PickAndPlacePPOImgAgent(TrainPPOImgDiffusionAgent):
         finally:
             with contextlib.suppress(Exception):
                 self.venv.close()
+
+
+class PickAndPlacePPOImgAgent(_PickAndPlaceAgent):
+    """DPPO's image PPO agent over the simulated pick-and-place task."""
+
+    def __init__(self, cfg):
+        env_config = EnvConfig(
+            observation=CameraObservation(normalization_path=Path(cfg.normalization_path)),
+            image_hw=(int(cfg.shape_meta.obs.rgb.shape[1]), int(cfg.shape_meta.obs.rgb.shape[2])),
+            render_hw=tuple(int(value) for value in cfg.env.render_hw),
+            scene_appearance=parse_appearance(str(cfg.env.scene_appearance))[1],
+            **_shared_env_settings(cfg),
+        )
+        if env_config.cond_steps != int(cfg.img_cond_steps):
+            raise ValueError(
+                "this environment stacks one camera history per state step, so "
+                "cond_steps and img_cond_steps must match"
+            )
+        self._build(cfg, env_config)
+        log.info(
+            f"Fine-tuning {cfg.base_policy_path} over {cfg.env.n_envs} environments "
+            f"at {env_config.control_hz:g} Hz, {cfg.act_steps} of {cfg.horizon_steps} "
+            f"actions executed per query, scene seed base {env_config.seed_base}, "
+            f"scene appearance {cfg.env.scene_appearance}."
+        )
+
+
+class PickAndPlaceFlowPPOAgent(_PickAndPlaceAgent):
+    """PPO fine-tuning of the state flow policy over the same task.
+
+    The actor reads privileged task state instead of cameras, so nothing in the
+    rollout renders and the appearance the checkpoint was trained in stops
+    mattering. Every other contract -- control rate, chunk schedule, reward,
+    scene stream -- is the one the visual strand established.
+    """
+
+    def __init__(self, cfg):
+        env_config = EnvConfig(
+            observation=FlowStateObservation(export_dir=Path(cfg.flow_export_path)),
+            **_shared_env_settings(cfg),
+        )
+        self._build(cfg, env_config)
+        log.info(
+            f"Fine-tuning {cfg.base_policy_path} against export {cfg.flow_export_path} "
+            f"over {cfg.env.n_envs} environments at {env_config.control_hz:g} Hz, "
+            f"{cfg.act_steps} of {cfg.horizon_steps} actions executed per query, "
+            f"{cfg.model.flow_steps} Euler steps of which the last "
+            f"{cfg.ft_denoising_steps} are fine-tuned, scene seed base "
+            f"{env_config.seed_base}."
+        )
 
 
 @contextlib.contextmanager

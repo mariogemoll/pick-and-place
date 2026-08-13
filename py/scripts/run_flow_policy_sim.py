@@ -19,11 +19,16 @@ from typing import Any
 import numpy as np
 import torch
 
-from pick_and_place.core.rotations import quat_wxyz_to_rotation_6d
 from pick_and_place.policies.flow_matching import (
     VelocityModel,
     generate,
     load_model,
+)
+from pick_and_place.policies.flow_policy import (
+    load_export,
+    normalize,
+    pack_observation,
+    unnormalize,
 )
 from pick_and_place.policies.diffusion_policy_unet import FlowConditionalUnet1D
 from pick_and_place.runtime.policy_sim import PolicySimEnv
@@ -31,42 +36,6 @@ from pick_and_place.runtime.recorded_scenes import recorded_episode_scenario
 from pick_and_place.runtime.training_scenes import training_scenario
 
 ENTER_KEYS = frozenset({257, 335})
-
-
-def normalize(values: np.ndarray, minimum: np.ndarray, maximum: np.ndarray) -> np.ndarray:
-    span = maximum - minimum
-    return np.where(
-        span > 1e-6, 2 * (values - minimum) / np.where(span > 1e-6, span, 1) - 1, 0
-    ).astype(np.float32)
-
-
-def unnormalize(values: np.ndarray, minimum: np.ndarray, maximum: np.ndarray) -> np.ndarray:
-    span = maximum - minimum
-    return np.where(span > 1e-6, (values + 1) / 2 * span + minimum, minimum).astype(np.float32)
-
-
-def load_export(export_dir: Path) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
-    with (export_dir / "export.json").open() as file:
-        manifest = json.load(file)
-    with np.load(export_dir / "normalization.npz", allow_pickle=False) as archive:
-        bounds = {name: np.asarray(archive[name], dtype=np.float32) for name in archive.files}
-    required = {"observation_min", "observation_max", "endpoint_min", "endpoint_max"}
-    if set(bounds) != required:
-        raise ValueError(f"normalization must contain exactly {sorted(required)}")
-    return manifest, bounds
-
-
-def pack_observation(observation: dict[str, np.ndarray], info: dict[str, Any]) -> np.ndarray:
-    """Pack state in the order declared by this project's flow-policy export."""
-    task = info["task_state"]
-    return np.concatenate(
-        (
-            np.asarray(observation["observation.state"], dtype=np.float32),
-            np.asarray(task["cube_position_m"], dtype=np.float32),
-            np.asarray(quat_wxyz_to_rotation_6d(task["cube_orientation_wxyz"]), dtype=np.float32),
-            np.asarray(task["target_xy_m"], dtype=np.float32),
-        )
-    )
 
 
 class StateFlowPolicy:

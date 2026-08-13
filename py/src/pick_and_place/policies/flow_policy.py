@@ -9,9 +9,13 @@ import itertools
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
+
+from pick_and_place.core.rotations import quat_wxyz_to_rotation_6d
+from pick_and_place.spec.controller import STATE_FEATURE
 
 CUBE_ROTATION_NAMES = (
     "cube_rotation_column_0_x",
@@ -37,6 +41,56 @@ def _make_cube_symmetries() -> torch.Tensor:
 
 
 CUBE_SYMMETRIES = _make_cube_symmetries()
+
+NORMALIZATION_NAMES = frozenset(
+    {"observation_min", "observation_max", "endpoint_min", "endpoint_max"}
+)
+
+
+def load_export(export_dir: str | Path) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
+    """Read a state flow-policy export's manifest and its normalization bounds."""
+    export_dir = Path(export_dir)
+    with (export_dir / "export.json").open() as file:
+        manifest = json.load(file)
+    with np.load(export_dir / "normalization.npz", allow_pickle=False) as archive:
+        bounds = {name: np.asarray(archive[name], dtype=np.float32) for name in archive.files}
+    if set(bounds) != NORMALIZATION_NAMES:
+        raise ValueError(f"normalization must contain exactly {sorted(NORMALIZATION_NAMES)}")
+    return manifest, bounds
+
+
+def normalize(values: np.ndarray, minimum: np.ndarray, maximum: np.ndarray) -> np.ndarray:
+    """Map each dimension onto ``[-1, 1]``, leaving a degenerate one at zero."""
+    span = maximum - minimum
+    return np.where(
+        span > 1e-6, 2 * (values - minimum) / np.where(span > 1e-6, span, 1) - 1, 0
+    ).astype(np.float32)
+
+
+def unnormalize(values: np.ndarray, minimum: np.ndarray, maximum: np.ndarray) -> np.ndarray:
+    """Invert :func:`normalize`."""
+    span = maximum - minimum
+    return np.where(span > 1e-6, (values + 1) / 2 * span + minimum, minimum).astype(np.float32)
+
+
+def pack_observation(observation: dict[str, np.ndarray], info: dict[str, Any]) -> np.ndarray:
+    """Pack state in the order declared by this project's flow-policy export.
+
+    Six robot coordinates, the cube's position, the first two columns of its
+    rotation matrix, and the target's planar position. The cube pose comes from
+    the simulator rather than from a camera, so this observation is privileged
+    and the policy that reads it is a simulation policy until something
+    estimates the same quantities on the rig.
+    """
+    task = info["task_state"]
+    return np.concatenate(
+        (
+            np.asarray(observation[STATE_FEATURE], dtype=np.float32),
+            np.asarray(task["cube_position_m"], dtype=np.float32),
+            np.asarray(quat_wxyz_to_rotation_6d(task["cube_orientation_wxyz"]), dtype=np.float32),
+            np.asarray(task["target_xy_m"], dtype=np.float32),
+        )
+    )
 
 
 @dataclass(frozen=True)

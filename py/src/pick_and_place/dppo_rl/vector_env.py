@@ -34,10 +34,6 @@ import numpy as np
 
 from pick_and_place.dppo_rl.env import DppoTaskEnv, EnvConfig
 
-# Keys crossing the process boundary. "privileged" is present only when the
-# asymmetric critic is enabled; the actor never reads it.
-_OBS_KEYS = ("state", "rgb")
-_PRIVILEGED_KEY = "privileged"
 
 
 def _worker(
@@ -143,12 +139,12 @@ class DppoVectorEnv:
 
     @staticmethod
     def _stack(observations: Sequence[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
-        keys = list(_OBS_KEYS)
-        if _PRIVILEGED_KEY in observations[0]:
-            keys.append(_PRIVILEGED_KEY)
+        # Whatever the codec packed, plus "privileged" when the asymmetric
+        # critic is enabled. Every worker builds the same environment, so the
+        # first one's keys are all of them.
         return {
             key: np.stack([observation[key] for observation in observations])
-            for key in keys
+            for key in observations[0]
         }
 
     # -- the interface DPPO's training agent calls -----------------------
