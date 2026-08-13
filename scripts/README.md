@@ -503,6 +503,46 @@ against 16 workers prefetching batch-128 frames on a box whose `free` reported
 evidence: nothing in the training log, nothing in the container's `dmesg`. Read
 the real limit from `/sys/fs/cgroup/memory/memory.limit_in_bytes`.
 
+### NVDEC decode works, and is 3x faster -- correcting an earlier claim
+
+This document previously said lerobot 0.5.1 "cannot move this to NVDEC --
+`decode_video_frames_torchcodec` takes no device". The *function* takes no
+device, but torchcodec's `VideoDecoder` does, and on the pinned stack
+`device="cuda"` works. Measured on this dataset's own video, 128 random-access
+frames -- the pattern training uses, batch 64 across two cameras:
+
+| | 128 random frames | throughput |
+| --- | ---: | ---: |
+| CPU, as lerobot decodes today | 0.106 s | 1,212 frames/s |
+| **`device="cuda"` (NVDEC)** | **0.035 s** | **3,691 frames/s** |
+
+Compiled training needs 457 frames/s, so NVDEC has ~8x headroom. Two benefits
+beyond the 3x: frames arrive **already on `cuda:0`**, removing the host-to-device
+copy, and the work runs on a fixed-function block rather than the SMs, so it
+does not compete with training -- the decoded frames cost about 0.7 GB/s of
+memory bandwidth against the card's ~1.8 TB/s.
+
+This matters more for *variance* than for speed. On a well-provisioned host
+`data_s` is already 0.01-0.06 s, so there is little to win; what NVDEC removes
+is the dependence on host CPU, which is the measured cause of the 1.68x spread
+between hosts. Note also that `torch.compile` raised the CPU needed per
+GPU-second by ~36%, so hosts that fed the GPU adequately before are closer to
+the edge now.
+
+Not yet established: whether decoding inside a DataLoader worker works, since
+forked workers cannot inherit a CUDA context -- `num_workers=0` with a prefetch
+stream, or a spawn start method, are the routes around it.
+
+### Two speed ideas that measured as nothing
+
+Recorded so they are not retried: **casting the frozen tower (or the whole VLM)
+to bf16** rather than letting autocast convert it each step is -2.3%
+uncompiled and +1.6% compiled, i.e. a wash. Autocast evidently caches its
+weight casts within a step, so the per-step re-cast that seemed wasteful is not
+happening. Embeddings barely move (cos 0.99993).
+
+And a **fused AdamW** cannot help: the optimizer is 0.5% of a step.
+
 ### A dud host stays a dud, so blocklist the machine
 
 Two offers rented hours apart, 41357771 and 45944050, both reported `running`
