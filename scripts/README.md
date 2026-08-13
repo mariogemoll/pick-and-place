@@ -487,6 +487,57 @@ trap as `num_workers`, sprung by a batch size instead. Read the real limit from
 Compare throughput in **samples/s**, never s/step: a batch-128 step does twice
 the work, so s/step makes the larger batch look strictly worse by construction.
 
+### Where a training step goes, and why quantizing the tower is not worth it
+
+Profiled at batch 64, uncompiled, on synthetic batches:
+
+| stage | seconds | share |
+| --- | ---: | ---: |
+| `embed_prefix` -- the frozen vision tower | 0.2282 | **59.2%** |
+| joint VLM and expert layers | 0.0667 | 17.3% |
+| backward | 0.0889 | 23.1% |
+| AdamW over 100M parameters | 0.0019 | 0.5% |
+
+The frozen tower is most of a training step, the backward is only 23% because
+just 22% of the parameters train, and the optimizer is negligible -- a fused
+AdamW would buy nothing.
+
+That invites two ideas, and **both fail, for opposite reasons**.
+
+**Running the prefix ahead on a side stream is capped at ~1.03x.** Measured GPU
+busy is **96.6%**, so there is no bubble to fill: reordering work does not
+create capacity. Note `nvidia-smi`'s utilization counter said 85% and implied
+15% idle -- it samples "any kernel resident" and overstates idle badly. Sum
+kernel durations against an unprofiled wall clock instead, and count only
+device-side entries: each `aten::` op and the kernel under it both carry device
+time, so a naive sum double counts and can exceed 100%.
+
+**Quantizing the tower buys 3.8%, and moves the embeddings 10%.** With
+torchao on a 5090:
+
+| | step | vs same-mode baseline | embedding drift |
+| --- | ---: | ---: | --- |
+| baseline eager | 0.3754 | -- | -- |
+| baseline compiled | 0.2645 | 1.419x | -- |
+| fp8, eager | 0.6064 | 0.619x | cos 0.99474, rel 0.103 |
+| fp8 + compile | 0.2548 | **1.038x** | cos 0.99474, rel 0.103 |
+| int8 dynamic, eager | 0.9316 | 0.404x | cos 0.99765, rel 0.069 |
+| int8 weight-only, eager | 0.5258 | 0.716x | cos 0.99941, rel 0.034 |
+
+Eager quantization is a large regression -- torchao's kernels need
+`torch.compile` to fuse the quantize/dequantize, and weight-only helps
+memory-bound batch-1 decoding rather than a compute-bound batch-64 ViT. Even
+done right, fp8's GEMM saving is mostly cancelled by conversion overhead, and
+much of the tower is attention, layernorm and elementwise work that fp8 does
+not touch. Perturbing the perception front-end of a policy scoring 32-39/100 by
+10% to save four minutes in five hours is not a trade worth making.
+
+Two installation notes, since this cost longer than the measurement: the venv
+is uv-managed and has no `pip`, so use `uv pip install --python <venv>/bin/python`;
+and installing torchao breaks `diffusers` 0.35.2, which lerobot imports through
+its groot policy, with `name 'logger' is not defined` -- diffusers only walks
+its torchao branch when torchao is present. `diffusers` 0.39.0 fixes it.
+
 ### Marketplace hosts vary by 1.68x on identical specs
 
 The same compiled batch-64 configuration measured **0.386 s/step** on one host
