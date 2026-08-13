@@ -474,11 +474,17 @@ the container memory limit cannot confound it:
 | 64 | 168.4 | **229.4** | 11,662 MiB |
 | 128 | 165.7 | **230.2** | 22,262 MiB |
 
-**Flat from 32 upward**, compiled and not. So batch size should be chosen on
-optimization grounds or for VRAM headroom, never for speed -- and batch 32
-gives 98.4% of the throughput for 58% of the memory. Only 16 is genuinely bad,
-at -7% compiled and -25% uncompiled. Compile's gain holds across the range
-(1.68x at 16, ~1.36x at 32-128), so it is not a batch-specific artifact.
+Throughput rises and plateaus rather than being flat: compiled, 32 to 64 is
+**+1.6%** and 64 to 128 a further **+0.3%**. Only medians were recorded, no
+spread, so whether 1.6% is real or noise is unmeasured -- but either way it is
+~1-2% against `torch.compile`'s 36% and a 1.68x spread between hosts, so batch
+size is not where speed comes from. Choose it on optimization grounds or for
+VRAM headroom: batch 32 gives 98.4% of batch 64's throughput for 58% of the
+memory.
+
+Batch 16 is the one genuinely bad choice, at -7% compiled and -25% uncompiled.
+Compile's gain holds across the whole range (1.68x at 16, ~1.36x at 32-128), so
+it is not an artifact of one batch size.
 
 This **supersedes an earlier measurement here that reported batch 128 as 5.9%
 slower**. That arm was being OOM-killed while it was measured, so it recorded
