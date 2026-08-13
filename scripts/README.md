@@ -377,6 +377,45 @@ The same arithmetic as the pi0.5 section, at SmolVLA's batch size:
 `scheduler_decay_steps`, so the cosine decay lands at the end of the run rather
 than being truncated mid-schedule. Change one and consider the other.
 
+### The 512x512 dataset
+
+`two-variant-1000-as-recorded-512x512-lerobot.tar.zst` is the same 1000
+episodes and 291,618 frames with both camera streams re-encoded from 960x720 to
+512x512. Produce one from any recorded dataset with:
+
+```sh
+python py/scripts/convert_dataset_resolution.py \
+  --src "$PAP_DATA_ROOT/datasets/as-recorded" \
+  --width 512 --height 512 --already-rectified --vcodec h264
+```
+
+`--already-rectified` is what makes it applicable to a sim recording: the
+frames are already an ideal pinhole render, so there is no lens distortion to
+undo and the script only center-crops and resizes.
+
+The point is decode cost. A training step measured **1.12-1.45 s** against
+**0.416 s** for the same forward and backward on synthetic batches, so two
+thirds of it was h264 random-access decode of two 960x720 streams per sample.
+512x512 is 2.6x fewer pixels per frame and takes the archive from 2.4 GB to
+1.3 GB.
+
+**It is a square crop, not a rescale, so the policy sees a narrower view.** The
+saved 960x720 frame is itself the central 1440x1080 of the 1920x1080 render;
+cropping it square keeps the central 1080x1080 and drops the left and right
+margins. Nothing needs changing at evaluation time — `eval_policy_sim.py` reads
+`image_hw` off the checkpoint and cover-crops the render to match, which lands
+on that same central 1080x1080 — but a policy trained on it is **not** a
+cheaper reproduction of the 32/100 run. It is a different input.
+
+The alternative, if what you want *is* that reproduction, is **512x384**:
+SmolVLA's `resize_imgs_with_padding` turns a 4:3 frame into 512x384 plus
+padding anyway, so pre-resizing to it reproduces today's model input pixel for
+pixel and buys the same decode saving with no change to the field of view.
+
+Converting the full dataset takes about an hour on two cores, bound by the
+h264 encode rather than the decode. That is cheap enough that renting for it is
+not worth the transfer and provisioning.
+
 ### Rent in Europe, and check the driver
 
 Two host properties are not negotiable, and both have cost a rented hour:

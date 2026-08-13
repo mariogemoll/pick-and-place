@@ -46,6 +46,11 @@ Examples:
     python py/scripts/convert_dataset_resolution.py \
         --src datasets/20260702 --width 640 --height 480
 
+    # A sim recording, already a pinhole render: crop and resize only
+    python py/scripts/convert_dataset_resolution.py \
+        --src datasets/as-recorded --width 512 --height 512 \
+        --already-rectified --vcodec h264
+
     # Only the successful episodes, converted to 512x512
     python py/scripts/select_episodes.py --src datasets/20260702 \
         | python py/scripts/convert_dataset_resolution.py \
@@ -77,6 +82,9 @@ FEATURE_TO_CAMERA = {
     "observation.images.overhead": "overhead_camera",
     "observation.images.wrist": "wrist_camera",
 }
+
+# Privileged simulator ground truth, present on sim recordings only.
+ENVIRONMENT_STATE = "observation.environment_state"
 
 # Episode-metadata columns that are LeRobot bookkeeping (file layout, video
 # spans, per-feature stats) rather than data recorded by this project. Every
@@ -288,6 +296,12 @@ def main() -> None:
     rows = pd.concat(pd.read_parquet(p) for p in data_files).sort_values("index")
     states = rows["observation.state"].to_numpy()
     actions = rows["action"].to_numpy()
+    # Sim recordings carry the simulator's privileged cube pose alongside the
+    # joints; a real recording has no such column. Carry it through when it is
+    # there so a converted sim dataset stays as usable as its source.
+    environment_states = (
+        rows[ENVIRONMENT_STATE].to_numpy() if ENVIRONMENT_STATE in rows.columns else None
+    )
     episode_indices = rows["episode_index"].to_numpy()
     task_indices = rows["task_index"].to_numpy()
     row_indices = rows["index"].to_numpy()
@@ -346,7 +360,15 @@ def main() -> None:
         encoder_queue_maxsize=args.encoder_queue_maxsize,
     )
     image_shape = (args.height, args.width, 3)
-    recording.create_dataset(image_shape, image_shape)
+    recording.create_dataset(
+        image_shape,
+        image_shape,
+        environment_state_names=(
+            None
+            if environment_states is None
+            else tuple(info["features"][ENVIRONMENT_STATE]["names"])
+        ),
+    )
 
     # Built lazily once the first frame reveals each camera's stored resolution.
     undistort_maps: dict[str, tuple[np.ndarray, np.ndarray]] = {}
@@ -418,6 +440,8 @@ def main() -> None:
                     "task": task_by_index[int(task_indices[i])],
                     **last_processed,
                 }
+                if environment_states is not None:
+                    frame[ENVIRONMENT_STATE] = np.asarray(environment_states[i], np.float32)
                 recording.dataset.add_frame(frame)
                 episode_has_frames = True
 
