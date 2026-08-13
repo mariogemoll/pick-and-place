@@ -280,6 +280,15 @@ batch would have trained on barely half an epoch.
 > cost-effectiveness only widens. **Do not run more VLA experiments in
 > simulation for this task.**
 >
+> **Run rollouts at `--n-action-steps 20`, not 10.** A sweep on the 20,000-step
+> checkpoint over the full `canonical_100_v1` measured 32/100 at horizon 10,
+> **39/100 at 20**, 34/100 at 25 and 24/100 at 50 — a peak, not a trend. Across
+> all four, contact stays flat at ~0.87 while `cube_lifted` tracks the score,
+> so the horizon decides whether the grasp completes rather than whether the
+> cube is found: too short and a replan switches modes mid-grasp, too long and
+> the policy is open-loop for 1.7 s. Same effect `FLOW_POLICY_IMAGE.md` measured
+> on the image flow policy, which is also flow-matching.
+>
 > The one live argument is sim2real: `real-20260701` is 18 minutes, far below
 > the 1–20 h band, and web-scale plus SO-100/SO-101 pretraining is a plausible
 > route to transferring from that little. That needs the real arm to score.
