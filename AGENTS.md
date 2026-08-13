@@ -124,6 +124,32 @@ That command writes both `so101.xml` and `so101.json`; only the `.json` is
 needed for tests. CI gets this by accident — its step reads as a smoke test of
 the exporter and deletes the `.xml` afterwards, leaving the `.json` behind.
 
+### The simulator needs generated AprilTag textures
+
+`assets/apriltags/textures/` is **not** in the repository — the textures are
+renders, and renders are not committed. A fresh clone therefore fails to compile
+any MuJoCo scene:
+
+```
+ValueError: Error: Error opening file
+  '.../assets/apriltags/textures/tagStandard41h12_00014_60x60mm_tag40mm.png'
+```
+
+Generate all fourteen before running anything that builds a scene:
+
+```sh
+MUJOCO_GL=egl python py/scripts/render_apriltag_textures.py --all-defaults
+```
+
+The output is deterministic, so a regenerated set matches any other machine's.
+`vast_pap_provision.sh` runs this, so rented pods are covered.
+
+**This hides until the worst moment.** Training never compiles a scene — it
+reads the dataset — so a missing texture set costs nothing for hours and then
+fails the first evaluation, after the GPU time is already spent. It also decides
+the cube's appearance, so a run evaluated without regenerating them would not be
+scoring the scene it trained on.
+
 ### Cross-language parity
 
 `fixtures/parity/` is the shared oracle for the logic both languages implement:

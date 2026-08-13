@@ -118,4 +118,11 @@ if ! "$venv/bin/python" -c "import torch; assert torch.cuda.is_available()" 2>/d
 fi
 
 "$venv/bin/python" -c "import torch; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
+
+# The AprilTag textures are generated, not committed, so a fresh clone has none
+# and every scene compile fails with "Error opening file
+# .../tagStandard41h12_00014_60x60mm_tag40mm.png". Training does not notice --
+# it reads the dataset -- so this only surfaces the first time a pod evaluates a
+# policy, which is exactly when a long job is already underway.
+MUJOCO_GL=egl "$venv/bin/python" "$repo/py/scripts/render_apriltag_textures.py" --all-defaults
 echo "PROVISION COMPLETE"
