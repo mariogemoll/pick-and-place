@@ -462,6 +462,42 @@ Evidence that this does not matter much: both arms logged `loss:0.194` at step
 steps at three decimals under bf16 autocast, not a guarantee over 50,000, so
 the flag stays off by default and a ladder should not change it mid-run.
 
+### Batch 128 is not the lever, and the old +18% is stale
+
+Compared on one host with both arms compiled:
+
+| | step | throughput | peak VRAM |
+| --- | ---: | ---: | ---: |
+| batch 64 | 0.6490 s | **98.6 samples/s** | 13,604 MiB |
+| batch 128 | 1.3800 s | 92.8 samples/s | 25,044 MiB |
+
+Slightly *worse*, not the "+18% at batch 112" recorded earlier. That figure was
+measured while the run was decode bound, where a larger batch amortized decode
+stalls; once the 512x512 dataset and `torch.compile` have removed those, there
+is nothing left for batch size to recover.
+
+**And batch 128 was OOM-killed at step ~350**, `rc=137`, with nothing in the
+training log and nothing in the container's `dmesg` -- the exit code is the only
+evidence. Not VRAM: 25,044 MiB of 32,607 fits. It was the container's **57 GB
+cgroup limit**, against 16 workers prefetching batch-128 frames on a box whose
+`free` reports 440 GB and whose `nproc` reports 192, both the *host's*. Same
+trap as `num_workers`, sprung by a batch size instead. Read the real limit from
+`/sys/fs/cgroup/memory/memory.limit_in_bytes`.
+
+Compare throughput in **samples/s**, never s/step: a batch-128 step does twice
+the work, so s/step makes the larger batch look strictly worse by construction.
+
+### Marketplace hosts vary by 1.68x on identical specs
+
+The same compiled batch-64 configuration measured **0.386 s/step** on one host
+and **0.649 s/step** on another, both advertising an RTX 5090 at reliability
+0.99 or better, both on the pinned stack. Nearly a factor of two.
+
+So an A/B is only meaningful when both arms run on the *same* host, and an
+absolute s/step or projected wall clock is a fact about the host it was
+measured on rather than about the configuration. Advertised `inet_down` already
+could not be trusted; neither can advertised compute.
+
 ### Rent in Europe, and check the driver
 
 Two host properties are not negotiable, and both have cost a rented hour:
