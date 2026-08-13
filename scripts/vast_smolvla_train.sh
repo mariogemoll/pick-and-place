@@ -53,30 +53,40 @@ output_prefix="$bucket_root/outputs/$run_name"
 # from-scratch image policies on this task that needed 200-300; 6.58 is still
 # not many, but a pretrained model is the whole reason to expect it to be
 # enough, and this is the run that tests that.
-#
-# 30,000 is also SmolVLA's own scheduler_decay_steps default, so the cosine
-# decay lands exactly at the end of the run rather than being truncated
-# mid-schedule.
 steps="${STEPS:-30000}"
+# The cosine decay has to be told how long the run is, because the scheduler
+# only ever rescales itself *downwards*: CosineDecayWithWarmupSchedulerConfig
+# .build() rescales warmup and decay to fit when num_training_steps is *less*
+# than num_decay_steps, and does nothing when it is more. SmolVLAConfig defaults
+# scheduler_decay_steps to 30,000, so at STEPS=30000 the two agree by accident
+# and any longer run silently spends its tail at the 2.5e-6 floor -- at 50,000
+# steps that is the last 40% of the run at a fortieth of the peak rate.
+#
+# Tying it to the step count keeps the decay landing exactly at the end of
+# whatever run is asked for. Set SCHEDULER_DECAY_STEPS to decouple them.
+scheduler_decay_steps="${SCHEDULER_DECAY_STEPS:-$steps}"
 # 64 fits a 32 GB card comfortably: 450M params at bf16 is under a gigabyte, the
 # optimizer carries state for only the 100M trainable ones, and the sequence is
 # short (two images at 64 tokens each, 48 language tokens, 50 action tokens).
 # The smoke stage reports peak VRAM; if there is headroom, 128 doubles epoch
 # coverage for the same step count.
 batch_size="${BATCH_SIZE:-64}"
-# Left at SmolVLA's own preset. Its optimizer and schedule (1e-4, cosine decay
-# to 2.5e-6 over 30,000 steps after 1,000 warmup) come from the policy's
-# training preset, and use_policy_training_preset defaults true, so nothing here
-# needs to restate them.
+# Everything else about the optimizer is left at SmolVLA's own preset -- AdamW
+# at a 1e-4 peak, 1,000 warmup steps, cosine decay to 2.5e-6 -- which
+# use_policy_training_preset (default true) takes from the policy config, so
+# only the decay length above needs restating.
 save_freq="${SAVE_FREQ:-5000}"
 seed="${SEED:-1000}"
-# The dataset decodes two 720x960 h264 streams per sample, so at batch 64 a step
-# needs 128 random-access frame decodes. That, and not the GPU, is the
-# bottleneck: measured on a 5090, a step takes 1.23s while the same forward and
-# backward on synthetic batches takes 0.416s, so two thirds of every step is
-# spent waiting for frames. lerobot 0.5.1 cannot move this to NVDEC --
-# decode_video_frames_torchcodec takes no device and its docstring warns that
-# CUDA decode in a dataloader worker raises CUDA initialization errors.
+# The dataset decodes two h264 streams per sample, so at batch 64 a step needs
+# 128 random-access frame decodes, and on the 720x960 dataset that -- not the
+# GPU -- was the bottleneck: measured on a 5090, a step took 1.23s while the
+# same forward and backward on synthetic batches took 0.416s, so two thirds of
+# every step was spent waiting for frames. lerobot 0.5.1 cannot move this to
+# NVDEC -- decode_video_frames_torchcodec takes no device and its docstring
+# warns that CUDA decode in a dataloader worker raises CUDA initialization
+# errors. Feeding a 512x512 dataset instead is the lever that does work: 2.6x
+# fewer pixels per frame should put decode under the 0.416s compute floor and
+# let the prefetch hide it entirely.
 #
 # 16 is not a throughput choice, it is a ceiling. `nproc` reports the *host's*
 # cores (256 on the box this was measured on) while the container's RAM is
@@ -91,6 +101,19 @@ num_workers="${NUM_WORKERS:-16}"
 # policy's eight-tick execution horizon, so the closed-loop reaction rates are
 # comparable across the policies being ranked.
 n_action_steps="${N_ACTION_STEPS:-10}"
+
+# SmolVLA feeds every camera through resize_with_pad() to
+# resize_imgs_with_padding, which is (512, 512): the frame is scaled down until
+# it fits inside a 512x512 box with its aspect ratio intact, then padded on the
+# left and top with zeros. A 960x720 frame therefore reaches SigLIP as 512x384
+# real pixels above 128 rows of padding -- a quarter of the model's input is
+# constant black, and the decoder paid for 2.6x more pixels than survive.
+#
+# A square dataset makes that step an identity: at 512x512 the ratio is 1, so
+# nothing is rescaled and nothing is padded. Set REQUIRE_NO_PADDING=1 to assert
+# that rather than trust it; the precondition below computes what the model will
+# actually receive and refuses a dataset that would be padded.
+require_no_padding="${REQUIRE_NO_PADDING:-0}"
 
 # lerobot does not wire --policy.use_amp into the Accelerator it builds, so the
 # run is fp32 unless this env var says otherwise: lerobot_train.py constructs
@@ -219,9 +242,11 @@ echo "Using dataset at $artifact_root"
 # SmolVLA reserves three image slots and pads missing ones only up to
 # empty_cameras, which stays 0 because this rig fills exactly two and the
 # finetune's input_features are rebuilt from the dataset.
-"$venv/bin/python" - "$artifact_root" <<'PY'
+"$venv/bin/python" - "$artifact_root" "$require_no_padding" <<'PY'
 import json, sys
 from pathlib import Path
+
+from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
 
 stats = json.loads((Path(sys.argv[1]) / "meta" / "stats.json").read_text())
 missing = [
@@ -242,6 +267,34 @@ if len(cameras) != 2:
 # position, so it does agree -- this only records what the order actually was.
 print(f"Mean/std stats present. Cameras in dataset order: {cameras}")
 print(f"Frames: {info['total_frames']}, episodes: {info['total_episodes']}, fps: {info['fps']}")
+
+# Replay resize_with_pad()'s arithmetic on the recorded frame shape, so the
+# geometry the model will actually see is a printed fact rather than an
+# assumption. The function scales the frame by the larger of the two axis
+# ratios, which fits it inside the box with its aspect ratio intact, then pads
+# whatever is left over on the left and top.
+box_height, box_width = SmolVLAConfig().resize_imgs_with_padding
+padded = False
+for camera in cameras:
+    height, width = info["features"][camera]["shape"][:2]
+    ratio = max(width / box_width, height / box_height)
+    fitted_height, fitted_width = int(height / ratio), int(width / ratio)
+    pad_rows = max(0, box_height - fitted_height)
+    pad_cols = max(0, box_width - fitted_width)
+    fraction = 1 - (fitted_height * fitted_width) / (box_height * box_width)
+    print(
+        f"{camera}: {width}x{height} -> {fitted_width}x{fitted_height} "
+        f"in a {box_width}x{box_height} box, padding {pad_cols} cols and {pad_rows} rows "
+        f"({fraction:.1%} of the model input)"
+    )
+    padded = padded or bool(pad_rows or pad_cols)
+
+if sys.argv[2] == "1" and padded:
+    raise SystemExit(
+        f"REQUIRE_NO_PADDING is set, but this dataset does not fill SmolVLA's "
+        f"{box_width}x{box_height} input. Convert it with convert_dataset_resolution.py "
+        f"--width {box_width} --height {box_height}."
+    )
 PY
 
 "$venv/bin/python" - "$checkpoint_revision" "$checkpoint_dir" <<'PY'
@@ -267,6 +320,7 @@ train_args=(
   --policy.type=smolvla
   --policy.pretrained_path="$checkpoint_dir"
   --policy.n_action_steps="$n_action_steps"
+  --policy.scheduler_decay_steps="$scheduler_decay_steps"
   --policy.device=cuda
   --policy.push_to_hub=false
   --batch_size="$batch_size"
