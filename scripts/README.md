@@ -416,6 +416,52 @@ Converting the full dataset takes about an hour on two cores, bound by the
 h264 encode rather than the decode. That is cheap enough that renting for it is
 not worth the transfer and provisioning.
 
+It worked. On the 512x512 dataset `data_s` — lerobot's own measure of how long
+a step waits for its batch — is **0.03-0.06 s of a 0.5 s step**, against roughly
+0.7 s on the 960x720 dataset. Decode is no longer a constraint, and the run is
+GPU-bound for the first time.
+
+Two things follow. Effective *cores* now set the ceiling, not container memory:
+the same run measured 0.68 s/step on a 21-core host and **0.50 s/step on a
+32-core one**, because the remaining decode has to fit in the gaps. And the
+launcher's `REQUIRE_NO_PADDING=1` will refuse a dataset that does not fill
+SmolVLA's 512x512 input, which is worth setting — a pod that already has the
+960x720 dataset unpacked would otherwise be used silently, since the launcher
+finds any dataset under `artifacts/` rather than the one named.
+
+### torch.compile is worth 1.45x
+
+Measured head to head on one host, same dataset, batch, seed and step count,
+only `--policy.compile_model` moving:
+
+| | `updt_s` median | min | `data_s` |
+| --- | ---: | ---: | ---: |
+| stock | 0.5050 | 0.4530 | 0.032 |
+| `compile_model=true` | **0.3480** | 0.3350 | 0.038 |
+
+**+45%**, or 7.01h against 4.83h over 50,000 steps. `COMPILE_MODEL=true` on
+`vast_smolvla_train.sh`.
+
+**Measure it with `updt_s` past step 150, never with tqdm's rate.** The wall
+clock for 400 steps was 306 s stock against 747 s compiled, because
+`max-autotune` spends about seven minutes compiling before the first step. A
+tqdm running mean therefore reports compile as *slower*, which is backwards for
+any run longer than about twenty minutes.
+
+Nothing went wrong that was expected to: **zero graph breaks and zero
+recompilations**. That is the dataset's doing rather than luck — it carries
+exactly one task string, so `pad_language_to="longest"` gives a constant
+sequence length, and a square dataset gives a constant image shape. A
+multi-task or non-square dataset would have to re-establish this.
+
+The one reservation is that enabling it also runs
+`set_float32_matmul_precision("high")`, switching fp32 matmuls to TF32, so a
+compiled checkpoint is not numerically identical to one trained without it.
+Evidence that this does not matter much: both arms logged `loss:0.194` at step
+200 and `loss:0.172` at step 400, identical at logged precision. That is 400
+steps at three decimals under bf16 autocast, not a guarantee over 50,000, so
+the flag stays off by default and a ladder should not change it mid-run.
+
 ### Rent in Europe, and check the driver
 
 Two host properties are not negotiable, and both have cost a rented hour:
