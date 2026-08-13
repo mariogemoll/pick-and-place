@@ -20,14 +20,22 @@ control tick it snapshots the latest overhead and wrist frames, reads the
 follower's joints, asks the selected controller for an action, and streams it back
 to the arm as position targets.
 
-It is *simpler* than the sim run on the proprioception side because no frame
-conversion is needed. The follower already reports and accepts the exact real
-frame the dataset was recorded in — arm joints in degrees, gripper as a 0-100
-position — which is the frame the learned state and action live in. So the
-follower's reading is the observation state verbatim, and the predicted action
-is sent verbatim (clamped to the joint limits). There are no sim→real offsets
-and no radians anywhere on the policy path; MuJoCo is loaded only to derive
-those joint limits and the neutral start pose.
+By default it is *simpler* than the sim run on the proprioception side. The
+follower already reports and accepts the exact real frame the dataset was
+recorded in — arm joints in degrees, gripper as a 0-100 position — so for a
+checkpoint fine-tuned on this rig's own recordings the follower's reading is the
+observation state verbatim and the predicted action is sent verbatim, clamped to
+the joint limits. No radians appear anywhere on the policy path; MuJoCo is
+loaded only to derive those limits and the neutral start pose.
+
+**A checkpoint trained in simulation needs two corrections that a real-trained
+one must not get.** It learned a world where the state, the images and the
+command all agree, and on hardware they do not: the servo readback differs from
+the model frame by the session's joint zeros, which drift day to day, and the
+joint settles a fitted tracking bias away from whatever it was commanded. Pass
+``--joint-zeros`` and ``--tracking-bias-scale 1`` to correct both. They compose
+on the command — a joint settles at model angle ``command + zero + bias`` — and
+the joint zeros additionally shift the state the policy is shown.
 
 The cameras do need conversion: each raw, lens-distorted frame is undistorted
 with its calibrated intrinsics, center-cropped to the policy's aspect ratio, and
@@ -50,6 +58,10 @@ Enter. The overhead camera verifies that the cube was set down at the target;
 camera extrinsics are solved at startup and checked for drift between attempts.
 Timed-out attempts return to neutral and retry. ``--loop`` continues after a
 success instead of exiting.
+
+That scoring reads the tagged cube's pose, so ``--no-measure-scene`` is needed for
+a policy trained on the plain blue cube, which has none: attempts then run
+unscored and the operator judges them.
 
 Safety: the arm ramps smoothly from wherever it is parked onto each start pose
 before the policy takes over, and on exit (success, Ctrl-C or step budget) it
@@ -97,14 +109,22 @@ from pick_and_place.cli.rig import (
     add_overhead_recalibration_arguments,
     add_rig_camera_arguments,
 )
+from pick_and_place.runtime.action_log import ActionLog
 from pick_and_place.runtime.frame_reader import open_frame_reader
 from pick_and_place.runtime.ramp import ramp_follower
+from pick_and_place.core.robot_dynamics import (
+    load_robot_dynamics_config,
+    tracking_bias_deg,
+    tracking_bias_vector,
+)
+from pick_and_place.planning.motion import ramp_setpoints
 from pick_and_place.spec.robot import CONTROL_HZ, GRIPPER_INDEX, JOINT_NAMES
 from pick_and_place.core.joint_frames import (
     action_to_joints,
     clamp_and_warn,
     follower_clamp_limits,
     joints_to_action,
+    load_joint_zero_offsets,
     sim_frame_to_real,
 )
 from pick_and_place.hardware.follower import make_so101_follower
@@ -188,80 +208,6 @@ def _drain_stdin_lines() -> bool:
     return typed
 
 
-class ActionLog:
-    """Accumulate one attempt's per-tick actions and write them to
-    ``<root>/attempt_NNN.npz`` when the attempt ends.
-
-    Logged per tick: the measured joint state, the action the policy returned
-    (the ensembled one when temporal ensembling is on), and the velocity-capped
-    command actually sent. Whenever the model predicted a fresh chunk that tick
-    (every tick under ensembling, every ``n_action_steps`` ticks otherwise), the
-    whole chunk is logged too, keyed by the tick it arrived on. Everything is in
-    the real frame (degrees, gripper 0-100). Row 0 of a chunk is the model's
-    freshest prediction for its arrival tick, so ``chunks[i, 0] - action`` at
-    ``chunk_tick[i]`` measures how far the ensemble lags the newest prediction,
-    and comparing chunks across arrival ticks exposes mode flips.
-    """
-
-    def __init__(self, root: Path) -> None:
-        self.root = root
-        self.root.mkdir(parents=True, exist_ok=True)
-        self.attempt = 0
-        self._clear()
-
-    def _clear(self) -> None:
-        self._tick: list[int] = []
-        self._t: list[float] = []
-        self._state: list[np.ndarray] = []
-        self._action: list[np.ndarray] = []
-        self._commanded: list[np.ndarray] = []
-        self._chunk_tick: list[int] = []
-        self._chunks: list[np.ndarray] = []
-
-    def start_attempt(self) -> None:
-        self.attempt += 1
-        self._clear()
-
-    def log_tick(
-        self,
-        tick: int,
-        t: float,
-        state: np.ndarray,
-        action: np.ndarray,
-        commanded: np.ndarray,
-        chunk: np.ndarray | None = None,
-    ) -> None:
-        self._tick.append(tick)
-        self._t.append(t)
-        self._state.append(np.asarray(state, dtype=np.float32))
-        self._action.append(np.asarray(action, dtype=np.float32))
-        self._commanded.append(np.asarray(commanded, dtype=np.float32))
-        if chunk is not None:
-            self._chunk_tick.append(tick)
-            self._chunks.append(np.asarray(chunk, dtype=np.float32))
-
-    def end_attempt(self, outcome: str) -> None:
-        if not self._tick:
-            return
-        path = self.root / f"attempt_{self.attempt:03d}.npz"
-        np.savez_compressed(
-            path,
-            tick=np.array(self._tick, dtype=np.int64),
-            t=np.array(self._t, dtype=np.float64),
-            state=np.stack(self._state),
-            action=np.stack(self._action),
-            commanded=np.stack(self._commanded),
-            chunk_tick=np.array(self._chunk_tick, dtype=np.int64),
-            chunks=(
-                np.stack(self._chunks)
-                if self._chunks
-                else np.zeros((0, 0, 0), dtype=np.float32)
-            ),
-            outcome=np.array(outcome),
-        )
-        print(f"Wrote action log: {path}")
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_policy_arguments(parser, controllers=("lerobot", "diffusion-policy", "flow-image"))
@@ -274,6 +220,28 @@ def main() -> None:
         type=int,
         default=0,
         help="stop after this many control ticks (0 = run until Ctrl-C)",
+    )
+    parser.add_argument(
+        "--joint-zeros",
+        type=Path,
+        default=None,
+        help=(
+            "session joint-zero calibration (config/joint_zeros.json) to map the "
+            "servo readback into the model frame before the policy sees it, and "
+            "the policy's action back before it is sent. Required for a "
+            "sim-trained checkpoint; omit for one fine-tuned on real recordings, "
+            "which learned the servo frame directly"
+        ),
+    )
+    parser.add_argument(
+        "--tracking-bias-scale",
+        type=float,
+        default=0.0,
+        help=(
+            "compensate the fitted servo steady-state bias, so a joint settles on "
+            "the commanded angle rather than 2.16 deg (shoulder_lift) away from "
+            "it; 1.0 is the measured arm, 0 sends the policy's action verbatim"
+        ),
     )
     parser.add_argument(
         "--max-joint-speed",
@@ -325,6 +293,30 @@ def main() -> None:
         "--audio-device",
         default=None,
         help="sounddevice input name or index (default: system input device)",
+    )
+    parser.add_argument(
+        "--send-substeps",
+        type=int,
+        default=3,
+        help=(
+            "sends per policy query. The policy emits setpoints at its own rate "
+            "(10 Hz for the flow policies), which leaves the servos one step per "
+            "period to chase and nothing in between; splitting it into this many "
+            "equal sends spreads the same travel with a fraction of the per-send "
+            "jump. 1 sends the undivided step (default: 3, i.e. 30 Hz sends)"
+        ),
+    )
+    parser.add_argument(
+        "--measure-scene",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "locate the cube and drop zone overhead and detect success automatically. "
+            "Requires the tagged cube, whose pose the overhead camera can read. Pass "
+            "--no-measure-scene for a plain blue cube, which has no measurable pose: "
+            "the rollout then runs once, unscored, and the operator judges it "
+            "(default: enabled)"
+        ),
     )
     parser.add_argument(
         "--loop",
@@ -406,6 +398,8 @@ def main() -> None:
         parser.error("--workspace-camera requires --record-video")
     if args.record_audio and args.record_video is None:
         parser.error("--record-audio requires --record-video")
+    if args.send_substeps < 1:
+        parser.error(f"--send-substeps must be at least 1, got {args.send_substeps}")
 
     override = (args.image_height, args.image_width)
     if any(override) and not all(override):
@@ -457,6 +451,11 @@ def main() -> None:
             f"{recording_hw[1]}x{recording_hw[0]} recording resolution."
         )
     print(f"Policy control rate: {control_hz:g} Hz.")
+    if args.send_substeps > 1:
+        print(
+            f"Ramping each setpoint over {args.send_substeps} sends "
+            f"({control_hz * args.send_substeps:g} Hz to the servos)."
+        )
 
     # MuJoCo is used only for the joint limits (to clamp commands) and to map the
     # neutral sim pose into the real frame for the start ramp — never stepped.
@@ -464,6 +463,25 @@ def main() -> None:
     kinematics = derive_kinematics(model)
     clamp_low, clamp_high = follower_clamp_limits(kinematics)
     clip_warned: set[str] = set()
+    # A real servo settles a fitted bias away from what it was commanded, which
+    # simulation does not reproduce, so a policy trained there aims short on
+    # hardware. Subtracting it makes the arm land where the policy asked.
+    tracking_bias = tracking_bias_vector(
+        tracking_bias_deg(load_robot_dynamics_config(), scale=args.tracking_bias_scale),
+        JOINT_NAMES,
+    )
+    if args.tracking_bias_scale:
+        print(f"Compensating the fitted servo tracking bias at {args.tracking_bias_scale:g}x.")
+    # A servo readback and the model frame differ by the session's joint zeros,
+    # which drift day to day. A checkpoint fine-tuned on this rig's own
+    # recordings learned the servo frame and wants none of this; one trained in
+    # simulation learned a world where the state, the images and the command all
+    # agree, and on hardware they do not until the zeros are applied.
+    joint_zero_offsets = np.zeros(len(JOINT_NAMES))
+    if args.joint_zeros is not None:
+        offsets = load_joint_zero_offsets(args.joint_zeros)
+        joint_zero_offsets = np.array([offsets.get(name, 0.0) for name in JOINT_NAMES])
+        print(f"Applying session joint zeros from {args.joint_zeros}: {offsets}")
     neutral_real = sim_frame_to_real(NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER)
     rest_real = sim_frame_to_real(REST_ARM_JOINTS, REST_GRIPPER)
 
@@ -637,10 +655,11 @@ def main() -> None:
         audio_note = " with audio" if args.record_audio else ""
         print(f"Recording the {cams} cameras{audio_note} to {record_dir}")
 
-    # ACT uses the tagged cube for automatic attempt setup and success checks.
-    # The Diffusion Policy's plain blue cube has no measurable pose, so its rollout
-    # is unmeasured.
-    measure_scene = args.controller == "lerobot"
+    # Automatic attempt setup and success checks read the tagged cube's pose from the
+    # overhead camera, so they are available to any controller trained against it —
+    # what decides this is the cube in the scene, not which policy is driving. A plain
+    # blue cube has no measurable pose and has to be scored by the operator.
+    measure_scene = args.measure_scene
     rng = np.random.default_rng()
     from pick_and_place.calibration.camera_compare import load_intrinsics
     from pick_and_place.calibration.cam_align_solve import (
@@ -802,6 +821,9 @@ def main() -> None:
         still_since = None
         prev_arm = None
         prev_t = None
+        # Where the ramp to each new setpoint starts. None until the first send of
+        # the attempt, which ramps from the arm's measured pose instead.
+        last_sent = None
         announced = False
         raw_lag = None  # newest chunk's first action vs the ensembled one, deg
         while True:
@@ -813,8 +835,12 @@ def main() -> None:
             wrist_rgb = policy_frame(wrist_rgb, wrist_undistort_map)
 
             state = action_to_joints(follower.get_observation(), neutral_real).astype(np.float32)
+            # `state` stays in the servo frame for the velocity cap, the safety
+            # checks and the log, because that is what the hardware reported.
+            # Only the policy sees the model frame.
+            policy_state = (state + joint_zero_offsets).astype(np.float32)
             observation = {
-                STATE_FEATURE: state,
+                STATE_FEATURE: policy_state,
                 OVERHEAD_FEATURE: overhead_rgb,
                 WRIST_FEATURE: wrist_rgb,
             }
@@ -826,7 +852,7 @@ def main() -> None:
             if chunked_controller is None:
                 assert predict_action is not None
                 lerobot_observation = {
-                    STATE_FEATURE: state,
+                    STATE_FEATURE: policy_state,
                     overhead_key: overhead_rgb,
                     wrist_key: wrist_rgb,
                 }
@@ -844,7 +870,15 @@ def main() -> None:
             else:
                 action_real = policy.act(observation)
             infer_seconds += time.monotonic() - infer_start
-            target = clamp_and_warn(action_real, clamp_low, clamp_high, clip_warned)
+            # Both corrections land on the command, and compose: a joint settles
+            # at model angle ``command + zero_offset + tracking_bias``, so
+            # reaching the policy's target means subtracting both. Before
+            # clamping, so the joint limits still bind what is actually sent,
+            # and before the velocity cap, so the cap bounds real travel rather
+            # than the uncorrected request.
+            target = clamp_and_warn(
+                action_real - joint_zero_offsets - tracking_bias, clamp_low, clamp_high, clip_warned
+            )
             # Velocity cap: never command an arm joint more than one tick's worth
             # of travel beyond where the arm actually is. This bounds both speed
             # and the servo's position error regardless of what the policy asks
@@ -856,7 +890,24 @@ def main() -> None:
                 commanded[:GRIPPER_INDEX] = state[:GRIPPER_INDEX] + np.clip(
                     arm_delta, -max_step, max_step
                 )
-            follower.send_action(joints_to_action(commanded))
+            # One setpoint per policy period would be a single step the servos chase
+            # and then hold, so the arm tracks a staircase. Ramp to it across the
+            # period instead, pacing the sends to absolute deadlines so the extra
+            # sends consume the period's slack rather than adding to it. Total travel
+            # per period — and so the velocity cap above — is unchanged.
+            sends = ramp_setpoints(last_sent if last_sent is not None else state,
+                                   commanded, args.send_substeps)
+            sub_period = period / len(sends)
+            for i, setpoint in enumerate(sends, start=1):
+                # The gripper takes its new value on the first send: like the
+                # velocity cap above, opening and closing stay timely.
+                setpoint[GRIPPER_INDEX] = commanded[GRIPPER_INDEX]
+                follower.send_action(joints_to_action(setpoint))
+                if i < len(sends):
+                    slack = (next_tick + i * sub_period) - time.monotonic()
+                    if slack > 0:
+                        time.sleep(slack)
+            last_sent = commanded.copy()
 
             # Drain the chunk captured during this tick's inference (if any) and
             # unnormalize the whole (chunk, dim) sequence in one pass — the
@@ -1147,7 +1198,15 @@ def main() -> None:
                 break
             if not measure_scene:
                 print(f"Unmeasured rollout ended: {outcome}.")
-                break
+                if not args.loop:
+                    break
+                go_neutral()
+                try:
+                    input("Reset the scene, then press Enter for the next attempt "
+                          "(Ctrl-C to stop)...")
+                except EOFError:
+                    break
+                continue
             if outcome == "timeout":
                 print(f"TIMEOUT — no success within {args.attempt_timeout:.0f}s. "
                       "Returning to neutral and retrying.")

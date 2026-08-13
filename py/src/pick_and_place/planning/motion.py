@@ -96,6 +96,22 @@ def smoothstep(t: float) -> float:
     return c * c * (3.0 - 2.0 * c)
 
 
+def ramp_setpoints(start: np.ndarray, target: np.ndarray, steps: int) -> list[np.ndarray]:
+    """Split one setpoint change into ``steps`` equal sends, arriving on ``target``.
+
+    A policy that emits setpoints more slowly than the arm can be commanded hands
+    the servos a single step per period and nothing in between, so they chase a
+    staircase. Spreading the same travel over ``steps`` sends within the period
+    covers identical ground with a fraction of the per-send jump. The last element
+    is exactly ``target``, so no error accumulates across periods.
+
+    ``steps == 1`` returns ``[target]`` — the undivided step, unchanged.
+    """
+    if steps < 1:
+        raise ValueError(f"steps must be at least 1, got {steps}")
+    return [start + (target - start) * ((i + 1) / steps) for i in range(steps)]
+
+
 def _smootherstep_integral(t: float) -> float:
     """Integral of smootherstep from 0 to ``t`` — distance travelled while speed
     ramps smoothly from zero to cruise speed."""

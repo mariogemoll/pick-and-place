@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -27,6 +28,12 @@ import torch
 from pick_and_place.data.flow_image_dataset import FlowImageExport
 from pick_and_place.policies.flow_image_encoder import FlowImageUnet1D, model_config
 from pick_and_place.policies.flow_matching import learning_rate_at_step
+from pick_and_place.policies.image_augmentation import (
+    PhotometricRanges,
+    random_photometric,
+    random_scale,
+    random_shift,
+)
 
 # ImageNet statistics: the right normalization when the trunk starts from
 # ImageNet weights, and a harmless fixed affine when it does not.
@@ -34,45 +41,40 @@ IMAGE_MEAN = (0.485, 0.456, 0.406)
 IMAGE_STD = (0.229, 0.224, 0.225)
 
 
-def random_shift(images: torch.Tensor, pad: int, generator: torch.Generator) -> torch.Tensor:
-    """Translate each camera stream by a few pixels, replicating at the edge.
-
-    The Diffusion Policy configuration this strand inherits sets ``augment:
-    true`` on its vision backbone, and image policies for manipulation rely on
-    it heavily: without it the encoder can memorize absolute pixel positions
-    rather than learning to locate the objects.
-
-    One shift is drawn per sample and camera and shared across the observation
-    timesteps, so the augmentation cannot manufacture apparent motion between
-    the two frames the policy differences to infer velocity.
-    """
-    if pad < 1:
-        return images
-    batch, steps, channels, height, width = images.shape
-    cameras = channels // 3
-    folded = images.reshape(batch * steps * cameras, 3, height, width)
-    padded = torch.nn.functional.pad(folded, (pad, pad, pad, pad), mode="replicate")
-    offsets = torch.randint(
-        0, 2 * pad + 1, (batch, 1, cameras, 2), generator=generator, device="cpu"
-    ).expand(batch, steps, cameras, 2).reshape(-1, 2)
-    rows = torch.arange(height, device=images.device)
-    columns = torch.arange(width, device=images.device)
-    row_index = (offsets[:, 0:1].to(images.device) + rows[None, :]).reshape(-1, height, 1)
-    column_index = (offsets[:, 1:2].to(images.device) + columns[None, :]).reshape(-1, 1, width)
-    sample = torch.arange(len(folded), device=images.device).reshape(-1, 1, 1)
-    cropped = padded[sample, :, row_index, column_index]
-    return cropped.permute(0, 3, 1, 2).reshape(batch, steps, channels, height, width)
-
-
-def prepare_images(
-    raw: np.ndarray, device: torch.device, mean: torch.Tensor, std: torch.Tensor
-) -> torch.Tensor:
-    """Move a uint8 observation window to the device and normalize it."""
+def to_unit_float(raw: np.ndarray, device: torch.device) -> torch.Tensor:
+    """Move a uint8 observation window to the device as ``[0, 1]`` floats."""
     batch = torch.from_numpy(np.ascontiguousarray(raw)).to(device, non_blocking=True)
-    steps, channels = batch.shape[1], batch.shape[2]
-    images = batch.float().div_(255.0).reshape(-1, 3, *batch.shape[-2:])
-    images = (images - mean) / std
-    return images.reshape(len(batch), steps, channels, *batch.shape[-2:])
+    return batch.float().div_(255.0)
+
+
+def normalize_images(images: torch.Tensor, mean: torch.Tensor, std: torch.Tensor) -> torch.Tensor:
+    """Apply the backbone's channel statistics to a ``[0, 1]`` observation window."""
+    steps, channels = images.shape[1], images.shape[2]
+    folded = images.reshape(-1, 3, *images.shape[-2:])
+    return ((folded - mean) / std).reshape(len(images), steps, channels, *images.shape[-2:])
+
+
+def augment(
+    images: torch.Tensor,
+    *,
+    shift_pixels: int,
+    scale_bounds: tuple[float, float],
+    photometric: PhotometricRanges | None,
+    shift_generator: torch.Generator,
+    draw_generator: torch.Generator,
+) -> torch.Tensor:
+    """Apply the enabled augmentations to a ``[0, 1]`` observation window.
+
+    Geometry runs before the camera response, which is the order the real chain
+    has: a camera that has moved or changed focal length is still the same
+    camera, and its gain, gamma and read noise act on whatever it ends up
+    pointing at.
+    """
+    images = random_scale(images, scale_bounds, draw_generator)
+    images = random_shift(images, shift_pixels, shift_generator)
+    if photometric is not None:
+        images = random_photometric(images, photometric, draw_generator)
+    return images
 
 
 def main() -> None:
@@ -112,6 +114,23 @@ def main() -> None:
         type=int,
         default=0,
         help="pixels of random translation augmentation per camera (0 disables)",
+    )
+    parser.add_argument(
+        "--random-scale-pct",
+        type=float,
+        default=0.0,
+        help=(
+            "percent of random zoom per camera, standing in for the overhead "
+            "camera's between-session focal length (0 disables)"
+        ),
+    )
+    parser.add_argument(
+        "--photometric-augmentation",
+        action="store_true",
+        help=(
+            "randomize each camera's exposure, white balance, gamma, read noise "
+            "and focus; the ranges are PhotometricRanges' defaults"
+        ),
     )
     parser.add_argument(
         "--resume",
@@ -179,6 +198,11 @@ def main() -> None:
     # does. Interleaving validation with the optimizer is what produced the
     # state policy's periodic training spikes, so it stays infrequent.
     shift_generator = torch.Generator().manual_seed(args.seed + 2)
+    # The photometric and scale draws land on the training device, so their
+    # generator has to live there too.
+    draw_generator = torch.Generator(device=device).manual_seed(args.seed + 3)
+    scale_bounds = (1.0 - args.random_scale_pct / 100.0, 1.0 + args.random_scale_pct / 100.0)
+    photometric = PhotometricRanges() if args.photometric_augmentation else None
     validation_rng = np.random.default_rng(args.seed + 1)
     validation_batches = [
         np.sort(validation_rng.choice(export.validation_frames, size=args.batch_size, replace=False))
@@ -220,9 +244,18 @@ def main() -> None:
 
             frames = np.sort(rng.choice(export.training_frames, size=args.batch_size, replace=False))
             raw_images, raw_states, raw_chunks = export.batch(frames)
-            images = prepare_images(raw_images, device, mean, std)
-            if args.random_shift:
-                images = random_shift(images, args.random_shift, shift_generator)
+            images = normalize_images(
+                augment(
+                    to_unit_float(raw_images, device),
+                    shift_pixels=args.random_shift,
+                    scale_bounds=scale_bounds,
+                    photometric=photometric,
+                    shift_generator=shift_generator,
+                    draw_generator=draw_generator,
+                ),
+                mean,
+                std,
+            )
             states = torch.from_numpy(raw_states).to(device)
             endpoints = torch.from_numpy(raw_chunks).to(device)
 
@@ -272,7 +305,7 @@ def main() -> None:
                             v_prediction = model(
                                 v_values,
                                 v_time.reshape(-1, 1),
-                                prepare_images(v_images, device, mean, std),
+                                normalize_images(to_unit_float(v_images, device), mean, std),
                                 torch.from_numpy(v_states).to(device),
                             )
                         total += torch.mean(
@@ -291,36 +324,22 @@ def main() -> None:
                     json.dump(history, file, indent=2)
 
             if (update + 1) % args.checkpoint_interval == 0 or update == args.updates - 1:
-                torch.save(
-                    {
-                        "model": model.state_dict(),
-                        "model_type": "flow_image_unet1d",
-                        "model_config": model_config(model),
-                        "update": update + 1,
-                        "export": str(args.export),
-                        "observation_steps": args.observation_steps,
-                        "prediction_steps": args.prediction_steps,
-                        "seed": args.seed,
-                        "random_shift": args.random_shift,
-                        "resumed_from": str(args.resume) if args.resume else None,
-                    },
-                    args.output / f"checkpoint-{update + 1:06d}.pt",
-                )
-                torch.save(
-                    {
-                        "model": model.state_dict(),
-                        "model_type": "flow_image_unet1d",
-                        "model_config": model_config(model),
-                        "update": update + 1,
-                        "export": str(args.export),
-                        "observation_steps": args.observation_steps,
-                        "prediction_steps": args.prediction_steps,
-                        "seed": args.seed,
-                        "random_shift": args.random_shift,
-                        "resumed_from": str(args.resume) if args.resume else None,
-                    },
-                    args.output / "checkpoint.pt",
-                )
+                contents = {
+                    "model": model.state_dict(),
+                    "model_type": "flow_image_unet1d",
+                    "model_config": model_config(model),
+                    "update": update + 1,
+                    "export": str(args.export),
+                    "observation_steps": args.observation_steps,
+                    "prediction_steps": args.prediction_steps,
+                    "seed": args.seed,
+                    "random_shift": args.random_shift,
+                    "random_scale_pct": args.random_scale_pct,
+                    "photometric_augmentation": asdict(photometric) if photometric else None,
+                    "resumed_from": str(args.resume) if args.resume else None,
+                }
+                torch.save(contents, args.output / f"checkpoint-{update + 1:06d}.pt")
+                torch.save(contents, args.output / "checkpoint.pt")
 
         print(f"done in {(time.time() - started) / 60:.1f} min", flush=True)
     finally:

@@ -39,7 +39,12 @@ from pick_and_place.policies.policy_evaluation import (
     TaskState,
     TaskSuccessOracle,
 )
-from pick_and_place.core.robot_dynamics import set_actuator_activation
+from pick_and_place.core.robot_dynamics import (
+    load_robot_dynamics_config,
+    set_actuator_activation,
+    tracking_bias_rad,
+    tracking_bias_vector,
+)
 from pick_and_place.sim.scene_appearance import SceneAppearance, SceneAppearanceOverride
 from pick_and_place.core.image_ops import resize_and_center_crop
 from pick_and_place.core.workspace_bounds import is_cube_drop_allowed
@@ -180,6 +185,7 @@ class PolicySimEnv(gym.Env):
         scene_appearance: SceneAppearance | None = None,
         terminate_on_success: bool = True,
         include_images: bool = True,
+        tracking_bias_scale: float = 0.0,
     ) -> None:
         super().__init__()
         image_height, image_width = image_hw
@@ -208,6 +214,19 @@ class PolicySimEnv(gym.Env):
         self.terminate_on_success = terminate_on_success
         self._appearance_override = (
             SceneAppearanceOverride(self.model) if scene_appearance is not None else None
+        )
+
+        # Where a commanded joint actually settles on the real arm. Off by
+        # default: it changes what a rollout measures, so every evaluation that
+        # uses it has to say so. The readback deliberately does not correct for
+        # it -- a drooping servo reports where it really is.
+        self._tracking_bias = (
+            tracking_bias_vector(
+                tracking_bias_rad(load_robot_dynamics_config(), scale=tracking_bias_scale),
+                JOINT_NAMES,
+            )
+            if tracking_bias_scale
+            else np.zeros(len(JOINT_NAMES))
         )
 
         self._joint_qpos_adr = joint_qpos_addresses(self.model)
@@ -299,8 +318,12 @@ class PolicySimEnv(gym.Env):
             self.model.actuator_ctrlrange[self._ctrl_index, 1],
         )
         self.data.qpos[self._joint_qpos_adr] = true_ctrl
-        self.data.ctrl[self._ctrl_index] = true_ctrl
-        for actuator_id, value in zip(self._ctrl_index, true_ctrl, strict=True):
+        # The arm is *observed* at this pose, so the command holding it there is
+        # the one whose droop lands on it. Seeding ctrl with the pose itself
+        # would start every episode drifting by the bias.
+        hold_ctrl = true_ctrl - self._tracking_bias
+        self.data.ctrl[self._ctrl_index] = hold_ctrl
+        for actuator_id, value in zip(self._ctrl_index, hold_ctrl, strict=True):
             set_actuator_activation(self.model, self.data, int(actuator_id), float(value))
 
     def _set_cube(self, scenario: EvaluationScenario) -> None:
@@ -475,8 +498,11 @@ class PolicySimEnv(gym.Env):
         base_ctrl = real_action_to_sim_ctrl(action)
         offsets = self._joint_offsets_rad()
         offset_vector = np.array([offsets.get(name, 0.0) for name in JOINT_NAMES])
+        # The joint settles a tracking bias away from what it was commanded,
+        # which is what the real servo does under load: the fit reads
+        # ``state = action + steady_state_bias``.
         self.data.ctrl[self._ctrl_index] = np.clip(
-            base_ctrl + offset_vector,
+            base_ctrl + offset_vector + self._tracking_bias,
             self.model.actuator_ctrlrange[self._ctrl_index, 0],
             self.model.actuator_ctrlrange[self._ctrl_index, 1],
         )
