@@ -10,12 +10,17 @@ dependencies = [
     "einops",
     "fpdf",
     "gymnasium",
+    # diffusion_policy_pretrain imports hydra and omegaconf directly. Pinned to
+    # match third_party/dppo, which installs its own hydra-core alongside ours on
+    # a training box; an unpinned resolve there would fight it.
+    "hydra-core==1.3.2",
     "imageio[ffmpeg]",
     # 0.5.1 pins transformers==5.3.0; newer transformers break lerobot imports.
     "lerobot[feetech,smolvla]==0.5.1",
     "matplotlib",
     "mujoco",
     "numpy",
+    "omegaconf",
     "opencv-python",
     "pupil-apriltags",
     "pyarrow",
