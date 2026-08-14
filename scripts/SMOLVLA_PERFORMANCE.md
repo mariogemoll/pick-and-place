@@ -21,6 +21,15 @@ The short version, on an RTX 5090 at batch 64:
 | cached tower, eager | 0.0711 | 900.0 |
 | **cached tower, compiled** | **0.0266** | **2,409.6** |
 
+Through stock `lerobot-train` on real data, eager, the same change is
+**0.426 s to 0.160 s** — smaller than 4.92x because a live step carries about
+0.08 s that a synthetic one does not, and which is *not* the trainer or the
+dataloader. That residual is now the largest single item in a cached step.
+
+The training loop itself is lerobot's, unmodified: `vast_smolvla_train.sh` calls
+`lerobot-train`, and `train_smolvla_cached.py` still does — it swaps the dataset
+and two methods on the policy and changes nothing else.
+
 ## Where a training step goes, and why quantizing the tower is not worth it
 
 Profiled at batch 64, uncompiled, on synthetic batches:
@@ -210,12 +219,40 @@ for cudnn autotuning and the decoders spinning up):
 | stock | 0.426 | 0.011 |
 | **cached** | **0.160** | **0.004** |
 
-**2.66x**, against 4.92x for the model alone. The gap is not the dataloader —
-`data_s` was already small and is now negligible. It is that lerobot's training
-loop costs about **0.08 s per step whatever the model does**, so it is 18% of the
-stock step and **55% of the cached one**. See "lerobot's loop is now the
-bottleneck" below; that is the next thing worth attacking, and it was invisible
-before the tower came out.
+**2.66x**, against 4.92x for the model alone, because a real step costs about
+**0.08 s more than the same model work on a synthetic batch** — 0.426 against
+0.350 stock, 0.160 against 0.071 cached. That constant is 18% of the stock step
+and **half of the cached one**, so it is the next thing worth attacking. It was
+invisible while the tower dominated.
+
+### It is not lerobot's trainer, and that was worth checking
+
+The obvious suspect is that lerobot's `update_policy` does more than a step
+needs. It does, and it costs almost nothing. Adding its extras to a bare step one
+at a time (`benchmark_trainer_overhead.py`, batch 64, eager):
+
+| added | stock | cached |
+| --- | ---: | ---: |
+| bare forward/backward/AdamW | 0.3502 | 0.0715 |
+| `policy.train()` every step | +0.0027 | +0.0019 |
+| `clip_grad_norm_` over all parameters | +0.0016 | +0.0027 |
+| `loss.item()` and `grad_norm.item()` | +0.0018 | +0.0012 |
+| `unwrap_model` | +0.0002 | -0.0001 |
+| the whole thing through `Accelerator` | +0.0027 | +0.0020 |
+| **total** | **0.3592** | **0.0792** |
+
+**+0.009 s, an eighth of the gap.** A faithful replica of `update_policy`,
+accelerate included, is within 3% of a bare loop. So **replacing lerobot's
+trainer with a hand-written one would buy nothing**, and `data_s` says it is not
+the dataloader either. Whatever the remaining ~0.07 s is, it is neither.
+
+**What it is remains unmeasured.** The one structural difference left between the
+two measurements is that the benchmark reuses one batch of device tensors every
+step while the real loop gets fresh ones, so allocator behaviour and host-to-
+device traffic that `data_s` does not capture are the leading suspects. Anyone
+picking this up should profile the live loop rather than trust that guess — it is
+worth roughly 2x on the cached configuration, which is more than any remaining
+model-side lever.
 
 Two things the cache removes for free: training never decodes video, so `data_s`
 collapses and the **1.68x spread between hosts** — which that section attributes
