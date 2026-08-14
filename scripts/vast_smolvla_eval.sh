@@ -15,11 +15,13 @@
 #
 # canonical_100_v1 is then sharded across SHARDS concurrent workers and merged.
 #
-# **Do not assume SHARDS-fold speedup.** Scoring is mostly MuJoCo rendering, but
-# each shard also runs its own SmolVLA inference, and those contend for one GPU.
-# A ten-rung ladder at SHARDS=8 was estimated at an hour from the single-process
-# figure of 3-8% GPU, and had not finished after **four**. Time a single rung
-# before sizing a teardown deadline around a whole ladder.
+# **Measure a rung before sizing a deadline around a ladder.** A ten-rung ladder
+# at SHARDS=8 was estimated at an hour and had not finished after **four**. The
+# estimate was extrapolated from a single-process GPU figure rather than timed,
+# and the shards were unpinned, so they oversubscribed the cores (see the thread
+# pinning below). One process scores the hundred scenarios in ~15 minutes, so a
+# serial ladder is ~2.5 hours: that is the number any sharded run has to beat,
+# and it is the fallback if sharding disappoints.
 #
 # STEPS takes a list, so the usual invocation is every checkpoint:
 #
@@ -48,6 +50,22 @@ set -uo pipefail
 
 export MUJOCO_GL=egl
 export PYTHONUNBUFFERED=1
+
+# One thread per shard. Torch and the BLAS libraries size their intra-op pools
+# from the visible core count, so an unpinned shard assumes it owns the machine.
+# SHARDS of them then oversubscribe the cores by SHARDS-fold and spend their
+# time in the scheduler: three concurrent scoring processes on 2026-08-12 each
+# took ~50 minutes for the hundred scenarios that one process alone finished in
+# ~15. Every other parallel workload here -- vast_recovery_dataset.sh,
+# vast_score_dppo_env.sh, vast_scene_difficulty.sh -- pins these for the same
+# reason; this script forks the most processes and was the only one that did not.
+#
+# Note for anything that derives a worker count below: coreutils `nproc` honours
+# OMP_NUM_THREADS and will report 1. Use `nproc --all`.
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
 
 run_name="${RUN_NAME:?set RUN_NAME to the training run whose checkpoints to score}"
 steps="${STEPS:-030000}"
@@ -98,18 +116,28 @@ score() {
 # Score one manifest across concurrent workers and merge the shards.
 #
 # This is what makes a ladder affordable. Scoring is MuJoCo rendering with
-# occasional inference -- measured at 3-8% GPU and 2.1 GB VRAM -- so it is CPU
-# and render bound, and a hundred scenarios that take about an hour serially
-# take a few minutes across a dozen workers. The previous SmolVLA run could
-# only afford smoke_v1's eight scenarios per checkpoint, which its own notes
-# say is too few to rank them, which is why "is 20,000 steps the ceiling?" went
-# unanswered.
+# occasional inference -- measured at 3-8% GPU and 2.1 GB VRAM for one process
+# -- so it is CPU and render bound. The previous SmolVLA run could only afford
+# smoke_v1's eight scenarios per checkpoint, which its own notes say is too few
+# to rank them, which is why "is 20,000 steps the ceiling?" went unanswered.
 #
-# Concurrency is bounded by VRAM before cores: each worker loads its own copy
-# of the model at ~2.1 GB, so a 32 GB card holds about a dozen alongside the
-# renderer. SHARDS is therefore a VRAM budget, not a core count -- the same
-# distinction NUM_WORKERS gets wrong in the training launcher.
+# Two ceilings bound SHARDS, and the lower one wins:
+#
+#   VRAM  -- each worker loads its own model at ~2.1 GB, so a 32 GB card holds
+#            about a dozen alongside the renderer.
+#   Cores -- each worker is pinned to one thread above, so SHARDS beyond
+#            `nproc --all` oversubscribes however much VRAM is free.
+#
+# Vast pods are often long on VRAM and short on vCPUs, so cores usually bind
+# first. That is the opposite of the training launcher, where VRAM binds, and
+# taking the training intuition on trust here is what produced the four-hour
+# ladder.
+cores="$(nproc --all)"
 shards="${SHARDS:-8}"
+if [ "$shards" -gt "$cores" ]; then
+  echo "SHARDS=$shards exceeds the $cores cores on this host; using $cores." >&2
+  shards="$cores"
+fi
 
 score_sharded() {
   local step="$1" manifest="$2" tag="$3"
@@ -160,7 +188,9 @@ print(len(ScenarioManifest.load('config/evaluation/$manifest').scenarios))
 }
 
 status=0
+echo "Scoring $(set -- $steps; echo $#) rung(s) at SHARDS=$shards on $cores cores."
 for step in $steps; do
+  rung_started=$SECONDS
   # Serial, and first: eight scenarios cost a couple of minutes and catch the
   # failures that would otherwise appear simultaneously in every shard.
   if ! score "$step" smoke_v1.json "smoke-$step"; then
@@ -169,6 +199,10 @@ for step in $steps; do
     continue
   fi
   score_sharded "$step" "$manifest" "headline-$step" || status=1
+  # Report what the rung cost, so the next ladder is sized from a measurement
+  # instead of an extrapolation. Anyone watching the log can multiply this by
+  # the rungs left and compare it against the teardown deadline.
+  echo "=== rung $step took $(( (SECONDS - rung_started) / 60 ))m$(( (SECONDS - rung_started) % 60 ))s ==="
   # Sync after every rung, not once at the end.
   #
   # On 2026-08-14 a ten-rung ladder ran unattended for four hours, was destroyed
