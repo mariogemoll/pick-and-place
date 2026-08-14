@@ -39,6 +39,11 @@ output_prefix="$bucket_root/outputs/$run_name"
 # The end-to-end arm trains on a subset, because a full cache is 72 GB and the
 # question it answers -- what a step costs with the tower gone -- does not need
 # the whole dataset. 100 episodes is ~29,000 frames and ~7 GB of cache.
+# Stages are selectable so a rerun after a failure does not repeat the twenty
+# minutes of max-autotune that stage 2 spends.
+stages="${STAGES:-0 1 2 3 4 5 6}"
+has_stage() { case " $stages " in *" $1 "*) return 0;; *) return 1;; esac; }
+
 episodes="${EPISODES:-100}"
 train_steps="${TRAIN_STEPS:-260}"
 batch_size="${BATCH_SIZE:-64}"
@@ -97,50 +102,60 @@ from huggingface_hub import snapshot_download
 print("pinned checkpoint at", snapshot_download("lerobot/smolvla_base", revision=sys.argv[1], local_dir=sys.argv[2]))
 PY
 
-echo "=== Stage 0: the cached path must reproduce the stock loss ==="
-# A speedup that changes the loss is not a speedup, it is a different model. This
-# runs one batch both ways with the flow-matching noise and time held fixed, so
-# the only thing that can differ is where the image tokens came from.
-"$venv/bin/python" "$repo/py/scripts/check_smolvla_prefix_cache.py" \
-  --dataset "$dataset_root" --checkpoint "$checkpoint_dir" \
-  --episodes 0 --batch-size 8 --device cuda \
-  2>&1 | tee "$results/equivalence.txt"
+if has_stage 0; then
+  echo "=== Stage 0: the cached path must reproduce the stock loss ==="
+  # A speedup that changes the loss is not a speedup, it is a different model. This
+  # runs one batch both ways with the flow-matching noise and time held fixed, so
+  # the only thing that can differ is where the image tokens came from.
+  "$venv/bin/python" "$repo/py/scripts/check_smolvla_prefix_cache.py" \
+    --dataset "$dataset_root" --checkpoint "$checkpoint_dir" \
+    --episodes 0 --batch-size 8 --device cuda \
+    2>&1 | tee "$results/equivalence.txt"
+fi
 
-echo "=== Stage 1: synthetic batches, eager ==="
-"$venv/bin/python" "$repo/py/scripts/benchmark_smolvla_step.py" \
-  --checkpoint "$checkpoint_dir" --dataset "$dataset_root" \
-  --arms stock cached tower --batch-size "$batch_size" --profile \
-  --output "$results/synthetic-eager.json"
+if has_stage 1; then
+  echo "=== Stage 1: synthetic batches, eager ==="
+  "$venv/bin/python" "$repo/py/scripts/benchmark_smolvla_step.py" \
+    --checkpoint "$checkpoint_dir" --dataset "$dataset_root" \
+    --arms stock cached tower --batch-size "$batch_size" --profile \
+    --output "$results/synthetic-eager.json"
+fi
 
-echo "=== Stage 2: synthetic batches, torch.compile ==="
-# max-autotune spends minutes compiling before the first step, so the warmup is
-# what absorbs it and the timed steps do not. A tqdm running mean would report
-# compile as slower; this does not.
-"$venv/bin/python" "$repo/py/scripts/benchmark_smolvla_step.py" \
-  --checkpoint "$checkpoint_dir" --dataset "$dataset_root" \
-  --arms stock cached --batch-size "$batch_size" --compile \
-  --output "$results/synthetic-compiled.json"
+if has_stage 2; then
+  echo "=== Stage 2: synthetic batches, torch.compile ==="
+  # max-autotune spends minutes compiling before the first step, so the warmup is
+  # what absorbs it and the timed steps do not. A tqdm running mean would report
+  # compile as slower; this does not.
+  "$venv/bin/python" "$repo/py/scripts/benchmark_smolvla_step.py" \
+    --checkpoint "$checkpoint_dir" --dataset "$dataset_root" \
+    --arms stock cached --batch-size "$batch_size" --compile \
+    --output "$results/synthetic-compiled.json"
+fi
 
-echo "=== Stage 3: LoRA against dense, eager ==="
-# Asked because it is the obvious parameter-efficiency lever. It can only touch
-# the backward and the optimizer, which the stage-1 profile sizes.
-"$venv/bin/python" "$repo/py/scripts/benchmark_smolvla_step.py" \
-  --checkpoint "$checkpoint_dir" --dataset "$dataset_root" \
-  --arms stock lora --batch-size "$batch_size" \
-  --output "$results/lora.json" || echo "LoRA arm failed; peft may not be installed."
+if has_stage 3; then
+  echo "=== Stage 3: LoRA against dense, eager ==="
+  # Asked because it is the obvious parameter-efficiency lever. It can only touch
+  # the backward and the optimizer, which the stage-1 profile sizes.
+  "$venv/bin/python" "$repo/py/scripts/benchmark_smolvla_step.py" \
+    --checkpoint "$checkpoint_dir" --dataset "$dataset_root" \
+    --arms stock lora --batch-size "$batch_size" \
+    --output "$results/lora.json" || echo "LoRA arm failed; peft may not be installed."
+fi
 
 episode_list=$("$venv/bin/python" -c "import sys; print('[' + ','.join(str(i) for i in range(int(sys.argv[1]))) + ']')" "$episodes")
 
-echo "=== Stage 4: build a cache over $episodes episodes ==="
-rm -rf "$cache_dir"
-cache_start=$(date +%s)
-"$venv/bin/python" "$repo/py/scripts/precompute_smolvla_prefix.py" \
-  --dataset "$dataset_root" --checkpoint "$checkpoint_dir" --output "$cache_dir" \
-  --batch-size "$batch_size" --num-workers "$num_workers" \
-  --episodes $(seq 0 $((episodes - 1))) \
-  2>&1 | tee "$results/precompute.log"
-echo "cache build seconds: $(( $(date +%s) - cache_start ))" | tee "$results/precompute-seconds.txt"
-du -sh "$cache_dir" | tee "$results/cache-size.txt"
+if has_stage 4; then
+  echo "=== Stage 4: build a cache over $episodes episodes ==="
+  rm -rf "$cache_dir"
+  cache_start=$(date +%s)
+  "$venv/bin/python" "$repo/py/scripts/precompute_smolvla_prefix.py" \
+    --dataset "$dataset_root" --checkpoint "$checkpoint_dir" --output "$cache_dir" \
+    --batch-size "$batch_size" --num-workers "$num_workers" \
+    --episodes $(seq 0 $((episodes - 1))) \
+    2>&1 | tee "$results/precompute.log"
+  echo "cache build seconds: $(( $(date +%s) - cache_start ))" | tee "$results/precompute-seconds.txt"
+  du -sh "$cache_dir" | tee "$results/cache-size.txt"
+fi
 
 common_args=(
   --dataset.repo_id="$artifact_name"
@@ -161,16 +176,20 @@ common_args=(
 
 export ACCELERATE_MIXED_PRECISION="${MIXED_PRECISION:-bf16}"
 
-echo "=== Stage 5: end to end, stock lerobot-train ==="
-rm -rf "$workspace/e2e-stock"
-"$venv/bin/lerobot-train" "${common_args[@]}" --output_dir="$workspace/e2e-stock" \
-  2>&1 | tee "$results/e2e-stock.log"
+if has_stage 5; then
+  echo "=== Stage 5: end to end, stock lerobot-train ==="
+  rm -rf "$workspace/e2e-stock"
+  "$venv/bin/lerobot-train" "${common_args[@]}" --output_dir="$workspace/e2e-stock" \
+    2>&1 | tee "$results/e2e-stock.log"
+fi
 
-echo "=== Stage 6: end to end, cached prefix ==="
-rm -rf "$workspace/e2e-cached"
-"$venv/bin/python" "$repo/py/scripts/train_smolvla_cached.py" \
-  --prefix-cache "$cache_dir" "${common_args[@]}" --output_dir="$workspace/e2e-cached" \
-  2>&1 | tee "$results/e2e-cached.log"
+if has_stage 6; then
+  echo "=== Stage 6: end to end, cached prefix ==="
+  rm -rf "$workspace/e2e-cached"
+  "$venv/bin/python" "$repo/py/scripts/train_smolvla_cached.py" \
+    --prefix-cache "$cache_dir" "${common_args[@]}" --output_dir="$workspace/e2e-cached" \
+    2>&1 | tee "$results/e2e-cached.log"
+fi
 
 echo "=== Summary ==="
 "$venv/bin/python" - "$results" <<'PY' | tee "$results/summary.txt"
