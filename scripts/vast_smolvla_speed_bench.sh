@@ -6,7 +6,7 @@
 # Measure what removing SmolVLA's frozen vision tower from the training step is
 # worth, on one rented GPU.
 #
-# The tower is 59% of a step and its weights never move, so an N-epoch run
+# The tower is 65% of a step and its weights never move, so an N-epoch run
 # recomputes the same 64x960 tokens per camera N times. Caching them is not an
 # overlap trick -- the earlier finding that running the prefix ahead on a side
 # stream caps at 1.03x stands, because GPU busy is 96.6% and there is no bubble
@@ -111,14 +111,32 @@ if has_stage 0; then
     --dataset "$dataset_root" --checkpoint "$checkpoint_dir" \
     --episodes 0 --batch-size 8 --device cuda \
     2>&1 | tee "$results/equivalence.txt"
+  # The other speedup that could change the model rather than its cost. This one
+  # is a backward, so the loss says nothing and gradients are what is compared,
+  # against a control that cannot differ and does.
+  PYTHONPATH="$repo/py/scripts" "$venv/bin/python" \
+    "$repo/py/scripts/check_smolvla_frozen_prefix.py" \
+    --checkpoint "$checkpoint_dir" --dataset "$dataset_root" \
+    --batch-size "$batch_size" --cached \
+    --output "$results/frozen-prefix-equivalence.json" \
+    2>&1 | tail -40 | tee "$results/frozen-prefix-equivalence.txt"
 fi
 
 if has_stage 1; then
   echo "=== Stage 1: synthetic batches, eager ==="
+  # `--language-padding longest` throughout, because that is what a run pads to;
+  # the checkpoint processor's 48 tokens are 1.27x slower and measuring them
+  # would be measuring a configuration nothing trains in.
   "$venv/bin/python" "$repo/py/scripts/benchmark_smolvla_step.py" \
     --checkpoint "$checkpoint_dir" --dataset "$dataset_root" \
     --arms stock cached tower --batch-size "$batch_size" --profile \
+    --language-padding longest \
     --output "$results/synthetic-eager.json"
+  "$venv/bin/python" "$repo/py/scripts/benchmark_smolvla_step.py" \
+    --checkpoint "$checkpoint_dir" --dataset "$dataset_root" \
+    --arms stock cached --batch-size "$batch_size" --frozen-prefix \
+    --language-padding longest \
+    --output "$results/synthetic-eager-frozen-prefix.json"
 fi
 
 if has_stage 2; then
@@ -129,7 +147,13 @@ if has_stage 2; then
   "$venv/bin/python" "$repo/py/scripts/benchmark_smolvla_step.py" \
     --checkpoint "$checkpoint_dir" --dataset "$dataset_root" \
     --arms stock cached --batch-size "$batch_size" --compile \
+    --language-padding longest \
     --output "$results/synthetic-compiled.json"
+  "$venv/bin/python" "$repo/py/scripts/benchmark_smolvla_step.py" \
+    --checkpoint "$checkpoint_dir" --dataset "$dataset_root" \
+    --arms cached --batch-size "$batch_size" --compile --frozen-prefix \
+    --language-padding longest \
+    --output "$results/synthetic-compiled-frozen-prefix.json"
 fi
 
 if has_stage 3; then
@@ -197,8 +221,9 @@ fi
 
 if has_stage 7; then
   echo "=== Stage 7: what lerobot's loop adds on top of a step ==="
-  # The end-to-end arms cost more than the synthetic ones by a margin that
-  # does not shrink when the model gets cheaper, so it is worth naming.
+  # An end-to-end step is within a few percent of the synthetic one once the
+  # batch carries what a real one carries, and this is what says the loop is not
+  # where the difference would come from.
   for arm in stock cached; do
     extra=()
     [ "$arm" = cached ] && extra=(--cached)

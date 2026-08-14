@@ -12,23 +12,50 @@ machines of identical advertised specification have measured 1.68x apart, so an
 absolute s/step is a fact about the host it was measured on. And **compare in
 samples/s, never s/step**, whenever the batch size moves.
 
-The short version, on an RTX 5090 at batch 64:
+The short version, on an RTX 5090 at batch 64, synthetic batches, with the
+language padded to the task string (below):
 
-| | s/step | samples/s |
-| --- | ---: | ---: |
-| stock, eager | 0.3500 | 182.8 |
-| stock, compiled | 0.2627 | 243.6 |
-| cached tower output, eager | 0.0711 | 900.0 |
-| **cached tower output, compiled** | **0.0266** | **2,409.6** |
+| | s/step | samples/s | peak VRAM |
+| --- | ---: | ---: | ---: |
+| stock, eager | 0.3420 | 187.1 | 11,446 MiB |
+| stock, compiled | 0.2571 | 249.0 | 9,165 MiB |
+| cached tower output | 0.1179 | 542.8 | 12,059 MiB |
+| cached, frozen prefix out of the backward | 0.0779 | 821.4 | 5,517 MiB |
+| cached, compiled | 0.0619 | 1,033.4 | 8,468 MiB |
+| **cached, frozen prefix, compiled** | **0.0410** | **1,559.2** | 4,446 MiB |
 
-Through stock `lerobot-train` on real data, eager, the same change is
-**0.426 s to 0.160 s** — smaller than 4.92x because a live step carries about
-0.08 s that a synthetic one does not, and which is *not* the trainer or the
-dataloader. That residual is now the largest single item in a cached step.
+Four changes, and they multiply rather than overlap. **Caching the frozen tower's
+output is 2.90x.** **Not running 36 tokens of language padding is 1.27x** and is
+already inside every number above. **Taking the frozen prefix out of the backward
+is 1.51x** — and it is 1.51x again on top of `torch.compile`, which is itself
+1.90x on a cached step. Together they are **8.34x** the stock eager step, and a
+quarter of its memory.
 
 The training loop itself is lerobot's, unmodified: `vast_smolvla_train.sh` calls
-`lerobot-train`, and `train_smolvla_cached.py` still does — it swaps the dataset
-and two methods on the policy and changes nothing else.
+`lerobot-train`, and `train_smolvla_cached.py` still does — it swaps the dataset,
+two methods on the policy and the tokenizer's padding, and changes nothing else.
+Each of the three has a flag that turns it off for an A/B.
+
+### These numbers replace the ones this file carried before 2026-08-14
+
+The cached rows used to read 0.0711 and 0.0266, for a 4.92x and a 13.2x. Those
+were measured on a synthetic batch carrying **3 tokens per camera instead of
+64**: `_tower_token_count` probed a policy whose `embed_image` had already been
+replaced by the cached path's identity, so it read `shape[1]` off a
+`[1, 3, H, W]` image and got the channel count. Every cached arm ran on a
+twentieth of the image tokens training uses. The tower row, the stock rows, the
+LoRA comparison and the batch-size sweep are unaffected — none of them build a
+cached batch — and the tower's own share of a step, the reason the cache exists,
+is unchanged.
+
+The same bug is why a live step looked **0.08 s more expensive than a synthetic
+one**, which this file called the next 2x to be had. It was never there: a
+synthetic batch built with the tower's real token count and the padding a real
+batch carries costs **0.1199 s against a live step's 0.1236 s**, a 3% gap that is
+the dataloader hand-off. The lesson is cheap to state and was expensive to find —
+**a synthetic batch is a claim about the real one, so measure its shape rather
+than deriving it**, and the benchmark now records `language_tokens` and
+`prefix_tokens_per_camera` in every result for exactly that reason.
 
 ## Where a training step goes, and why quantizing the tower is not worth it
 
@@ -127,41 +154,44 @@ lossless. (Without that autocast the tower emits float32 and a bfloat16 cache
 costs 0.2% on the loss, so the script picks its storage dtype from the precision
 it is running at.)
 
-Measured back to back on one host, RTX 5090, batch 64, synthetic batches:
+Measured back to back on one host, RTX 5090, batch 64, synthetic batches, 64
+tokens per camera and 12 language tokens in every arm:
 
 | arm | s/step | samples/s | peak VRAM |
 | --- | ---: | ---: | ---: |
-| stock, eager | 0.3500 | 182.8 | 11,391 MiB |
-| **cached, eager** | **0.0711** | **900.0** | 5,582 MiB |
-| stock, compiled | 0.2627 | 243.6 | 9,116 MiB |
-| **cached, compiled** | **0.0266** | **2,409.6** | 3,950 MiB |
-| tower alone | 0.2243 | 570.6 images/s | 4,890 MiB |
+| stock, eager | 0.3420 | 187.1 | 11,446 MiB |
+| **cached, eager** | **0.1179** | **542.8** | 12,059 MiB |
+| stock, compiled | 0.2571 | 249.0 | 9,165 MiB |
+| **cached, compiled** | **0.0619** | **1,033.4** | 8,468 MiB |
+| tower alone | 0.2228 | 574.6 images/s | 4,887 MiB |
 
-**4.92x eager, and 9.89x compiled.** The two levers multiply rather than
-overlap: `torch.compile` is worth 1.33x on the stock step here (reproducing the
-1.45x that section measured on another host) and **9.9x** on the cached one,
-because with the tower gone the graph is small enough for `max-autotune`'s CUDA
-graphs to matter. Compiled and cached is **13.2x** the stock eager step.
+**2.90x eager, and 4.15x compiled**, or 5.52x for compiled-and-cached against the
+stock eager step. `torch.compile` is worth 1.33x on the stock step here
+(reproducing the 1.45x that section measured on another host) and **1.90x** on
+the cached one, where the graph left after the tower is small enough for
+`max-autotune`'s CUDA graphs to matter.
 
 The one cost is that `max-autotune` compiles for twenty to thirty minutes before
 the first step on this configuration — much longer than the seven minutes that
 section records — so it is only worth enabling on a run of real length. Time it
 with `updt_s` past step 150, never with tqdm's rate.
 
-The eager gain is already more than the tower's own share, and the stage split
-says where the rest came from:
+The gain is the tower's own share and nothing else, which is what the stage split
+says:
 
 | stage | stock | cached |
 | --- | ---: | ---: |
-| tower | 0.2236 (63.9%) | 0.0000 |
-| rest of forward | 0.0537 | 0.0322 |
-| backward | 0.0710 | 0.0366 |
-| AdamW | 0.0041 | 0.0039 |
+| tower | 0.2226 (65.1%) | 0.0000 |
+| rest of forward | 0.0495 | 0.0474 |
+| backward | 0.0680 | 0.0680 |
+| AdamW | 0.0030 | 0.0030 |
 
-The tower accounts for 0.2236 s of the 0.2789 s saved. The remaining 0.055 s is
-the rest of the step running ~1.75x faster with the tower's activations out of
-the way; peak VRAM halves alongside it, which is the likeliest cause, but that is
-measured rather than explained — do not plan around it.
+Every stage but the tower is the same to within a millisecond, which is the
+result to expect and did not use to be there: the earlier table showed the rest
+of the step getting 1.75x faster too, and speculated that halved VRAM caused it.
+Both were the 3-token batch. **Peak VRAM does not fall either** — the cached arm
+is slightly *higher*, because the tower's activations are replaced by a wider
+batch of embeddings arriving from the dataloader.
 
 **The cache pays for itself after 1.2 epochs.** Building it is one pass over the
 dataset, measured at **194 frames/s** over 100 episodes with 8 workers — which
@@ -169,19 +199,20 @@ extrapolates to **25 minutes** for all 291,618 frames. That is *decode* bound,
 not tower bound: the tower alone sustains 285 frames/s, so more workers would
 close some of the gap. It is the last time the run pays for h264 at all.
 
-Against 182.8 samples/s stock and 900.0 cached, the break-even is about 345,000
-samples — 5,400 steps at batch 64. Every run this project has done is far past
-that. For a 50,000-step run at batch 64, which is 10.97 epochs:
+Against 187.1 samples/s stock and 821.4 cached with the prefix split off, the
+break-even is about 363,000 samples — 5,700 steps at batch 64, or 1.25 epochs.
+Every run this project has done is far past that. For a 50,000-step run at batch
+64, which is 10.97 epochs, using the end-to-end `updt_s + data_s` below rather
+than the model alone:
 
 | | training | + cache build | total |
 | --- | ---: | ---: | ---: |
-| stock, eager | 4.86 h | — | **4.86 h** |
-| cached, eager | 0.99 h | 0.42 h | **1.41 h** |
-| stock, compiled | 3.65 h | — | **3.65 h** |
-| cached, compiled | 0.37 h | 0.42 h | **0.79 h** |
+| stock, eager | 5.50 h | — | **5.50 h** |
+| cached, repadded, split off | 1.15 h | 0.42 h | **1.57 h** |
+| the same, compiled | 0.65 h | 0.42 h | **1.07 h** |
 
-At $0.78/hr that is **$3.79 against $0.62**, and a working day's iteration loop
-against a coffee break. The compiled rows exclude `max-autotune`'s twenty to
+At $0.78/hr that is **$4.29 against $0.83**, and a working day's iteration loop
+against a lunch break. The compiled row excludes `max-autotune`'s twenty to
 thirty minutes of startup, which is a fixed cost either way.
 
 Two costs, both real:
@@ -209,23 +240,44 @@ dataset before handing it to a `DataLoader` is exposed to the same thing.
 
 ### End to end, through stock `lerobot-train`
 
-The numbers above are the model alone. Run both arms as real training on the
-same 100 episodes, 300 steps, `--log_freq=20`, and read lerobot's own metrics
-(the first logged point is dropped — it averages in the first step, which pays
-for cudnn autotuning and the decoders spinning up):
+The numbers above are the model alone. Run the arms as real training on the same
+100 episodes, 300 steps, `--log_freq=20`, and read lerobot's own metrics (the
+first logged point is dropped — it averages in the first step, which pays for
+cudnn autotuning and the decoders spinning up):
 
 | | `updt_s` | `data_s` |
 | --- | ---: | ---: |
-| stock | 0.426 | 0.011 |
-| **cached** | **0.160** | **0.004** |
+| stock | 0.379 | 0.017 |
+| cached, language padded to 48 | 0.153 | 0.002 |
+| cached, padded to the task string | 0.121 | 0.002 |
+| cached, padded, frozen prefix split off | 0.081 | 0.002 |
+| cached, padded, compiled | 0.065 | 0.002 |
+| **cached, padded, split off, compiled** | **0.045** | 0.002 |
 
-**2.66x**, against 4.92x for the model alone, because a real step costs about
-**0.08 s more than the same model work on a synthetic batch** — 0.426 against
-0.350 stock, 0.160 against 0.071 cached. That constant is 18% of the stock step
-and **half of the cached one**, so it is the next thing worth attacking. It was
-invisible while the tower dominated.
+**8.4x**, and a live step now costs what the model costs: 0.121 against the
+0.1179 the same work takes on a synthetic batch, 0.081 against 0.0779, 0.045
+against 0.0410. The 0.08 s that used to sit between them was the 3-token batch
+and the padding, not the loop. The stock row keeps an 11% gap because it still
+decodes video and copies two 512x512 frames per sample to the device.
 
-### It is not lerobot's trainer, and that was worth checking
+### The live loop was worth building anyway
+
+`benchmark_live_step.py` runs the real dataset, preprocessor and Accelerator and
+bisects a step three ways — a synthetic batch, one real batch frozen and reused,
+and a fresh batch every step. Cached, at the padding a run uses now:
+
+| arm | step | `data_s` |
+| --- | ---: | ---: |
+| synthetic | 0.1199 | — |
+| live, 8 workers | 0.1236 | 0.0021 |
+| live, 0 workers | 0.2210 | 0.1012 |
+
+**3%** between synthetic and live with workers, and the split inside the step is
+identical to four decimal places. The zero-worker row is worth keeping in view:
+without workers the cached read costs 0.10 s a step, so `num_workers` still
+matters after the video decoding is gone — it is just no longer a memory cliff.
+
+### It is not lerobot's trainer either, and that was worth checking
 
 The obvious suspect is that lerobot's `update_policy` does more than a step
 needs. It does, and it costs almost nothing. Adding its extras to a bare step one
@@ -233,46 +285,167 @@ at a time (`benchmark_trainer_overhead.py`, batch 64, eager):
 
 | added | stock | cached |
 | --- | ---: | ---: |
-| bare forward/backward/AdamW | 0.3502 | 0.0715 |
-| `policy.train()` every step | +0.0027 | +0.0019 |
-| `clip_grad_norm_` over all parameters | +0.0016 | +0.0027 |
-| `loss.item()` and `grad_norm.item()` | +0.0018 | +0.0012 |
-| `unwrap_model` | +0.0002 | -0.0001 |
-| the whole thing through `Accelerator` | +0.0027 | +0.0020 |
-| **total** | **0.3592** | **0.0792** |
+| bare forward/backward/AdamW | 0.3431 | 0.1180 |
+| `policy.train()` every step | +0.0014 | +0.0011 |
+| `clip_grad_norm_` over all parameters | +0.0011 | +0.0010 |
+| `loss.item()` and `grad_norm.item()` | +0.0002 | +0.0002 |
+| `unwrap_model` | +0.0001 | +0.0000 |
+| the whole thing through `Accelerator` | +0.0018 | +0.0017 |
+| **total** | **0.3477** | **0.1220** |
 
-**+0.009 s, an eighth of the gap.** A faithful replica of `update_policy`,
-accelerate included, is within 3% of a bare loop. So **replacing lerobot's
-trainer with a hand-written one would buy nothing**, and `data_s` says it is not
-the dataloader either. Whatever the remaining ~0.07 s is, it is neither.
+**+0.004 s**, 1.3% of a stock step and 3.4% of a cached one. A faithful replica
+of `update_policy`, accelerate included, is that close to a bare loop, so
+**replacing lerobot's trainer with a hand-written one would buy nothing**. The
+three diagnostic `.item()` syncs inside `SmolVLAPolicy.forward` are the same
+story: removing them measured 0.5%, inside the noise, and is not worth carrying a
+rewritten `forward` for.
 
-**What it is remains unmeasured.** The one structural difference left between the
-two measurements is that the benchmark reuses one batch of device tensors every
-step while the real loop gets fresh ones, so allocator behaviour and host-to-
-device traffic that `data_s` does not capture are the leading suspects. Anyone
-picking this up should profile the live loop rather than trust that guess — it is
-worth roughly 2x on the cached configuration, which is more than any remaining
-model-side lever.
+**Export `ACCELERATE_MIXED_PRECISION=bf16` before running this.** Without it
+`accelerator.autocast()` is a no-op, the accelerate row runs in float32, and the
+ladder reports it as +0.44 s — a 2.3x regression that is the benchmark's
+configuration rather than accelerate's cost.
 
-Two things the cache removes for free: training never decodes video, so `data_s`
-collapses and the **1.68x spread between hosts** — which that section attributes
-to host CPU — stops applying to the training phase. And `num_workers` stops
-being a memory cliff, because a worker now reads 240 KiB from a memory map
-instead of decoding two 512x512 frames.
+The cache removes something else for free: training never decodes video, so the
+**1.68x spread between hosts** — which that section attributes to host CPU —
+stops applying to the training phase.
 
-**What is left is not worth chasing.** After the tower, the step is the VLM and
-expert layers plus the backward. The frozen VLM's *prefix* path is cacheable too,
-and by a less obvious argument worth recording: prefix `att_masks` are `0` for
-image and language tokens and `1` for the state token, and `make_att_2d_masks`
-lets a token attend only where the cumulative mask is no larger than its own — so
-the image and language tokens never see `state_proj`, the one trainable thing in
-the prefix, at any depth. Their representations through all 16 VLM layers are
-frozen functions of the pixels as well.
 
-It still is not worth it. Caching them means storing per-layer keys and values:
-16 layers x 2 x ~177 tokens x 320 = **3.6 MB per sample** against the tower
-block's 240 KiB, fifteen times the disk, to remove maybe half of the ~8% of the
-old step that the prefix VLM path costs.
+## The language padding is 1.27x, and it is free
+
+`SmolVLAConfig.pad_language_to` is `"longest"`, but the tokenizer is not built
+from that config: `make_pre_post_processors` loads the processor saved beside the
+checkpoint, and `smolvla_base`'s pins `padding="max_length"` with
+`max_length=48`. This dataset's one task string is **12 tokens**, so a step ran
+36 tokens of padding through all 16 VLM layers and their backward.
+
+They are masked out of everything — `embed_prefix` builds `pad_masks` from the
+attention mask, `make_att_2d_masks` lets nothing attend to a padded position, and
+`position_ids` come from a cumulative sum that padding does not advance. The
+tokens cost time and change nothing:
+
+| language tokens | cached step | samples/s |
+| ---: | ---: | ---: |
+| 48, as the checkpoint pads | 0.1500 | 426.8 |
+| **12, the task string** | **0.1179** | **542.8** |
+
+**1.27x**, and 0.153 to 0.121 end to end. `train_smolvla_cached.py` now does this
+by default and says so at startup; `--language-padding max_length` is the A/B.
+
+The change travels with the checkpoint: every `pretrained_model/` a run writes
+records `"padding": "longest"`, so a policy is evaluated the way it was trained
+rather than reverting to the base checkpoint's 48 tokens.
+
+**The loss moves by ~1e-3 relative, and that is arithmetic order rather than a
+different computation.** The VLM is loaded with `torch_dtype="bfloat16"`, so
+changing the sequence length changes how things accumulate.
+`check_smolvla_prefix_cache.py` sweeps padding lengths that are all
+mathematically identical:
+
+| language tokens | loss | drift from 48 |
+| ---: | ---: | ---: |
+| 48 | 1.27683592 | — |
+| 47 | 1.27468407 | 2.152e-03 |
+| 24 | 1.27416790 | 2.668e-03 |
+| 12 | 1.27530575 | 1.530e-03 |
+
+Dropping **one** padding token moves the loss further than dropping all 36 does.
+
+Two caveats. This is worth 1.27x because *this* task string is short; a dataset
+whose prompts fill the 48 tokens would gain nothing. And `"longest"` is a
+constant length only because the dataset carries exactly one task string — a
+multi-task dataset would give a length that varies per batch, which recompiles
+under `torch.compile`.
+
+
+## The prefix backward is 1.51x, and it was running for nothing
+
+After the tower and the padding, a cached step is 0.1179 s: 0.0474 forward,
+0.0680 backward, 0.0030 AdamW. Almost all of it is the prefix. Sweeping the
+tokens per camera in the cached arm, everything else held:
+
+| tokens per camera | prefix tokens | s/step | samples/s |
+| ---: | ---: | ---: | ---: |
+| 64 (what the tower emits) | 141 | 0.1177 | 544.0 |
+| 48 | 109 | 0.0910 | 703.4 |
+| 32 | 77 | 0.0694 | 921.8 |
+| 16 | 45 | 0.0500 | 1,280.4 |
+| 4 | 21 | 0.0391 | 1,637.8 |
+| 1 | 15 | 0.0370 | 1,727.5 |
+
+**The image tokens are 0.081 s of the 0.118 s step, 69% of it.** The expert and
+everything else is the 0.037 s floor.
+
+That prefix is frozen, by the argument this file has recorded for a while: prefix
+`att_masks` are `0` for image and language tokens and `1` for the state token,
+and `make_att_2d_masks` lets a token attend only where the cumulative mask is no
+larger than its own — so the image and language tokens never see `state_proj`,
+the one trainable thing in the prefix, at any depth. Their representations
+through all 16 VLM layers, and the keys and values they contribute, are frozen
+functions of the pixels and the task string.
+
+So their **backward is pure waste** — and it runs anyway. Autograd cannot see the
+argument: every layer concatenates prefix and suffix into one tensor, and the
+suffix requires grad, so the prefix half of that tensor does too from layer 1
+onward. Confirmed by measurement: freezing `state_proj` (`train_state_proj=false`,
+which makes nothing in the prefix trainable) changes the step by **0.5%**,
+0.1177 to 0.1171. The prefix backward survives the freeze.
+
+So `smolvla_frozen_prefix.py` splits the stack by hand: the frozen 140 tokens run
+under `no_grad`, and the state token and the action tokens run with grad against
+the keys and values those produced. Same projections, same rotary positions, same
+mask slices, same keys in the same order — only which tensors autograd keeps
+changes. It is a fork of `SmolVLMWithExpertModel.forward`'s layer loop, about 150
+lines, because the model's own prefill-then-decode path assumes the VLM stream is
+finished by the time the cache is used, and here the state token still has to
+travel with gradients.
+
+| arm | s/step | samples/s | peak VRAM |
+| --- | ---: | ---: | ---: |
+| cached | 0.1179 | 542.8 | 12,059 MiB |
+| **cached, frozen prefix split off** | **0.0779** | **821.4** | **5,517 MiB** |
+| cached, compiled | 0.0619 | 1,033.4 | 8,468 MiB |
+| **cached, split off, compiled** | **0.0410** | **1,559.2** | **4,446 MiB** |
+| stock | 0.3420 | 187.1 | 11,446 MiB |
+| stock, frozen prefix split off | 0.3026 | 211.5 | 6,257 MiB |
+
+**1.51x cached, 1.51x again on top of `torch.compile`, and VRAM less than half** —
+the activations of 140 tokens through 16 layers stop being stored. End to end
+through `lerobot-train`, `updt_s` goes **0.121 to 0.081**. It is 1.13x rather
+than 1.51x on the stock arm because the tower still dominates there.
+
+### Whether it computes the same thing
+
+A forward check would not settle this, since the point of the change is the
+backward. `check_smolvla_frozen_prefix.py` compares **gradients**, parameter by
+parameter, on one batch with the noise and time held fixed — and carries its own
+scale for "unchanged", because bit-identical is not available: the split reduces
+over shorter sequences and the weights are bfloat16. The control is the padding
+above, a change the attention masks make mathematically invisible.
+
+| | loss moves by | worst gradient moves by |
+| --- | ---: | ---: |
+| frozen prefix split off | 1.9e-03 | 4.4% (`state_proj.weight`) |
+| control: 12 language tokens against 48 | 1.8e-03 | 128% (`action_out_proj.bias`) |
+
+The split moves the loss by what an invisible change moves it by, and the
+gradients **thirty times less**. Read the control the other way too: on a
+synthetic batch the gradients are sums of near-cancelling terms, so a *relative*
+gradient difference of tens of percent is what bfloat16 alone produces, and no
+equivalence claim about gradients on this model is worth anything without that
+control beside it.
+
+Two things *not* to reach for. Storing those per-layer keys and values on disk
+instead is 16 layers x 2 x 141 tokens x 320 = **2.9 MB per sample** against the
+tower block's 240 KiB, twelve times the disk, for a saving that recomputing them
+under `no_grad` gets for nothing. And `train_state_proj=false` buys the 0.5%
+above, not the backward — it is a model change for no speed.
+
+**The patch has to keep the compiled artifact.** `SmolVLAFlowMatching.__init__`
+implements `compile_model` as `self.forward = torch.compile(self.forward)`, so a
+patch that assigns `forward` afterwards silently throws it away. That is how this
+was first measured: the compiled split arm reported 0.0780 s against the eager
+0.0779 s, which is not a compile that failed to help but a compile that was never
+there.
 
 
 ## LoRA buys nothing, measured
@@ -305,6 +478,10 @@ only `--policy.compile_model` moving:
 | --- | ---: | ---: | ---: |
 | stock | 0.5050 | 0.4530 | 0.032 |
 | `compile_model=true` | **0.3480** | 0.3350 | 0.038 |
+
+That is compile against the *stock* step. It is worth more as the step gets
+cheaper — 1.90x on a cached one and 1.51x on a cached one with the prefix split
+off — so the headline table is where to read what it buys now.
 
 **+45%**, or 7.01h against 4.83h over 50,000 steps. `COMPILE_MODEL=true` on
 `vast_smolvla_train.sh`.

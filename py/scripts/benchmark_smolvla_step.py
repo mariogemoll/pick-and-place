@@ -51,8 +51,26 @@ def build_policy(checkpoint: Path, dataset_root: Path, device: torch.device, com
     return make_policy(cfg=config, ds_meta=meta), meta
 
 
-def synthetic_batch(policy, meta, batch_size: int, device: torch.device, cached: bool) -> dict:  # noqa: ANN001
-    """A batch shaped exactly like the trained one, with the content randomized."""
+def synthetic_batch(  # noqa: ANN001
+    policy,
+    meta,
+    batch_size: int,
+    device: torch.device,
+    cached: bool,
+    num_tokens: int | None = None,
+    language_padding: str = "max_length",
+) -> dict:
+    """A batch shaped exactly like the trained one, with the content randomized.
+
+    ``num_tokens`` is how many tokens the tower emits per camera, and it has to be
+    measured before ``patch_policy_for_cached_prefix`` replaces ``embed_image``
+    with the identity -- afterwards the tower cannot be asked any more.
+
+    ``language_padding`` defaults to what a training run actually does rather than
+    to ``config.pad_language_to``: the preprocessor comes from the checkpoint, and
+    ``smolvla_base``'s pins ``max_length``, so a real batch carries 48 language
+    tokens where the config asks for the 12 the task string needs.
+    """
     config = policy.config
     camera_keys = [key for key in config.image_features]
     height, width = config.resize_imgs_with_padding
@@ -67,7 +85,8 @@ def synthetic_batch(policy, meta, batch_size: int, device: torch.device, cached:
     if cached:
         # The tower's own output shape, taken from the model rather than assumed.
         tokens = policy.model.vlm_with_expert.config.text_config.hidden_size
-        num_tokens = _tower_token_count(policy, device)
+        if num_tokens is None:
+            num_tokens = _tower_token_count(policy, device)
         for key in camera_keys:
             batch[embedding_key(key)] = torch.randn(
                 batch_size, num_tokens, tokens, device=device, dtype=torch.bfloat16
@@ -78,8 +97,8 @@ def synthetic_batch(policy, meta, batch_size: int, device: torch.device, cached:
 
     tokenizer = policy.model.vlm_with_expert.processor.tokenizer
     encoded = tokenizer(
-        ["pick up the cube and place it on the target\n"] * batch_size,
-        padding=config.pad_language_to,
+        ["Pick up the cube and place it at the target.\n"] * batch_size,
+        padding=language_padding,
         padding_side="right",
         max_length=config.tokenizer_max_length,
         return_tensors="pt",
@@ -93,10 +112,42 @@ def synthetic_batch(policy, meta, batch_size: int, device: torch.device, cached:
 
 
 def _tower_token_count(policy, device: torch.device) -> int:  # noqa: ANN001
+    """Ask the frozen tower how many tokens it emits for one image.
+
+    Refuses an answer from a policy whose ``embed_image`` is already the cached
+    path's identity: that returns the probe unchanged, and reading `shape[1]` off
+    a [1, 3, H, W] image yields 3 rather than 64. A synthetic batch built from
+    that runs, silently, on a twentieth of the image tokens training uses.
+    """
     height, width = policy.config.resize_imgs_with_padding
     probe = torch.zeros(1, 3, height, width, device=device)
     with torch.no_grad(), torch.autocast(device.type, dtype=torch.bfloat16):
-        return int(policy.model.vlm_with_expert.embed_image(probe).shape[1])
+        tokens = policy.model.vlm_with_expert.embed_image(probe)
+    hidden_size = policy.model.vlm_with_expert.config.text_config.hidden_size
+    if tokens.ndim != 3 or tokens.shape[2] != hidden_size:
+        raise RuntimeError(
+            f"the tower returned {tuple(tokens.shape)}, not [batch, tokens, {hidden_size}]. "
+            "Measure the token count before patching the policy for the cached prefix."
+        )
+    return int(tokens.shape[1])
+
+
+def freeze_state_projection(policy) -> int:  # noqa: ANN001
+    """Stop `state_proj`, the one trainable thing in the prefix, from training.
+
+    Nobody should train this way -- the state would stop reaching the action
+    expert through a learned projection. It measures a bound: with nothing
+    trainable in the prefix, autograd skips the whole 16-layer prefix backward,
+    and the step that results is the floor a split prefix could reach.
+    """
+    frozen = 0
+    for name, parameter in policy.named_parameters():
+        if "state_proj" in name and parameter.requires_grad:
+            parameter.requires_grad_(False)
+            frozen += parameter.numel()
+    if frozen == 0:
+        raise RuntimeError("no trainable state_proj to freeze")
+    return frozen
 
 
 def time_steps(step, warmup: int, repeats: int) -> list[float]:  # noqa: ANN001
@@ -197,6 +248,31 @@ def main() -> None:
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--profile", action="store_true", help="also split the step into stages")
     parser.add_argument("--lora-rank", type=int, default=16)
+    parser.add_argument(
+        "--language-padding",
+        choices=("max_length", "longest"),
+        default="max_length",
+        help="what the tokenizer pads to. The default is what the checkpoint's "
+        "processor does; 'longest' is what the policy config asks for.",
+    )
+    parser.add_argument(
+        "--frozen-prefix",
+        action="store_true",
+        help="take the frozen part of the prefix out of the backward, which is "
+        "what a training run does now",
+    )
+    parser.add_argument(
+        "--freeze-state-proj",
+        action="store_true",
+        help="freeze the prefix's one trainable projection, which removes the "
+        "prefix backward entirely. A bound, not a trainable configuration.",
+    )
+    parser.add_argument(
+        "--prefix-tokens",
+        type=int,
+        help="tokens per camera in the cached arm, instead of asking the tower. "
+        "Only for sweeping sequence length; the cache holds what the tower emits.",
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
@@ -205,6 +281,9 @@ def main() -> None:
         "gpu": torch.cuda.get_device_name(0),
         "batch_size": args.batch_size,
         "compile": args.compile,
+        "language_padding": args.language_padding,
+        "frozen_prefix": args.frozen_prefix,
+        "state_proj_frozen": args.freeze_state_proj,
         "arms": {},
     }
 
@@ -217,9 +296,23 @@ def main() -> None:
             policy = policy.wrap_with_peft(peft_cli_overrides={"r": args.lora_rank})
         base = policy.get_base_model() if arm == "lora" else policy
         cached = arm == "cached"
+        # Before the patch, while the tower is still there to answer.
+        num_tokens = args.prefix_tokens
+        if cached and num_tokens is None:
+            num_tokens = _tower_token_count(base, device)
         if cached:
             patch_policy_for_cached_prefix(policy)
-        batch = synthetic_batch(base, meta, args.batch_size, device, cached)
+        if args.frozen_prefix and arm != "tower":
+            from pick_and_place.policies.smolvla_frozen_prefix import (
+                patch_policy_for_frozen_prefix,
+            )
+
+            patch_policy_for_frozen_prefix(base)
+        if args.freeze_state_proj:
+            freeze_state_projection(policy)
+        batch = synthetic_batch(
+            base, meta, args.batch_size, device, cached, num_tokens, args.language_padding
+        )
         policy.train()
 
         if arm == "tower":
@@ -230,12 +323,19 @@ def main() -> None:
 
         timings = time_steps(step, args.warmup, args.repeats)
         entry = {
+            # What the batch really carries, rather than what was asked for:
+            # sequence length drives the attention cost, so it is a measurement
+            # input and belongs beside the seconds.
+            "language_tokens": int(batch["observation.language.tokens"].shape[1]),
             "median_s": statistics.median(timings),
             "min_s": min(timings),
             "samples_per_s": args.batch_size / statistics.median(timings),
             "trainable_parameters": trainable,
             "peak_vram_mib": torch.cuda.max_memory_allocated() // (1024 * 1024),
         }
+        if cached:
+            # The measurement is a function of this, so it belongs in the result.
+            entry["prefix_tokens_per_camera"] = num_tokens
         if arm == "tower":
             # Two cameras per sample, and a cache is built one image at a time.
             entry["images_per_s"] = (
