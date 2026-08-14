@@ -99,7 +99,8 @@ def main() -> None:
             entry["added_s"] = median - previous
         results["layers"][layer] = entry
         previous = median
-        print(f"{layer:16s} {median:.4f}s" + (f"  (+{entry['added_s']:.4f})" if previous else ""))
+        added = f"  (+{entry['added_s']:.4f})" if "added_s" in entry else ""
+        print(f"{layer:16s} {median:.4f}s{added}", flush=True)
 
     if args.output:
         args.output.write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
