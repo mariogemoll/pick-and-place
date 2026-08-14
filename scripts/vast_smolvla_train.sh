@@ -346,6 +346,28 @@ echo "$checkpoint_revision" > "$output_root/job-metadata/checkpoint-revision.txt
 git -C "$repo" rev-parse HEAD | tee "$output_root/job-metadata/repository-commit.txt"
 cp "$0" "$output_root/job-metadata/launcher.sh"
 
+# With PREFIX_CACHE=1 the frozen vision tower is run over the dataset once, up
+# front, and training reads its tokens back instead of recomputing them. The
+# tower is the majority of a step and its weights never move, so an 11-epoch run
+# otherwise computes the same 64x960 tokens per camera eleven times. Video is
+# never decoded during training either, which is what removes the dependence on
+# the host's core count.
+#
+# The augmentation has to move into the cache with it: lerobot's image
+# transforms run on pixels a cached run never reads, so PREFIX_CACHE_VARIANTS
+# stores that many independently augmented passes and each read draws one.
+# Leave it at 1 and the run is the no-augmentation arm, which SMOLVLA.md calls
+# the cheapest open question in the file.
+prefix_cache="${PREFIX_CACHE:-0}"
+prefix_cache_variants="${PREFIX_CACHE_VARIANTS:-1}"
+prefix_cache_dir="$workspace/prefix-cache"
+
+if [ "$prefix_cache" = "1" ]; then
+  image_transforms=false
+else
+  image_transforms=true
+fi
+
 train_args=(
   --dataset.repo_id="$artifact_name"
   --dataset.root="$artifact_root"
@@ -354,7 +376,7 @@ train_args=(
   # the single most load-bearing knob for an image-conditioned policy: the image
   # flow policy measured 3/20 without it against 20/20 with it, on otherwise
   # identical runs. This is the one change most likely to decide the run.
-  --dataset.image_transforms.enable=true
+  --dataset.image_transforms.enable="$image_transforms"
   --policy.type=smolvla
   --policy.pretrained_path="$checkpoint_dir"
   --policy.n_action_steps="$n_action_steps"
@@ -367,6 +389,30 @@ train_args=(
   --seed="$seed"
 )
 
+trainer=("$venv/bin/lerobot-train")
+if [ "$prefix_cache" = "1" ]; then
+  echo "=== Prefix cache: one pass of the frozen tower over the dataset ==="
+  augment_args=()
+  if [ "$prefix_cache_variants" -gt 1 ]; then
+    augment_args=(--augment)
+  fi
+  cache_start=$(date +%s)
+  "$venv/bin/python" "$repo/py/scripts/precompute_smolvla_prefix.py" \
+    --dataset "$artifact_root" \
+    --checkpoint "$checkpoint_dir" \
+    --output "$prefix_cache_dir" \
+    --batch-size "$batch_size" \
+    --num-workers "$num_workers" \
+    --variants "$prefix_cache_variants" \
+    "${augment_args[@]}" \
+    2>&1 | tee "$output_root/job-metadata/prefix-cache.log"
+  echo "prefix cache built in $(( $(date +%s) - cache_start ))s" \
+    | tee "$output_root/job-metadata/prefix-cache-seconds.txt"
+  df -h "$workspace" | tail -1 | tee -a "$output_root/job-metadata/prefix-cache-seconds.txt"
+  trainer=("$venv/bin/python" "$repo/py/scripts/train_smolvla_cached.py"
+    --prefix-cache "$prefix_cache_dir")
+fi
+
 echo "=== Smoke stage: $smoke_steps steps, batch $batch_size, $num_workers workers, ${ACCELERATE_MIXED_PRECISION} ==="
 rm -rf "$workspace/smolvla-smoke"
 # Sample VRAM *during* the stage and keep the peak. Reading it afterwards
@@ -376,7 +422,7 @@ rm -rf "$workspace/smolvla-smoke"
   done ) > "$workspace/vram-samples.txt" &
 vram_pid=$!
 smoke_start=$(date +%s)
-"$venv/bin/lerobot-train" \
+"${trainer[@]}" \
   "${train_args[@]}" \
   --wandb.enable=false \
   --steps="$smoke_steps" \
@@ -426,7 +472,7 @@ echo "=== Smoke stage passed ==="
 sync_pid=$!
 
 set +e
-"$venv/bin/lerobot-train" \
+"${trainer[@]}" \
   "${train_args[@]}" \
   "${wandb_args[@]}" \
   --steps="$steps" \

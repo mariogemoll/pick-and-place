@@ -85,7 +85,10 @@ def synthetic_batch(policy, meta, batch_size: int, device: torch.device, cached:
         return_tensors="pt",
     )
     batch["observation.language.tokens"] = encoded["input_ids"].to(device)
-    batch["observation.language.attention_mask"] = encoded["attention_mask"].to(device)
+    # Boolean, not the tokenizer's int64: make_att_2d_masks multiplies the
+    # padding masks together and torch.where refuses a Long condition. lerobot's
+    # own tokenizer step converts it, and a synthetic batch has to match.
+    batch["observation.language.attention_mask"] = encoded["attention_mask"].to(device).bool()
     return batch
 
 
