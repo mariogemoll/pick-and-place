@@ -60,8 +60,7 @@ export PYTHONUNBUFFERED=1
 # vast_score_dppo_env.sh, vast_scene_difficulty.sh -- pins these for the same
 # reason; this script forks the most processes and was the only one that did not.
 #
-# Note for anything that derives a worker count below: coreutils `nproc` honours
-# OMP_NUM_THREADS and will report 1. Use `nproc --all`.
+# Deriving a worker count is harder here than it looks; see detect_cores below.
 export OMP_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
@@ -135,10 +134,36 @@ score() {
 # first. That is the opposite of the training launcher, where VRAM binds, and
 # taking the training intuition on trust here is what produced the four-hour
 # ladder.
-cores="$(nproc --all)"
+# The container's CPU budget, which on a Vast pod is not what any of the usual
+# calls report. On a host with 256 cores renting out a 32-vCPU slice, `nproc`,
+# `nproc --all` and sched_getaffinity all answer **256**; only the cgroup quota
+# knows it is really 30. That is not cosmetic: unpinned, every shard sized its
+# thread pools from 256 on a 30-core allotment, which is how eight of them came
+# to spend the afternoon in the scheduler.
+detect_cores() {
+  local quota period
+  if [ -r /sys/fs/cgroup/cpu.max ]; then
+    read -r quota period < /sys/fs/cgroup/cpu.max
+    if [ "$quota" != "max" ] && [ "$period" -gt 0 ]; then
+      echo $(( quota / period ))
+      return
+    fi
+  fi
+  if [ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us ]; then
+    quota=$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us)
+    period=$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us)
+    if [ "$quota" -gt 0 ] && [ "$period" -gt 0 ]; then
+      echo $(( quota / period ))
+      return
+    fi
+  fi
+  nproc --all
+}
+
+cores="$(detect_cores)"
 shards="${SHARDS:-8}"
 if [ "$shards" -gt "$cores" ]; then
-  echo "SHARDS=$shards exceeds the $cores cores on this host; using $cores." >&2
+  echo "SHARDS=$shards exceeds this container's $cores cores; using $cores." >&2
   shards="$cores"
 fi
 
