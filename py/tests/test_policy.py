@@ -232,3 +232,45 @@ def test_resolve_checkpoint_cameras_falls_back_for_base_checkpoint(monkeypatch):
     hw, keys = resolve_checkpoint_cameras("checkpoint", override_hw=(480, 640))
     assert hw == (480, 640)
     assert keys == (OVERHEAD_FEATURE, WRIST_FEATURE)
+
+
+def test_make_policy_does_not_compile_a_checkpoint_trained_with_compile(monkeypatch):
+    from lerobot.policies import factory
+    from lerobot.configs.policies import PreTrainedConfig
+    from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
+    from lerobot.policies.smolvla.modeling_smolvla import SmolVLAPolicy
+
+    # A checkpoint trained with torch.compile records compile_model in its own
+    # config. Honoring it here would autotune before the first scenario and
+    # switch fp32 matmuls to TF32 process-wide, so the flag stops at the model.
+    config = SmolVLAConfig()
+    config.compile_model = True
+
+    class DummyPolicy:
+        def __init__(self, cfg):
+            self.config = cfg
+
+        def to(self, device):
+            return self
+
+        def eval(self):
+            return self
+
+    monkeypatch.setattr(
+        PreTrainedConfig, "from_pretrained", classmethod(lambda cls, checkpoint: config)
+    )
+    monkeypatch.setattr(
+        SmolVLAPolicy,
+        "from_pretrained",
+        classmethod(lambda cls, checkpoint, *, config: DummyPolicy(config)),
+    )
+    monkeypatch.setattr(factory, "make_pre_post_processors", lambda **kwargs: (None, None))
+
+    policy, _, _ = make_policy(
+        "checkpoint",
+        (512, 512),
+        ("observation.images.overhead", "observation.images.wrist"),
+        "cpu",
+    )
+
+    assert policy.config.compile_model is False
