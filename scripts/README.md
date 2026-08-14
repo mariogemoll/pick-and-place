@@ -432,8 +432,9 @@ finds any dataset under `artifacts/` rather than the one named.
 ### Everything else about speed is in `SMOLVLA_PERFORMANCE.md`
 
 Where a step's time goes, what `torch.compile` and batch size and NVDEC are
-worth, and the one change that matters most — **caching the frozen vision tower
-takes a step from 0.3500 s to 0.0711 s, and to 0.0266 s compiled** (`PREFIX_CACHE=1`).
+worth, and the one change that matters most — **caching the frozen vision
+tower's output takes a step from 0.3500 s to 0.0711 s, and to 0.0266 s
+compiled** (`PREFIX_CACHE=1`).
 Also the ideas that measured as nothing, LoRA among them. It moved out of this
 file when it outgrew it.
 

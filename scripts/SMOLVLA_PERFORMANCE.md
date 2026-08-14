@@ -18,8 +18,8 @@ The short version, on an RTX 5090 at batch 64:
 | --- | ---: | ---: |
 | stock, eager | 0.3500 | 182.8 |
 | stock, compiled | 0.2627 | 243.6 |
-| cached tower, eager | 0.0711 | 900.0 |
-| **cached tower, compiled** | **0.0266** | **2,409.6** |
+| cached tower output, eager | 0.0711 | 900.0 |
+| **cached tower output, compiled** | **0.0266** | **2,409.6** |
 
 Through stock `lerobot-train` on real data, eager, the same change is
 **0.426 s to 0.160 s** — smaller than 4.92x because a live step carries about
@@ -97,7 +97,7 @@ happening. Embeddings barely move (cos 0.99993).
 And a **fused AdamW** cannot help: the optimizer is 0.5% of a step.
 
 
-## The third idea works: cache the frozen tower instead of recomputing it
+## The third idea works: cache the frozen tower's output
 
 The two ideas above fail because they try to *reorder* or *cheapen* the tower.
 Neither can win much: GPU busy is 96.6%, so there is no bubble to fill, and the
