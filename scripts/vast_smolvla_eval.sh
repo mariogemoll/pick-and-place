@@ -87,17 +87,24 @@ if [ ! -f "$repo/assets/apriltags/textures/tagStandard41h12_00014_60x60mm_tag40m
   "$venv/bin/python" py/scripts/render_apriltag_textures.py --all-defaults
 fi
 
+# Fetched per rung, immediately before scoring it, rather than all up front.
+#
 # Only pretrained_model: scoring loads the model and never the optimizer state,
 # which is another 0.4 GB per checkpoint and 4 GB across a ten-rung ladder.
-for step in $steps; do
-  if [ ! -d "$ckpts/$step/pretrained_model" ]; then
-    echo "Fetching checkpoint $step from S3."
-    mkdir -p "$ckpts/$step/pretrained_model"
-    aws s3 sync \
-      "$bucket_root/outputs/$run_name/train/checkpoints/$step/pretrained_model" \
-      "$ckpts/$step/pretrained_model" --only-show-errors || exit 1
-  fi
-done
+# Even so a ten-rung ladder is 12 GB, and a pod pulling that at the ~4 MB/s a
+# rented host actually delivers spends the best part of an hour downloading
+# before it can score anything. Fetching up front puts that whole hour ahead of
+# the first result, so a teardown deadline landing inside it banks nothing --
+# which is the failure the per-rung sync below exists to prevent.
+fetch_checkpoint() {
+  local step="$1"
+  [ -d "$ckpts/$step/pretrained_model" ] && return 0
+  echo "Fetching checkpoint $step from S3."
+  mkdir -p "$ckpts/$step/pretrained_model"
+  aws s3 sync \
+    "$bucket_root/outputs/$run_name/train/checkpoints/$step/pretrained_model" \
+    "$ckpts/$step/pretrained_model" --only-show-errors
+}
 
 score() {
   local step="$1" manifest="$2" tag="$3"
@@ -219,6 +226,11 @@ status=0
 echo "Scoring $(set -- $steps; echo $#) rung(s) at SHARDS=$shards on $cores cores."
 for step in $steps; do
   rung_started=$SECONDS
+  if ! fetch_checkpoint "$step"; then
+    echo "Could not fetch checkpoint $step; skipping it." >&2
+    status=1
+    continue
+  fi
   # Serial, and first: eight scenarios cost a couple of minutes and catch the
   # failures that would otherwise appear simultaneously in every shard.
   if ! score "$step" smoke_v1.json "smoke-$step"; then
