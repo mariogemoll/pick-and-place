@@ -331,6 +331,10 @@ tokens cost time and change nothing:
 **1.27x**, and 0.153 to 0.121 end to end. `train_smolvla_cached.py` now does this
 by default and says so at startup; `--language-padding max_length` is the A/B.
 
+The change travels with the checkpoint: every `pretrained_model/` a run writes
+records `"padding": "longest"`, so a policy is evaluated the way it was trained
+rather than reverting to the base checkpoint's 48 tokens.
+
 **The loss moves by ~1e-3 relative, and that is arithmetic order rather than a
 different computation.** The VLM is loaded with `torch_dtype="bfloat16"`, so
 changing the sequence length changes how things accumulate.

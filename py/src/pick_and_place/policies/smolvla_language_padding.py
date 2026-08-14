@@ -22,6 +22,11 @@ changing the sequence length changes the order things are accumulated in. A
 sweep over padding lengths that are all mathematically identical moves the loss
 by the same order, which is what ``check_smolvla_prefix_cache.py`` shows.
 
+The change travels with the checkpoint, which is what should happen: a training
+run saves the preprocessor it used, so every ``pretrained_model/`` it writes
+records ``"padding": "longest"`` and the policy is evaluated the way it was
+trained.
+
 One caveat carries over from `torch.compile`: ``"longest"`` is a constant length
 only because this dataset carries exactly one task string. A multi-task dataset
 would give a length that varies per batch, which recompiles.
