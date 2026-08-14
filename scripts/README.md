@@ -264,3 +264,394 @@ which makes epoch coverage easy to misjudge:
 `STEPS` therefore defaults to 20,000 rather than the LIBERO recipe's 30,000:
 that recipe runs batch 64, so cutting the step count without accounting for the
 batch would have trained on barely half an epoch.
+
+## Finetuning SmolVLA
+
+> **Result: 32/100 on `canonical_100_v1`** (20,000 steps, batch 64, 4.39 epochs,
+> ~$2.40), against π₀.₅'s 0/100 on the same dataset and harness. So a VLA does
+> learn this task, and the π₀.₅ result was a misconfiguration rather than a
+> verdict — at π₀.₅'s exact sample count (5,000 steps, 1.10 epochs) SmolVLA also
+> scores 0/8 and cannot move the cube.
+>
+> **It is still not the right tool here.** DPPO scores 0.746 and the flow policy
+> 0.71, both for less compute. 0.32 understates SmolVLA — tagged cube against
+> their blue, 4.39 epochs, no tuning — but every one of those is fixed by
+> spending *more*, and they already win for *less*, so the gap in
+> cost-effectiveness only widens. **Do not run more VLA experiments in
+> simulation for this task.**
+>
+> **Run rollouts at `--n-action-steps 20`, not 10.** A sweep on the 20,000-step
+> checkpoint over the full `canonical_100_v1` measured 32/100 at horizon 10,
+> **39/100 at 20**, 34/100 at 25 and 24/100 at 50 — a peak, not a trend. Across
+> all four, contact stays flat at ~0.87 while `cube_lifted` tracks the score,
+> so the horizon decides whether the grasp completes rather than whether the
+> cube is found: too short and a replan switches modes mid-grasp, too long and
+> the policy is open-loop for 1.7 s. Same effect `FLOW_POLICY_IMAGE.md` measured
+> on the image flow policy, which is also flow-matching.
+>
+> The one live argument is sim2real: `real-20260701` is 18 minutes, far below
+> the 1–20 h band, and web-scale plus SO-100/SO-101 pretraining is a plausible
+> route to transferring from that little. That needs the real arm to score.
+
+`vast_smolvla_train.sh` is the cheap retry of the question the pi0.5 run left
+open, on the same rented 5090:
+
+```sh
+RUN_NAME=<fresh> scripts/vast_smolvla_train.sh
+```
+
+No `HF_TOKEN`. SmolVLA tokenizes through `HuggingFaceTB/SmolVLM2-500M-Video-Instruct`,
+which is public, so the gated-checkpoint dance pi0.5 needs for
+`google/paligemma-3b-pt-224` is simply absent.
+
+### Why this and not another pi0.5 run
+
+pi0.5 scored 0/100, and its notes argue that was a misconfiguration rather than
+a verdict. SmolVLA tests the same hypothesis for about a third of the price, and
+its shape fits the objection better:
+
+| | pi0.5 | SmolVLA |
+| --- | ---: | ---: |
+| total parameters | 4,144,691,984 | 450,046,176 |
+| trainable | 1,287,168 (0.031%) | 99,880,992 (22.2%) |
+| how | rank-16 LoRA, `modules_to_save` empty | dense, no adapters |
+| epochs at the default budget | 1.10 | 6.58 |
+
+The pi0.5 notes single out `state_proj`, `action_in_proj` and `action_out_proj`
+— the projections carrying the 6-DOF joint mapping, the part with no pretrained
+equivalent — as having been adapted at rank 16 rather than trained. SmolVLA
+trains `state_proj` densely (`train_state_proj` defaults true) along with the
+whole action expert, while `freeze_vision_encoder` and `train_expert_only` keep
+the pretrained VLM intact. That is the recipe SmolVLA was designed around, taken
+as-is.
+
+`smolvla_base` is also pretrained largely on community LeRobot datasets recorded
+on SO-100/SO-101 arms — this arm, these joint names, this action space. pi0.5's
+pretraining mix is broader and further away.
+
+### What is load-bearing in the configuration
+
+- **`--dataset.image_transforms.enable=true`.** lerobot defaults this to false,
+  the pi0.5 run took the default, and it scored 0/100. On this task the image
+  flow policy measured **3/20 without random-shift augmentation against 20/20
+  with it** on otherwise identical runs. This is the single knob most likely to
+  decide the result.
+- **`n_action_steps` must be passed.** SmolVLA defaults it to the full chunk of
+  50, which is 1.67 seconds open-loop at `CONTROL_HZ` 30 — the same trap pi0.5
+  has. The launcher pins 10, about a third of a second, near the flow policy's
+  eight-tick execution horizon, so the closed-loop reaction rates of the
+  policies being ranked are comparable.
+- **No `--rename_map`.** SmolVLA's *base* config declares `camera1`/`camera2`/
+  `camera3` at 256x256, which invites renaming the dataset's cameras to match.
+  Do not: lerobot rebuilds `input_features` from the dataset, the names only
+  determine the order image tokens are stacked in, and keeping
+  `observation.images.overhead`/`.wrist` is what lets
+  `resolve_checkpoint_cameras` match them **by name** rather than by position.
+  Renaming is what produced the camera-ordering bug (fixed in `735a621`).
+  Note the dataset lists **wrist before overhead**, so that is the stacking
+  order; it is self-consistent because inference looks each frame up by key.
+- **MEAN_STD, not quantiles.** SmolVLA normalizes state and action with
+  mean/std, so the launcher's precondition check looks for those. pi0.5's checks
+  `q01`/`q99`. Copying that check across would pass on a dataset that then fails
+  on the first batch.
+- **`empty_cameras` stays 0.** pi0.5 reserves three image slots and needs one
+  padded; SmolVLA's finetune declares exactly the two the dataset has, so
+  nothing is missing and nothing needs padding.
+- **bf16 comes from the environment, not the config.** `--policy.use_amp` is
+  *not* wired into the `Accelerator` lerobot builds — `lerobot_train.py` calls
+  `Accelerator()` with no `mixed_precision`, so accelerate falls back to
+  `ACCELERATE_MIXED_PRECISION`, default `no`. Without the launcher exporting it
+  the run is fp32. Set `MIXED_PRECISION=no` to compare.
+
+### Sizing
+
+The same arithmetic as the pi0.5 section, at SmolVLA's batch size:
+
+| batch | steps | samples | epochs over `as-recorded` |
+| ---: | ---: | ---: | ---: |
+| 64 | 10,000 | 640,000 | 2.19 |
+| 64 | 30,000 | 1,920,000 | 6.58 |
+| 128 | 30,000 | 3,840,000 | 13.17 |
+
+`STEPS` defaults to 30,000 because that is also SmolVLA's own
+`scheduler_decay_steps`, so the cosine decay lands at the end of the run rather
+than being truncated mid-schedule. Change one and consider the other.
+
+### The 512x512 dataset
+
+`two-variant-1000-as-recorded-512x512-lerobot.tar.zst` is the same 1000
+episodes and 291,618 frames with both camera streams re-encoded from 960x720 to
+512x512. Produce one from any recorded dataset with:
+
+```sh
+python py/scripts/convert_dataset_resolution.py \
+  --src "$PAP_DATA_ROOT/datasets/as-recorded" \
+  --width 512 --height 512 --already-rectified --vcodec h264
+```
+
+`--already-rectified` is what makes it applicable to a sim recording: the
+frames are already an ideal pinhole render, so there is no lens distortion to
+undo and the script only center-crops and resizes.
+
+The point is decode cost. A training step measured **1.12-1.45 s** against
+**0.416 s** for the same forward and backward on synthetic batches, so two
+thirds of it was h264 random-access decode of two 960x720 streams per sample.
+512x512 is 2.6x fewer pixels per frame and takes the archive from 2.4 GB to
+1.3 GB.
+
+**It is a square crop, not a rescale, so the policy sees a narrower view.** The
+saved 960x720 frame is itself the central 1440x1080 of the 1920x1080 render;
+cropping it square keeps the central 1080x1080 and drops the left and right
+margins. Nothing needs changing at evaluation time — `eval_policy_sim.py` reads
+`image_hw` off the checkpoint and cover-crops the render to match, which lands
+on that same central 1080x1080 — but a policy trained on it is **not** a
+cheaper reproduction of the 32/100 run. It is a different input.
+
+The alternative, if what you want *is* that reproduction, is **512x384**:
+SmolVLA's `resize_imgs_with_padding` turns a 4:3 frame into 512x384 plus
+padding anyway, so pre-resizing to it reproduces today's model input pixel for
+pixel and buys the same decode saving with no change to the field of view.
+
+Converting the full dataset takes about an hour on two cores, bound by the
+h264 encode rather than the decode. That is cheap enough that renting for it is
+not worth the transfer and provisioning.
+
+It worked. On the 512x512 dataset `data_s` — lerobot's own measure of how long
+a step waits for its batch — is **0.03-0.06 s of a 0.5 s step**, against roughly
+0.7 s on the 960x720 dataset. Decode is no longer a constraint, and the run is
+GPU-bound for the first time.
+
+Two things follow. Effective *cores* now set the ceiling, not container memory:
+the same run measured 0.68 s/step on a 21-core host and **0.50 s/step on a
+32-core one**, because the remaining decode has to fit in the gaps. And the
+launcher's `REQUIRE_NO_PADDING=1` will refuse a dataset that does not fill
+SmolVLA's 512x512 input, which is worth setting — a pod that already has the
+960x720 dataset unpacked would otherwise be used silently, since the launcher
+finds any dataset under `artifacts/` rather than the one named.
+
+### torch.compile is worth 1.45x
+
+Measured head to head on one host, same dataset, batch, seed and step count,
+only `--policy.compile_model` moving:
+
+| | `updt_s` median | min | `data_s` |
+| --- | ---: | ---: | ---: |
+| stock | 0.5050 | 0.4530 | 0.032 |
+| `compile_model=true` | **0.3480** | 0.3350 | 0.038 |
+
+**+45%**, or 7.01h against 4.83h over 50,000 steps. `COMPILE_MODEL=true` on
+`vast_smolvla_train.sh`.
+
+**Measure it with `updt_s` past step 150, never with tqdm's rate.** The wall
+clock for 400 steps was 306 s stock against 747 s compiled, because
+`max-autotune` spends about seven minutes compiling before the first step. A
+tqdm running mean therefore reports compile as *slower*, which is backwards for
+any run longer than about twenty minutes.
+
+Nothing went wrong that was expected to: **zero graph breaks and zero
+recompilations**. That is the dataset's doing rather than luck — it carries
+exactly one task string, so `pad_language_to="longest"` gives a constant
+sequence length, and a square dataset gives a constant image shape. A
+multi-task or non-square dataset would have to re-establish this.
+
+The one reservation is that enabling it also runs
+`set_float32_matmul_precision("high")`, switching fp32 matmuls to TF32, so a
+compiled checkpoint is not numerically identical to one trained without it.
+Evidence that this does not matter much: both arms logged `loss:0.194` at step
+200 and `loss:0.172` at step 400, identical at logged precision. That is 400
+steps at three decimals under bf16 autocast, not a guarantee over 50,000, so
+the flag stays off by default and a ladder should not change it mid-run.
+
+### Batch size is not a throughput lever at all, above 32
+
+Swept on one host with synthetic batches -- no dataloader, so `num_workers` and
+the container memory limit cannot confound it:
+
+| batch | uncompiled samples/s | compiled samples/s | compiled peak VRAM |
+| ---: | ---: | ---: | ---: |
+| 16 | 126.5 | 213.0 | 3,918 MiB |
+| 32 | 167.4 | 225.8 | 6,789 MiB |
+| 64 | 168.4 | **229.4** | 11,662 MiB |
+| 128 | 165.7 | **230.2** | 22,262 MiB |
+
+Throughput rises and plateaus rather than being flat: compiled, 32 to 64 is
+**+1.6%** and 64 to 128 a further **+0.3%**. Only medians were recorded, no
+spread, so whether 1.6% is real or noise is unmeasured -- but either way it is
+~1-2% against `torch.compile`'s 36% and a 1.68x spread between hosts, so batch
+size is not where speed comes from. Choose it on optimization grounds or for
+VRAM headroom: batch 32 gives 98.4% of batch 64's throughput for 58% of the
+memory.
+
+Batch 16 is the one genuinely bad choice, at -7% compiled and -25% uncompiled.
+Compile's gain holds across the whole range (1.68x at 16, ~1.36x at 32-128), so
+it is not an artifact of one batch size.
+
+This **supersedes an earlier measurement here that reported batch 128 as 5.9%
+slower**. That arm was being OOM-killed while it was measured, so it recorded
+memory pressure rather than batch size. It also supersedes the much older "+18%
+at batch 112", which was measured while the run was decode bound and a larger
+batch amortized decode stalls.
+
+Compare throughput in **samples/s**, never s/step: a batch-128 step does twice
+the work, so s/step makes the larger batch look worse by construction. Halving
+the step count at double the batch is the same sample budget.
+
+**Watch the container memory limit rather than VRAM.** The OOM above was not
+VRAM -- 25,044 MiB of 32,607 fits -- but the container's **57 GB cgroup limit**,
+against 16 workers prefetching batch-128 frames on a box whose `free` reported
+440 GB and whose `nproc` reported 192, both the *host's*. `rc=137` was the only
+evidence: nothing in the training log, nothing in the container's `dmesg`. Read
+the real limit from `/sys/fs/cgroup/memory/memory.limit_in_bytes`.
+
+### NVDEC decode works, and is 3x faster -- correcting an earlier claim
+
+This document previously said lerobot 0.5.1 "cannot move this to NVDEC --
+`decode_video_frames_torchcodec` takes no device". The *function* takes no
+device, but torchcodec's `VideoDecoder` does, and on the pinned stack
+`device="cuda"` works. Measured on this dataset's own video, 128 random-access
+frames -- the pattern training uses, batch 64 across two cameras:
+
+| | 128 random frames | throughput |
+| --- | ---: | ---: |
+| CPU, as lerobot decodes today | 0.106 s | 1,212 frames/s |
+| **`device="cuda"` (NVDEC)** | **0.035 s** | **3,691 frames/s** |
+
+Compiled training needs 457 frames/s, so NVDEC has ~8x headroom. Two benefits
+beyond the 3x: frames arrive **already on `cuda:0`**, removing the host-to-device
+copy, and the work runs on a fixed-function block rather than the SMs, so it
+does not compete with training -- the decoded frames cost about 0.7 GB/s of
+memory bandwidth against the card's ~1.8 TB/s.
+
+This matters more for *variance* than for speed. On a well-provisioned host
+`data_s` is already 0.01-0.06 s, so there is little to win; what NVDEC removes
+is the dependence on host CPU, which is the measured cause of the 1.68x spread
+between hosts. Note also that `torch.compile` raised the CPU needed per
+GPU-second by ~36%, so hosts that fed the GPU adequately before are closer to
+the edge now.
+
+Not yet established: whether decoding inside a DataLoader worker works, since
+forked workers cannot inherit a CUDA context -- `num_workers=0` with a prefetch
+stream, or a spawn start method, are the routes around it.
+
+### Two speed ideas that measured as nothing
+
+Recorded so they are not retried: **casting the frozen tower (or the whole VLM)
+to bf16** rather than letting autocast convert it each step is -2.3%
+uncompiled and +1.6% compiled, i.e. a wash. Autocast evidently caches its
+weight casts within a step, so the per-step re-cast that seemed wasteful is not
+happening. Embeddings barely move (cos 0.99993).
+
+And a **fused AdamW** cannot help: the optimizer is 0.5% of a step.
+
+### A dud host stays a dud, so blocklist the machine
+
+Two offers rented hours apart, 41357771 and 45944050, both reported `running`
+and both refused the SSH key -- because they are the same physical machine,
+visible only as the same `public_ipaddr`. The dud rule says destroy and rent
+elsewhere, but "elsewhere" has to mean a different *machine*: the marketplace
+will happily re-offer the broken one under a new offer id. Record the IP of a
+dud and skip offers that resolve to it.
+
+### Where a training step goes, and why quantizing the tower is not worth it
+
+Profiled at batch 64, uncompiled, on synthetic batches:
+
+| stage | seconds | share |
+| --- | ---: | ---: |
+| `embed_prefix` -- the frozen vision tower | 0.2282 | **59.2%** |
+| joint VLM and expert layers | 0.0667 | 17.3% |
+| backward | 0.0889 | 23.1% |
+| AdamW over 100M parameters | 0.0019 | 0.5% |
+
+The frozen tower is most of a training step, the backward is only 23% because
+just 22% of the parameters train, and the optimizer is negligible -- a fused
+AdamW would buy nothing.
+
+That invites two ideas, and **both fail, for opposite reasons**.
+
+**Running the prefix ahead on a side stream is capped at ~1.03x.** Measured GPU
+busy is **96.6%**, so there is no bubble to fill: reordering work does not
+create capacity. Note `nvidia-smi`'s utilization counter said 85% and implied
+15% idle -- it samples "any kernel resident" and overstates idle badly. Sum
+kernel durations against an unprofiled wall clock instead, and count only
+device-side entries: each `aten::` op and the kernel under it both carry device
+time, so a naive sum double counts and can exceed 100%.
+
+**Quantizing the tower buys 3.8%, and moves the embeddings 10%.** With
+torchao on a 5090:
+
+| | step | vs same-mode baseline | embedding drift |
+| --- | ---: | ---: | --- |
+| baseline eager | 0.3754 | -- | -- |
+| baseline compiled | 0.2645 | 1.419x | -- |
+| fp8, eager | 0.6064 | 0.619x | cos 0.99474, rel 0.103 |
+| fp8 + compile | 0.2548 | **1.038x** | cos 0.99474, rel 0.103 |
+| int8 dynamic, eager | 0.9316 | 0.404x | cos 0.99765, rel 0.069 |
+| int8 weight-only, eager | 0.5258 | 0.716x | cos 0.99941, rel 0.034 |
+
+Eager quantization is a large regression -- torchao's kernels need
+`torch.compile` to fuse the quantize/dequantize, and weight-only helps
+memory-bound batch-1 decoding rather than a compute-bound batch-64 ViT. Even
+done right, fp8's GEMM saving is mostly cancelled by conversion overhead, and
+much of the tower is attention, layernorm and elementwise work that fp8 does
+not touch. Perturbing the perception front-end of a policy scoring 32-39/100 by
+10% to save four minutes in five hours is not a trade worth making.
+
+Two installation notes, since this cost longer than the measurement: the venv
+is uv-managed and has no `pip`, so use `uv pip install --python <venv>/bin/python`;
+and installing torchao breaks `diffusers` 0.35.2, which lerobot imports through
+its groot policy, with `name 'logger' is not defined` -- diffusers only walks
+its torchao branch when torchao is present. `diffusers` 0.39.0 fixes it.
+
+### Marketplace hosts vary by 1.68x on identical specs
+
+The same compiled batch-64 configuration measured **0.386 s/step** on one host
+and **0.649 s/step** on another, both advertising an RTX 5090 at reliability
+0.99 or better, both on the pinned stack. Nearly a factor of two.
+
+So an A/B is only meaningful when both arms run on the *same* host, and an
+absolute s/step or projected wall clock is a fact about the host it was
+measured on rather than about the configuration. Advertised `inet_down` already
+could not be trusted; neither can advertised compute.
+
+### Rent in Europe, and check the driver
+
+Two host properties are not negotiable, and both have cost a rented hour:
+
+- **Driver 580 or newer.** The pinned `torch==2.13.0+cu130` needs it. On an
+  older driver `vast_pap_provision.sh` silently falls back to `torch 2.10.0+cu128`,
+  and the pinned `torchvision==0.28.0` — built for 2.13 — then dies with
+  `RuntimeError: operator torchvision::nms does not exist`. Filter offers on
+  `driver_version` before renting.
+- **A European host.** The `allyouneed` bucket is in **eu-north-1**. From
+  Romania the 2.4 GB dataset pulls at ~100 MB/s, in 23 seconds. A California
+  host advertising 1509 Mbps delivered 85 KB/s against the same bucket, which is
+  eight hours for the same file.
+
+Advertised `inet_down` is not evidence. Measure it on the rented host before
+staging a workload:
+
+```sh
+aws s3 cp s3://allyouneed/pick-and-place/datasets/<artifact>.tar.zst /tmp/probe.bin
+```
+
+### Scoring the checkpoints
+
+`vast_smolvla_eval.sh` mirrors the pi0.5 one — `smoke_v1` first, then
+`canonical_100_v1`, and it syncs results to S3 before you can destroy the pod:
+
+```sh
+RUN_NAME=<training run> STEPS="030000 020000" scripts/vast_smolvla_eval.sh
+```
+
+It needs no `--base-checkpoint`: SmolVLA trains without adapters, so a
+checkpoint is a complete model rather than a 5 MB diff against a 14.5 GB base.
+
+`MANIFEST` picks the suite, and results land under
+`outputs/<run>/evaluation/<manifest id>/`. The manifest is part of the path
+because it is part of the result: scoring 020000 and 040000 on `heldout_256_v1`
+into an unqualified path overwrote those two rungs of the `canonical_100_v1`
+ladder, and their per-episode records did not survive it.
+
+**Sync before teardown.** The pi0.5 evaluation artifacts no longer exist because
+a pod was destroyed before its results reached S3.
