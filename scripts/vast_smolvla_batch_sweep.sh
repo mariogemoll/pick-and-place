@@ -15,11 +15,13 @@
 # ~4.4 GB compiled, so batch 256 fits where 128 used to be OOM-killed.
 #
 # The sweep runs eager on synthetic batches first -- minutes per arm, and no
-# dataloader to confound it -- compiles only the two fastest, because
-# max-autotune costs 20-30 minutes per shape, and then confirms the candidates
-# through `benchmark_live_step.py`, which is the only arm that pays for the cache
-# read. That read scales with batch (240 KiB per sample: 15 MB a step at 64
-# against 61 MB at 256) and a synthetic sweep cannot see it.
+# dataloader to confound it -- then confirms its candidates through
+# `benchmark_live_step.py`, which is the only arm that pays for the cache read.
+# That read scales with batch (240 KiB per sample: 15 MB a step at 64 against
+# 61 MB at 256) and a synthetic sweep cannot see it. `torch.compile` comes last
+# and on the two fastest sizes only, because max-autotune costs 20-30 minutes
+# per shape: it is the one stage that can outrun a budget, so it runs when every
+# cheaper answer is already banked in S3.
 #
 # Every arm runs on one host in one session, which is the only way they are
 # comparable: marketplace hosts of identical advertised specification have
@@ -188,23 +190,8 @@ fi
 echo "compile: [$compile_batch_sizes]   live: [$live_batch_sizes]" \
   | tee "$results/candidates.txt"
 
-if has_stage 2; then
-  echo "=== Stage 2: torch.compile, only the candidates ==="
-  # max-autotune spends 20-30 minutes compiling per shape before the first step,
-  # which is why this is two arms and not five. The warmup absorbs it, so the
-  # timed steps do not.
-  for batch in $compile_batch_sizes; do
-    run_arm "compiled batch $batch" \
-      "$venv/bin/python" "$repo/py/scripts/benchmark_smolvla_step.py" \
-      --checkpoint "$checkpoint_dir" --dataset "$dataset_root" \
-      --arms cached --batch-size "$batch" --repeats "$repeats" \
-      --compile --frozen-prefix --language-padding longest \
-      --output "$results/compiled-b$batch.json"
-  done
-fi
-
-if has_stage 3 && [ ! -d "$cache_dir" ]; then
-  echo "=== Stage 3: build a prefix cache over $episodes episodes, for the live arm ==="
+if has_stage 2 && [ ! -d "$cache_dir" ]; then
+  echo "=== Stage 2: build a prefix cache over $episodes episodes, for the live arm ==="
   cache_start=$(date +%s)
   "$venv/bin/python" "$repo/py/scripts/precompute_smolvla_prefix.py" \
     --dataset "$dataset_root" --checkpoint "$checkpoint_dir" --output "$cache_dir" \
@@ -215,8 +202,8 @@ if has_stage 3 && [ ! -d "$cache_dir" ]; then
   du -sh "$cache_dir" | tee "$results/cache-size.txt"
 fi
 
-if has_stage 4; then
-  echo "=== Stage 4: live steps, which are the ones that pay for the cache read ==="
+if has_stage 3; then
+  echo "=== Stage 3: live steps, which are the ones that pay for the cache read ==="
   # 240 KiB per sample comes off disk every step, so the read scales with batch
   # where the synthetic arm's device-resident tensors do not. `synthetic` beside
   # `live` in one process is what sizes that: the gap between them is everything
@@ -230,6 +217,21 @@ if has_stage 4; then
       --episodes "$episodes" --steps "$live_steps" \
       --frozen-prefix --pad-longest \
       --output "$results/live-b$batch.json"
+  done
+fi
+
+if has_stage 4; then
+  echo "=== Stage 4: torch.compile, only the candidates ==="
+  # max-autotune spends 20-30 minutes compiling per shape before the first step,
+  # which is why this is two arms and not five. The warmup absorbs it, so the
+  # timed steps do not.
+  for batch in $compile_batch_sizes; do
+    run_arm "compiled batch $batch" \
+      "$venv/bin/python" "$repo/py/scripts/benchmark_smolvla_step.py" \
+      --checkpoint "$checkpoint_dir" --dataset "$dataset_root" \
+      --arms cached --batch-size "$batch" --repeats "$repeats" \
+      --compile --frozen-prefix --language-padding longest \
+      --output "$results/compiled-b$batch.json"
   done
 fi
 
