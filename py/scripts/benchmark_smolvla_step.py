@@ -34,11 +34,14 @@ ARMS = ("stock", "cached", "tower", "lora")
 
 
 def build_policy(checkpoint: Path, dataset_root: Path, device: torch.device, compile_model: bool):  # noqa: ANN201
-    from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
+    from lerobot.datasets.lerobot_dataset import LeRobotDataset
     from lerobot.policies.factory import make_policy
     from lerobot.policies.smolvla.configuration_smolvla import SmolVLAConfig
 
-    meta = LeRobotDatasetMetadata(repo_id=dataset_root.name, root=dataset_root)
+    # Only the metadata is used -- feature names, shapes and stats -- but going
+    # through the dataset is the same path training takes, so the policy is built
+    # against exactly the features it would see.
+    meta = LeRobotDataset(repo_id=dataset_root.name, root=dataset_root).meta
     config = SmolVLAConfig(
         pretrained_path=str(checkpoint),
         device=device.type,
@@ -133,13 +136,13 @@ def make_tower_step(policy, batch: dict):  # noqa: ANN001
     return step
 
 
-def profile_components(policy, batch: dict, repeats: int) -> dict[str, float]:  # noqa: ANN001
+def profile_components(policy, base, batch: dict, repeats: int) -> dict[str, float]:  # noqa: ANN001
     """Split a step into tower, rest-of-forward, backward and optimizer."""
     trainable = [p for p in policy.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(trainable, lr=1e-4)
     tower = {"seconds": 0.0}
 
-    original = policy.model.vlm_with_expert.embed_image
+    original = base.model.vlm_with_expert.embed_image
 
     def timed_embed_image(image):  # noqa: ANN001, ANN202
         torch.cuda.synchronize()
@@ -149,7 +152,7 @@ def profile_components(policy, batch: dict, repeats: int) -> dict[str, float]:  
         tower["seconds"] += time.perf_counter() - started
         return result
 
-    policy.model.vlm_with_expert.embed_image = timed_embed_image
+    base.model.vlm_with_expert.embed_image = timed_embed_image
     totals = {"tower": 0.0, "forward": 0.0, "backward": 0.0, "optimizer": 0.0}
     try:
         for index in range(repeats + 1):
@@ -176,7 +179,7 @@ def profile_components(policy, batch: dict, repeats: int) -> dict[str, float]:  
             totals["backward"] += backward
             totals["optimizer"] += optimizer_seconds
     finally:
-        policy.model.vlm_with_expert.embed_image = original
+        base.model.vlm_with_expert.embed_image = original
     return {key: value / repeats for key, value in totals.items()}
 
 
@@ -205,19 +208,19 @@ def main() -> None:
     for arm in args.arms:
         policy, meta = build_policy(args.checkpoint, args.dataset, device, args.compile)
         if arm == "lora":
-            policy = policy.wrap_with_peft(
-                peft_cli_overrides={"method_type": "lora", "r": args.lora_rank}
-            )
+            # The policy's own default targets -- the expert's q/v projections and
+            # the state and action projections -- so this is LoRA where the dense
+            # run trains, not a different set of weights.
+            policy = policy.wrap_with_peft(peft_cli_overrides={"r": args.lora_rank})
+        base = policy.get_base_model() if arm == "lora" else policy
         cached = arm == "cached"
         if cached:
             patch_policy_for_cached_prefix(policy)
-        batch = synthetic_batch(
-            policy if arm != "lora" else policy.base_model.model, meta, args.batch_size, device, cached
-        )
+        batch = synthetic_batch(base, meta, args.batch_size, device, cached)
         policy.train()
 
         if arm == "tower":
-            step = make_tower_step(policy, batch)
+            step = make_tower_step(base, batch)
             trainable = 0
         else:
             step, trainable = make_train_step(policy, batch)
@@ -233,14 +236,14 @@ def main() -> None:
         if arm == "tower":
             # Two cameras per sample, and a cache is built one image at a time.
             entry["images_per_s"] = (
-                args.batch_size * len(list(policy.config.image_features))
+                args.batch_size * len(list(base.config.image_features))
             ) / statistics.median(timings)
         if args.profile and arm in ("stock", "cached"):
-            entry["stages_s"] = profile_components(policy, batch, max(args.repeats // 3, 5))
+            entry["stages_s"] = profile_components(policy, base, batch, max(args.repeats // 3, 5))
         results["arms"][arm] = entry
         print(f"{arm}: {json.dumps(entry, indent=2)}", flush=True)
 
-        del policy, batch, step
+        del policy, base, batch, step
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
 
