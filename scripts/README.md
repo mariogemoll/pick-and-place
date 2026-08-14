@@ -618,6 +618,15 @@ Two costs, both real:
   *is* the no-augmentation arm, which `SMOLVLA.md` calls the cheapest open
   question it has.
 
+**Do not read a frame in the parent process before forking workers.** Building
+the cache first probed the tower's output shape with `dataset[0]`, and the
+workers then died with `Could not push packet to decoder: Invalid data found
+when processing input`. lerobot warns about this in `DatasetReader._query_videos`
+— it keeps open torchcodec decoders in a module-level `VideoDecoderCache`, and a
+forked worker inherits one it cannot use. The probe now runs on a blank image,
+which carries the shape and decodes nothing. Any code that touches a LeRobot
+dataset before handing it to a `DataLoader` is exposed to the same thing.
+
 Two things it removes for free: training never decodes video, so `data_s`
 collapses and the **1.68x spread between hosts** — which that section attributes
 to host CPU — stops applying to the training phase. And `num_workers` stops

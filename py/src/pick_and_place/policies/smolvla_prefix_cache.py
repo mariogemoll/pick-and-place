@@ -185,7 +185,7 @@ def write_prefix_cache(
     if not camera_keys:
         raise ValueError("policy declares no image features, so there is nothing to cache")
 
-    probe = _probe_tower(policy, dataset, camera_keys, device, autocast_dtype)
+    probe = _probe_tower(policy, device, autocast_dtype)
     spec = PrefixCacheSpec(
         camera_keys=camera_keys,
         num_frames=dataset.num_frames,
@@ -241,17 +241,25 @@ def write_prefix_cache(
 
 def _probe_tower(
     policy: SmolVLAPolicy,
-    dataset: LeRobotDataset,
-    camera_keys: tuple[str, ...],
     device: torch.device,
     autocast_dtype: torch.dtype | None,
 ) -> tuple[int, int]:
-    """Ask the tower for its own token count and width rather than deriving them."""
-    item = dataset[0]
-    batch = {key: item[key].unsqueeze(0) for key in camera_keys}
-    images = _prepare_images_on_device(policy, batch, camera_keys, device)
+    """Ask the tower for its own token count and width rather than deriving them.
+
+    Deliberately a blank image rather than a real frame. Reading one would decode
+    video in this process, and `DatasetReader._query_videos` says in as many words
+    not to do that when workers are coming: lerobot keeps open torchcodec decoders
+    in a module-level cache, and a forked worker inheriting one fails with
+    "Could not push packet to decoder: Invalid data found when processing input".
+    Only the output shape is wanted here, and blank pixels carry it.
+    """
+    if policy.config.resize_imgs_with_padding is not None:
+        height, width = policy.config.resize_imgs_with_padding
+    else:
+        height, width = next(iter(policy.config.image_features.values())).shape[1:]
+    blank = torch.zeros(1, 3, height, width, device=device)
     with torch.autocast(device.type, dtype=autocast_dtype, enabled=autocast_dtype is not None):
-        tokens = tower_tokens(policy, images)
+        tokens = tower_tokens(policy, [blank])
     return int(tokens.shape[2]), int(tokens.shape[3])
 
 
