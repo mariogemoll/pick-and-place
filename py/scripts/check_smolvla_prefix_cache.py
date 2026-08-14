@@ -80,6 +80,10 @@ def main() -> None:
     # in float32 would measure the precision, not the cache.
     autocast_dtype = None if device.type == "cpu" else torch.bfloat16
     autocast = torch.autocast(device.type, dtype=autocast_dtype, enabled=autocast_dtype is not None)
+    # Store at the precision the tower produces. On CUDA that is bfloat16 and the
+    # cache is bit-exact; on CPU there is no bfloat16 autocast, so a bfloat16
+    # cache would be measuring its own rounding rather than the substitution.
+    cache_dtype = "float32" if autocast_dtype is None else "bfloat16"
 
     with torch.no_grad(), autocast:
         stock_loss, _ = policy.forward(dict(stock_batch), noise=noise, time=time_values)
@@ -92,6 +96,7 @@ def main() -> None:
             cache_dir,
             batch_size=args.batch_size,
             num_workers=0,
+            dtype=cache_dtype,
             device=device,
             autocast_dtype=autocast_dtype,
         )
@@ -102,6 +107,7 @@ def main() -> None:
             cached_loss, _ = policy.forward(dict(cached_batch), noise=noise, time=time_values)
 
     difference = abs(cached_loss.item() - stock_loss.item())
+    print(f"cache dtype {cache_dtype}, autocast {autocast_dtype}")
     print(f"stock loss  {stock_loss.item():.8f}")
     print(f"cached loss {cached_loss.item():.8f}")
     print(f"difference  {difference:.3e} ({difference / abs(stock_loss.item()):.3e} relative)")

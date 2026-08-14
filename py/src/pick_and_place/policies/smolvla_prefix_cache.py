@@ -133,7 +133,9 @@ def _to_storage(tokens: torch.Tensor, dtype: str) -> np.ndarray:
 
 
 def _from_storage(block: np.ndarray, dtype: str) -> torch.Tensor:
-    tensor = torch.from_numpy(np.ascontiguousarray(block))
+    # Copied out of the mapping: torch refuses to wrap a read-only array without
+    # warning, and the block is 120 KiB against a step that moves megabytes.
+    tensor = torch.from_numpy(np.array(block))
     if dtype == "bfloat16":
         return tensor.view(torch.bfloat16)
     return tensor
