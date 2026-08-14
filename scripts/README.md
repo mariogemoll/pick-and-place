@@ -569,10 +569,9 @@ or `PREFIX_CACHE=1` on `vast_smolvla_train.sh`, which does both.
 policy and through the cached one with the flow-matching noise and time held
 fixed. Under the bf16 autocast the run uses, the two losses agree to
 **0.000e+00** — the tower already emits bfloat16 there, so storing bfloat16 is
-lossless. (On CPU there is no bf16 autocast, the tower emits float32, and a
-bfloat16 cache costs 0.2% on the loss. The script picks the storage dtype from
-the precision it is running at, so it measures the substitution rather than its
-own rounding.)
+lossless. (Without that autocast the tower emits float32 and a bfloat16 cache
+costs 0.2% on the loss, so the script picks its storage dtype from the precision
+it is running at.)
 
 Measured back to back on one host, RTX 5090, batch 64, synthetic batches:
 
@@ -580,10 +579,23 @@ Measured back to back on one host, RTX 5090, batch 64, synthetic batches:
 | --- | ---: | ---: | ---: |
 | stock, eager | 0.3500 | 182.8 | 11,391 MiB |
 | **cached, eager** | **0.0711** | **900.0** | 5,582 MiB |
+| stock, compiled | 0.2627 | 243.6 | 9,116 MiB |
+| **cached, compiled** | **0.0266** | **2,409.6** | 3,950 MiB |
 | tower alone | 0.2243 | 570.6 images/s | 4,890 MiB |
 
-**4.92x on the model step.** More than the tower's own share, and the stage
-split says where the rest came from:
+**4.92x eager, and 9.89x compiled.** The two levers multiply rather than
+overlap: `torch.compile` is worth 1.33x on the stock step here (reproducing the
+1.45x that section measured on another host) and **9.9x** on the cached one,
+because with the tower gone the graph is small enough for `max-autotune`'s CUDA
+graphs to matter. Compiled and cached is **13.2x** the stock eager step.
+
+The one cost is that `max-autotune` compiles for twenty to thirty minutes before
+the first step on this configuration — much longer than the seven minutes that
+section records — so it is only worth enabling on a run of real length. Time it
+with `updt_s` past step 150, never with tqdm's rate.
+
+The eager gain is already more than the tower's own share, and the stage split
+says where the rest came from:
 
 | stage | stock | cached |
 | --- | ---: | ---: |
@@ -593,16 +605,30 @@ split says where the rest came from:
 | AdamW | 0.0041 | 0.0039 |
 
 The tower accounts for 0.2236 s of the 0.2789 s saved. The remaining 0.055 s is
-the rest of the step running about 1.75x faster with the tower's activations out
-of the way; peak VRAM halves alongside it, which is the likeliest cause, but this
-is measured rather than explained — do not plan around it.
+the rest of the step running ~1.75x faster with the tower's activations out of
+the way; peak VRAM halves alongside it, which is the likeliest cause, but that is
+measured rather than explained — do not plan around it.
 
-**The cache pays for itself after 0.80 epochs.** Building it is one pass through
-the tower at 570.6 images/s, which for 291,618 frames across two cameras is
-**17.0 minutes**. Against 182.8 samples/s stock and 900.0 cached, the break-even
-is about 234,000 samples — 3,700 steps at batch 64. Every run this project has done is
-far past that: a 50,000-step run is 10.97 epochs, **4.86 h stock against 1.27 h
-including the cache build, or 3.8x end to end**.
+**The cache pays for itself after 1.2 epochs.** Building it is one pass over the
+dataset, measured at **194 frames/s** over 100 episodes with 8 workers — which
+extrapolates to **25 minutes** for all 291,618 frames. That is *decode* bound,
+not tower bound: the tower alone sustains 285 frames/s, so more workers would
+close some of the gap. It is the last time the run pays for h264 at all.
+
+Against 182.8 samples/s stock and 900.0 cached, the break-even is about 345,000
+samples — 5,400 steps at batch 64. Every run this project has done is far past
+that. For a 50,000-step run at batch 64, which is 10.97 epochs:
+
+| | training | + cache build | total |
+| --- | ---: | ---: | ---: |
+| stock, eager | 4.86 h | — | **4.86 h** |
+| cached, eager | 0.99 h | 0.42 h | **1.41 h** |
+| stock, compiled | 3.65 h | — | **3.65 h** |
+| cached, compiled | 0.37 h | 0.42 h | **0.79 h** |
+
+At $0.78/hr that is **$3.79 against $0.62**, and a working day's iteration loop
+against a coffee break. The compiled rows exclude `max-autotune`'s twenty to
+thirty minutes of startup, which is a fixed cost either way.
 
 Two costs, both real:
 
@@ -647,15 +673,25 @@ It still is not worth it. Caching them means storing per-layer keys and values:
 block's 240 KiB, fifteen times the disk, to remove maybe half of the ~8% of the
 old step that the prefix VLM path costs.
 
-### LoRA is not a speed lever here
+### LoRA buys nothing, measured
 
 Worth stating because it is the obvious thing to reach for, and `PI05.md` makes
-it look relevant. It is not, and the stage split above is why: **the backward is
-20% of a step and AdamW is 1%**. LoRA can only touch those two, so even reducing
-both to zero would be a fifth of the step against the tower's two thirds. It also
-cannot help the forward at all, which is where the time is. The SmolVLA run
-already trains densely (`use_peft: False`, 22.2% of parameters), and moving to
-adapters would trade accuracy for a fraction of a fifth.
+it look relevant. Same host, same batch, eager, only the adapters moving:
+
+| | s/step | samples/s | trainable |
+| --- | ---: | ---: | ---: |
+| dense | 0.3498 | 183.0 | 99,880,992 |
+| rank-16 LoRA | 0.3474 | 184.2 | 742,656 |
+
+**0.7%, which is noise.** A 134-fold cut in trainable parameters bought nothing
+measurable, and the stage split says why: the backward is 20% of a step and AdamW
+is 1%. Those two are all LoRA can touch, and it does not even empty them — the
+activations still have to be backpropagated through the frozen layers to reach
+the adapters. The forward, where two thirds of the time is, is untouched.
+
+So LoRA on this model is a memory and checkpoint-size decision, not a speed one.
+The SmolVLA run already trains densely (`use_peft: False`, 22.2% of parameters);
+leave it that way.
 
 ### A dud host stays a dud, so blocklist the machine
 
