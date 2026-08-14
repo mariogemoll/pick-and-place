@@ -5,9 +5,9 @@
 """Time what lerobot's training loop adds on top of forward, backward and AdamW.
 
 `update_policy` does more than the three things a step needs. Most of it is
-constant per step, so it is invisible next to a 0.35 s stock step and more than
-half of a 0.07 s cached one. This adds lerobot's extras to a bare step one at a
-time, on the same batch and the same host.
+constant per step, so it is invisible next to a 0.34 s stock step and worth
+looking at next to a 0.12 s cached one. This adds lerobot's extras to a bare step
+one at a time, on the same batch and the same host.
 """
 
 from __future__ import annotations
@@ -38,13 +38,20 @@ def main() -> None:
     args = parser.parse_args()
 
     # Imported here so the module stays importable without the benchmark's deps.
-    from benchmark_smolvla_step import build_policy, synthetic_batch
+    from benchmark_smolvla_step import _tower_token_count, build_policy, synthetic_batch
 
     device = torch.device("cuda")
     policy, meta = build_policy(args.checkpoint, args.dataset, device, compile_model=False)
+    # The token count has to be read while the tower is still reachable, because
+    # the patch below replaces it with the identity.
+    num_tokens = _tower_token_count(policy, device) if args.cached else None
     if args.cached:
         patch_policy_for_cached_prefix(policy)
-    batch = synthetic_batch(policy, meta, args.batch_size, device, args.cached)
+    # "longest" is what a run pads to now, so the step timed here is the step
+    # training takes rather than the checkpoint processor's 48-token one.
+    batch = synthetic_batch(
+        policy, meta, args.batch_size, device, args.cached, num_tokens, "longest"
+    )
     policy.train()
 
     trainable = [p for p in policy.parameters() if p.requires_grad]
