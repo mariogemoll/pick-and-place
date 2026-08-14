@@ -8,6 +8,9 @@
 #
 #   RUN_NAME=<training run> STEPS="030000 020000" scripts/vast_smolvla_eval.sh
 #
+# MANIFEST picks the suite; results land under
+# outputs/<run>/evaluation/<manifest id>/ on both the pod and S3.
+#
 # Every checkpoint is scored on smoke_v1 first. Eight scenarios cost a couple of
 # minutes and catch the whole class of failures that otherwise surface a hundred
 # scenarios in: a checkpoint that will not resolve, missing scene assets, a
@@ -76,7 +79,14 @@ repo="$workspace/pick-and-place"
 venv="$workspace/venvs/pick-and-place"
 bucket_root="s3://allyouneed/pick-and-place"
 ckpts="$workspace/outputs/$run_name/train/checkpoints"
-out="$workspace/eval/$run_name"
+# Results are keyed by checkpoint *and* manifest. Without the manifest in the
+# path a second suite scored on the same run lands on the first one's results:
+# scoring 020000 and 040000 on heldout_256_v1 replaced those two rungs of the
+# canonical_100_v1 ladder in S3, and their per-episode records -- the input to
+# the paired test -- are gone. Only the headline numbers survived, in
+# LADDER_RESULTS.md.
+manifest_id="${manifest%%.json*}"
+out="$workspace/eval/$run_name/$manifest_id"
 mkdir -p "$out"
 cd "$repo"
 
@@ -250,12 +260,12 @@ for step in $steps; do
   # the same way the pi0.5 evaluation artifacts were lost. A ladder is ten
   # independent results, so there is no reason to hold any of them hostage to
   # the last one finishing.
-  aws s3 sync "$out" "$bucket_root/outputs/$run_name/evaluation" \
+  aws s3 sync "$out" "$bucket_root/outputs/$run_name/evaluation/$manifest_id" \
     --no-follow-symlinks --only-show-errors \
     || echo "Interim sync after step $step failed; continuing." >&2
 done
 
-aws s3 sync "$out" "$bucket_root/outputs/$run_name/evaluation" --no-follow-symlinks \
+aws s3 sync "$out" "$bucket_root/outputs/$run_name/evaluation/$manifest_id" --no-follow-symlinks \
   --only-show-errors
-echo "Results under $out and $bucket_root/outputs/$run_name/evaluation"
+echo "Results under $out and $bucket_root/outputs/$run_name/evaluation/$manifest_id"
 exit "$status"

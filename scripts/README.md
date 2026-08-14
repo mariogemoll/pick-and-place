@@ -647,5 +647,11 @@ RUN_NAME=<training run> STEPS="030000 020000" scripts/vast_smolvla_eval.sh
 It needs no `--base-checkpoint`: SmolVLA trains without adapters, so a
 checkpoint is a complete model rather than a 5 MB diff against a 14.5 GB base.
 
+`MANIFEST` picks the suite, and results land under
+`outputs/<run>/evaluation/<manifest id>/`. The manifest is part of the path
+because it is part of the result: scoring 020000 and 040000 on `heldout_256_v1`
+into an unqualified path overwrote those two rungs of the `canonical_100_v1`
+ladder, and their per-episode records did not survive it.
+
 **Sync before teardown.** The pi0.5 evaluation artifacts no longer exist because
 a pod was destroyed before its results reached S3.
