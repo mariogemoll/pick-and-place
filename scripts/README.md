@@ -543,6 +543,111 @@ happening. Embeddings barely move (cos 0.99993).
 
 And a **fused AdamW** cannot help: the optimizer is 0.5% of a step.
 
+### The third idea works: cache the frozen tower instead of recomputing it
+
+The two ideas above fail because they try to *reorder* or *cheapen* the tower.
+Neither can win much: GPU busy is 96.6%, so there is no bubble to fill, and the
+tower is mostly attention and elementwise work that quantization does not touch.
+
+The thing neither tries is **not doing the work at all**. `freeze_vision_encoder`
+and `train_expert_only` are both true, so nothing in `embed_image` — SigLIP over
+1024 patches per camera, then the pixel-shuffle connector — ever moves. Its
+64x960 output is a pure function of the pixels, and an 11-epoch run computes the
+same block eleven times.
+
+Compute it once:
+
+```sh
+python py/scripts/precompute_smolvla_prefix.py \
+  --dataset "$artifact_root" --checkpoint "$checkpoint_dir" --output /workspace/prefix-cache
+python py/scripts/train_smolvla_cached.py --prefix-cache /workspace/prefix-cache <lerobot-train args>
+```
+
+or `PREFIX_CACHE=1` on `vast_smolvla_train.sh`, which does both.
+
+**It is exact.** `check_smolvla_prefix_cache.py` runs one batch through the stock
+policy and through the cached one with the flow-matching noise and time held
+fixed. Under the bf16 autocast the run uses, the two losses agree to
+**0.000e+00** — the tower already emits bfloat16 there, so storing bfloat16 is
+lossless. (On CPU there is no bf16 autocast, the tower emits float32, and a
+bfloat16 cache costs 0.2% on the loss. The script picks the storage dtype from
+the precision it is running at, so it measures the substitution rather than its
+own rounding.)
+
+Measured back to back on one host, RTX 5090, batch 64, synthetic batches:
+
+| arm | s/step | samples/s | peak VRAM |
+| --- | ---: | ---: | ---: |
+| stock, eager | 0.3500 | 182.8 | 11,391 MiB |
+| **cached, eager** | **0.0711** | **900.0** | 5,582 MiB |
+| tower alone | 0.2243 | 570.6 images/s | 4,890 MiB |
+
+**4.92x on the model step.** More than the tower's own share, and the stage
+split says where the rest came from:
+
+| stage | stock | cached |
+| --- | ---: | ---: |
+| tower | 0.2236 (63.9%) | 0.0000 |
+| rest of forward | 0.0537 | 0.0322 |
+| backward | 0.0710 | 0.0366 |
+| AdamW | 0.0041 | 0.0039 |
+
+The tower accounts for 0.2236 s of the 0.2789 s saved. The remaining 0.055 s is
+the rest of the step running about 1.75x faster with the tower's activations out
+of the way; peak VRAM halves alongside it, which is the likeliest cause, but this
+is measured rather than explained — do not plan around it.
+
+**The cache pays for itself after 0.80 epochs.** Building it is one pass through
+the tower at 570.6 images/s, which for 291,618 frames across two cameras is
+**17.0 minutes**. Against 182.8 samples/s stock and 900.0 cached, the break-even
+is about 234,000 samples — 3,700 steps at batch 64. Every run this project has done is
+far past that: a 50,000-step run is 10.97 epochs, **4.86 h stock against 1.27 h
+including the cache build, or 3.8x end to end**.
+
+Two costs, both real:
+
+- **72 GB of local disk**, and it must be local. 291,618 frames x 2 cameras x 64
+  tokens x 960 dims x 2 bytes. Build it on the pod — do not put it in S3, where
+  the egress alone would cost more than the GPU. Rent the disk at creation time;
+  instance disk cannot be grown later.
+- **Augmentation has to move into the cache.** lerobot's image transforms run on
+  pixels a cached run never decodes, so leaving them enabled would be silently
+  inert; `CachedPrefixDataset` refuses that configuration rather than let it
+  happen. `--variants N` stores N independently augmented passes and each read
+  draws one, at N times the disk and the build time. At the default of 1 the run
+  *is* the no-augmentation arm, which `SMOLVLA.md` calls the cheapest open
+  question it has.
+
+Two things it removes for free: training never decodes video, so `data_s`
+collapses and the **1.68x spread between hosts** — which that section attributes
+to host CPU — stops applying to the training phase. And `num_workers` stops
+being a memory cliff, because a worker now reads 240 KiB from a memory map
+instead of decoding two 512x512 frames.
+
+**What is left is not worth chasing.** After the tower, the step is the VLM and
+expert layers plus the backward. The frozen VLM's *prefix* path is cacheable too,
+and by a less obvious argument worth recording: prefix `att_masks` are `0` for
+image and language tokens and `1` for the state token, and `make_att_2d_masks`
+lets a token attend only where the cumulative mask is no larger than its own — so
+the image and language tokens never see `state_proj`, the one trainable thing in
+the prefix, at any depth. Their representations through all 16 VLM layers are
+frozen functions of the pixels as well.
+
+It still is not worth it. Caching them means storing per-layer keys and values:
+16 layers x 2 x ~177 tokens x 320 = **3.6 MB per sample** against the tower
+block's 240 KiB, fifteen times the disk, to remove maybe half of the ~8% of the
+old step that the prefix VLM path costs.
+
+### LoRA is not a speed lever here
+
+Worth stating because it is the obvious thing to reach for, and `PI05.md` makes
+it look relevant. It is not, and the stage split above is why: **the backward is
+20% of a step and AdamW is 1%**. LoRA can only touch those two, so even reducing
+both to zero would be a fifth of the step against the tower's two thirds. It also
+cannot help the forward at all, which is where the time is. The SmolVLA run
+already trains densely (`use_peft: False`, 22.2% of parameters), and moving to
+adapters would trade accuracy for a fraction of a fifth.
+
 ### A dud host stays a dud, so blocklist the machine
 
 Two offers rented hours apart, 41357771 and 45944050, both reported `running`
