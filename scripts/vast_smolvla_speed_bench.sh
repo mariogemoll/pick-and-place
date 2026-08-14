@@ -41,11 +41,11 @@ output_prefix="$bucket_root/outputs/$run_name"
 # the whole dataset. 100 episodes is ~29,000 frames and ~7 GB of cache.
 # Stages are selectable so a rerun after a failure does not repeat the twenty
 # minutes of max-autotune that stage 2 spends.
-stages="${STAGES:-0 1 2 3 4 5 6}"
+stages="${STAGES:-0 1 2 3 4 5 6 7}"
 has_stage() { case " $stages " in *" $1 "*) return 0;; *) return 1;; esac; }
 
 episodes="${EPISODES:-100}"
-train_steps="${TRAIN_STEPS:-260}"
+train_steps="${TRAIN_STEPS:-300}"
 batch_size="${BATCH_SIZE:-64}"
 num_workers="${NUM_WORKERS:-8}"
 
@@ -172,6 +172,10 @@ common_args=(
   --steps="$train_steps"
   --save_freq="$train_steps"
   --wandb.enable=false
+  # Every 20 steps, not lerobot's default 200: at 300 steps the default
+  # yields one averaged point per arm, and one point that includes the first
+  # step's decoder warmup is not a median of anything.
+  --log_freq=20
 )
 
 export ACCELERATE_MIXED_PRECISION="${MIXED_PRECISION:-bf16}"
@@ -191,6 +195,21 @@ if has_stage 6; then
     2>&1 | tee "$results/e2e-cached.log"
 fi
 
+if has_stage 7; then
+  echo "=== Stage 7: what lerobot's loop adds on top of a step ==="
+  # The end-to-end arms cost more than the synthetic ones by a margin that
+  # does not shrink when the model gets cheaper, so it is worth naming.
+  for arm in stock cached; do
+    extra=()
+    [ "$arm" = cached ] && extra=(--cached)
+    PYTHONPATH="$repo/py/scripts" "$venv/bin/python" \
+      "$repo/py/scripts/benchmark_trainer_overhead.py" \
+      --checkpoint "$checkpoint_dir" --dataset "$dataset_root" \
+      --batch-size "$batch_size" "${extra[@]}" \
+      --output "$results/trainer-overhead-$arm.json"
+  done
+fi
+
 echo "=== Summary ==="
 "$venv/bin/python" - "$results" <<'PY' | tee "$results/summary.txt"
 import json
@@ -207,10 +226,16 @@ def step_times(log: Path) -> dict[str, float]:
     text = log.read_text(errors="replace")
     updates = [float(m) for m in re.findall(r"updt_s:([0-9.]+)", text)]
     data = [float(m) for m in re.findall(r"data_s:([0-9.]+)", text)]
+    # Drop the first point: it averages in the first step, which pays for
+    # cudnn autotuning and the decoders spinning up. Keep it if it is all
+    # there is, and say so, rather than reporting a median of nothing.
+    useful = updates[1:] or updates
+    useful_data = data[1:] or data
     return {
-        "updt_s": statistics.median(updates[1:]) if len(updates) > 1 else float("nan"),
-        "data_s": statistics.median(data[1:]) if len(data) > 1 else float("nan"),
+        "updt_s": round(statistics.median(useful), 4) if useful else float("nan"),
+        "data_s": round(statistics.median(useful_data), 4) if useful_data else float("nan"),
         "logged_points": len(updates),
+        "warmup_dropped": len(updates) > 1,
     }
 
 
