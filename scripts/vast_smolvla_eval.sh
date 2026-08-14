@@ -88,12 +88,15 @@ if [ ! -f "$repo/assets/apriltags/textures/tagStandard41h12_00014_60x60mm_tag40m
   "$venv/bin/python" py/scripts/render_apriltag_textures.py --all-defaults
 fi
 
+# Only pretrained_model: scoring loads the model and never the optimizer state,
+# which is another 0.4 GB per checkpoint and 4 GB across a ten-rung ladder.
 for step in $steps; do
-  if [ ! -d "$ckpts/$step" ]; then
+  if [ ! -d "$ckpts/$step/pretrained_model" ]; then
     echo "Fetching checkpoint $step from S3."
-    mkdir -p "$ckpts/$step"
-    aws s3 sync "$bucket_root/outputs/$run_name/train/checkpoints/$step" "$ckpts/$step" \
-      --only-show-errors || exit 1
+    mkdir -p "$ckpts/$step/pretrained_model"
+    aws s3 sync \
+      "$bucket_root/outputs/$run_name/train/checkpoints/$step/pretrained_model" \
+      "$ckpts/$step/pretrained_model" --only-show-errors || exit 1
   fi
 done
 
