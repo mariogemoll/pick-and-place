@@ -198,7 +198,26 @@ forked worker inherits one it cannot use. The probe now runs on a blank image,
 which carries the shape and decodes nothing. Any code that touches a LeRobot
 dataset before handing it to a `DataLoader` is exposed to the same thing.
 
-Two things it removes for free: training never decodes video, so `data_s`
+### End to end, through stock `lerobot-train`
+
+The numbers above are the model alone. Run both arms as real training on the
+same 100 episodes, 300 steps, `--log_freq=20`, and read lerobot's own metrics
+(the first logged point is dropped — it averages in the first step, which pays
+for cudnn autotuning and the decoders spinning up):
+
+| | `updt_s` | `data_s` |
+| --- | ---: | ---: |
+| stock | 0.426 | 0.011 |
+| **cached** | **0.160** | **0.004** |
+
+**2.66x**, against 4.92x for the model alone. The gap is not the dataloader —
+`data_s` was already small and is now negligible. It is that lerobot's training
+loop costs about **0.08 s per step whatever the model does**, so it is 18% of the
+stock step and **55% of the cached one**. See "lerobot's loop is now the
+bottleneck" below; that is the next thing worth attacking, and it was invisible
+before the tower came out.
+
+Two things the cache removes for free: training never decodes video, so `data_s`
 collapses and the **1.68x spread between hosts** — which that section attributes
 to host CPU — stops applying to the training phase. And `num_workers` stops
 being a memory cliff, because a worker now reads 240 KiB from a memory map

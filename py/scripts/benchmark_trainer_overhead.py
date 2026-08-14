@@ -23,7 +23,7 @@ from pick_and_place.policies.smolvla_prefix_cache import patch_policy_for_cached
 
 # Kept in the same order lerobot applies them, so each row is the cost of adding
 # that line to the row above rather than of some arbitrary combination.
-LAYERS = ("bare", "train_mode", "clip_grad_norm", "item_sync", "unwrap_model")
+LAYERS = ("bare", "train_mode", "clip_grad_norm", "item_sync", "unwrap_model", "accelerate")
 
 
 def main() -> None:
@@ -76,10 +76,36 @@ def main() -> None:
 
         return step
 
+    def make_accelerate_step():  # noqa: ANN202
+        """lerobot's `update_policy` as it actually runs: through an Accelerator.
+
+        `accelerator.prepare` rewraps `forward` for mixed precision and swaps in
+        its own `backward` and `clip_grad_norm_`, so the same lines can cost
+        something different from the bare ones measured above.
+        """
+        from accelerate import Accelerator
+
+        accelerator = Accelerator()
+        prepared, prepared_optimizer = accelerator.prepare(policy, optimizer)
+
+        def step() -> None:
+            prepared.train()
+            with accelerator.autocast():
+                loss, _ = prepared.forward(dict(batch))
+            accelerator.backward(loss)
+            grad_norm = accelerator.clip_grad_norm_(prepared.parameters(), 10.0)
+            prepared_optimizer.step()
+            prepared_optimizer.zero_grad()
+            accelerator.unwrap_model(prepared, keep_fp32_wrapper=True)
+            float(loss.item())
+            float(grad_norm.item())
+
+        return step
+
     results = {"gpu": torch.cuda.get_device_name(0), "cached": args.cached, "layers": {}}
     previous = None
     for layer in LAYERS:
-        step = make_step(layer)
+        step = make_accelerate_step() if layer == "accelerate" else make_step(layer)
         for _ in range(args.warmup):
             step()
         torch.cuda.synchronize()
