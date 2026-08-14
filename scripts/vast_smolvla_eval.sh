@@ -13,9 +13,15 @@
 # scenarios in: a checkpoint that will not resolve, missing scene assets, a
 # camera-key mismatch. Only then does canonical_100_v1 run.
 #
-# canonical_100_v1 is then sharded across SHARDS concurrent workers and merged,
-# which is what makes scoring a whole ladder affordable rather than only its
-# last rung. STEPS takes a list, so the usual invocation is every checkpoint:
+# canonical_100_v1 is then sharded across SHARDS concurrent workers and merged.
+#
+# **Do not assume SHARDS-fold speedup.** Scoring is mostly MuJoCo rendering, but
+# each shard also runs its own SmolVLA inference, and those contend for one GPU.
+# A ten-rung ladder at SHARDS=8 was estimated at an hour from the single-process
+# figure of 3-8% GPU, and had not finished after **four**. Time a single rung
+# before sizing a teardown deadline around a whole ladder.
+#
+# STEPS takes a list, so the usual invocation is every checkpoint:
 #
 #   RUN_NAME=<run> STEPS="005000 010000 015000 020000 025000 030000 \
 #     035000 040000 045000 050000" scripts/vast_smolvla_eval.sh
@@ -163,6 +169,16 @@ for step in $steps; do
     continue
   fi
   score_sharded "$step" "$manifest" "headline-$step" || status=1
+  # Sync after every rung, not once at the end.
+  #
+  # On 2026-08-14 a ten-rung ladder ran unattended for four hours, was destroyed
+  # by its teardown deadline before the final sync, and left *nothing* in S3 --
+  # the same way the pi0.5 evaluation artifacts were lost. A ladder is ten
+  # independent results, so there is no reason to hold any of them hostage to
+  # the last one finishing.
+  aws s3 sync "$out" "$bucket_root/outputs/$run_name/evaluation" \
+    --no-follow-symlinks --only-show-errors \
+    || echo "Interim sync after step $step failed; continuing." >&2
 done
 
 aws s3 sync "$out" "$bucket_root/outputs/$run_name/evaluation" --no-follow-symlinks \
