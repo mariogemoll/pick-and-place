@@ -256,6 +256,12 @@ def main() -> None:
         action="store_true",
         help="tokenize to the longest task string instead of the saved 48",
     )
+    parser.add_argument(
+        "--frozen-prefix",
+        action="store_true",
+        help="take the frozen part of the prefix out of the backward, which is "
+        "what a training run does now",
+    )
     parser.add_argument("--split", action="store_true", help="also attribute a step to its stages")
     parser.add_argument("--busy", action="store_true", help="also measure the GPU busy fraction")
     parser.add_argument("--cprofile", type=Path, help="write a Python profile of the live arm here")
@@ -281,6 +287,10 @@ def main() -> None:
     num_tokens = _tower_token_count(policy, device) if cached else None
     if cached:
         patch_policy_for_cached_prefix(policy)
+    if args.frozen_prefix:
+        from pick_and_place.policies.smolvla_frozen_prefix import patch_policy_for_frozen_prefix
+
+        patch_policy_for_frozen_prefix(policy)
 
     dataset = build_dataset(args.dataset, policy.config, args.episodes)
     if cached:
@@ -322,6 +332,7 @@ def main() -> None:
     results: dict[str, Any] = {
         "gpu": torch.cuda.get_device_name(0),
         "cached": cached,
+        "frozen_prefix": args.frozen_prefix,
         "batch_size": args.batch_size,
         "num_workers": args.num_workers,
         "language_padding": padding,
@@ -342,9 +353,13 @@ def main() -> None:
         else:
             fetch = fetch_live
 
+        # Per arm, not per process: whether a batch size fits is the other half of
+        # a batch-size sweep, and the arms differ in what they hold resident.
+        torch.cuda.reset_peak_memory_stats()
         with maybe_cprofile(args.cprofile if arm == "live" else None):
             entry = timed_loop(fetch, update, warmup=args.warmup, steps=args.steps)
         entry["samples_per_s"] = args.batch_size / entry["step_s"]
+        entry["peak_vram_mib"] = torch.cuda.max_memory_allocated() // (1024 * 1024)
         if args.split:
             entry["stages_s"] = split_step(policy, accelerator, optimizer, fetch(), max(args.steps // 4, 5))
         if args.busy:

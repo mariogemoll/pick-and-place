@@ -357,7 +357,12 @@ multi-task dataset would give a length that varies per batch, which recompiles
 under `torch.compile`.
 
 
-## The prefix backward is 1.51x, and it was running for nothing
+## The prefix backward is 1.51x at batch 64, and it was running for nothing
+
+The 1.51x is a batch-64 figure on one host. The split's worth grows with
+batch size and turns negative at the small end -- 0.96x at 16 up to 1.50x at
+128, remeasured on another host under the batch sweep below, where it is also
+what makes batch 256 fit at all.
 
 After the tower and the padding, a cached step is 0.1179 s: 0.0474 forward,
 0.0680 backward, 0.0030 AdamW. Almost all of it is the prefix. Sweeping the
@@ -507,46 +512,146 @@ steps at three decimals under bf16 autocast, not a guarantee over 50,000, so
 the flag stays off by default and a ladder should not change it mid-run.
 
 
-## Batch size is not a throughput lever at all, above 32
+## Batch size is a throughput lever again, once the tower is out of the step
 
-Swept on one host with synthetic batches -- no dataloader, so `num_workers` and
-the container memory limit cannot confound it:
+Measured 2026-08-14 on one RTX 5090, synthetic batches -- no dataloader, so
+`num_workers` and the container memory limit cannot confound it -- in the
+configuration a run uses now: cached tower output, the frozen prefix out of the
+backward, language padded to the task string.
 
-| batch | uncompiled samples/s | compiled samples/s | compiled peak VRAM |
+| batch | eager samples/s | eager peak VRAM | compiled samples/s | compiled peak VRAM |
+| ---: | ---: | ---: | ---: | ---: |
+| 16 | 239.8 | 2,663 MiB | -- | -- |
+| 32 | 381.5 | 3,596 MiB | 808.5 | 3,055 MiB |
+| 64 | 472.0 | 5,517 MiB | 915.3 | 4,583 MiB |
+| 128 | **507.0** | 9,363 MiB | 989.4 | 7,650 MiB |
+| 256 | 504.1 | 17,093 MiB | **1,058.4** | 13,244 MiB |
+
+**This supersedes the sweep this file carried before, and supersedes its
+conclusion, not just its numbers.** That sweep found compiled throughput flat
+from batch 32 upwards -- 225.8, 229.4, 230.2 at 32, 64, 128, a total spread of
+2% -- and concluded batch size was not where speed came from. It was measured
+while the frozen vision tower was 65% of a step and saturated the GPU at any
+batch. With the tower cached and the prefix split off, a step is small enough
+that launch and per-step overhead are visible, and the curve rises again:
+**eager, 32 to 64 is +24% and 64 to 128 a further +7%**; **compiled, 64 to 128
+is +8% and 128 to 256 another +7%**, flattening at 256 (batch 512 is a further
++1.2%, below).
+
+`torch.compile` is worth 1.94-2.12x across the whole range, so the two levers
+are independent: neither is an artifact of the other.
+
+### Where the plateau sits, and it is 256
+
+Eager it arrives at 128: batch 256 is 0.6% *slower*, and **batch 512 does not fit
+at all** -- CUDA out of memory against 31.4 GiB, which the 9,363 to 17,093 MiB
+step from 128 to 256 already predicted. Compiled it arrives at 256. Measured on a
+second host, which is 1.57x faster than the first and so is quoted only against
+itself:
+
+| batch | compiled samples/s | compiled peak VRAM |
+| ---: | ---: | ---: |
+| 256 | 1,658.0 | 13,413 MiB |
+| 512 | **1,677.7** | 24,858 MiB |
+
+**Batch 512 buys 1.2% for 1.85x the memory**, so the curve that was still
+climbing at 256 stops there. Compiled 512 is the largest batch that fits on a
+32 GB card, and it is not worth using: 25 GB leaves nothing for a longer chunk,
+a second camera, or an unfrozen encoder.
+
+That second host is also the cleanest available illustration of the rule at the
+top of this file. It ran **760.0 samples/s eager at batch 128** where the first
+ran 507.0, and **1,658.0 compiled at 256** against 1,058.4 -- 1.50x and 1.57x
+apart on identical arms, identical code and the same advertised GPU. The
+*shape* of the curve reproduced on both; none of the absolute numbers did.
+
+### What that is worth in wall clock, which is less than the percentages suggest
+
+Compare a fixed *sample* budget, never a step count: 10,000 steps at batch 128
+sees twice the data that 10,000 steps at batch 64 does, so a step count makes the
+larger batch look worse by construction. Per **640,000 samples** -- what 10,000
+steps at batch 64 is -- compiled on the first host:
+
+| batch | s/step | per 10,000 steps | per 640,000 samples |
 | ---: | ---: | ---: | ---: |
-| 16 | 126.5 | 213.0 | 3,918 MiB |
-| 32 | 167.4 | 225.8 | 6,789 MiB |
-| 64 | 168.4 | **229.4** | 11,662 MiB |
-| 128 | 165.7 | **230.2** | 22,262 MiB |
+| 64 | 0.0699 | 11.7 min | **11.7 min** |
+| 128 | 0.1294 | 21.6 min | **10.8 min** |
+| 256 | 0.2419 | 40.3 min | **10.1 min** |
 
-Throughput rises and plateaus rather than being flat: compiled, 32 to 64 is
-**+1.6%** and 64 to 128 a further **+0.3%**. Only medians were recorded, no
-spread, so whether 1.6% is real or noise is unmeasured -- but either way it is
-~1-2% against `torch.compile`'s 36% and a 1.68x spread between hosts, so batch
-size is not where speed comes from. Choose it on optimization grounds or for
-VRAM headroom: batch 32 gives 98.4% of batch 64's throughput for 58% of the
-memory.
+A 3,200,000-sample budget -- what 50,000 steps at batch 64 is -- therefore takes
+**0.97 h compiled at batch 64, 0.90 h at 128 and 0.84 h at 256** on that host.
+The whole lever is about eight minutes and six cents on a one-hour run. The old
+advice "choose batch size on optimization grounds, not for speed" therefore
+survives at 64 and above, even though the measurement it rested on does not.
 
-Batch 16 is the one genuinely bad choice, at -7% compiled and -25% uncompiled.
-Compile's gain holds across the whole range (1.68x at 16, ~1.36x at 32-128), so
-it is not an artifact of one batch size.
+**The small end is where this now costs real time.** Batch 32 is 81% of batch
+64's compiled throughput and batch 16 is under half of batch 256's eager
+throughput. The superseded sweep called 16 "the one genuinely bad choice" at -7%
+compiled; it is worse than that now, and 32 has joined it. Dropping batch size
+for VRAM headroom used to be nearly free and is not.
 
-This **supersedes an earlier measurement here that reported batch 128 as 5.9%
-slower**. That arm was being OOM-killed while it was measured, so it recorded
-memory pressure rather than batch size. It also supersedes the much older "+18%
-at batch 112", which was measured while the run was decode bound and a larger
-batch amortized decode stalls.
+### The prefix split is what makes the large end reachable
 
-Compare throughput in **samples/s**, never s/step: a batch-128 step does twice
-the work, so s/step makes the larger batch look worse by construction. Halving
-the step count at double the batch is the same sample budget.
+The frozen-prefix split is not a constant factor -- it grows with batch, because
+what it removes is a backward over 140 prefix tokens per sample:
 
-**Watch the container memory limit rather than VRAM.** The OOM above was not
-VRAM -- 25,044 MiB of 32,607 fits -- but the container's **57 GB cgroup limit**,
-against 16 workers prefetching batch-128 frames on a box whose `free` reported
+| batch | 16 | 32 | 64 | 128 | 256 | 512 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| unsplit / split | 0.96 | 1.23 | 1.38 | 1.50 | OOM | OOM |
+
+At batch 16 the split is a *loss*, which is the same launch-bound small end seen
+from the other side: the split runs the prefix as a second forward, and at 16 the
+extra launches cost more than the backward it removes. And **the unsplit arm at
+batch 256 does not fit at all** -- CUDA out of memory against 31.4 GiB, where the
+split arm peaks at 17,093 MiB. The largest batch on the curve exists because of
+the split.
+
+### The cache read does not bend the curve, which was the thing to check
+
+A synthetic sweep holds its batch on the device; a real one reads 240 KiB of
+cached prefix per sample off disk every step, which is 15 MB at batch 64 and
+61 MB at 256. That was the reason to expect the synthetic curve to flatter the
+large sizes. Measured through `benchmark_live_step.py`, over a 100-episode cache,
+it does not:
+
+| batch | synthetic samples/s | live samples/s | `data_s` | live peak VRAM |
+| ---: | ---: | ---: | ---: | ---: |
+| 16 | 225.6 | 212.9 | 0.0015 | 2,661 MiB |
+| 32 | 368.4 | 340.7 | 0.0018 | 3,610 MiB |
+| 64 | 459.9 | 439.6 | 0.0026 | 5,528 MiB |
+| 128 | 500.2 | 492.5 | 0.0035 | 9,385 MiB |
+| 256 | 500.6 | 495.4 | 0.0049 | 17,155 MiB |
+
+`data_s` grows from 1.5 ms to 4.9 ms across a 16x change in batch -- sublinear,
+and 1% of a step at every size. Live tracks synthetic within 6% at 16 and within
+1% at 256, so the gap *narrows* as the batch grows. The synthetic sweep can be
+read as the live one.
+
+**Watch the container memory limit rather than VRAM.** An earlier batch-128 run
+was OOM-killed here, and it was not VRAM -- it was the container's **57 GB cgroup
+limit**, against 16 workers prefetching frames on a box whose `free` reported
 440 GB and whose `nproc` reported 192, both the *host's*. `rc=137` was the only
 evidence: nothing in the training log, nothing in the container's `dmesg`. Read
-the real limit from `/sys/fs/cgroup/memory/memory.limit_in_bytes`.
+the real limit from `/sys/fs/cgroup/memory/memory.limit_in_bytes`. That failure
+is about the dataloader and is unchanged by anything above; a batch-256 run has
+to size `num_workers` against it.
+
+### Reproducing this
+
+`scripts/vast_smolvla_batch_sweep.sh` on one rented host, about 50 minutes and
+$0.40 including the compiled arms, which are 20-30 minutes of max-autotune each
+and run last for that reason. Results are in
+`$PAP_DATA_ROOT/smolvla-speed/2026-08-14-batch-sweep/` and in S3 at
+`outputs/smolvla-batch-sweep/`; the 512 arms and their 256 anchor are the
+`-512` siblings of both paths. **Set `RUN_NAME` when adding arms**, as those did:
+the launcher keys its output prefix on it, and a second sweep under the default
+name would overwrite the first, which is the collision this project has already
+paid for once in its evaluation artifacts.
+
+**None of this says to change the recipe.** Ten scored rungs exist at batch 64,
+and a run at another batch size is not comparable to them. This is the speed
+question; whether a different batch size trains a better policy is a separate one
+that nothing here measures.
 
 
 ## NVDEC decode works, and is 3x faster -- correcting an earlier claim
