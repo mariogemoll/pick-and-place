@@ -535,22 +535,54 @@ while the frozen vision tower was 65% of a step and saturated the GPU at any
 batch. With the tower cached and the prefix split off, a step is small enough
 that launch and per-step overhead are visible, and the curve rises again:
 **eager, 32 to 64 is +24% and 64 to 128 a further +7%**; **compiled, 64 to 128
-is +8% and 128 to 256 another +7%**, still climbing at the largest size that
-fits.
-
-Where the plateau sits now depends on whether the step is compiled. Eager it
-arrives at 128 and 256 is 0.6% *slower*. Compiled it has not arrived by 256.
+is +8% and 128 to 256 another +7%**, flattening at 256 (batch 512 is a further
++1.2%, below).
 
 `torch.compile` is worth 1.94-2.12x across the whole range, so the two levers
 are independent: neither is an artifact of the other.
 
+### Where the plateau sits, and it is 256
+
+Eager it arrives at 128: batch 256 is 0.6% *slower*, and **batch 512 does not fit
+at all** -- CUDA out of memory against 31.4 GiB, which the 9,363 to 17,093 MiB
+step from 128 to 256 already predicted. Compiled it arrives at 256. Measured on a
+second host, which is 1.57x faster than the first and so is quoted only against
+itself:
+
+| batch | compiled samples/s | compiled peak VRAM |
+| ---: | ---: | ---: |
+| 256 | 1,658.0 | 13,413 MiB |
+| 512 | **1,677.7** | 24,858 MiB |
+
+**Batch 512 buys 1.2% for 1.85x the memory**, so the curve that was still
+climbing at 256 stops there. Compiled 512 is the largest batch that fits on a
+32 GB card, and it is not worth using: 25 GB leaves nothing for a longer chunk,
+a second camera, or an unfrozen encoder.
+
+That second host is also the cleanest available illustration of the rule at the
+top of this file. It ran **760.0 samples/s eager at batch 128** where the first
+ran 507.0, and **1,658.0 compiled at 256** against 1,058.4 -- 1.50x and 1.57x
+apart on identical arms, identical code and the same advertised GPU. The
+*shape* of the curve reproduced on both; none of the absolute numbers did.
+
 ### What that is worth in wall clock, which is less than the percentages suggest
 
-A 3,200,000-sample budget -- what 50,000 steps at batch 64 is -- takes **0.97 h
-compiled at batch 64, 0.90 h at 128 and 0.84 h at 256** on this host. The whole
-lever is about eight minutes and six cents on a one-hour run. The old advice
-"choose batch size on optimization grounds, not for speed" therefore survives at
-64 and above, even though the measurement it rested on does not.
+Compare a fixed *sample* budget, never a step count: 10,000 steps at batch 128
+sees twice the data that 10,000 steps at batch 64 does, so a step count makes the
+larger batch look worse by construction. Per **640,000 samples** -- what 10,000
+steps at batch 64 is -- compiled on the first host:
+
+| batch | s/step | per 10,000 steps | per 640,000 samples |
+| ---: | ---: | ---: | ---: |
+| 64 | 0.0699 | 11.7 min | **11.7 min** |
+| 128 | 0.1294 | 21.6 min | **10.8 min** |
+| 256 | 0.2419 | 40.3 min | **10.1 min** |
+
+A 3,200,000-sample budget -- what 50,000 steps at batch 64 is -- therefore takes
+**0.97 h compiled at batch 64, 0.90 h at 128 and 0.84 h at 256** on that host.
+The whole lever is about eight minutes and six cents on a one-hour run. The old
+advice "choose batch size on optimization grounds, not for speed" therefore
+survives at 64 and above, even though the measurement it rested on does not.
 
 **The small end is where this now costs real time.** Batch 32 is 81% of batch
 64's compiled throughput and batch 16 is under half of batch 256's eager
@@ -563,9 +595,9 @@ for VRAM headroom used to be nearly free and is not.
 The frozen-prefix split is not a constant factor -- it grows with batch, because
 what it removes is a backward over 140 prefix tokens per sample:
 
-| batch | 16 | 32 | 64 | 128 | 256 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| unsplit / split | 0.96 | 1.23 | 1.38 | 1.50 | OOM |
+| batch | 16 | 32 | 64 | 128 | 256 | 512 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| unsplit / split | 0.96 | 1.23 | 1.38 | 1.50 | OOM | OOM |
 
 At batch 16 the split is a *loss*, which is the same launch-bound small end seen
 from the other side: the split runs the prefix as a second forward, and at 16 the
@@ -610,7 +642,11 @@ to size `num_workers` against it.
 $0.40 including the compiled arms, which are 20-30 minutes of max-autotune each
 and run last for that reason. Results are in
 `$PAP_DATA_ROOT/smolvla-speed/2026-08-14-batch-sweep/` and in S3 at
-`outputs/smolvla-batch-sweep/`.
+`outputs/smolvla-batch-sweep/`; the 512 arms and their 256 anchor are the
+`-512` siblings of both paths. **Set `RUN_NAME` when adding arms**, as those did:
+the launcher keys its output prefix on it, and a second sweep under the default
+name would overwrite the first, which is the collision this project has already
+paid for once in its evaluation artifacts.
 
 **None of this says to change the recipe.** Ten scored rungs exist at batch 64,
 and a run at another batch size is not comparable to them. This is the speed
