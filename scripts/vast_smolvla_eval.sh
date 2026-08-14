@@ -41,8 +41,17 @@
 # and _peft_base_checkpoint() correctly finds no adapter_config.json to resolve.
 #
 # --n-action-steps is not passed: eval_policy_sim.py defaults to the
-# checkpoint's own value, which the launcher pinned to 10. Pass
-# EXTRA="--n-action-steps N" only to sweep it.
+# checkpoint's own value. Pass EXTRA="--n-action-steps N" only to sweep it.
+#
+# That value is whatever the training launcher was given, and it is not the
+# same across the runs in this bucket: the two as-recorded runs carry the
+# launcher's default 10, while every rung of the 512x512 ladder carries 20 --
+# already in its 005000 checkpoint, with resume false, so it was launched with
+# N_ACTION_STEPS=20 rather than having an override fail to take. Read the
+# checkpoint's own config.json before comparing two runs, because a horizon
+# sweep on the 20,000-step checkpoint moved the score from 32/100 at 10 to
+# 39/100 at 20: a rung scored at a different horizon than the rung it is being
+# compared against is not a comparison.
 #
 # **Sync before teardown.** The pi0.5 evaluation artifacts were lost to a pod
 # destroyed before its results reached S3, which is why that run's per-episode
