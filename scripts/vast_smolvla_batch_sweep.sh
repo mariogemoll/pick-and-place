@@ -185,7 +185,10 @@ if [ -z "$compile_batch_sizes" ]; then
   compile_batch_sizes=$(pick_fastest 2)
 fi
 if [ -z "$live_batch_sizes" ]; then
-  live_batch_sizes="$compile_batch_sizes"
+  # The whole sweep, not just the candidates: the live arm is the only one that
+  # pays for the cache read, and whether that read bends the curve is a question
+  # about its shape rather than about its maximum. It costs minutes per size.
+  live_batch_sizes="$batch_sizes"
 fi
 echo "compile: [$compile_batch_sizes]   live: [$live_batch_sizes]" \
   | tee "$results/candidates.txt"
@@ -204,6 +207,12 @@ fi
 
 if has_stage 3; then
   echo "=== Stage 3: live steps, which are the ones that pay for the cache read ==="
+  # The live arm runs its step through accelerate, which autocasts from this
+  # variable and not from the `torch.autocast` the synthetic benchmark writes
+  # itself. Unset, accelerate keeps activations in fp32, they meet the cache's
+  # bf16 embeddings in the first projection, and the arm dies on a dtype
+  # mismatch rather than measuring anything.
+  export ACCELERATE_MIXED_PRECISION="${MIXED_PRECISION:-bf16}"
   # 240 KiB per sample comes off disk every step, so the read scales with batch
   # where the synthetic arm's device-resident tensors do not. `synthetic` beside
   # `live` in one process is what sizes that: the gap between them is everything
