@@ -33,8 +33,9 @@ These are non-negotiable and override convenience.
   `scripts/run_policy_real.py`. Those ceilings are a ratchet: lower them as the
   files shrink, never raise them to land new code. The check walks the whole
   history, so paths that have since shrunk or moved stay listed at the ceiling
-  their largest historical blob needs — `runtime/executor.py` is 21 KB now but
-  keeps a 61 KB entry, because a 60.7 KB blob of it is still in the history.
+  their largest historical blob needs — `runtime/executor.py` has moved to
+  `rollout/real.py` and is 23 KB there, but keeps a 61 KB entry under its old
+  path because a 60.7 KB blob of it is still in the history.
 - **Never commit datasets, checkpoints, renders, or recordings.** See
   [Local and generated data](#local-and-generated-data).
 
@@ -175,7 +176,7 @@ left out.
 | Directory | Contents |
 | --- | --- |
 | `SO-ARM100/` | Vendored hardware submodule: CAD, STL, URDF, MJCF, BOM. |
-| `py/` | The `pick_and_place` package (141 modules in 15 subpackages), 85 CLI scripts, 79 test files. Simulation, real-robot control, calibration, datasets, policies. |
+| `py/` | The `pick_and_place` package (155 modules in 17 subpackages), 110 CLI scripts, 82 test files. Simulation, real-robot control, calibration, datasets, policies. |
 | `ts/` | Vite + Three.js browser app: the visualizations embedded in the web page. |
 | `mesh_optimization/` | Standalone Python subproject that decimates high-poly STL into web-ready GLB. |
 | `scripts/` | Repository-level shell/TS tooling: license headers, file-size check, mesh pipeline, remote-GPU job scripts. |
@@ -262,32 +263,26 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   flow-matching policy (`flow_matching`, `flow_policy`,
   `diffusion_policy_unet`). ACT and SmolVLA are *evaluated* here but trained
   externally via the `lerobot` CLI.
-- **`runtime/`** — what an episode needs around the loop that runs it.
-  `checkpoint` decides, after each phase, whether to replan from measured state
-  or fly straight on where a checkpoint would do more harm than good.
-  `wrist_servo` runs the rig's cube detector on its own thread, `preflight` vets
-  a trajectory under live physics, and `episodes` samples one that runs clean.
+- **`runtime/`** — what an episode needs around the loop that runs it, and the
+  policy runners that do not use that loop. `episodes` samples an episode that
+  runs clean and `preflight` vets a trajectory under live physics — the two the
+  scripted expert has injected into it, because it may not reach for a scene or
+  for physics itself. `wrist_servo` runs the rig's cube detector on its own
+  thread, `frame_reader` gives each camera a thread holding only its newest
+  frame, `wrist_preview` puts that on screen, and `ramp` eases the arm onto a
+  pose. `sim_wrist_servo` is the simulated counterpart — render the wrist
+  camera, detect the cube in it, inline rather than on a thread, which is what
+  keeps a recorded episode a pure function of its seed — and `wrist_mixed_view`
+  blends the true and believed wrist views for watching the servo converge.
 
-  `sim_wrist_servo` renders the wrist camera and detects the cube in it —
-  inline, not on a thread, which is what keeps a recorded episode a pure function
-  of its seed — and `wrist_mixed_view` blends the true and believed wrist views
-  for watching the servo converge. `believed_frame` is what the two worlds meet
-  through: with a miscalibration draw, commands and recorded rows live in the
-  believed frame while physics runs the true one. `checkpoint` and `descent` are
-  shared by both paths, so they agree by construction on which phase boundaries
-  replan.
+  `believed_frame` is what the two worlds meet through: with a miscalibration
+  draw, commands and recorded rows live in the believed frame while physics runs
+  the true one.
 
-  Every run also emits a trajectory artifact, which is what makes appearance a
-  free variable after the fact: the dataset keeps only the believed state,
-  because that is the training label, while the artifact keeps the true joints
-  and cube pose next to it, because reproducing an episode's pixels means
-  putting the arm back where physics actually held it.
-
-  Around those: `episodes` (sample one that runs clean), `preflight` (vet a
-  trajectory under live physics), `frame_reader` (one background thread per
-  camera, holding only the newest frame), `ramp` (ease the arm onto a pose),
-  `scripted_policy`, `policy_sim`, `policy_real`,
-  `overhead_detection`, `episode_loop`, `training_scenes`.
+  Around those: `policy_sim` and `policy_real` (running a *learned* policy,
+  which needs no trajectory and so no phase loop), `overhead_detection`,
+  `episode_loop`, `training_scenes`, `recorded_scenes`, `action_log`,
+  `move_to_random_pose`.
 - **`plant/`** — the two things you command and observe: hardware, and sim. Both
   are the same shape — **a true world plus a believed shadow**. On the rig the
   true world is the physical arm and the shadow is a MuJoCo model stepped at the
@@ -417,7 +412,7 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
 
 ### Script categories
 
-`py/scripts/` holds more code than the package does. Broadly:
+`py/scripts/` holds about as much code as the package does. Broadly:
 
 - **Run the task** — `pick_and_place/{sim,real,record_sim,record_teleop,finalize_sim_dataset}.py`
 - **Run a policy** — `run_policy_{sim,real}.py`, `eval_policy_sim.py`,
@@ -432,7 +427,8 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   `generate_charuco_board.py`, `export_camera_calibrations.py`
 - **Sim-to-real measurement** — `export_sim_real_pairs.py`,
   `measure_hand_eye_offset.py`, `fit_{pan_zero,joint_zeros,sag}.py`,
-  `probe_camera_pose_envelope.py`
+  `probe_camera_pose_envelope.py`, `check_overhead_localization.py` (does
+  simulated overhead perception miss by as much as the rig does?)
 - **Web assets** — `export_generic_robot.py`, `export_episode_rolls.py`,
   `distill_grasp_policy.py`, `render_apriltag_textures.py`
 - **Viewers and diagnostics** — `view_*.py`, `replay_*.py`, `showcamfeed*.py`,
@@ -543,16 +539,19 @@ surface in `git status`, not because they are still a valid place to write.
 Recorded here so they are not mistaken for intentional design:
 
 - `scripts/run_policy_real.py` is oversized and combines too many
-  responsibilities: one 938-line `main` holding ten nested closures that share
-  state through `nonlocal`.
-- Scripts hold more code than the package (~27k lines against ~23k).
+  responsibilities: one 1,068-line `main` holding thirteen nested closures that
+  share state through `nonlocal`.
+- Scripts hold about as much code as the package (~32k lines each). They used to
+  hold considerably more; the balance moved as stable logic was pulled out of
+  the recording scripts into `rollout/`.
 - **`execute_episode`'s recording branch has no caller.** Its one production
   caller is `calibrate_joint_zeros.py`, which passes only the episode, follower,
   viewer and wrist camera. `recording`, `overhead_camera_cap`,
   `workspace_camera_cap`, `record_rest_to_rest`, `success_metadata`,
   `failed_trajectory_dir` and `joint_offsets_deg` are reachable from nothing —
   real-robot recording goes through
-  `runtime/policy_real.run_physical_policy_episode` instead. The branch is
+  `runtime/policy_real.run_physical_policy_episode` instead (`execute_episode`
+  now lives in `rollout/real.py`). The branch is
   covered by tests but exercised by no command, so treat it as unproven against
   hardware and decide whether it earns its keep before building on it.
 - No dependency lockfiles are committed for either language.
