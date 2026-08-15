@@ -196,7 +196,7 @@ above, where work genuinely combines capabilities.
 | --- | --- | --- |
 | Foundation | `spec`, `core` | `spec` imports nothing else in the package; `core` imports only `spec`. |
 | Capability branches | `planning`, `perception`, `sim`, `hardware`, `data`, `policies` | Each owns one heavy dependency. **No branch may import another.** |
-| Convergence | `runtime`, `variants`, `calibration`, `analysis`, `cli` | May import anything, including each other. Nothing below them may import them. |
+| Convergence | `runtime`, `plant`, `variants`, `calibration`, `analysis`, `cli` | May import anything, including each other. Nothing below them may import them. |
 
 `scripts/check_package_layering.py` enforces this in CI. When a module needs
 two capabilities it belongs in the convergence tier by construction; when it
@@ -281,6 +281,20 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   camera, holding only the newest frame), `ramp` (ease the arm onto a pose),
   `scripted_policy`, `policy_sim`, `policy_real`,
   `overhead_detection`, `episode_loop`, `training_scenes`.
+- **`plant/`** — the two things you command and observe: hardware, and sim. Both
+  are the same shape — **a true world plus a believed shadow**. On the rig the
+  true world is the physical arm and the shadow is a MuJoCo model stepped at the
+  commanded joints; in sim the true world is a MuJoCo model and the shadow is a
+  second one over it. Both step MuJoCo, both take the wrist camera pose from
+  forward kinematics of the believed shadow, and both solve tag detection
+  against it.
+
+  What differs is narrow — where the image comes from, what receives the
+  commands, whether the detector runs on a thread or inline, and what drives the
+  clock — and all four fit behind `interface`'s three operations: command
+  joints, read back joints, give me the latest cube sighting. `Sighting.fresh`
+  is where the thread/inline difference surfaces: the rig returns the same solve
+  on consecutive ticks and folding it in twice would pull the grasp too far.
 - **`variants/`** — one recorded trajectory, rendered many ways. Everything here
   answers "no" to the question that organizes the sim/real split: *if I change
   this, does the correct action change?* Lighting, materials, colours,

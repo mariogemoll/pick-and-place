@@ -1,18 +1,17 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Play one trajectory phase, tick by tick, against the arm and the simulator.
+"""Play one trajectory phase against the arm, tick by tick.
 
 This is the inner loop of the hardware path. Once per control tick it evaluates
-the phase at the current trajectory time, writes the resulting joint set points
-into the simulator, steps physics forward by exactly one tick's worth of
-substeps, clamps the same set points into the real frame and sends them to the
-servos, then reads the motors back.
+the phase at the current trajectory time and hands the resulting joint set points
+to the plant, which writes them into the believed shadow, steps physics by
+exactly one tick's worth of substeps, sends the clamped real-frame command to the
+servos and paces the loop to the control rate.
 
-**The simulator is the plant, not a preview.** Trajectory time comes from
-``data.time``, so the phase advances at the rate physics does; the sleep at the
-bottom of the loop is what keeps that rate near wall time. Scaling by ``speed``
-slows every phase uniformly without touching the planner.
+**The simulator is the plant, not a preview.** Trajectory time comes from the
+plant's clock, so the phase advances at the rate physics does. Scaling by
+``speed`` slows every phase uniformly without touching the planner.
 
 The descent is the one phase with feedback, and it is what most of the length
 here is: it consumes wrist-camera estimates, re-solves its grasp toward them,
@@ -22,15 +21,13 @@ case it backs up to pregrasp and comes in again before giving up.
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
-import mujoco
 import numpy as np
 
 from pick_and_place.core.geometry import CubePose
-from pick_and_place.core.joint_frames import joints_to_action
+from pick_and_place.plant.real import RealPlant
 from pick_and_place.planning.visual_servo import (
     DESCENT_SERVO_MAX_DURATION,
     DESCENT_SERVO_STABLE_FRAMES,
@@ -38,45 +35,26 @@ from pick_and_place.planning.visual_servo import (
     DescentServoRetryState,
 )
 from pick_and_place.runtime.descent import follow_estimate
-from pick_and_place.runtime.wrist_servo import WristServo, show_frame
-from pick_and_place.sim.collisions import unexpected_contact_pairs
-from pick_and_place.sim.model import set_cube_pose
-from pick_and_place.spec.robot import CONTROL_HZ
+from pick_and_place.runtime.wrist_servo import show_frame
 
 
 @dataclass(frozen=True)
-class Plant:
-    """What a phase is played against: the simulator, the arm, and the clock.
+class RealRun:
+    """What surrounds the plant for one hardware run: the window and the logging.
 
-    Named as one thing because every unit below needs most of it, and threading
-    a dozen arguments through the tick loop is what made this code resist being
-    split in the first place.
-
-    ``to_real`` maps a phase's sim-frame output to a clamped hardware command,
-    ``readback`` reads the motors, and ``on_tick`` receives each
-    ``(commanded, actual)`` pair for logging and recording.
+    ``on_tick`` receives each ``(commanded, actual)`` pair for the tracking log
+    and the dataset. None of it is part of commanding or observing, which is why
+    it sits here rather than on the plant.
     """
 
-    model: mujoco.MjModel
-    data: mujoco.MjData
-    actuator_id: dict[str, int]
-    robot_geom_ids: Any
-    env_geom_ids: Any
-    kinematics: Any
-    follower: Any
     viewer: Any
-    substeps_per_tick: int
-    speed: float
-    to_real: Callable[[dict[str, float], float], np.ndarray]
-    readback: Callable[[np.ndarray], np.ndarray]
     on_tick: Callable[..., None]
 
 
 @dataclass(frozen=True)
 class WristView:
-    """The wrist camera, if there is one, and whether its frames are being shown."""
+    """The wrist camera preview, if one is being shown."""
 
-    servo: WristServo | None
     camera_id: int
     renderer: Any = None
     show: bool = False
@@ -97,18 +75,9 @@ class PhaseResult:
     contacts: set[tuple[str, str]]
 
 
-def _report_new_contacts(plant: Plant, previous: set[tuple[str, str]], phase_t: float) -> set:
-    """Print unexpected contacts that were not there last tick; return the current set."""
-    current = unexpected_contact_pairs(
-        plant.model, plant.data, plant.robot_geom_ids, plant.env_geom_ids
-    )
-    for pair in current - previous:
-        print(f"collision phase_t={phase_t:.3f}s  {pair[0]} ↔ {pair[1]}")
-    return current
-
-
 def play_phase(
-    plant: Plant,
+    plant: RealPlant,
+    run: RealRun,
     wrist: WristView,
     phase,
     *,
@@ -126,81 +95,54 @@ def play_phase(
     """
     from pick_and_place.planning.trajectory import DescentPhase
 
-    servo = wrist.servo
-    data = plant.data
-    control_period = 1.0 / CONTROL_HZ
+    servo = plant.servo
 
     is_descent = isinstance(phase, DescentPhase)
-    playback_start = data.time
-    next_tick = time.monotonic()
+    playback_start = plant.time
     convergence = DescentServoConvergence() if is_descent else None
     retry = DescentServoRetryState() if is_descent else None
     saw_detection = False
     deadline = max(phase.duration, DESCENT_SERVO_MAX_DURATION) if is_descent else phase.duration
-    last_estimate_id, last_preview_id = (
-        servo.begin_phase(is_descent) if servo is not None else (-1, -1)
-    )
+    last_preview_id = plant.begin_phase(is_descent)
 
     def result(outcome: str) -> PhaseResult:
         """Snapshot the loop's current state. Reads the latest bindings when called."""
         return PhaseResult(outcome, phase, tracked_source, commanded, contacts)
 
-    while plant.viewer.is_running():
-        raw_phase_t = (data.time - playback_start) * plant.speed
+    while run.viewer.is_running():
+        raw_phase_t = (plant.time - playback_start) * plant.speed
         phase_t = (
             retry.command_phase_t(raw_phase_t, phase.duration)
             if retry is not None
             else raw_phase_t
         )
 
-        preview_bgr = None
-        if servo is not None and (wrist.show or is_descent):
-            if is_descent:
-                estimate, preview = servo.sample(
-                    data.cam_xpos[wrist.camera_id].copy(),
-                    data.cam_xmat[wrist.camera_id].reshape(3, 3).copy(),
+        if is_descent:
+            sighting = plant.sighting(tracked_source)
+            if sighting.usable:
+                correction = follow_estimate(
+                    phase, tracked_source, sighting.pose, plant.kinematics
                 )
-                if estimate is not None and estimate.frame_id != last_estimate_id:
-                    last_estimate_id = estimate.frame_id
-                    correction = follow_estimate(
-                        phase, tracked_source, estimate.source, plant.kinematics
-                    )
-                    phase = correction.phase
-                    tracked_source = correction.tracked
-                    saw_detection = True
-                    if convergence is not None:
-                        convergence.observe(tracked_source)
-                    set_cube_pose(plant.model, data, correction.measured)
-                if wrist.show and preview is not None and preview.frame_id != last_preview_id:
-                    last_preview_id = preview.frame_id
-                    preview_bgr = preview.bgr.copy()
-            elif wrist.show:
-                snapshot = servo.reader.latest()
-                if snapshot is not None:
-                    preview_bgr = snapshot.bgr.copy()
+                phase = correction.phase
+                tracked_source = correction.tracked
+                saw_detection = True
+                if convergence is not None:
+                    convergence.observe(tracked_source)
+                plant.set_believed_cube(correction.measured)
 
-            if preview_bgr is not None and wrist.show:
-                show_frame(
-                    preview_bgr,
-                    renderer=wrist.renderer,
-                    model=plant.model,
-                    data=data,
-                    undistort_map=servo.undistort_map,
-                    rectify=not is_descent,
-                )
+        if wrist.show and servo is not None:
+            last_preview_id = _show_preview(plant, wrist, is_descent, last_preview_id)
 
         frame = phase.evaluate(phase_t)
-        for name, value in frame.joints.items():
-            data.ctrl[plant.actuator_id[name]] = value
-        data.ctrl[plant.actuator_id["gripper"]] = frame.gripper
-        mujoco.mj_step(plant.model, data, nstep=plant.substeps_per_tick)
-        contacts = _report_new_contacts(plant, contacts, phase_t)
+        commanded = plant.step(frame.joints, frame.gripper)
+        current = plant.new_contacts()
+        for pair in current - contacts:
+            print(f"collision phase_t={phase_t:.3f}s  {pair[0]} ↔ {pair[1]}")
+        contacts = current
 
-        commanded = plant.to_real(frame.joints, frame.gripper)
-        plant.follower.send_action(joints_to_action(commanded))
-        plant.on_tick(
+        run.on_tick(
             commanded,
-            plant.readback(commanded),
+            plant.readback(),
             servo_active=is_descent,
             servo_source=(
                 np.array(
@@ -210,7 +152,7 @@ def play_phase(
                 else None
             ),
         )
-        plant.viewer.sync()
+        run.viewer.sync()
 
         if is_descent:
             assert retry is not None and convergence is not None
@@ -233,8 +175,8 @@ def play_phase(
                     retry.finish_backup()
                     convergence = DescentServoConvergence()
                     saw_detection = False
-                    playback_start = data.time
-                    next_tick = time.monotonic()
+                    playback_start = plant.time
+                    plant.resync_clock()
                 continue
             if phase_t >= deadline:
                 if saw_detection:
@@ -259,13 +201,35 @@ def play_phase(
         elif phase_t >= phase.duration:
             break
 
-        next_tick += control_period
-        remaining = next_tick - time.monotonic()
-        if remaining > 0:
-            time.sleep(remaining)
-        elif remaining < -control_period:
-            # Do not issue a burst of catch-up commands after a long vision, I/O,
-            # or scheduling stall.
-            next_tick = time.monotonic()
-
     return result("completed")
+
+
+def _show_preview(
+    plant: RealPlant, wrist: WristView, is_descent: bool, last_preview_id: int
+) -> int:
+    """Put the newest camera frame on screen; return the preview id now shown.
+
+    Nothing here feeds control, so it is deliberately best-effort: during the
+    descent the window waits for a frame the detector has actually annotated,
+    and outside it takes whatever the camera thread last read.
+    """
+    servo = plant.servo
+    if is_descent:
+        preview = plant.last_preview
+        if preview is None or preview.frame_id == last_preview_id:
+            return last_preview_id
+        bgr, shown = preview.bgr, preview.frame_id
+    else:
+        snapshot = servo.reader.latest()
+        if snapshot is None:
+            return last_preview_id
+        bgr, shown = snapshot.bgr, last_preview_id
+    show_frame(
+        bgr.copy(),
+        renderer=wrist.renderer,
+        model=plant.model,
+        data=plant.data,
+        undistort_map=servo.undistort_map,
+        rectify=not is_descent,
+    )
+    return shown

@@ -46,14 +46,11 @@ from pick_and_place.core.joint_frames import (
 )
 from pick_and_place.data.recorder import EpisodeRecorder
 from pick_and_place.data.recording import RecordingSession
-from pick_and_place.runtime.checkpoint import (
-    fuses_into_next,
-    measured_sim_state,
-    replan_from_checkpoint,
-)
+from pick_and_place.runtime.checkpoint import fuses_into_next, replan_from_checkpoint
 from pick_and_place.runtime.descent import regrasp_after_descent
 from pick_and_place.runtime.episodes import Episode
-from pick_and_place.runtime.phase_playback import Plant, WristView, play_phase
+from pick_and_place.plant.real import RealPlant
+from pick_and_place.runtime.phase_playback import RealRun, WristView, play_phase
 from pick_and_place.runtime.ramp import ramp_follower
 from pick_and_place.runtime.tick_recorder import TickRecorder
 from pick_and_place.runtime.wrist_servo import WristServo, open_sim_view, open_wrist_servo
@@ -368,24 +365,24 @@ def execute_episode(
             ),
         )
 
-        plant = Plant(
-            model=model,
-            data=data,
+        plant = RealPlant(
+            model,
+            data,
+            follower=follower,
             actuator_id=actuator_id,
             robot_geom_ids=robot_geom_ids,
             env_geom_ids=env_geom_ids,
             kinematics=kinematics,
-            follower=follower,
-            viewer=viewer,
             substeps_per_tick=simulation_steps_per_tick,
+            clamp_low=clamp_low,
+            clamp_high=clamp_high,
+            wrist_camera_id=wrist_cam_id,
+            servo=servo,
+            joint_offsets_deg=joint_offsets_deg,
             speed=speed,
-            to_real=to_real,
-            readback=readback,
-            on_tick=log_tick,
         )
-        wrist = WristView(
-            servo=servo, camera_id=wrist_cam_id, renderer=wrist_renderer, show=show_wrist
-        )
+        run = RealRun(viewer=viewer, on_tick=log_tick)
+        wrist = WristView(camera_id=wrist_cam_id, renderer=wrist_renderer, show=show_wrist)
 
         current_traj = episode.trajectory
         tracked_source = episode.source
@@ -398,6 +395,7 @@ def execute_episode(
             print(f"Executing phase: {phase.name}")
             played = play_phase(
                 plant,
+                run,
                 wrist,
                 phase,
                 tracked_source=tracked_source,
@@ -452,9 +450,7 @@ def execute_episode(
                 episode_status = "success"
                 break
 
-            measured_joints, measured_gripper = measured_sim_state(
-                model, readback(commanded), joint_offsets_deg
-            )
+            measured_joints, measured_gripper = plant.measured()
             print(f"Replanning remaining trajectory after {completed}...")
             candidate = replan_from_checkpoint(
                 model,

@@ -62,14 +62,15 @@ from pick_and_place.runtime.believed_frame import BelievedFrame
 from pick_and_place.runtime.checkpoint import fuses_into_next, replan_from_checkpoint
 from pick_and_place.runtime.descent import regrasp_after_descent
 from pick_and_place.runtime.episodes import Episode
-from pick_and_place.runtime.sim_phase_playback import SimPlant, play_phase
+from pick_and_place.plant.sim import SimPlant
+from pick_and_place.runtime.sim_phase_playback import SimRun, play_phase
 from pick_and_place.runtime.sim_tick_recorder import SimTickRecorder
 from pick_and_place.runtime.sim_wrist_servo import SimWristServo
 from pick_and_place.runtime.wrist_mixed_view import close_mixed
 from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
 from pick_and_place.sim.domain_randomization import reload_renderer_textures
 from pick_and_place.policies.policy_evaluation import TaskOracleConfig
-from pick_and_place.sim.model import build_model, get_cube_pose, get_joint, placement_error
+from pick_and_place.sim.model import build_model, get_cube_pose, placement_error
 from pick_and_place.spec.robot import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 
@@ -371,19 +372,19 @@ def record_episode(
     # jaws back onto the true cube, correcting away the very fumble being staged.
     run_checkpoints = belief.closed_loop or episode.grasp_perturbation is not None
     plant = SimPlant(
-        model=model,
-        data=data,
+        model,
+        data,
+        belief=belief,
         actuator_id=episode.actuator_id,
         robot_geom_ids=episode.robot_geom_ids,
         env_geom_ids=episode.env_geom_ids,
         kinematics=kinematics,
         substeps_per_tick=substeps_per_tick,
+        servo=servo,
         speed=speed,
         realtime=realtime,
-        verbose=verbose,
-        viewer=viewer,
-        should_stop=should_stop,
     )
+    run = SimRun(viewer=viewer, should_stop=should_stop, verbose=verbose)
 
     def outcome(status: str) -> RecordEpisodeResult:
         """Snapshot the artifact as it stands. Reads the latest bindings when called."""
@@ -400,8 +401,8 @@ def record_episode(
             played = play_phase(
                 plant,
                 current_traj.phases[0],
+                run=run,
                 belief=belief,
-                servo=servo,
                 recorder=recorder,
                 artifact=artifact,
                 tracked_source=tracked_source,
@@ -494,14 +495,15 @@ def record_episode(
                     completed = None
             if verbose:
                 print(f"Replanning remaining trajectory after {completed}...")
+            measured_joints, measured_gripper = plant.measured()
             candidate = replan_from_checkpoint(
                 model,
                 kinematics=kinematics,
                 actuator_id=episode.actuator_id,
                 robot_geom_ids=episode.robot_geom_ids,
                 env_geom_ids=episode.env_geom_ids,
-                measured_joints=belief.arm_joints(),
-                measured_gripper=get_joint(model, data, "gripper"),
+                measured_joints=measured_joints,
+                measured_gripper=measured_gripper,
                 completed_phase_name=completed,
                 source=tracked_source,
                 target=episode.believed_target,
@@ -517,8 +519,7 @@ def record_episode(
                 return outcome("restart")
             current_traj = candidate
     finally:
-        if servo is not None:
-            servo.close()
+        plant.close()
         if show_wrist_mixed:
             close_mixed()
 
