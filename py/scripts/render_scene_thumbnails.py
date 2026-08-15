@@ -44,7 +44,7 @@ def main() -> None:
 
     from pick_and_place.runtime.training_scenes import training_scenario
     from pick_and_place.runtime.policy_sim import OVERHEAD_FEATURE, PolicySimEnv
-    from pick_and_place.sim.scene_appearance import parse_appearance
+    from pick_and_place.variants.appearance import parse_appearance
 
     payload = json.loads(args.phenotypes.read_text())
     scenes = payload["scenes"]

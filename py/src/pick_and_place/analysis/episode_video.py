@@ -241,7 +241,7 @@ class EpisodeVideoSession:
 
     Implements the same recording interface as
     :class:`pick_and_place.data.recording.RecordingSession`, so
-    :func:`pick_and_place.runtime.executor.execute_episode` drives either
+    :func:`pick_and_place.rollout.real.execute_episode` drives either
     interchangeably.
     """
 

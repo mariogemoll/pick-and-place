@@ -72,7 +72,7 @@ def main() -> None:
             np.random.default_rng(np.random.SeedSequence([args.seed, index])).integers(2**63)
         )
         sample = preset.sample(episode_seed)
-        appearance = generate_procedural_appearance(sample)
+        appearance = generate_procedural_appearance(sample.appearance())
         background_path = output / "backgrounds" / f"{index:03d}.png"
         table_path = output / "tables" / f"{index:03d}.png"
         _write_rgb(background_path, appearance.background_rgb)

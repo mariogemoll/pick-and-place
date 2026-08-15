@@ -7,8 +7,8 @@ from pick_and_place.sim.model import build_model
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.sim.derive_kinematics import derive_kinematics
-from pick_and_place.planning.replan import replan_remaining_candidates
-from pick_and_place.planning.trajectory import DROP_DWELL_DURATION, ReleasePhase
+from pick_and_place.scripted.replan import replan_remaining_candidates
+from pick_and_place.scripted.trajectory import DROP_DWELL_DURATION, ReleasePhase
 from pick_and_place.spec.robot import GRIPPER_GRASP, GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
 
 

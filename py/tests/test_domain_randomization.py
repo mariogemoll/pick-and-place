@@ -1,6 +1,12 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
+"""The randomization envelope, and the half of a draw that shapes behavior.
+
+The other half — everything that is only pixels — is applied by
+``pick_and_place.variants`` and tested in ``test_variant_scene.py``.
+"""
+
 import json
 import colorsys
 from collections import Counter
@@ -11,15 +17,14 @@ import numpy as np
 
 from pick_and_place.sim.domain_randomization import (
     DomainRandomizationPreset,
-    DomainRandomizer,
+    WristMountRandomizer,
     domain_seed,
     generate_procedural_appearance,
     orient_cube,
 )
 from pick_and_place.sim.model import build_model
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose, world_from_cube
-from pick_and_place.sim.paper_target_marker import place_paper_target_marker
 
 
 PRESET = Path(__file__).parents[2] / "config" / "domain_randomization" / "act_mild_v1.json"
@@ -27,7 +32,7 @@ PRESET = Path(__file__).parents[2] / "config" / "domain_randomization" / "act_mi
 
 def _procedural_model(preset: DomainRandomizationPreset):
     sample = preset.sample(123)
-    appearance = generate_procedural_appearance(sample)
+    appearance = generate_procedural_appearance(sample.appearance())
     return build_model(
         CubePose(0.2, 0.0, CUBE_HALF_SIZE),
         include_environment=True,
@@ -52,86 +57,50 @@ def test_different_material_families_receive_independent_draws():
     assert len(set(sample.material_factors.values())) == len(sample.material_factors)
 
 
-def test_apply_restores_canonical_visual_model_before_next_sample():
-    preset = DomainRandomizationPreset.load(PRESET)
-    model = _procedural_model(preset)
-    randomizer = DomainRandomizer(model)
-    canonical_camera = model.cam_pos.copy()
-    canonical_collision = model.geom_size.copy()
-    first = preset.sample(1)
-    second = preset.sample(2)
-    randomizer.apply(first)
-    first_camera = model.cam_pos.copy()
-    first_light = model.light_pos.copy()
-    first_texture = model.tex_data.copy()
-    randomizer.apply(second)
-    randomizer.apply(first)
-    np.testing.assert_allclose(model.cam_pos, first_camera)
-    np.testing.assert_allclose(model.light_pos, first_light)
-    np.testing.assert_array_equal(model.tex_data, first_texture)
-    assert not np.array_equal(first_camera, canonical_camera)
-    nominal_wrist_pos, _ = randomizer.believed_wrist_camera_pose
-    wrist = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "wrist_camera")
-    np.testing.assert_allclose(nominal_wrist_pos, canonical_camera[wrist])
-    assert not np.array_equal(model.cam_pos[wrist], nominal_wrist_pos)
-    np.testing.assert_array_equal(model.geom_size, canonical_collision)
-
-
-def test_reset_restores_canonical_model_without_applying_another_sample():
-    preset = DomainRandomizationPreset.load(PRESET)
-    model = _procedural_model(preset)
-    randomizer = DomainRandomizer(model)
-    canonical_camera = model.cam_pos.copy()
-    canonical_texture = model.tex_data.copy()
-
-    randomizer.apply(preset.sample(1))
-    randomizer.reset()
-
-    np.testing.assert_array_equal(model.cam_pos, canonical_camera)
-    np.testing.assert_array_equal(model.tex_data, canonical_texture)
-
-
-def test_marker_tint_preserves_the_placed_target_color():
-    preset = DomainRandomizationPreset.load(PRESET)
-    model = _procedural_model(preset)
-    randomizer = DomainRandomizer(model)
-    sample = preset.sample(8)
-    randomizer.apply(sample)
-    place_paper_target_marker(
-        model,
-        (0.2, 0.0),
-        0.0,
-        (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
-        usable=True,
-        alpha=1.0,
-    )
-    randomizer.tint_episode_markers()
-    target = mujoco.mj_name2id(
-        model, mujoco.mjtObj.mjOBJ_GEOM, "paper_target_marker_geom"
-    )
-    expected = 0.12 * np.asarray(sample.material_factors["target"])
-    np.testing.assert_allclose(model.geom_rgba[target, :3], expected)
-    assert model.geom_rgba[target, 3] == 1.0
-
-
-def test_key_light_casts_shadow_from_sampled_direction():
-    preset = DomainRandomizationPreset.load(PRESET)
-    model = _procedural_model(preset)
-    sample = preset.sample(9)
-    DomainRandomizer(model).apply(sample)
-    key = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_LIGHT, "warm_spotlight")
-    expected = np.asarray(sample.key_light_target) - np.asarray(sample.key_light_position)
-    expected /= np.linalg.norm(expected)
-    assert model.light_castshadow[key]
-    np.testing.assert_allclose(model.light_dir[key], expected)
-    assert model.light_diffuse[key].max() / model.light_diffuse[key].min() <= 1.25
-
-
 def test_key_light_samples_hard_and_soft_shadow_sources():
     preset = DomainRandomizationPreset.load(PRESET)
     radii = [preset.sample(seed).key_light_bulb_radius for seed in range(100)]
     assert min(radii) < 0.02
     assert max(radii) > 0.3
+
+
+def test_the_wrist_mount_moves_while_the_controller_keeps_the_nominal_one():
+    """The hand-eye error the expert has to servo through.
+
+    The camera and its housing move together — a real sensor cannot slide out of
+    its own barrel — while ``believed_wrist_camera_pose`` stays on the authored
+    mount, which is what makes every solve inherit the error.
+    """
+    preset = DomainRandomizationPreset.load(PRESET)
+    model = _procedural_model(preset)
+    canonical = model.cam_pos.copy()
+    wrist = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "wrist_camera")
+    overhead = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "overhead_camera")
+    mount = WristMountRandomizer(model)
+
+    mount.apply(preset.sample(1))
+
+    assert not np.array_equal(model.cam_pos[wrist], canonical[wrist])
+    np.testing.assert_allclose(mount.believed_wrist_camera_pose[0], canonical[wrist])
+    # Only the wrist: the overhead viewpoint is drawn when the episode is rendered.
+    np.testing.assert_array_equal(model.cam_pos[overhead], canonical[overhead])
+
+    mount.reset()
+    np.testing.assert_allclose(model.cam_pos[wrist], canonical[wrist])
+
+
+def test_applying_a_second_draw_does_not_compound_onto_the_first():
+    preset = DomainRandomizationPreset.load(PRESET)
+    model = _procedural_model(preset)
+    mount = WristMountRandomizer(model)
+    wrist = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "wrist_camera")
+
+    mount.apply(preset.sample(1))
+    first = model.cam_pos[wrist].copy()
+    mount.apply(preset.sample(2))
+    mount.apply(preset.sample(1))
+
+    np.testing.assert_allclose(model.cam_pos[wrist], first)
 
 
 def test_all_24_cube_orientations_are_unique_and_balance_up_faces():
@@ -152,9 +121,9 @@ def test_all_24_cube_orientations_are_unique_and_balance_up_faces():
 
 def test_procedural_appearance_is_deterministic_and_seeded():
     preset = DomainRandomizationPreset.load(PRESET)
-    first = generate_procedural_appearance(preset.sample(5))
-    repeated = generate_procedural_appearance(preset.sample(5))
-    other = generate_procedural_appearance(preset.sample(6))
+    first = generate_procedural_appearance(preset.sample(5).appearance())
+    repeated = generate_procedural_appearance(preset.sample(5).appearance())
+    other = generate_procedural_appearance(preset.sample(6).appearance())
     np.testing.assert_array_equal(first.background_rgb, repeated.background_rgb)
     np.testing.assert_array_equal(first.table_rgb, repeated.table_rgb)
     assert not np.array_equal(first.background_rgb, other.background_rgb)

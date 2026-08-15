@@ -31,7 +31,7 @@ from typing import Optional, Any
 import mujoco
 import numpy as np
 
-from pick_and_place.planning.motion import smoothstep
+from pick_and_place.scripted.motion import smoothstep
 from pick_and_place.core.camera_calibration import LOCAL_CAMERA_EXTRINSICS_DIR
 from pick_and_place.sim.camera_extrinsics import save_camera_extrinsics
 from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR

@@ -20,8 +20,8 @@ from pathlib import Path
 import cv2
 import mujoco
 import numpy as np
-import pyarrow.parquet as pq
 
+from pick_and_place.data.trajectory_artifact import ARTIFACT_FILENAME, load_trajectory
 from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
 from pick_and_place.sim.paper_target_marker import PAPER_TARGET_MARKER_NAME, place_paper_target_marker
 from pick_and_place.runtime.policy_sim import (
@@ -30,7 +30,7 @@ from pick_and_place.runtime.policy_sim import (
     real_action_to_sim_ctrl,
 )
 from pick_and_place.core.image_ops import resize_and_center_crop
-from pick_and_place.core.task_phases import coarse_phase_labels, phase_spans_from_json
+from pick_and_place.core.task_phases import coarse_phase_labels
 from pick_and_place.core.workspace_bounds import is_cube_drop_allowed
 
 # Thresholds on the fractional pixel coverage after the exact 96x96 transform:
@@ -46,7 +46,7 @@ class EpisodeTruth:
     """Per-frame ground truth needed to re-render a recorded episode."""
 
     name: str
-    states: np.ndarray  # (N, 6) hardware-frame observation.state
+    states: np.ndarray  # (N, 6) hardware-frame true arm joints
     cube_poses: np.ndarray  # (N, 7) true cube position + wxyz quaternion
     target_xy: tuple[float, float]
     target_plate_yaw: float
@@ -54,32 +54,21 @@ class EpisodeTruth:
 
 
 def load_episode_truth(root: Path) -> EpisodeTruth:
-    """Load one staged episode's per-frame ground truth and phase labels."""
-    meta_paths = sorted((root / "meta" / "episodes").glob("chunk-*/file-*.parquet"))
-    if len(meta_paths) != 1:
-        raise ValueError(f"{root.name} must contain one episode metadata parquet")
-    row = pq.read_table(meta_paths[0]).to_pylist()[0]
-    if "phase_spans" not in row or row["phase_spans"] is None:
-        raise ValueError(f"{root.name} has no phase_spans metadata; re-record with ground truth")
-    data_paths = sorted((root / "data").glob("chunk-*/file-*.parquet"))
-    if len(data_paths) != 1:
-        raise ValueError(f"{root.name} must contain one data parquet")
-    table = pq.read_table(
-        data_paths[0],
-        columns=["frame_index", "observation.state", "observation.environment_state"],
-    ).sort_by("frame_index")
-    states = np.asarray(table["observation.state"].to_pylist(), dtype=np.float32)
-    cube_poses = np.asarray(table["observation.environment_state"].to_pylist(), dtype=np.float64)
-    if cube_poses.shape != (len(states), 7):
-        raise ValueError(f"{root.name} environment_state must be (N, 7), got {cube_poses.shape}")
-    spans = phase_spans_from_json(row["phase_spans"])
+    """Load one staged episode's per-frame ground truth and phase labels.
+
+    Read from the episode's trajectory artifact, which is the only place the
+    *true* arm pose is stored. The dataset's ``observation.state`` is the
+    servo-style readback, so under a miscalibration draw it is a different pose —
+    put the arm there and it lands in the wrong place in the picture.
+    """
+    artifact = load_trajectory(root / ARTIFACT_FILENAME)
     return EpisodeTruth(
         name=root.name,
-        states=states,
-        cube_poses=cube_poses,
-        target_xy=(float(row["target_x"]), float(row["target_y"])),
-        target_plate_yaw=float(row["target_plate_yaw"]),
-        coarse_phases=coarse_phase_labels(spans, len(states)),
+        states=artifact.frames.true_state,
+        cube_poses=artifact.frames.true_cube_pose.astype(np.float64),
+        target_xy=artifact.facts.target_xy,
+        target_plate_yaw=artifact.facts.target_plate_yaw,
+        coarse_phases=coarse_phase_labels(artifact.facts.phase_spans, len(artifact.frames)),
     )
 
 

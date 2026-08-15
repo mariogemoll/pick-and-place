@@ -124,7 +124,7 @@ def main() -> None:
     from pick_and_place.dsrl.noise_policy import latent_shape
     from pick_and_place.dsrl.sac import SacConfig
     from pick_and_place.dsrl.trainer import DsrlTrainer, TrainConfig
-    from pick_and_place.sim.scene_appearance import parse_appearance
+    from pick_and_place.variants.appearance import parse_appearance
 
     with np.load(args.normalization) as bounds:
         action_encoding = read_action_encoding(bounds)

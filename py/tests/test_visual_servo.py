@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: 0BSD
 
 from pick_and_place.core.geometry import CubePose
-from pick_and_place.planning.visual_servo import (
+from pick_and_place.scripted.visual_servo import (
     DESCENT_SERVO_BACKUP_DURATION,
     DESCENT_SERVO_STABLE_FRAMES,
     DescentServoConvergence,

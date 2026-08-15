@@ -4,7 +4,7 @@
 """Training resets drawn from the evaluation distribution.
 
 A policy is never trained on the frozen benchmark scenes. Training and
-evaluation both draw from :mod:`pick_and_place.planning.scenario_sampling`, so the
+evaluation both draw from :mod:`pick_and_place.scripted.scenario_sampling`, so the
 distribution is shared by construction, but the seed streams are disjoint:
 manifests use small bases (1701 for ``canonical_100_v1``/``dr_100_v1``, 2701 for the perturbation
 smoke suite) and training starts at :data:`TRAINING_SEED_BASE`.
@@ -22,7 +22,7 @@ import numpy as np
 from pick_and_place.core.geometry import cube_quat_from_pose
 from pick_and_place.core.joint_frames import sim_frame_to_real
 from pick_and_place.policies.policy_evaluation import EvaluationScenario
-from pick_and_place.planning.scenario_sampling import sample_scene, workspace_region
+from pick_and_place.scripted.scenario_sampling import sample_scene, workspace_region
 from pick_and_place.spec.robot import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
 
 # Far above every manifest seed base in config/evaluation/, so a training scene

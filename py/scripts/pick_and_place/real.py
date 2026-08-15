@@ -26,7 +26,7 @@ from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_mode
 from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR, load_camera_intrinsics
 from pick_and_place.data.dataset_metadata import cube_pose_metadata, driver_metadata
 from pick_and_place.runtime.episode_loop import episode_loop
-from pick_and_place.planning.episode_sampling import sample_recovery_cube
+from pick_and_place.scripted.episode_sampling import sample_recovery_cube
 from pick_and_place.sim.model import build_model, set_cube_pose, set_joint
 from pick_and_place.core.joint_frames import follower_clamp_limits
 from pick_and_place.spec.robot import CONTROL_HZ
@@ -76,11 +76,9 @@ from pick_and_place.runtime.policy_real import (
     run_physical_policy_episode,
 )
 from pick_and_place.analysis.policy_recording import PolicyRecordingSession
-from pick_and_place.runtime.scripted_policy import (
-    AsyncWristLocalization,
-    ScriptedPolicy,
-    WristCameraLocalizer,
-)
+from pick_and_place.plant.wrist_localizer import AsyncWristLocalization, WristCameraLocalizer
+from pick_and_place.rollout.scripted import scripted_policy
+from pick_and_place.scripted.policy import ScriptedPolicy
 from pick_and_place.spec.robot import (
     NEUTRAL_ARM_JOINTS,
     NEUTRAL_GRIPPER,
@@ -349,7 +347,7 @@ def main() -> None:
             )
         )
         def make_controller(*, recovery: bool) -> ScriptedPolicy:
-            return ScriptedPolicy(
+            return scripted_policy(
                 OverheadLocalizer(
                     overhead_matrix,
                     data.cam_xpos[overhead_id],

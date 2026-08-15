@@ -15,7 +15,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from pick_and_place.core.geometry import CubePose
-from pick_and_place.planning.scenario_sampling import workspace_region
+from pick_and_place.scripted.scenario_sampling import workspace_region
 from pick_and_place.policies.policy_evaluation import EvaluationScenario
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 

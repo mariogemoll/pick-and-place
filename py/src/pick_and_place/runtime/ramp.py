@@ -23,7 +23,7 @@ from typing import Callable
 import numpy as np
 
 from pick_and_place.core.joint_frames import action_to_joints, clamp_and_warn, joints_to_action
-from pick_and_place.planning.motion import smoothstep
+from pick_and_place.scripted.motion import smoothstep
 from pick_and_place.spec.robot import CONTROL_HZ, GRIPPER_INDEX
 
 # Seconds spent ramping onto a pose when the velocity cap does not ask for more.

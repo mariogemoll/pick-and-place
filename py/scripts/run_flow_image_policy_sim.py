@@ -33,7 +33,7 @@ from pick_and_place.policies.flow_image_policy import (
 )
 from pick_and_place.runtime.policy_sim import PolicySimEnv
 from pick_and_place.runtime.training_scenes import training_scenario
-from pick_and_place.sim.scene_appearance import parse_appearance
+from pick_and_place.variants.appearance import parse_appearance
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, WRIST_FEATURE
 from pick_and_place.spec.robot import GRIPPER_INDEX
 

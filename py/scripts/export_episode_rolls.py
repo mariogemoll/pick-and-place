@@ -57,7 +57,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from pick_and_place.planning.episode_sampling import (
+from pick_and_place.scripted.episode_sampling import (
     pickup_yaw_from_azimuth,
     sample_cube,
     sample_near_neutral,

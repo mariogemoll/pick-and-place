@@ -56,31 +56,30 @@ from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
 from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_spec
 from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
 from pick_and_place.spec.robot import JOINT_NAMES
-from pick_and_place.planning.episode_sampling import sample_cube, sample_target
+from pick_and_place.scripted.episode_sampling import sample_cube, sample_target
 from pick_and_place.core.geometry import cube_quat_from_pose, CubePose
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
 from pick_and_place.sim.domain_randomization import (
     DomainRandomizationPreset,
-    DomainRandomizer,
+    WristMountRandomizer,
     domain_seed,
     generate_procedural_appearance,
     orient_cube,
     reload_renderer_textures,
 )
 from pick_and_place.core.miscalibration import MiscalibrationDraw, MiscalibrationModel
-from pick_and_place.sim.render_randomization import (
-    BackgroundRandomization,
-    CameraRandomization,
+from pick_and_place.sim.camera_pose_envelope import set_camera_jitter, snapshot_camera
+from pick_and_place.variants.draw import BackgroundRandomization, CameraRandomization
+from pick_and_place.variants.scene import (
+    AppearanceRandomizer,
     scene_texture_ids,
-    set_camera_jitter,
     set_scene_texture,
-    snapshot_overhead_camera,
 )
-from pick_and_place.sim.scene_appearance import (
+from pick_and_place.variants.appearance import (
     SceneAppearanceOverride,
     parse_appearance,
 )
-from pick_and_place.runtime.sim_recorder import OVERHEAD_CAMERA, downsample_through_recording
+from pick_and_place.rollout.sim import OVERHEAD_CAMERA, downsample_through_recording
 from pick_and_place.sim.paper_target_marker import add_paper_target_marker, place_paper_target_marker
 from pick_and_place.spec.robot import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
 from pick_and_place.core.workspace_bounds import is_cube_drop_allowed, sample_target_plate_yaw
@@ -457,7 +456,7 @@ def main() -> None:
     )
     if active_sample is not None:
         source_pose = orient_cube(source_pose, active_sample.cube_orientation_index)
-        appearance = generate_procedural_appearance(active_sample)
+        appearance = generate_procedural_appearance(active_sample.appearance())
         background_panorama = appearance.background_rgb
         table_texture = appearance.table_rgb
     else:
@@ -473,9 +472,11 @@ def main() -> None:
         background_panorama=background_panorama,
         table_texture=table_texture,
     )
-    randomizer = DomainRandomizer(model) if active_sample is not None else None
+    randomizer = AppearanceRandomizer(model) if active_sample is not None else None
+    wrist_mount = WristMountRandomizer(model) if active_sample is not None else None
     if randomizer is not None:
-        randomizer.apply(active_sample)
+        randomizer.apply(active_sample.appearance())
+        wrist_mount.apply(active_sample)
         randomizer.tint_episode_markers()
         print(
             f"Domain sample episode {domain_episode}: seed={active_sample.seed}, "
@@ -497,7 +498,7 @@ def main() -> None:
         if args.background_randomization is not None
         else None
     )
-    overhead_base = snapshot_overhead_camera(model, OVERHEAD_CAMERA)
+    overhead_base = snapshot_camera(model, OVERHEAD_CAMERA)
     texture_ids = scene_texture_ids(model)
     base_tex_data = model.tex_data.copy()
     appearance_override = SceneAppearanceOverride(model) if scene_appearance is not None else None
@@ -622,7 +623,8 @@ def main() -> None:
         domain_episode += 1
         if preset is not None:
             active_sample = preset.sample(domain_seed(args.seed, domain_episode))
-            randomizer.apply(active_sample)
+            randomizer.apply(active_sample.appearance())
+            wrist_mount.apply(active_sample)
             reload_renderer_textures(renderer, randomizer.texture_ids)
             draw = active_sample.miscalibration
             print(

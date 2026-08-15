@@ -14,12 +14,12 @@ from pathlib import Path
 
 import numpy as np
 
-from pick_and_place.planning.episode_sampling import PICKUP_YAW_DEVIATION, pickup_yaw_from_azimuth
+from pick_and_place.scripted.episode_sampling import PICKUP_YAW_DEVIATION, pickup_yaw_from_azimuth
 from pick_and_place.sim.model import build_model
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.sim.derive_kinematics import derive_kinematics
-from pick_and_place.planning.grasp import grasp_candidates
+from pick_and_place.scripted.grasp import grasp_candidates
 from pick_and_place.core.workspace_bounds import (
     CANONICAL_PICKUP_SECTOR,
     PAN_AXIS,

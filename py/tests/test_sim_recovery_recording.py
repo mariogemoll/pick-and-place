@@ -21,9 +21,9 @@ import numpy as np
 import pytest
 
 from pick_and_place.core.grasp_perturbation import GraspPerturbation
-from pick_and_place.planning.scenario_sampling import sample_scene
+from pick_and_place.scripted.scenario_sampling import sample_scene
 from pick_and_place.runtime.episodes import EpisodeSamplingError, prepare_episode
-from pick_and_place.runtime.sim_recorder import _HELD_MIN_Z_M, record_episode
+from pick_and_place.rollout.sim import _HELD_MIN_Z_M, record_episode
 from pick_and_place.sim.model import get_cube_pose
 from pick_and_place.spec.robot import HARDWARE_SIMULATION_HZ
 

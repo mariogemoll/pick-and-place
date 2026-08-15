@@ -159,7 +159,7 @@ def main() -> None:
     from pick_and_place.dppo_rl.env import EnvConfig
     from pick_and_place.dppo_rl.observations import CameraObservation
     from pick_and_place.dppo_rl.vector_env import DppoVectorEnv
-    from pick_and_place.sim.scene_appearance import parse_appearance
+    from pick_and_place.variants.appearance import parse_appearance
 
     with np.load(args.normalization) as bounds:
         action_encoding = read_action_encoding(bounds)

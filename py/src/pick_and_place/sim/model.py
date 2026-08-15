@@ -49,6 +49,23 @@ def set_cube_pose(model: mujoco.MjModel, data: mujoco.MjData, source: CubePose) 
     data.qvel[qvel_adr:qvel_adr + 6] = 0.0
 
 
+def cube_qpos_address(model: mujoco.MjModel) -> int:
+    """Index of ``pick_cube``'s freejoint in ``data.qpos``."""
+    cube_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pick_cube")
+    return int(model.jnt_qposadr[model.body_jntadr[cube_body_id]])
+
+
+def get_cube_qpos(model: mujoco.MjModel, data: mujoco.MjData) -> np.ndarray:
+    """The cube's raw freejoint state: position plus a ``w, x, y, z`` quaternion.
+
+    Unlike :func:`get_cube_pose` this keeps the full rotation. A renderer needs
+    it, because a cube that has been knocked over does not rest on the face its
+    yaw alone would put down.
+    """
+    address = cube_qpos_address(model)
+    return np.asarray(data.qpos[address : address + 7], dtype=np.float64).copy()
+
+
 def get_cube_pose(model: mujoco.MjModel, data: mujoco.MjData) -> CubePose:
     """Read ``pick_cube``'s current pose — the inverse of :func:`set_cube_pose`.
 

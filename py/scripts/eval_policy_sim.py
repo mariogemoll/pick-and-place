@@ -34,11 +34,9 @@ from pick_and_place.policies.policy_evaluation import (
 )
 from pick_and_place.runtime.policy_sim import build_policy_sim_model, evaluate_policy_episode, PolicySimEnv
 from pick_and_place.perception.overhead_localization import OverheadLocalizer
-from pick_and_place.runtime.scripted_policy import (
-    AsyncWristLocalization,
-    ScriptedPolicy,
-    WristCameraLocalizer,
-)
+from pick_and_place.plant.wrist_localizer import AsyncWristLocalization, WristCameraLocalizer
+from pick_and_place.rollout.scripted import scripted_policy
+from pick_and_place.scripted.policy import ScriptedPolicy
 from pick_and_place.perception.cube_detection import CubeTracker
 from pick_and_place.perception.detector_process import DetectorProcess
 from pick_and_place.cli.policy import (
@@ -46,7 +44,7 @@ from pick_and_place.cli.policy import (
     add_policy_arguments,
 )
 from pick_and_place.cli.scene import add_render_size_arguments, add_scene_appearance_arguments
-from pick_and_place.sim.scene_appearance import parse_appearance
+from pick_and_place.variants.appearance import parse_appearance
 from pick_and_place.core.workspace_bounds import workspace_interior_corners_world
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -288,7 +286,7 @@ def _make_scripted_controller(
     # one the single persistent handle so no child process leaks per episode --
     # a DetectorProcess holds no per-frame state and is built for reuse across a
     # long run.
-    controller = ScriptedPolicy(
+    controller = scripted_policy(
         OverheadLocalizer(
             camera_matrices["overhead_camera"],
             overhead_position,

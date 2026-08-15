@@ -175,7 +175,7 @@ left out.
 | Directory | Contents |
 | --- | --- |
 | `SO-ARM100/` | Vendored hardware submodule: CAD, STL, URDF, MJCF, BOM. |
-| `py/` | The `pick_and_place` package (100 modules in 13 subpackages), 85 CLI scripts, 48 test files. Simulation, real-robot control, calibration, datasets, policies. |
+| `py/` | The `pick_and_place` package (141 modules in 15 subpackages), 85 CLI scripts, 79 test files. Simulation, real-robot control, calibration, datasets, policies. |
 | `ts/` | Vite + Three.js browser app: the visualizations embedded in the web page. |
 | `mesh_optimization/` | Standalone Python subproject that decimates high-poly STL into web-ready GLB. |
 | `scripts/` | Repository-level shell/TS tooling: license headers, file-size check, mesh pipeline, remote-GPU job scripts. |
@@ -195,8 +195,8 @@ above, where work genuinely combines capabilities.
 | Tier | Packages | Rule |
 | --- | --- | --- |
 | Foundation | `spec`, `core` | `spec` imports nothing else in the package; `core` imports only `spec`. |
-| Capability branches | `planning`, `perception`, `sim`, `hardware`, `data`, `policies` | Each owns one heavy dependency. **No branch may import another.** |
-| Convergence | `runtime`, `calibration`, `analysis`, `cli` | May import anything, including each other. Nothing below them may import them. |
+| Capability branches | `scripted`, `perception`, `sim`, `hardware`, `data`, `policies` | Each owns one heavy dependency. **No branch may import another.** |
+| Convergence | `runtime`, `plant`, `rollout`, `variants`, `calibration`, `analysis`, `cli` | May import anything, including each other. Nothing below them may import them. |
 
 `scripts/check_package_layering.py` enforces this in CI. When a module needs
 two capabilities it belongs in the convergence tier by construction; when it
@@ -212,14 +212,24 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
 - **`core/`** — pure computation over the spec: `geometry`, `transforms`,
   `rotations`, `ik`, `kinematics`, `workspace_bounds`, `joint_frames` (sim↔real
   conversions and the joint-limit clamp), `image_ops`, `miscalibration`,
+  `appearance` (its opposite: one draw of everything that is only pixels),
   `robot_dynamics`, `camera_calibration` (the rig's measured calibration files),
   `paths`.
-- **`planning/`** — the analytic planner, which generates every demonstration
-  and is the expert baseline: `motion` (interpolation, easing, how long a move
-  takes), `grasp` (where to take hold), `carry` (getting the cube across),
-  `trajectory` (the eight phases assembled), `replan` (resuming from a
-  checkpoint), `visual_servo`, and the declared reset distribution
-  (`episode_sampling`, `scenario_sampling`).
+- **`scripted/`** — the analytic expert, which generates every demonstration and
+  is the baseline every learned policy is scored against: `motion`
+  (interpolation, easing, how long a move takes), `grasp` (where to take hold),
+  `carry` (getting the cube across), `trajectory` (the eight phases assembled),
+  `replan` (resuming from a checkpoint), `checkpoint` (which phase boundaries
+  earn one), `visual_servo` and `descent` (steering onto what the wrist camera
+  saw), `policy` (the whole controller, driven tick by tick from observations),
+  and the declared reset distribution (`episode_sampling`, `scenario_sampling`).
+
+  It is a branch, which is a real constraint and not a filing decision: it
+  **consumes** sightings rather than producing them, and its episode preparation
+  and preflight are injected, because each needs a capability — a tag detector,
+  a compiled scene, live physics — that an expert has no other use for. What is
+  left imports nothing but the physical facts and pure geometry, and is drivable
+  from exactly the observations a learned policy is drivable from.
 - **`perception/`** — AprilTag cube and drop-zone localization:
   `cube_detection`, `paper_detection`, `overhead_localization`,
   `detector_process`, `image_rectify`.
@@ -227,8 +237,10 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   `model` (compile a runnable model and move things in it), `collisions`,
   `environment`, `materials`, `wrist_camera`, `camera_module`,
   `workspace_overlays`, `paper_target_marker`, `frame_tags`,
-  `derive_kinematics`, `domain_randomization`, `render_randomization`,
-  `camera_pose_envelope`, `camera_extrinsics`, `export`. Loads the stock MJCF
+  `derive_kinematics`, `camera_pose_envelope`, `camera_extrinsics`, `export`,
+  and `domain_randomization` — the randomization envelope plus the half of a
+  draw that shapes behavior (the wrist camera's mount error, the cube's resting
+  orientation, the miscalibration). Loads the stock MJCF
   from `SO-ARM100/` with `MjSpec` and replaces full-mesh collision geoms with
   the hand-tuned box model; `python -m pick_and_place.sim.export` writes
   standalone MJCF plus a web manifest.
@@ -237,7 +249,9 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
 - **`data/`** — recording and datasets: `recording`, `recorder`,
   `recording_config` (what one recording run is: the scene it draws, its frame
   sizes, where it lands), `dataset_metadata`, `dataset_subset`,
-  `sim_dataset_staging`, `diffusion_policy_dataset`.
+  `sim_dataset_staging`, `diffusion_policy_dataset`, and `trajectory_artifact`
+  (one episode's behavior with no pixels in it — the true world and the believed
+  one side by side, which is what a scene can be re-rendered from).
 - **`policies/`** — controller implementations and the contract they are scored
   against: `policy_controllers`, `policy`, `policy_evaluation` (frozen scenario
   manifests in `config/evaluation/` and a success oracle),
@@ -245,32 +259,76 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   flow-matching policy (`flow_matching`, `flow_policy`,
   `diffusion_policy_unet`). ACT and SmolVLA are *evaluated* here but trained
   externally via the `lerobot` CLI.
-- **`runtime/`** — running an episode. `executor` orchestrates one: it opens the
-  cameras, ramps the arm onto the start pose, and then alternates between
-  `phase_playback` (the tick loop — evaluate the phase, step physics, command
-  the servos, read back) and `checkpoint` (after each phase, replan from
-  measured state, or fly straight on where a checkpoint would do more harm than
-  good). `wrist_servo` runs the descent's cube detector on its own thread and
-  `descent` folds its estimates back into the running phase; `tick_recorder`
-  turns the run into dataset rows, one per control tick.
+- **`runtime/`** — what an episode needs around the loop that runs it.
+  `checkpoint` decides, after each phase, whether to replan from measured state
+  or fly straight on where a checkpoint would do more harm than good.
+  `wrist_servo` runs the rig's cube detector on its own thread, `preflight` vets
+  a trajectory under live physics, and `episodes` samples one that runs clean.
 
-  `sim_recorder` is the same episode with no arm in it, and is built from the
-  matching set: `sim_phase_playback` (the tick loop, capturing each row *before*
-  it commands it), `sim_wrist_servo` (render the wrist camera, detect the cube
-  in it — inline, not on a thread, which is what keeps a recorded episode a pure
-  function of its seed), `sim_tick_recorder` (one dataset row per tick, plus its
-  phase spans), and `wrist_mixed_view` (the true and believed wrist views
-  blended, for watching the servo converge). `believed_frame` is what the two
-  worlds meet through: with a miscalibration draw, commands and recorded rows
-  live in the believed frame while physics runs the true one. `checkpoint` and
-  `descent` are shared with the hardware path, so both agree by construction on
-  which phase boundaries replan.
+  `sim_wrist_servo` renders the wrist camera and detects the cube in it —
+  inline, not on a thread, which is what keeps a recorded episode a pure function
+  of its seed — and `wrist_mixed_view` blends the true and believed wrist views
+  for watching the servo converge. `believed_frame` is what the two worlds meet
+  through: with a miscalibration draw, commands and recorded rows live in the
+  believed frame while physics runs the true one. `checkpoint` and `descent` are
+  shared by both paths, so they agree by construction on which phase boundaries
+  replan.
+
+  Every run also emits a trajectory artifact, which is what makes appearance a
+  free variable after the fact: the dataset keeps only the believed state,
+  because that is the training label, while the artifact keeps the true joints
+  and cube pose next to it, because reproducing an episode's pixels means
+  putting the arm back where physics actually held it.
 
   Around those: `episodes` (sample one that runs clean), `preflight` (vet a
   trajectory under live physics), `frame_reader` (one background thread per
   camera, holding only the newest frame), `ramp` (ease the arm onto a pose),
-  `scripted_policy`, `episode_rerender`, `policy_sim`, `policy_real`,
+  `scripted_policy`, `policy_sim`, `policy_real`,
   `overhead_detection`, `episode_loop`, `training_scenes`.
+- **`plant/`** — the two things you command and observe: hardware, and sim. Both
+  are the same shape — **a true world plus a believed shadow**. On the rig the
+  true world is the physical arm and the shadow is a MuJoCo model stepped at the
+  commanded joints; in sim the true world is a MuJoCo model and the shadow is a
+  second one over it. Both step MuJoCo, both take the wrist camera pose from
+  forward kinematics of the believed shadow, and both solve tag detection
+  against it.
+
+  What differs is narrow — where the image comes from, what receives the
+  commands, whether the detector runs on a thread or inline, and what drives the
+  clock — and all four fit behind `interface`'s three operations: command
+  joints, read back joints, give me the latest cube sighting. `wrist_localizer`
+  is the other half of the same rule: turning an image into a cube pose is
+  detection, so it lives here rather than inside the controller that consumes
+  the answer. `Sighting.fresh`
+  is where the thread/inline difference surfaces: the rig returns the same solve
+  on consecutive ticks and folding it in twice would pull the grasp too far.
+- **`rollout/`** — one episode runner, over any controller and any plant. `phase`
+  is the tick loop: evaluate the phase, observe, record, command, repeat, with
+  the descent's visual servo folded in. There is one of it rather than two,
+  because once the world sits behind `plant/` a rig run and a sim run *are* the
+  same loop. `sim` and `real` are the two setups that build a plant and drive it
+  — a scene and a camera rig on one side, cameras and a ramp onto the start pose
+  on the other — plus `sim_dataset`/`real_dataset` (a dataset row per tick) and
+  `records` (what a finished episode leaves behind).
+
+  **A tick is observed before it is commanded**, which is the dataset's central
+  invariant: a row pairs the observation at time t with the action issued from
+  it. It is also why a phase's last tick is recorded but never commanded.
+- **`variants/`** — one recorded trajectory, rendered many ways. Everything here
+  answers "no" to the question that organizes the sim/real split: *if I change
+  this, does the correct action change?* Lighting, materials, colours,
+  backgrounds, viewpoint, exposure and noise move pixels and nothing else, so
+  they are drawn against an episode that already succeeded and its action labels
+  stay correct. `appearance` (the named palettes), `draw` (the envelopes a
+  variant samples from), `scene` (applying a draw to a compiled model),
+  `renderer` (replaying an artifact through the recording camera pipeline),
+  `render` (one artifact into N variants — variant outer, frame inner, so the
+  scene is restyled once instead of per frame), `video` (encoding a variant the
+  way the recording was encoded).
+
+  The input is a trajectory artifact, which is why none of this needs the
+  planner, the detectors or physics — and why a domain-randomization experiment
+  costs a render pass rather than a fresh collection run.
 - **`calibration/`** — solving the rig by rendering the scene and comparing it
   to a real image: `cam_align_solve`, `camera_compare`,
   `camera_calibration_export`, `session_calibration`.
