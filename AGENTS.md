@@ -299,7 +299,18 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   joints, read back joints, give me the latest cube sighting. `wrist_localizer`
   is the other half of the same rule: turning an image into a cube pose is
   detection, so it lives here rather than inside the controller that consumes
-  the answer. `Sighting.fresh`
+  the answer.
+
+  `overhead` locates the cube and the drop plate the same way — render the
+  overhead camera at detection resolution, run the detector, solve through where
+  the camera is *believed* to be. Doing that honestly makes sim **better** than
+  the rig (0.4 mm against 6-9 mm), so a residual calibration error is drawn and
+  the belief error becomes an outcome rather than a value applied to the truth.
+  `overhead_check` is the measurement that says whether it lands on the rig's
+  distribution; `scripts/check_overhead_localization.py` runs it. Two known
+  properties: the arm can stand in the way, which is why the rig hunts and why
+  sim now does too, and simulated yaw is still cleaner than the rig's (~0.4
+  against ~2 degrees) because rendered tags carry no sensor noise. `Sighting.fresh`
   is where the thread/inline difference surfaces: the rig returns the same solve
   on consecutive ticks and folding it in twice would pull the grasp too far.
 - **`rollout/`** — one episode runner, over any controller and any plant. `phase`
@@ -314,6 +325,12 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   **A tick is observed before it is commanded**, which is the dataset's central
   invariant: a row pairs the observation at time t with the action issued from
   it. It is also why a phase's last tick is recorded but never commanded.
+
+  `localized_episode` prepares an episode the way the rig does — put the plate
+  down, look, hunt if something is hidden, then plan on what was seen — which is
+  what `record_sim.py --overhead-perception` runs. `checkpoint` carries out a
+  replan, and `scripted` hands the expert the scene and physics it is not
+  allowed to reach for itself.
 - **`variants/`** — one recorded trajectory, rendered many ways. Everything here
   answers "no" to the question that organizes the sim/real split: *if I change
   this, does the correct action change?* Lighting, materials, colours,
