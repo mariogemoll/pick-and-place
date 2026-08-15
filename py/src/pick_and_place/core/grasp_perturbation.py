@@ -4,11 +4,13 @@
 """A deliberate one-shot error in where the cube is believed to be.
 
 The analytic planner never fails, so no recorded demonstration contains a retry:
-the cloned policy has never seen an arm recover from a fumbled grasp, and
-`docs/POLICY_FAILURE_ANATOMY.md` section 4 measures the consequence -- a missed
-grasp is terminal, the arm retreats to a pose no demonstration passes through and
-drifts outward until timeout. This makes the planner fumble on purpose so the
-recovery it then plans can be recorded as a demonstration.
+the cloned policy has never seen an arm recover from a fumbled grasp. Measured
+consequence, replaying a never-solved scene: after a missed grasp the arm
+retreats to a configuration no demonstration passes through (base swung 33 deg,
+wrist flexed 72 deg) and then drifts monotonically outward for the rest of the
+episode rather than re-approaching -- a missed grasp is terminal, not recovered
+from. This makes the planner fumble on purpose so the recovery it then plans can
+be recorded as a demonstration.
 
 **Why the belief and not the command.** The obvious alternative is to disturb the
 arm directly: add a transient offset to `data.ctrl`, or shove the cube's `qpos`

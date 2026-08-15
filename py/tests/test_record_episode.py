@@ -18,8 +18,7 @@ modes are deterministic and can be pinned exactly.
 
 The dataset is a spy rather than a LeRobotDataset and the cameras are a stub rig
 where the rendered pixels are not what is under test — what is asserted is the
-row stream, the phase spans, and the decisions the loop makes. ``docs/fingerprint_recorder.py``
-covers the same two paths as a before/after oracle over six seeds each.
+row stream, the phase spans, and the decisions the loop makes.
 """
 
 import contextlib
