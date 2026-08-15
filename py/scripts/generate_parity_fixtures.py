@@ -45,8 +45,8 @@ from pick_and_place.core.geometry import (
 )
 from pick_and_place.core.ik import solve_simple_grasp_ik
 from pick_and_place.core.kinematics import So101Kinematics
-from pick_and_place.planning.grasp import GraspChoice, grasp_candidates
-from pick_and_place.planning.motion import _timed_arc_fraction, smoothstep
+from pick_and_place.scripted.grasp import GraspChoice, grasp_candidates
+from pick_and_place.scripted.motion import _timed_arc_fraction, smoothstep
 from pick_and_place.sim.derive_kinematics import derive_kinematics
 from pick_and_place.sim.model import build_model
 from pick_and_place.spec.robot import ARM_JOINT_NAMES

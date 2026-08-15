@@ -58,7 +58,7 @@ from pick_and_place.sim.domain_randomization import (
 )
 from pick_and_place.core.geometry import cube_quat_from_pose
 from pick_and_place.policies.policy_evaluation import SCENARIO_MANIFEST_VERSION
-from pick_and_place.planning.scenario_sampling import sample_scene, workspace_region
+from pick_and_place.scripted.scenario_sampling import sample_scene, workspace_region
 
 INITIAL_ROBOT_STATE_REAL = [0.0, 0.0, 0.0, 0.0, -90.0, 39.3]
 CONTROL_HZ = 30.0

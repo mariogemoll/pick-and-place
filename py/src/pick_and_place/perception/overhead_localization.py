@@ -18,7 +18,8 @@ from pick_and_place.perception.cube_detection import (
 )
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
-from pick_and_place.perception.paper_detection import PaperTarget, PaperTracker, detect_paper_target
+from pick_and_place.perception.paper_detection import PaperTracker, detect_paper_target
+from pick_and_place.spec.drop_zone import PaperTarget
 
 
 class OverheadLocalizer:

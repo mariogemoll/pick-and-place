@@ -56,7 +56,7 @@ from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
 from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_spec
 from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
 from pick_and_place.spec.robot import JOINT_NAMES
-from pick_and_place.planning.episode_sampling import sample_cube, sample_target
+from pick_and_place.scripted.episode_sampling import sample_cube, sample_target
 from pick_and_place.core.geometry import cube_quat_from_pose, CubePose
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
 from pick_and_place.sim.domain_randomization import (

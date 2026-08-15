@@ -45,7 +45,7 @@ from pick_and_place.core.joint_frames import (
 )
 from pick_and_place.hardware.follower import make_so101_follower
 from pick_and_place.sim.derive_kinematics import derive_kinematics
-from pick_and_place.planning.motion import smoothstep
+from pick_and_place.scripted.motion import smoothstep
 from pick_and_place.runtime.move_to_random_pose import sample_reachable_pose
 from pick_and_place.data.recorder import EpisodeRecorder
 from pick_and_place.core.safety import recover_on

@@ -18,7 +18,7 @@ def main():
     parser = argparse.ArgumentParser(description="Capture the current robot pose as the rest position.")
     parser.add_argument("--port", required=True, help="Serial port of the SO-101 follower")
     parser.add_argument("--id", default="folly", help="Follower ID (default: folly)")
-    parser.add_argument("--update", action="store_true", help="Automatically update py/src/pick_and_place/planning/trajectory.py")
+    parser.add_argument("--update", action="store_true", help="Automatically update py/src/pick_and_place/scripted/trajectory.py")
     args = parser.parse_args()
 
     print(f"Connecting to follower on {args.port}...")

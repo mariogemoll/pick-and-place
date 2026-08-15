@@ -59,8 +59,9 @@ from pick_and_place.data.recording import RecordingSession
 from pick_and_place.data.trajectory_artifact import TrajectoryFrames, TrajectoryWriter
 from pick_and_place.perception.image_rectify import SQUARE_SIZE
 from pick_and_place.runtime.believed_frame import BelievedFrame
-from pick_and_place.runtime.checkpoint import fuses_into_next, replan_from_checkpoint
-from pick_and_place.runtime.descent import regrasp_after_descent
+from pick_and_place.rollout.checkpoint import replan_from_checkpoint
+from pick_and_place.scripted.checkpoint import fuses_into_next
+from pick_and_place.scripted.descent import regrasp_after_descent
 from pick_and_place.runtime.episodes import Episode
 from pick_and_place.plant.sim import SimPlant
 from pick_and_place.rollout.phase import Run, play_phase
@@ -264,7 +265,7 @@ def _grasp_and_lift(kinematics, grasp, remaining_lift) -> tuple[Any, Any]:
     grasp mode: the planner picks the low recovery lift for its own reasons, and
     the descent has no say in that.
     """
-    from pick_and_place.planning.trajectory import GraspPhase, LiftPhase, RecoveryLiftPhase
+    from pick_and_place.scripted.trajectory import GraspPhase, LiftPhase, RecoveryLiftPhase
     from pick_and_place.spec.robot import GRIPPER_OPEN
 
     lift_cls = RecoveryLiftPhase if isinstance(remaining_lift, RecoveryLiftPhase) else LiftPhase

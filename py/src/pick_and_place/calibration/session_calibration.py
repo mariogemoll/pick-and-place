@@ -43,8 +43,8 @@ from pick_and_place.perception.cube_detection import (
     estimate_cube_pose,
     make_cube_detector,
 )
-from pick_and_place.planning.episode_sampling import sample_hunt_pose
-from pick_and_place.planning.motion import smoothstep
+from pick_and_place.scripted.episode_sampling import sample_hunt_pose
+from pick_and_place.scripted.motion import smoothstep
 from pick_and_place.sim.collisions import build_geom_sets, make_carry_collision_checker
 from pick_and_place.spec.robot import ARM_JOINT_NAMES, JOINT_NAMES
 from pick_and_place.core.joint_frames import (

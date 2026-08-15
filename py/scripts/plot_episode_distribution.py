@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from pick_and_place.planning.episode_sampling import sample_cube, sample_target
+from pick_and_place.scripted.episode_sampling import sample_cube, sample_target
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.workspace_bounds import (
     CANONICAL_PICKUP_SECTOR,

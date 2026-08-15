@@ -54,6 +54,25 @@ def test_actor_respects_the_action_magnitude():
     assert action.abs().max().item() <= 1.5
 
 
+#: Initializations to average the untrained spread over, and samples from each.
+#: The spread varies by about 0.03 between initializations, which is wider than
+#: any tolerance worth asserting, so the test asks about the *design* rather
+#: than about one draw of it.
+UNTRAINED_ACTOR_SEEDS = 8
+UNTRAINED_ACTOR_SAMPLES = 4000
+
+
+def _untrained_actor_spread(action_magnitude: float) -> float:
+    """Mean output spread of a freshly initialized actor, over several seeds."""
+    spreads = []
+    for seed in range(UNTRAINED_ACTOR_SEEDS):
+        torch.manual_seed(seed)
+        agent = LatentSac(_config(action_magnitude=action_magnitude))
+        action, _ = agent.actor(torch.zeros(UNTRAINED_ACTOR_SAMPLES, ACTOR_DIM))
+        spreads.append(action.std().item())
+    return float(np.mean(spreads))
+
+
 def test_an_untrained_actor_starts_near_the_base_policys_noise():
     """Why action_magnitude is 1.5 and not 1.0.
 
@@ -61,10 +80,21 @@ def test_an_untrained_actor_starts_near_the_base_policys_noise():
     distribution were much narrower, the handover at the end of warmup would
     step the policy off the noise distribution the denoiser was trained under
     before anything had been learned. At 1.5 the two very nearly coincide.
+
+    Averaged over initializations, because that is what the claim is about. One
+    draw lands anywhere between 0.90 and 1.02 depending on the weights it got,
+    and which values a seed produces is not identical across platforms — so a
+    single draw is flaky whether it is seeded or not. The mean over eight is
+    stable to a couple of thousandths and still separates 1.5 from the
+    alternatives by a mile.
     """
-    agent = LatentSac(_config(action_magnitude=1.5))
-    action, _ = agent.actor(torch.zeros(20000, ACTOR_DIM))
-    assert action.std().item() == pytest.approx(0.94, abs=0.06)
+    assert _untrained_actor_spread(1.5) == pytest.approx(0.944, abs=0.05)
+
+
+def test_the_magnitude_is_what_sets_that_spread():
+    """The tolerance above is tight enough to mean something."""
+    assert _untrained_actor_spread(1.0) == pytest.approx(0.63, abs=0.05)
+    assert _untrained_actor_spread(2.0) == pytest.approx(1.26, abs=0.05)
 
 
 def test_deterministic_action_is_the_squashed_mean():

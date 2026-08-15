@@ -1,168 +1,110 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Observation-driven incremental analytic pick-and-place controller."""
+"""Observation-driven incremental analytic pick-and-place controller.
+
+The expert. It localizes, plans, servos the descent onto what it sees and
+replans the rest from measured state — and it does all of that from images and
+reported joints, which is the whole point: it is drivable from exactly what a
+learned policy is drivable from.
+
+It *consumes* sightings rather than producing them. Detection, preflight and
+episode preparation are injected, because each needs a capability the controller
+has no other use for — a tag detector, a compiled scene, live physics — and
+reaching for any of them would make the expert a thing that can only run where
+those happen to be.
+"""
 
 from __future__ import annotations
 
 import dataclasses
 from collections.abc import Callable, Iterable
-from concurrent.futures import Future, ThreadPoolExecutor
 from enum import Enum
-from typing import Any
+from typing import Protocol
 
-import mujoco
 import numpy as np
-from scipy.spatial.transform import Rotation
 
-from pick_and_place.perception.cube_detection import CubeTracker
-from pick_and_place.planning.episode_sampling import sample_hunt_pose
-from pick_and_place.runtime.episodes import Episode, prepare_episode
-from pick_and_place.runtime.preflight import PreflightDebug, preflight
-from pick_and_place.sim.collisions import is_unexpected
-from pick_and_place.sim.model import set_joint
-from pick_and_place.spec.robot import JOINT_NAMES
-from pick_and_place.core.joint_frames import real_frame_to_sim, sim_frame_to_real
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
-from pick_and_place.perception.overhead_localization import OverheadLocalizer
-from pick_and_place.perception.paper_detection import PaperTarget
-from pick_and_place.spec.controller import ControllerFailure, OVERHEAD_FEATURE, PolicyObservation, STATE_FEATURE, WRIST_FEATURE
-from pick_and_place.planning.grasp import fold_cube_yaw, grasp_candidates
-from pick_and_place.planning.motion import shortest_delta
-from pick_and_place.planning.replan import replan_remaining_candidates
-from pick_and_place.planning.trajectory import (
+from pick_and_place.core.joint_frames import real_frame_to_sim, sim_frame_to_real
+from pick_and_place.core.kinematics import So101Kinematics
+from pick_and_place.scripted.episode_sampling import sample_hunt_pose
+from pick_and_place.scripted.grasp import fold_cube_yaw, grasp_candidates
+from pick_and_place.scripted.motion import shortest_delta
+from pick_and_place.scripted.replan import replan_remaining_candidates
+from pick_and_place.scripted.trajectory import (
     DescentPhase,
     GraspPhase,
     LiftPhase,
     RecoveryLiftPhase,
     Trajectory,
 )
-from pick_and_place.spec.robot import GRIPPER_OPEN
-from pick_and_place.planning.visual_servo import (
+from pick_and_place.scripted.visual_servo import (
     DESCENT_SERVO_MAX_DURATION,
     DescentServoConvergence,
     DescentServoRetryState,
 )
+from pick_and_place.spec.controller import (
+    OVERHEAD_FEATURE,
+    STATE_FEATURE,
+    WRIST_FEATURE,
+    ControllerFailure,
+    PolicyObservation,
+)
+from pick_and_place.spec.drop_zone import PaperTarget
+from pick_and_place.spec.robot import GRIPPER_OPEN, JOINT_NAMES
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 
-PlanEpisode = Callable[..., Episode]
+
+class PlannedEpisode(Protocol):
+    """The plan-level facts the controller needs from a prepared episode.
+
+    A structural type rather than an import: preparing an episode means
+    compiling a scene and vetting a trajectory against live physics, and a
+    controller that could reach for either would only run where they exist.
+    """
+
+    trajectory: Trajectory
+    kinematics: So101Kinematics
+    target: CubePose
+    end_joints: dict[str, float]
+    end_gripper: float
+
+
+class SceneLocalizer(Protocol):
+    """What the controller needs from whatever looks at the overhead image.
+
+    Declared here, by the consumer, because it is a contract about *readings* —
+    where the cube is, where the plate is — and says nothing about detectors.
+    """
+
+    def reset(self) -> None:
+        """Forget detections from the previous episode."""
+        ...
+
+    def localize_cube(
+        self, frame_rgb: np.ndarray, *, free_grasp: bool = False
+    ) -> CubePose | None:
+        """Where the cube is, from one overhead frame."""
+        ...
+
+    def localize_drop_target(
+        self,
+        frame_rgb: np.ndarray,
+        *,
+        target_color: str,
+        workspace_corners_world: np.ndarray,
+    ) -> PaperTarget | None:
+        """Where the drop plate is, from one overhead frame."""
+        ...
+
+
+PlanEpisode = Callable[..., PlannedEpisode]
 TargetSampler = Callable[[np.random.Generator], CubePose]
 WristLocalization = Callable[
     [np.ndarray, dict[str, float], float, CubePose], CubePose | None
 ]
 ReplanCandidates = Callable[..., Iterable[Trajectory]]
-TrajectoryPreflight = Callable[[Episode, Trajectory], bool]
-
-
-class WristCameraLocalizer:
-    """Map wrist RGB into world poses through fixed nominal calibration.
-
-    The model is a controller-owned kinematic mirror. Reported joints pose its
-    nominal wrist camera each tick, so physical or simulated camera-mount
-    perturbations remain hidden in the observation image instead of leaking
-    through extrinsics supplied by the environment.
-    """
-
-    def __init__(
-        self,
-        model: mujoco.MjModel,
-        camera_matrix: np.ndarray,
-        *,
-        camera_name: str = "wrist_camera",
-        tracker_factory: Callable[[], Any] | None = None,
-        free_grasp: bool = False,
-    ) -> None:
-        matrix = np.asarray(camera_matrix, dtype=float)
-        if matrix.shape != (3, 3) or not np.all(np.isfinite(matrix)):
-            raise ValueError("camera_matrix must have finite shape (3, 3)")
-        camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
-        if camera_id < 0:
-            raise ValueError(f"model has no camera named {camera_name!r}")
-        self.model = model
-        self.camera_matrix = matrix.copy()
-        self.camera_id = camera_id
-        self.free_grasp = free_grasp
-        self._tracker_factory = tracker_factory or (lambda: CubeTracker(smooth=0.95))
-        self._shadow = mujoco.MjData(model)
-        self.reset()
-
-    def reset(self) -> None:
-        """Clear tracking history between controller episodes."""
-        self._tracker = self._tracker_factory()
-
-    def __call__(
-        self,
-        image: np.ndarray,
-        reported_joints: dict[str, float],
-        reported_gripper: float,
-        prior: CubePose,
-    ) -> CubePose | None:
-        del prior
-        for name, value in reported_joints.items():
-            set_joint(self.model, self._shadow, name, value)
-        set_joint(self.model, self._shadow, "gripper", reported_gripper)
-        mujoco.mj_forward(self.model, self._shadow)
-        estimate = self._tracker.update_frame(
-            image,
-            self.camera_matrix,
-            self._shadow.cam_xpos[self.camera_id],
-            self._shadow.cam_xmat[self.camera_id].reshape(3, 3),
-            dist=None,
-        )
-        if estimate is None:
-            return None
-        roll, pitch, yaw = Rotation.from_matrix(estimate.rotation).as_euler("xyz")
-        return CubePose(
-            x=float(estimate.position[0]),
-            y=float(estimate.position[1]),
-            z=CUBE_HALF_SIZE,
-            roll=float(roll) if self.free_grasp else 0.0,
-            pitch=float(pitch) if self.free_grasp else 0.0,
-            yaw=float(yaw),
-        )
-
-
-class AsyncWristLocalization:
-    """Keep wrist detection off the command-critical control thread."""
-
-    def __init__(self, localizer: WristLocalization) -> None:
-        self._localizer = localizer
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wrist-localizer")
-        self._future: Future[CubePose | None] | None = None
-        self._latest: CubePose | None = None
-
-    def __call__(
-        self,
-        frame_rgb: np.ndarray,
-        joints: dict[str, float],
-        gripper: float,
-        prior: CubePose,
-    ) -> CubePose | None:
-        if self._future is not None and self._future.done():
-            self._latest = self._future.result()
-            self._future = None
-        if self._future is None:
-            self._future = self._executor.submit(
-                self._localizer,
-                np.asarray(frame_rgb).copy(),
-                dict(joints),
-                float(gripper),
-                prior,
-            )
-        return self._latest
-
-    def reset(self) -> None:
-        if self._future is not None:
-            if not self._future.cancel():
-                self._future.result()
-            self._future = None
-        self._latest = None
-        reset = getattr(self._localizer, "reset", None)
-        if reset is not None:
-            reset()
-
-    def close(self) -> None:
-        self._executor.shutdown(wait=True, cancel_futures=True)
+TrajectoryPreflight = Callable[[PlannedEpisode, Trajectory], bool]
 
 
 class ScriptedPolicyState(str, Enum):
@@ -186,21 +128,20 @@ class ScriptedPolicy:
 
     def __init__(
         self,
-        localizer: OverheadLocalizer,
+        localizer: SceneLocalizer,
         workspace_corners_world: np.ndarray,
+        plan_episode: PlanEpisode,
+        trajectory_preflight: TrajectoryPreflight,
         *,
         target_color: str = "black",
         max_localization_steps: int = 60,
         localization_steps_per_search: int = 15,
         planning_max_attempts: int = 40,
         planning_verbose: bool = False,
-        debug: PreflightDebug = PreflightDebug(),
         rng_seed: int = 0,
         control_hz: float = 30.0,
         wrist_localizer: WristLocalization | None = None,
-        plan_episode: PlanEpisode = prepare_episode,
         replan_candidates: ReplanCandidates = replan_remaining_candidates,
-        trajectory_preflight: TrajectoryPreflight | None = None,
         target_sampler: TargetSampler | None = None,
         free_grasp: bool = False,
     ) -> None:
@@ -225,13 +166,12 @@ class ScriptedPolicy:
         self.localization_steps_per_search = localization_steps_per_search
         self.planning_max_attempts = planning_max_attempts
         self.planning_verbose = planning_verbose
-        self.debug = debug
         self.rng_seed = rng_seed
         self.control_hz = float(control_hz)
         self.wrist_localizer = wrist_localizer
         self._plan_episode = plan_episode
         self._replan_candidates = replan_candidates
-        self._trajectory_preflight = trajectory_preflight or self._default_preflight
+        self._trajectory_preflight = trajectory_preflight
         self.target_sampler = target_sampler
         self.free_grasp = free_grasp
         self.reset()
@@ -245,7 +185,7 @@ class ScriptedPolicy:
         self.state = ScriptedPolicyState.LOCALIZING
         self.cube_pose: CubePose | None = None
         self.drop_target: PaperTarget | None = None
-        self.episode: Episode | None = None
+        self.episode: PlannedEpisode | None = None
         self.failure: ControllerFailure | None = None
         self._localization_steps = 0
         self._search_target: np.ndarray | None = None
@@ -313,17 +253,6 @@ class ScriptedPolicy:
         self.state = ScriptedPolicyState.FAILED
         self.failure = ControllerFailure(code=code, message=message)
 
-    @staticmethod
-    def _default_preflight(episode: Episode, trajectory: Trajectory) -> bool:
-        events = preflight(
-            episode.model,
-            trajectory,
-            episode.actuator_id,
-            episode.robot_geom_ids,
-            episode.env_geom_ids,
-        )
-        return not any(is_unexpected(name1, name2) for _, name1, name2 in events)
-
     def _search_action(self) -> np.ndarray:
         arm_joints, gripper = sample_hunt_pose(self._rng)
         return sim_frame_to_real(arm_joints, gripper).astype(np.float32)
@@ -354,7 +283,6 @@ class ScriptedPolicy:
             max_attempts=self.planning_max_attempts,
             verbose=self.planning_verbose,
             include_environment=True,
-            debug=self.debug,
             free_grasp=self.free_grasp,
             target_sampler=self.target_sampler,
         )

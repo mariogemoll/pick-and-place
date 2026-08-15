@@ -25,7 +25,7 @@ import numpy as np
 
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.core.robot_dynamics import set_actuator_activation
-from pick_and_place.planning.trajectory import Trajectory
+from pick_and_place.scripted.trajectory import Trajectory
 from pick_and_place.sim.collisions import is_unexpected
 from pick_and_place.sim.model import set_cube_pose, set_joint
 

@@ -195,7 +195,7 @@ above, where work genuinely combines capabilities.
 | Tier | Packages | Rule |
 | --- | --- | --- |
 | Foundation | `spec`, `core` | `spec` imports nothing else in the package; `core` imports only `spec`. |
-| Capability branches | `planning`, `perception`, `sim`, `hardware`, `data`, `policies` | Each owns one heavy dependency. **No branch may import another.** |
+| Capability branches | `scripted`, `perception`, `sim`, `hardware`, `data`, `policies` | Each owns one heavy dependency. **No branch may import another.** |
 | Convergence | `runtime`, `plant`, `rollout`, `variants`, `calibration`, `analysis`, `cli` | May import anything, including each other. Nothing below them may import them. |
 
 `scripts/check_package_layering.py` enforces this in CI. When a module needs
@@ -215,12 +215,21 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   `appearance` (its opposite: one draw of everything that is only pixels),
   `robot_dynamics`, `camera_calibration` (the rig's measured calibration files),
   `paths`.
-- **`planning/`** — the analytic planner, which generates every demonstration
-  and is the expert baseline: `motion` (interpolation, easing, how long a move
-  takes), `grasp` (where to take hold), `carry` (getting the cube across),
-  `trajectory` (the eight phases assembled), `replan` (resuming from a
-  checkpoint), `visual_servo`, and the declared reset distribution
-  (`episode_sampling`, `scenario_sampling`).
+- **`scripted/`** — the analytic expert, which generates every demonstration and
+  is the baseline every learned policy is scored against: `motion`
+  (interpolation, easing, how long a move takes), `grasp` (where to take hold),
+  `carry` (getting the cube across), `trajectory` (the eight phases assembled),
+  `replan` (resuming from a checkpoint), `checkpoint` (which phase boundaries
+  earn one), `visual_servo` and `descent` (steering onto what the wrist camera
+  saw), `policy` (the whole controller, driven tick by tick from observations),
+  and the declared reset distribution (`episode_sampling`, `scenario_sampling`).
+
+  It is a branch, which is a real constraint and not a filing decision: it
+  **consumes** sightings rather than producing them, and its episode preparation
+  and preflight are injected, because each needs a capability — a tag detector,
+  a compiled scene, live physics — that an expert has no other use for. What is
+  left imports nothing but the physical facts and pure geometry, and is drivable
+  from exactly the observations a learned policy is drivable from.
 - **`perception/`** — AprilTag cube and drop-zone localization:
   `cube_detection`, `paper_detection`, `overhead_localization`,
   `detector_process`, `image_rectify`.
@@ -253,8 +262,8 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
 - **`runtime/`** — what an episode needs around the loop that runs it.
   `checkpoint` decides, after each phase, whether to replan from measured state
   or fly straight on where a checkpoint would do more harm than good.
-  `wrist_servo` runs the rig's cube detector on its own thread and `descent`
-  folds its estimates back into the running phase.
+  `wrist_servo` runs the rig's cube detector on its own thread, `preflight` vets
+  a trajectory under live physics, and `episodes` samples one that runs clean.
 
   `sim_wrist_servo` renders the wrist camera and detects the cube in it —
   inline, not on a thread, which is what keeps a recorded episode a pure function
@@ -287,7 +296,10 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   What differs is narrow — where the image comes from, what receives the
   commands, whether the detector runs on a thread or inline, and what drives the
   clock — and all four fit behind `interface`'s three operations: command
-  joints, read back joints, give me the latest cube sighting. `Sighting.fresh`
+  joints, read back joints, give me the latest cube sighting. `wrist_localizer`
+  is the other half of the same rule: turning an image into a cube pose is
+  detection, so it lives here rather than inside the controller that consumes
+  the answer. `Sighting.fresh`
   is where the thread/inline difference surfaces: the rig returns the same solve
   on consecutive ticks and folding it in twice would pull the grasp too far.
 - **`rollout/`** — one episode runner, over any controller and any plant. `phase`

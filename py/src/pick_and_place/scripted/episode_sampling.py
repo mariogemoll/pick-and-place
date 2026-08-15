@@ -6,7 +6,7 @@
 Where the cube starts, where it must end up, and what the arm is doing when the
 episode begins. Sampling only — :mod:`pick_and_place.runtime.episodes` takes a draw from
 here and vets it against live physics, and
-:mod:`pick_and_place.planning.scenario_sampling` composes the cube and target draws into
+:mod:`pick_and_place.scripted.scenario_sampling` composes the cube and target draws into
 the declared reset distribution.
 """
 

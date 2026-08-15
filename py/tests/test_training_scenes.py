@@ -15,7 +15,7 @@ from pick_and_place.runtime.training_scenes import (
     training_scenario,
 )
 from pick_and_place.policies.policy_evaluation import ScenarioManifest
-from pick_and_place.planning.scenario_sampling import sample_scene
+from pick_and_place.scripted.scenario_sampling import sample_scene
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 MANIFESTS = (

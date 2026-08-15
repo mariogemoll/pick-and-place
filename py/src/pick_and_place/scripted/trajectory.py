@@ -13,9 +13,9 @@ the target, (5) descend from cruise into the canonical drop pose, (6) release,
 lift clear, and flow back to neutral. The release is left to gravity: the
 gripper set point opens and the cube falls on its own.
 
-Where to take hold is :mod:`pick_and_place.planning.grasp`, how to get the cube
-across is :mod:`pick_and_place.planning.carry`, and resuming a partly-run
-trajectory is :mod:`pick_and_place.planning.replan`.
+Where to take hold is :mod:`pick_and_place.scripted.grasp`, how to get the cube
+across is :mod:`pick_and_place.scripted.carry`, and resuming a partly-run
+trajectory is :mod:`pick_and_place.scripted.replan`.
 """
 
 from __future__ import annotations
@@ -33,19 +33,19 @@ from pick_and_place.core import transforms as tf
 from pick_and_place.core.geometry import CubeFace, CubePose
 from pick_and_place.core.ik import solve_simple_grasp_ik
 from pick_and_place.core.kinematics import So101Kinematics
-from pick_and_place.planning.carry import (
+from pick_and_place.scripted.carry import (
     CarryJointChecker,
     CarryPlan,
     drop_descent_joints,
     nominal_drop_center_z,
     plan_carry_candidates,
 )
-from pick_and_place.planning.grasp import (
+from pick_and_place.scripted.grasp import (
     GraspChoice,
     free_grasp_candidates,
     grasp_candidates,
 )
-from pick_and_place.planning.motion import (
+from pick_and_place.scripted.motion import (
     Frame,
     _joint_distance,
     _joint_move_duration,

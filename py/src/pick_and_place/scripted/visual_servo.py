@@ -18,7 +18,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from pick_and_place.core.geometry import CubePose
-from pick_and_place.planning.motion import smoothstep
+from pick_and_place.scripted.motion import smoothstep
 
 # Descent PBVS completion gate. The planned descent duration is still the
 # minimum time needed to physically move from hover to grasp; these values decide

@@ -35,7 +35,7 @@ from pick_and_place.core.joint_frames import (
     sim_frame_to_real,
 )
 from pick_and_place.plant.interface import NOTHING_SEEN, Observation, Sighting
-from pick_and_place.runtime.checkpoint import measured_sim_state
+from pick_and_place.rollout.checkpoint import measured_sim_state
 from pick_and_place.runtime.wrist_servo import WristServo
 from pick_and_place.sim.collisions import unexpected_contact_pairs
 from pick_and_place.sim.model import set_cube_pose

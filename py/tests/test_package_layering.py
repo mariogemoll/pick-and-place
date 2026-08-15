@@ -27,7 +27,7 @@ def test_the_foundation_may_not_reach_up() -> None:
 
 def test_capability_branches_may_not_import_each_other() -> None:
     assert checker.is_violation("sim", "perception")
-    assert checker.is_violation("planning", "policies")
+    assert checker.is_violation("scripted", "policies")
     assert not checker.is_violation("sim", "core")
 
 

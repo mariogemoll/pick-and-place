@@ -15,12 +15,12 @@ Feedback is applied at two points, not continuously across the whole episode:
   filters it into the live source pose, re-derives the locked face/elbow grasp,
   and ``DescentPhase.evaluate`` re-solves IK toward the updated grasp. See
   :mod:`pick_and_place.runtime.wrist_servo` and
-  :mod:`pick_and_place.runtime.descent`.
+  :mod:`pick_and_place.scripted.descent`.
 - **Phase boundaries (checkpoint replanning).** After a completed phase the
   measured joints are sensed and the remaining trajectory is replanned and
   preflighted before continuing (sense → plan → execute → re-seed). Which
   boundaries get a checkpoint, and why the rest do not, is
-  :mod:`pick_and_place.runtime.checkpoint`.
+  :mod:`pick_and_place.rollout.checkpoint`.
 
 The other phases (hover, carry, release, lift) are feedforward playback. Motor
 readback is logged every tick and, at checkpoints, fed back into the replan.
@@ -46,8 +46,9 @@ from pick_and_place.core.joint_frames import (
 )
 from pick_and_place.data.recorder import EpisodeRecorder
 from pick_and_place.data.recording import RecordingSession
-from pick_and_place.runtime.checkpoint import fuses_into_next, replan_from_checkpoint
-from pick_and_place.runtime.descent import regrasp_after_descent
+from pick_and_place.rollout.checkpoint import replan_from_checkpoint
+from pick_and_place.scripted.checkpoint import fuses_into_next
+from pick_and_place.scripted.descent import regrasp_after_descent
 from pick_and_place.runtime.episodes import Episode
 from pick_and_place.plant.real import RealPlant
 from pick_and_place.data.trajectory_artifact import TrajectoryWriter
@@ -167,7 +168,7 @@ def _report_grasp(model: mujoco.MjModel, data: mujoco.MjData) -> None:
 
 def _grasp_and_lift(kinematics, grasp, free_grasp: bool) -> tuple[Any, Any]:
     """The close-and-lift pair, built from a grasp the descent settled on."""
-    from pick_and_place.planning.trajectory import GraspPhase, LiftPhase, RecoveryLiftPhase
+    from pick_and_place.scripted.trajectory import GraspPhase, LiftPhase, RecoveryLiftPhase
     from pick_and_place.spec.robot import GRIPPER_OPEN
 
     lift_cls = RecoveryLiftPhase if free_grasp else LiftPhase

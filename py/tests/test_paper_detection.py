@@ -3,7 +3,8 @@
 
 import numpy as np
 
-from pick_and_place.perception.paper_detection import PaperTarget, PaperTracker
+from pick_and_place.perception.paper_detection import PaperTracker
+from pick_and_place.spec.drop_zone import PaperTarget
 
 
 def test_paper_tracker_reset_requires_a_new_detection():

@@ -6,7 +6,7 @@
 Shared by ``pick_and_place/sim.py`` (sim-only viewer), ``pick_and_place/real.py``
 (the hardware path) and ``record_episodes`` (batch dataset generation). All need
 the same thing: poses drawn from
-:mod:`pick_and_place.planning.episode_sampling`, a trajectory planned for them,
+:mod:`pick_and_place.scripted.episode_sampling`, a trajectory planned for them,
 and :mod:`pick_and_place.runtime.preflight` run over each candidate until one
 comes back without an unexpected contact — resampling when none does.
 """
@@ -26,9 +26,9 @@ from pick_and_place.core.grasp_perturbation import GraspPerturbation
 from pick_and_place.core.miscalibration import MiscalibrationDraw
 from pick_and_place.core.robot_dynamics import set_actuator_activation
 from pick_and_place.core.workspace_bounds import is_cube_drop_allowed, is_cube_pickup_allowed
-from pick_and_place.planning.episode_sampling import sample_cube, sample_near_neutral, sample_target
-from pick_and_place.planning.grasp import GraspChoice, free_grasp_candidates, grasp_candidates
-from pick_and_place.planning.trajectory import Trajectory, trajectory_candidates_for_grasp
+from pick_and_place.scripted.episode_sampling import sample_cube, sample_near_neutral, sample_target
+from pick_and_place.scripted.grasp import GraspChoice, free_grasp_candidates, grasp_candidates
+from pick_and_place.scripted.trajectory import Trajectory, trajectory_candidates_for_grasp
 from pick_and_place.runtime.preflight import (
     PreflightDebug,
     preflight,
