@@ -19,7 +19,7 @@ Phases: (1) neutral -> hover, (2) hover -> grasp at cube center, (3) grasp,
 (5) release, lift clear, and flow back to neutral.
 
 This is sim-only. To run on the physical SO-101 follower, use
-``real.py`` (``pick_and_place.runtime.executor``).
+``real.py`` (``pick_and_place.rollout.real``).
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ from pick_and_place.spec.robot import HARDWARE_SIMULATION_HZ
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.core.miscalibration import MiscalibrationModel
-from pick_and_place.runtime.sim_recorder import record_episode
+from pick_and_place.rollout.sim import record_episode
 from pick_and_place.sim.paper_target_marker import place_paper_target_marker
 from pick_and_place.core.workspace_bounds import (
     PAN_AXIS,

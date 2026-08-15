@@ -30,7 +30,7 @@ from pick_and_place.sim.camera_pose_envelope import (
 )
 from pick_and_place.variants.draw import BackgroundRandomization, CameraRandomization
 from pick_and_place.variants.scene import scene_texture_ids, set_scene_texture
-from pick_and_place.runtime.sim_recorder import OVERHEAD_CAMERA, build_recording_scene
+from pick_and_place.rollout.sim import OVERHEAD_CAMERA, build_recording_scene
 
 PRESET = Path(__file__).parents[2] / "config" / "domain_randomization" / "act_mild_v1.json"
 

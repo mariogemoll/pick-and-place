@@ -91,7 +91,7 @@ from pick_and_place.planning.episode_sampling import sample_cube, sample_target
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.sim.scene import build_environment
 from pick_and_place.core.image_ops import resize_and_center_crop
-from pick_and_place.runtime.sim_recorder import configure_render_quality, fovy_from_intrinsics
+from pick_and_place.rollout.sim import configure_render_quality, fovy_from_intrinsics
 from pick_and_place.core.workspace_bounds import (
     CANONICAL_PICKUP_SECTOR,
     CUBE_PLACEMENT_SECTOR,

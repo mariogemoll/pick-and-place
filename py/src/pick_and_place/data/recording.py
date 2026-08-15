@@ -44,7 +44,7 @@ class RecordingSession:
     no intermediate video/motor files and no separate export step.
 
     This class and :class:`pick_and_place.analysis.episode_video.EpisodeVideoSession`
-    implement the same recording interface consumed by :func:`pick_and_place.runtime.executor.execute_episode`:
+    implement the same recording interface consumed by :func:`pick_and_place.rollout.real.execute_episode`:
     ``create_dataset``/``initialized``, ``record_frame``, ``has_pending_frames``,
     ``save_episode``/``discard_episode``/``finalize``, ``dropped_frame_count``,
     plus the live-capture hooks (``record_live_frame``, ``start_live_capture``/

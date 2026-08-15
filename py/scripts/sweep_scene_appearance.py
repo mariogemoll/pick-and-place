@@ -51,7 +51,7 @@ from pick_and_place.analysis.scene_visibility import (
     video_render_hw,
 )
 from pick_and_place.core.image_ops import resize_and_center_crop
-from pick_and_place.runtime.sim_recorder import OVERHEAD_CAMERA, WRIST_CAMERA
+from pick_and_place.rollout.sim import OVERHEAD_CAMERA, WRIST_CAMERA
 from pick_and_place.core.task_phases import PHASES
 
 FRAME_STRIDE = 3  # 30 Hz source frames per 10 Hz policy tick

@@ -181,7 +181,7 @@ def main() -> None:
         pick-place + descent servo). Frees the wrist device for the executor and
         reopens it afterwards. Returns True only on a completed placement."""
         from pick_and_place.runtime.episodes import EpisodeSamplingError, prepare_episode
-        from pick_and_place.runtime.executor import execute_episode
+        from pick_and_place.rollout.real import execute_episode
 
         current = action_to_joints(follower.get_observation(), np.zeros(6))
         start_joints, start_gripper = real_frame_to_sim(current)

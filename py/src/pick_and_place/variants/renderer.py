@@ -28,7 +28,7 @@ from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
 from pick_and_place.core.joint_frames import real_frame_to_sim
 from pick_and_place.core.workspace_bounds import is_cube_drop_allowed
 from pick_and_place.data.trajectory_artifact import EpisodeFacts, WristCameraMount
-from pick_and_place.runtime.sim_recorder import WRIST_CAMERA, SimCameraRig, build_recording_scene
+from pick_and_place.rollout.sim import WRIST_CAMERA, SimCameraRig, build_recording_scene
 from pick_and_place.sim.camera_pose_envelope import (
     CameraBase,
     CameraJitter,

@@ -41,7 +41,7 @@ from pick_and_place.core.joint_frames import (
     sim_frame_to_real,
 )
 from pick_and_place.runtime.episodes import prepare_episode
-from pick_and_place.runtime.executor import execute_episode
+from pick_and_place.rollout.real import execute_episode
 from pick_and_place.runtime.ramp import RAMP_DURATION
 from pick_and_place.spec.robot import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 

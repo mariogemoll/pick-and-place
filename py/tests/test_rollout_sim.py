@@ -32,8 +32,8 @@ import pytest
 from pick_and_place.core.joint_frames import sim_frame_to_real
 from pick_and_place.core.miscalibration import MiscalibrationModel
 from pick_and_place.runtime.episodes import prepare_episode
-from pick_and_place.runtime.sim_recorder import record_episode
-from pick_and_place.runtime.sim_tick_recorder import CUBE_POSE_STATE_NAMES
+from pick_and_place.rollout.sim import record_episode
+from pick_and_place.rollout.sim_dataset import CUBE_POSE_STATE_NAMES
 from pick_and_place.spec.robot import ARM_JOINT_NAMES, CONTROL_HZ, HARDWARE_SIMULATION_HZ
 
 #: Real speed. The pick only holds at 1.0 — faster playback outruns the position

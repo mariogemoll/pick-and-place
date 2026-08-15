@@ -38,7 +38,7 @@ from pick_and_place.variants.appearance import (
     SceneAppearance,
     SceneAppearanceOverride,
 )
-from pick_and_place.runtime.sim_recorder import build_recording_scene
+from pick_and_place.rollout.sim import build_recording_scene
 
 RERENDER_PATH = Path(__file__).parents[1] / "scripts" / "rerender_episodes.py"
 

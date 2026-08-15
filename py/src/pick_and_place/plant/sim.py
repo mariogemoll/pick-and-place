@@ -23,11 +23,11 @@ import numpy as np
 
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.core.joint_frames import sim_frame_to_real
-from pick_and_place.plant.interface import NOTHING_SEEN, Sighting
+from pick_and_place.plant.interface import NOTHING_SEEN, Observation, Sighting
 from pick_and_place.runtime.believed_frame import BelievedFrame
 from pick_and_place.runtime.sim_wrist_servo import SimWristServo
 from pick_and_place.sim.collisions import unexpected_contact_pairs
-from pick_and_place.sim.model import get_joint
+from pick_and_place.sim.model import get_cube_qpos, get_joint
 from pick_and_place.spec.robot import CONTROL_HZ
 
 
@@ -76,6 +76,35 @@ class SimPlant:
         """Simulated time. A phase advances at the rate physics does."""
         return float(self.data.time)
 
+    @property
+    def has_wrist_camera(self) -> bool:
+        return self.servo is not None
+
+    def begin_phase(self, descent_active: bool) -> None:
+        """Nothing to arm: the detector runs inline, on demand, and holds no state."""
+
+    def resync_clock(self) -> None:
+        """Nothing to resync: the clock is simulated time, which does not run away."""
+        self._tick_started = time.monotonic()
+
+    def observe(self) -> Observation:
+        """The tick's world in both frames, plus the cube's privileged true pose.
+
+        Read once and handed to everything that wants it. Two readers would
+        drift: the pan zero wanders with the clock, so a second read is a second
+        draw of the offsets that separate the frames.
+        """
+        true_state, believed_state = self.belief.state_pair()
+        return Observation(
+            state=believed_state,
+            true_state=true_state,
+            true_cube_pose=get_cube_qpos(self.model, self.data),
+        )
+
+    def to_real(self, joints: Mapping[str, float], gripper: float) -> np.ndarray:
+        """The command as a real-frame six-vector. Nothing clamps it: it was preflighted."""
+        return sim_frame_to_real(joints, gripper)
+
     def step(self, joints: Mapping[str, float], gripper: float) -> np.ndarray:
         """Write the set point into the actuators and advance one control tick.
 
@@ -93,7 +122,7 @@ class SimPlant:
             if remaining > 0:
                 time.sleep(remaining)
         self._tick_started = time.monotonic()
-        return sim_frame_to_real(joints, gripper)
+        return self.to_real(joints, gripper)
 
     def measured(self) -> tuple[dict[str, float], float]:
         """The servo-style readback: true joints minus the offsets in effect."""

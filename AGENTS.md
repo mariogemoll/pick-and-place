@@ -196,7 +196,7 @@ above, where work genuinely combines capabilities.
 | --- | --- | --- |
 | Foundation | `spec`, `core` | `spec` imports nothing else in the package; `core` imports only `spec`. |
 | Capability branches | `planning`, `perception`, `sim`, `hardware`, `data`, `policies` | Each owns one heavy dependency. **No branch may import another.** |
-| Convergence | `runtime`, `plant`, `variants`, `calibration`, `analysis`, `cli` | May import anything, including each other. Nothing below them may import them. |
+| Convergence | `runtime`, `plant`, `rollout`, `variants`, `calibration`, `analysis`, `cli` | May import anything, including each other. Nothing below them may import them. |
 
 `scripts/check_package_layering.py` enforces this in CI. When a module needs
 two capabilities it belongs in the convergence tier by construction; when it
@@ -250,28 +250,23 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   flow-matching policy (`flow_matching`, `flow_policy`,
   `diffusion_policy_unet`). ACT and SmolVLA are *evaluated* here but trained
   externally via the `lerobot` CLI.
-- **`runtime/`** — running an episode. `executor` orchestrates one: it opens the
-  cameras, ramps the arm onto the start pose, and then alternates between
-  `phase_playback` (the tick loop — evaluate the phase, step physics, command
-  the servos, read back) and `checkpoint` (after each phase, replan from
-  measured state, or fly straight on where a checkpoint would do more harm than
-  good). `wrist_servo` runs the descent's cube detector on its own thread and
-  `descent` folds its estimates back into the running phase; `tick_recorder`
-  turns the run into dataset rows, one per control tick.
+- **`runtime/`** — what an episode needs around the loop that runs it.
+  `checkpoint` decides, after each phase, whether to replan from measured state
+  or fly straight on where a checkpoint would do more harm than good.
+  `wrist_servo` runs the rig's cube detector on its own thread and `descent`
+  folds its estimates back into the running phase.
 
-  `sim_recorder` is the same episode with no arm in it, and is built from the
-  matching set: `sim_phase_playback` (the tick loop, capturing each row *before*
-  it commands it), `sim_wrist_servo` (render the wrist camera, detect the cube
-  in it — inline, not on a thread, which is what keeps a recorded episode a pure
-  function of its seed), `sim_tick_recorder` (one dataset row per tick), and
-  `wrist_mixed_view` (the true and believed wrist views blended, for watching the
-  servo converge). `believed_frame` is what the two worlds meet through: with a
-  miscalibration draw, commands and recorded rows live in the believed frame
-  while physics runs the true one. `checkpoint` and `descent` are shared with the
-  hardware path, so both agree by construction on which phase boundaries replan.
+  `sim_wrist_servo` renders the wrist camera and detects the cube in it —
+  inline, not on a thread, which is what keeps a recorded episode a pure function
+  of its seed — and `wrist_mixed_view` blends the true and believed wrist views
+  for watching the servo converge. `believed_frame` is what the two worlds meet
+  through: with a miscalibration draw, commands and recorded rows live in the
+  believed frame while physics runs the true one. `checkpoint` and `descent` are
+  shared by both paths, so they agree by construction on which phase boundaries
+  replan.
 
-  Every sim run also emits a trajectory artifact, which is what makes appearance
-  a free variable after the fact: the dataset keeps only the believed state,
+  Every run also emits a trajectory artifact, which is what makes appearance a
+  free variable after the fact: the dataset keeps only the believed state,
   because that is the training label, while the artifact keeps the true joints
   and cube pose next to it, because reproducing an episode's pixels means
   putting the arm back where physics actually held it.
@@ -295,6 +290,18 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   joints, read back joints, give me the latest cube sighting. `Sighting.fresh`
   is where the thread/inline difference surfaces: the rig returns the same solve
   on consecutive ticks and folding it in twice would pull the grasp too far.
+- **`rollout/`** — one episode runner, over any controller and any plant. `phase`
+  is the tick loop: evaluate the phase, observe, record, command, repeat, with
+  the descent's visual servo folded in. There is one of it rather than two,
+  because once the world sits behind `plant/` a rig run and a sim run *are* the
+  same loop. `sim` and `real` are the two setups that build a plant and drive it
+  — a scene and a camera rig on one side, cameras and a ramp onto the start pose
+  on the other — plus `sim_dataset`/`real_dataset` (a dataset row per tick) and
+  `records` (what a finished episode leaves behind).
+
+  **A tick is observed before it is commanded**, which is the dataset's central
+  invariant: a row pairs the observation at time t with the action issued from
+  it. It is also why a phase's last tick is recorded but never commanded.
 - **`variants/`** — one recorded trajectory, rendered many ways. Everything here
   answers "no" to the question that organizes the sim/real split: *if I change
   this, does the correct action change?* Lighting, materials, colours,

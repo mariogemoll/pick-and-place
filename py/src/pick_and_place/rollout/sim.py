@@ -63,10 +63,10 @@ from pick_and_place.runtime.checkpoint import fuses_into_next, replan_from_check
 from pick_and_place.runtime.descent import regrasp_after_descent
 from pick_and_place.runtime.episodes import Episode
 from pick_and_place.plant.sim import SimPlant
-from pick_and_place.runtime.sim_phase_playback import SimRun, play_phase
-from pick_and_place.runtime.sim_tick_recorder import SimTickRecorder
+from pick_and_place.rollout.phase import Run, play_phase
+from pick_and_place.rollout.sim_dataset import SimTickRecorder
 from pick_and_place.runtime.sim_wrist_servo import SimWristServo
-from pick_and_place.runtime.wrist_mixed_view import close_mixed
+from pick_and_place.runtime.wrist_mixed_view import blend_mixed, close_mixed, show_mixed
 from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
 from pick_and_place.sim.domain_randomization import reload_renderer_textures
 from pick_and_place.policies.policy_evaluation import TaskOracleConfig
@@ -384,7 +384,36 @@ def record_episode(
         speed=speed,
         realtime=realtime,
     )
-    run = SimRun(viewer=viewer, should_stop=should_stop, verbose=verbose)
+    def on_tick(tick) -> None:
+        if recorder is not None:
+            recorder.record(
+                believed_state=tick.observation.state,
+                action=tick.action,
+                true_cube_pose=tick.observation.true_cube_pose,
+            )
+
+    def on_look(plant, sighting, tracked, is_descent) -> None:
+        if not show_wrist_mixed:
+            return
+        true_rgb, camera_position, camera_rotation = plant.last_look
+        show_mixed(
+            blend_mixed(
+                true_rgb,
+                plant.servo.render_believed(tracked),
+                sighting,
+                plant.servo.camera_matrix,
+                camera_position,
+                camera_rotation,
+            )
+        )
+
+    run = Run(
+        on_tick=on_tick,
+        on_look=on_look,
+        sync=(lambda: None) if viewer is None else viewer.sync,
+        should_stop=(lambda: False) if should_stop is None else should_stop,
+        verbose=verbose,
+    )
 
     def outcome(status: str) -> RecordEpisodeResult:
         """Snapshot the artifact as it stands. Reads the latest bindings when called."""
@@ -402,12 +431,10 @@ def record_episode(
                 plant,
                 current_traj.phases[0],
                 run=run,
-                belief=belief,
-                recorder=recorder,
                 artifact=artifact,
                 tracked_source=tracked_source,
                 contacts=contacts,
-                show_wrist_mixed=show_wrist_mixed,
+                watch=show_wrist_mixed,
             )
             phase = played.phase
             tracked_source = played.tracked_source

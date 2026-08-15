@@ -34,7 +34,7 @@ from pick_and_place.core.joint_frames import (
     joints_to_action,
     sim_frame_to_real,
 )
-from pick_and_place.plant.interface import NOTHING_SEEN, Sighting
+from pick_and_place.plant.interface import NOTHING_SEEN, Observation, Sighting
 from pick_and_place.runtime.checkpoint import measured_sim_state
 from pick_and_place.runtime.wrist_servo import WristServo
 from pick_and_place.sim.collisions import unexpected_contact_pairs
@@ -100,6 +100,29 @@ class RealPlant:
         """The last real-frame command issued, which a readback is filled in from."""
         return self._commanded
 
+    def observe(self) -> Observation:
+        """Read the motors.
+
+        ``true_state`` is the same array: a rig has no privileged view of itself,
+        so where the arm physically is *is* what its servos report, up to the
+        calibration this plant already folds in.
+        """
+        state = self.readback()
+        return Observation(state=state, true_state=state)
+
+    def to_real(self, joints: Mapping[str, float], gripper: float) -> np.ndarray:
+        """The clamped hardware command these set points become, without sending it.
+
+        Clamped to the same joint limits the trajectory was planned against, so a
+        valid command is never altered while an out-of-range one is still caught.
+        """
+        return clamp_and_warn(
+            sim_frame_to_real(joints, gripper, self.joint_offsets_deg),
+            self.clamp_low,
+            self.clamp_high,
+            self._clip_warned,
+        )
+
     def step(self, joints: Mapping[str, float], gripper: float) -> np.ndarray:
         """Command the shadow and the arm, step physics, and pace to the control rate."""
         for name, value in joints.items():
@@ -107,12 +130,7 @@ class RealPlant:
         self.data.ctrl[self.actuator_id["gripper"]] = gripper
         mujoco.mj_step(self.model, self.data, nstep=self.substeps_per_tick)
 
-        self._commanded = clamp_and_warn(
-            sim_frame_to_real(joints, gripper, self.joint_offsets_deg),
-            self.clamp_low,
-            self.clamp_high,
-            self._clip_warned,
-        )
+        self._commanded = self.to_real(joints, gripper)
         self.follower.send_action(joints_to_action(self._commanded))
         self._pace()
         return self._commanded
@@ -134,6 +152,10 @@ class RealPlant:
     def resync_clock(self) -> None:
         """Restart the pacing clock after a deliberate pause, so it does not burst."""
         self._next_tick = time.monotonic()
+
+    @property
+    def has_wrist_camera(self) -> bool:
+        return self.servo is not None
 
     def begin_phase(self, descent_active: bool) -> int:
         """Arm or idle the detector for a phase; return the preview id already shown.

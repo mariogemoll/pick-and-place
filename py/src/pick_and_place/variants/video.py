@@ -27,7 +27,7 @@ from pathlib import Path
 
 import numpy as np
 
-from pick_and_place.runtime.sim_recorder import (
+from pick_and_place.rollout.sim import (
     OVERHEAD_CAMERA,
     WRIST_CAMERA,
 )

@@ -34,7 +34,7 @@ from pick_and_place.data.trajectory_artifact import (
     save_trajectory,
 )
 from pick_and_place.runtime.episodes import Episode
-from pick_and_place.runtime.sim_recorder import RecordEpisodeResult
+from pick_and_place.rollout.sim import RecordEpisodeResult
 from pick_and_place.sim.domain_randomization import DomainSample
 
 

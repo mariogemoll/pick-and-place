@@ -50,9 +50,11 @@ from pick_and_place.runtime.checkpoint import fuses_into_next, replan_from_check
 from pick_and_place.runtime.descent import regrasp_after_descent
 from pick_and_place.runtime.episodes import Episode
 from pick_and_place.plant.real import RealPlant
-from pick_and_place.runtime.phase_playback import RealRun, WristView, play_phase
+from pick_and_place.data.trajectory_artifact import TrajectoryWriter
+from pick_and_place.rollout.phase import Run, play_phase
+from pick_and_place.runtime.wrist_preview import WristView, show_preview
 from pick_and_place.runtime.ramp import ramp_follower
-from pick_and_place.runtime.tick_recorder import TickRecorder
+from pick_and_place.rollout.real_dataset import TickRecorder
 from pick_and_place.runtime.wrist_servo import WristServo, open_sim_view, open_wrist_servo
 from pick_and_place.spec.robot import (
     CONTROL_HZ,
@@ -233,7 +235,7 @@ def execute_episode(
     ``LeRobotDataset`` and both the wrist camera (opened here when
     ``wrist_camera`` is set) and ``overhead_camera_cap`` (owned by the caller)
     are required; ``workspace_camera_cap`` is an optional third. See
-    :class:`~pick_and_place.runtime.tick_recorder.TickRecorder` for what a
+    :class:`~pick_and_place.rollout.real_dataset.TickRecorder` for what a
     recorded episode guarantees.
 
     Returns ``"success"`` when the trajectory ran to completion, or ``"restart"``
@@ -381,8 +383,35 @@ def execute_episode(
             joint_offsets_deg=joint_offsets_deg,
             speed=speed,
         )
-        run = RealRun(viewer=viewer, on_tick=log_tick)
-        wrist = WristView(camera_id=wrist_cam_id, renderer=wrist_renderer, show=show_wrist)
+        wrist = WristView(renderer=wrist_renderer, show=show_wrist)
+        # A hardware run produces the same artifact a sim run does, minus the
+        # ground truth no rig has: the true arm pose is the servo readback,
+        # because that is all the arm can tell you about itself.
+        artifact = TrajectoryWriter()
+        run = Run(
+            on_tick=lambda tick: log_tick(
+                tick.action,
+                tick.observation.state,
+                servo_active=tick.is_descent,
+                servo_source=(
+                    np.array(
+                        [
+                            tick.tracked_source.x,
+                            tick.tracked_source.y,
+                            tick.tracked_source.z,
+                            tick.tracked_source.yaw,
+                        ]
+                    )
+                    if tick.is_descent
+                    else None
+                ),
+            ),
+            on_look=lambda plant, sighting, tracked, is_descent: show_preview(
+                plant, wrist, is_descent
+            ),
+            sync=viewer.sync,
+            should_stop=lambda: not viewer.is_running(),
+        )
 
         current_traj = episode.trajectory
         tracked_source = episode.source
@@ -395,21 +424,22 @@ def execute_episode(
             print(f"Executing phase: {phase.name}")
             played = play_phase(
                 plant,
-                run,
-                wrist,
                 phase,
+                run=run,
+                artifact=artifact,
                 tracked_source=tracked_source,
                 contacts=contacts,
-                commanded=commanded,
+                action=commanded,
+                watch=show_wrist,
             )
             phase = played.phase
             tracked_source = played.tracked_source
-            commanded = played.commanded
+            commanded = played.action
             contacts = played.contacts
             if played.outcome == "restart":
                 episode_status = "restart"
                 return "restart"
-            if not viewer.is_running():
+            if played.outcome == "stopped":
                 break
 
             completed = phase.name

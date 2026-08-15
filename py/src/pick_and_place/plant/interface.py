@@ -57,6 +57,24 @@ class Sighting:
 NOTHING_SEEN = Sighting()
 
 
+@dataclass(frozen=True)
+class Observation:
+    """One tick's look at the arm and the cube, before the tick's command goes out.
+
+    ``state`` is the training label: the servo-style readback, in the real frame,
+    which is what a policy will see at deployment. ``true_state`` is where the
+    arm physically was, which is what a renderer needs — on a rig the two are the
+    same array, because the rig has no privileged view of itself, and in sim they
+    differ by the drawn joint-zero offsets.
+
+    ``true_cube_pose`` is privileged ground truth and exists only in sim.
+    """
+
+    state: np.ndarray
+    true_state: np.ndarray
+    true_cube_pose: np.ndarray | None = None
+
+
 class Plant(Protocol):
     """One tick's worth of commanding and observing.
 
@@ -77,6 +95,41 @@ class Plant(Protocol):
         with any feed-forward offsets folded in — because that, not the planner's
         sim-frame set point, is what a dataset row's ``action`` has to hold.
         """
+        ...
+
+    def observe(self) -> Observation:
+        """Read the world as it is *before* this tick's command is issued.
+
+        That ordering is the dataset's central invariant: a row pairs the
+        observation at time t with the action issued from it, so the policy is
+        trained on what it will actually have when it has to decide.
+        """
+        ...
+
+    def to_real(self, joints: Mapping[str, float], gripper: float) -> np.ndarray:
+        """The real-frame command these set points become, without issuing it.
+
+        Separate from :meth:`step` because the last tick of a phase is observed
+        and recorded but never commanded — the phase ends first.
+        """
+        ...
+
+    @property
+    def has_wrist_camera(self) -> bool:
+        """Whether anything can see the cube from the jaws.
+
+        Without one the descent is not a servo at all: it plays out open loop,
+        which is what a vetted feedforward plan wants and what a rig run with no
+        wrist camera has to fall back to.
+        """
+        ...
+
+    def begin_phase(self, descent_active: bool) -> None:
+        """Arm or idle the detector for a phase, and forget the previous phase's output."""
+        ...
+
+    def resync_clock(self) -> None:
+        """Restart the pacing clock after a deliberate pause, so it does not burst."""
         ...
 
     def measured(self) -> tuple[dict[str, float], float]:

@@ -88,8 +88,8 @@ from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.sim.paper_target_marker import place_paper_target_marker
 from pick_and_place.core.paths import datasets_root
-from pick_and_place.runtime.recorded_episode import episode_metadata, save_episode_artifact
-from pick_and_place.runtime.sim_recorder import SimCameraRig, build_recording_scene, record_episode
+from pick_and_place.rollout.records import episode_metadata, save_episode_artifact
+from pick_and_place.rollout.sim import SimCameraRig, build_recording_scene, record_episode
 from pick_and_place.data.sim_dataset_staging import (
     episode_index,
     episode_staging_root,

@@ -79,7 +79,7 @@ from pick_and_place.variants.appearance import (
     SceneAppearanceOverride,
     parse_appearance,
 )
-from pick_and_place.runtime.sim_recorder import OVERHEAD_CAMERA, downsample_through_recording
+from pick_and_place.rollout.sim import OVERHEAD_CAMERA, downsample_through_recording
 from pick_and_place.sim.paper_target_marker import add_paper_target_marker, place_paper_target_marker
 from pick_and_place.spec.robot import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
 from pick_and_place.core.workspace_bounds import is_cube_drop_allowed, sample_target_plate_yaw

@@ -10,7 +10,7 @@ and the same pose sampling/easing (``pick_and_place.runtime.move_to_random_pose`
 near-neutral arm pose and moves the real SO-101 follower there, recording the
 real-frame commanded set point vs. the encoder read-back at each control tick.
 No cube, no camera, no grasp, no checkpoint replanning: this reuses
-``pick_and_place.hardware.follower``/``pick_and_place.runtime.executor``'s connect/ramp/clamp
+``pick_and_place.hardware.follower``/``pick_and_place.rollout.real``'s connect/ramp/clamp
 plumbing, the same plumbing ``pick_and_place/real.py`` uses, but
 none of its grasp-specific machinery.
 
