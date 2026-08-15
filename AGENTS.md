@@ -213,6 +213,8 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   `rotations`, `ik`, `kinematics`, `workspace_bounds`, `joint_frames` (sim↔real
   conversions and the joint-limit clamp), `image_ops`, `miscalibration`,
   `appearance` (its opposite: one draw of everything that is only pixels),
+  `physics` (one draw of the arm itself — gain, time constant, mass, friction,
+  damping, stiction, droop — behind a single amount dial),
   `robot_dynamics`, `camera_calibration` (the rig's measured calibration files),
   `paths`.
 - **`scripted/`** — the analytic expert, which generates every demonstration and
@@ -238,6 +240,7 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   `environment`, `materials`, `wrist_camera`, `camera_module`,
   `workspace_overlays`, `paper_target_marker`, `frame_tags`,
   `derive_kinematics`, `camera_pose_envelope`, `camera_extrinsics`, `export`,
+  `physics` (apply an arm draw to a compiled scene, and take it back),
   and `domain_randomization` — the randomization envelope plus the half of a
   draw that shapes behavior (the wrist camera's mount error, the cube's resting
   orientation, the miscalibration). Loads the stock MJCF
@@ -328,7 +331,11 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
 
   `localized_episode` prepares an episode the way the rig does — put the plate
   down, look, hunt if something is hidden, then plan on what was seen — which is
-  what `record_sim.py --overhead-perception` runs. `checkpoint` carries out a
+  what `record_sim.py --overhead-perception` runs. `--physics-randomization`
+  draws the arm itself; the draw is applied **before** the episode is planned,
+  because planning ends in a preflight and preflight runs live physics, so
+  vetting against the nominal arm when a drawn one will fly it checks a
+  different world than the one that follows. `checkpoint` carries out a
   replan, and `scripted` hands the expert the scene and physics it is not
   allowed to reach for itself.
 - **`variants/`** — one recorded trajectory, rendered many ways. Everything here

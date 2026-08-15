@@ -142,6 +142,48 @@ class OverheadCameraError:
     frame_placement_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
 
+#: A camera exactly where its calibration says it is.
+NO_OVERHEAD_ERROR = OverheadCameraError((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+
+
+@dataclass(frozen=True)
+class OverheadCameraModel:
+    """The distribution the overhead calibration's residual error is drawn from.
+
+    Separate from :class:`MiscalibrationModel`, and drawn from its own stream,
+    for the reason every other draw here is: a camera sigma must not move any
+    episode's cube. It also belongs to the *session* rather than to the arm —
+    the extrinsics are solved once and hold for everything that follows.
+    """
+
+    extrinsics_sigma_m: float = DEFAULT_OVERHEAD_EXTRINSICS_SIGMA_M
+    extrinsics_sigma_deg: float = DEFAULT_OVERHEAD_EXTRINSICS_SIGMA_DEG
+    workspace_frame_sigma_m: float = DEFAULT_WORKSPACE_FRAME_SIGMA_M
+
+    def sample(self, rng: np.random.Generator) -> OverheadCameraError:
+        """Where the overhead camera is believed to be, relative to where it is.
+
+        The frame placement error is drawn in the table plane only: the frame is
+        a flat printed fixture that sits *on* the table, so it can be laid down
+        in the wrong place but not at the wrong height.
+        """
+        extrinsics = rng.normal(0.0, self.extrinsics_sigma_m, size=3)
+        frame = np.array(
+            [
+                rng.normal(0.0, self.workspace_frame_sigma_m),
+                rng.normal(0.0, self.workspace_frame_sigma_m),
+                0.0,
+            ]
+        )
+        return OverheadCameraError(
+            position_m=tuple(float(v) for v in extrinsics + frame),
+            rotation_deg=tuple(
+                float(rng.normal(0.0, self.extrinsics_sigma_deg)) for _ in range(3)
+            ),
+            frame_placement_m=tuple(float(v) for v in frame),
+        )
+
+
 @dataclass
 class MiscalibrationDraw:
     """One episode's realization of the miscalibration model.
@@ -156,10 +198,6 @@ class MiscalibrationDraw:
     pan_jitter: SlowJitter | None
     cube_belief_error: tuple[float, float, float, float]  # dx, dy, dz, dyaw
     target_belief_error: tuple[float, float]  # dx, dy
-    #: Where the overhead camera is believed to be, relative to where it is.
-    #: Used instead of the two belief errors above by anything that actually
-    #: renders and detects; ignored by anything that injects the outcome.
-    overhead_camera_error: OverheadCameraError = OverheadCameraError((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
 
     def offsets_deg(self, t: float = 0.0) -> dict[str, float]:
         """Joint-zero offsets (degrees) in effect at episode time ``t``."""
@@ -204,9 +242,6 @@ class MiscalibrationModel:
     cube_belief_sigma_z_m: float = DEFAULT_CUBE_BELIEF_SIGMA_Z_M
     cube_belief_sigma_yaw_rad: float = DEFAULT_CUBE_BELIEF_SIGMA_YAW_RAD
     target_belief_sigma_xy_m: float = DEFAULT_TARGET_BELIEF_SIGMA_XY_M
-    overhead_extrinsics_sigma_m: float = DEFAULT_OVERHEAD_EXTRINSICS_SIGMA_M
-    overhead_extrinsics_sigma_deg: float = DEFAULT_OVERHEAD_EXTRINSICS_SIGMA_DEG
-    workspace_frame_sigma_m: float = DEFAULT_WORKSPACE_FRAME_SIGMA_M
 
     def sample(self, rng: np.random.Generator) -> MiscalibrationDraw:
         # Sorted so a seeded rng assigns the same draw to the same joint on
@@ -241,28 +276,4 @@ class MiscalibrationModel:
                 float(rng.normal(0.0, self.target_belief_sigma_xy_m)),
                 float(rng.normal(0.0, self.target_belief_sigma_xy_m)),
             ),
-            overhead_camera_error=self._sample_overhead_error(rng),
-        )
-
-    def _sample_overhead_error(self, rng: np.random.Generator) -> OverheadCameraError:
-        """Where the overhead camera is believed to be, relative to where it is.
-
-        The frame placement error is drawn in the table plane only: the frame is
-        a flat printed fixture that sits *on* the table, so it can be laid down
-        in the wrong place but not at the wrong height.
-        """
-        extrinsics = rng.normal(0.0, self.overhead_extrinsics_sigma_m, size=3)
-        frame = np.array(
-            [
-                rng.normal(0.0, self.workspace_frame_sigma_m),
-                rng.normal(0.0, self.workspace_frame_sigma_m),
-                0.0,
-            ]
-        )
-        return OverheadCameraError(
-            position_m=tuple(float(v) for v in extrinsics + frame),
-            rotation_deg=tuple(
-                float(rng.normal(0.0, self.overhead_extrinsics_sigma_deg)) for _ in range(3)
-            ),
-            frame_placement_m=tuple(float(v) for v in frame),
         )

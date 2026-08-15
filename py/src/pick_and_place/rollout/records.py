@@ -23,6 +23,7 @@ from typing import Any
 from pick_and_place.core.geometry import PlacementError
 from pick_and_place.core.grasp_perturbation import GraspPerturbation
 from pick_and_place.core.miscalibration import MiscalibrationDraw
+from pick_and_place.core.physics import NOMINAL, PhysicsDraw
 from pick_and_place.core.task_phases import phase_spans_json
 from pick_and_place.data.dataset_metadata import cube_pose_metadata, placement_error_metadata
 from pick_and_place.data.trajectory_artifact import (
@@ -68,6 +69,7 @@ def episode_metadata(
     orientation_index: int,
     perturbation: GraspPerturbation | None,
     draw: MiscalibrationDraw | None,
+    physics: PhysicsDraw = NOMINAL,
     sample: DomainSample | None,
     preset_name: str | None = None,
     domain_seed: int | None = None,
@@ -80,6 +82,9 @@ def episode_metadata(
     metadata["cube_start_roll"] = float(episode.source.roll)
     metadata["cube_start_pitch"] = float(episode.source.pitch)
     metadata["cube_orientation_index"] = orientation_index
+    # Recorded on every episode, drawn or not, so a dataset can be split by the
+    # arm it was flown with rather than by which run it came from.
+    metadata.update(physics.as_metadata())
     # Recorded on every episode, perturbed or not, so the fraction can be swept
     # later by filtering the dataset instead of regenerating it -- and so a
     # downstream reader can tell a clean episode from a recovered one, which the
@@ -125,6 +130,7 @@ def save_episode_artifact(
     *,
     target_plate_yaw: float,
     draw: MiscalibrationDraw | None,
+    physics: PhysicsDraw = NOMINAL,
     sample: DomainSample | None,
     seed: int | None,
     episode_index: int,
@@ -158,6 +164,7 @@ def save_episode_artifact(
                     )
                 ),
                 recorded_appearance=None if sample is None else sample.appearance(),
+                physics=physics,
             ),
         ),
     )

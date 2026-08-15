@@ -26,7 +26,7 @@ from __future__ import annotations
 import argparse
 from functools import partial
 
-from pick_and_place.core.miscalibration import MiscalibrationModel
+from pick_and_place.core.miscalibration import OverheadCameraModel
 from pick_and_place.plant.overhead import DETECTION_HEIGHT, DETECTION_WIDTH
 from pick_and_place.plant.overhead_check import measure
 from pick_and_place.rollout.sim import build_recording_scene
@@ -54,13 +54,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    sigmas = MiscalibrationModel()
+    sigmas = OverheadCameraModel()
     if args.no_calibration_error:
-        sigmas = MiscalibrationModel(
-            overhead_extrinsics_sigma_m=0.0,
-            overhead_extrinsics_sigma_deg=0.0,
-            workspace_frame_sigma_m=0.0,
-        )
+        sigmas = OverheadCameraModel(0.0, 0.0, 0.0)
     summary = measure(
         partial(
             build_recording_scene,

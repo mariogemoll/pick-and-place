@@ -16,7 +16,11 @@ import numpy as np
 import pytest
 
 from pick_and_place.core.geometry import CubePose
-from pick_and_place.core.miscalibration import MiscalibrationModel, OverheadCameraError
+from pick_and_place.core.miscalibration import (
+    MiscalibrationModel,
+    OverheadCameraError,
+    OverheadCameraModel,
+)
 from pick_and_place.core.workspace_bounds import is_cube_drop_allowed
 from pick_and_place.plant.overhead import SimOverheadPerception, believed_camera_pose
 from pick_and_place.plant.overhead_check import fold_cube_symmetry
@@ -138,8 +142,7 @@ def test_the_believed_camera_pose_is_the_true_one_plus_the_error():
 
 def test_the_frame_placement_error_is_part_of_the_position_error():
     """Two causes, one effect: they compose rather than acting separately."""
-    draw = MiscalibrationModel().sample(np.random.default_rng(4))
-    error = draw.overhead_camera_error
+    error = OverheadCameraModel().sample(np.random.default_rng(4))
 
     assert error.frame_placement_m[2] == 0.0  # a flat fixture lies on the table
     assert any(abs(value) > 0.0 for value in error.frame_placement_m[:2])
@@ -160,7 +163,7 @@ def test_a_localized_episode_plans_against_what_it_saw(scene):
     perception = SimOverheadPerception(model, data)
     rng = np.random.default_rng(3)
     draw = MiscalibrationModel().sample(rng)
-    perception.set_error(draw.overhead_camera_error)
+    perception.set_error(OverheadCameraModel().sample(rng))
     try:
         localized = prepare_localized_episode(
             rng,
