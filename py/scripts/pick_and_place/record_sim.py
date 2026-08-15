@@ -52,7 +52,6 @@ import numpy as np
 from tqdm import tqdm
 
 from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
-from pick_and_place.data.dataset_metadata import cube_pose_metadata, placement_error_metadata
 from pick_and_place.sim.domain_randomization import (
     DomainRandomizationPreset,
     DomainRandomizer,
@@ -77,18 +76,19 @@ from pick_and_place.cli.scene import (
     add_scene_texture_arguments,
 )
 from pick_and_place.spec.robot import CONTROL_HZ
-from pick_and_place.core.miscalibration import MiscalibrationDraw, MiscalibrationModel
+from pick_and_place.core.miscalibration import MiscalibrationModel
 from pick_and_place.core.grasp_perturbation import (
     DEFAULT_MAGNITUDE_M,
     GraspPerturbation,
 )
 from pick_and_place.data.recording import RecordingSession
+from pick_and_place.data.trajectory_artifact import render_environment_fingerprint
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.sim.paper_target_marker import place_paper_target_marker
 from pick_and_place.core.paths import datasets_root
+from pick_and_place.runtime.recorded_episode import episode_metadata, save_episode_artifact
 from pick_and_place.runtime.sim_recorder import SimCameraRig, build_recording_scene, record_episode
-from pick_and_place.core.task_phases import phase_spans_json
 from pick_and_place.data.sim_dataset_staging import (
     episode_index,
     episode_staging_root,
@@ -137,26 +137,6 @@ def _configured_file(path: Path | None) -> dict[str, str] | None:
         "path": str(resolved),
         "sha256": hashlib.sha256(resolved.read_bytes()).hexdigest(),
     }
-
-
-def _miscalibration_metadata(draw: MiscalibrationDraw) -> dict[str, float]:
-    """Episode metadata recording the injected draw (believed-vs-true errors)."""
-    metadata = {
-        f"injected_offset_{name}_deg": float(value) for name, value in draw.base_offsets_deg.items()
-    }
-    dx, dy, dz, dyaw = draw.cube_belief_error
-    tx, ty = draw.target_belief_error
-    metadata.update(
-        {
-            "injected_cube_belief_dx": float(dx),
-            "injected_cube_belief_dy": float(dy),
-            "injected_cube_belief_dz": float(dz),
-            "injected_cube_belief_dyaw": float(dyaw),
-            "injected_target_belief_dx": float(tx),
-            "injected_target_belief_dy": float(ty),
-        }
-    )
-    return metadata
 
 
 def run_recording(
@@ -218,6 +198,12 @@ def run_recording(
         background_panorama = initial_appearance.background_rgb
     source = _to_cube(scene.source_xy)
     target = _to_cube(scene.target_xy)
+    # Constant for the run: it identifies this machine's renderer and camera
+    # calibration, not anything an episode draws.
+    fingerprint = render_environment_fingerprint(
+        render_hw=(frames.render_height, frames.render_width),
+        image_hw=(frames.image_height, frames.image_width),
+    )
 
     # One persistent scene reused across episodes. The environment is required for
     # the overhead camera; calibrated extrinsics place it where the real one sits.
@@ -400,48 +386,28 @@ def run_recording(
                 progress.set_postfix(saved=recorded, skipped=attempted - recorded)
                 continue
             error = placement_error(model, data, episode.target)
-            metadata = cube_pose_metadata(episode.source, episode.target)
-            metadata.update(placement_error_metadata(error, detected=True))
-            metadata["target_plate_yaw"] = float(target_plate_yaw)
-            metadata["phase_spans"] = phase_spans_json(result.phase_spans)
-            metadata["cube_start_roll"] = float(episode.source.roll)
-            metadata["cube_start_pitch"] = float(episode.source.pitch)
-            metadata["cube_orientation_index"] = orientation_index
-            # Recorded on every episode, perturbed or not, so the fraction can be
-            # swept later by filtering the dataset instead of regenerating it --
-            # and so a downstream reader can tell a clean episode from a recovered
-            # one, which the frames alone do not reveal.
-            metadata["grasp_perturbation_kind"] = (
-                perturbation.kind if perturbation is not None else "none"
+            metadata = episode_metadata(
+                episode,
+                result,
+                error,
+                target_plate_yaw=target_plate_yaw,
+                orientation_index=orientation_index,
+                perturbation=perturbation,
+                draw=draw,
+                sample=sample,
+                preset_name=preset.name if preset is not None else None,
+                domain_seed=domain_seed,
             )
-            if perturbation is not None:
-                metadata.update(
-                    {
-                        f"grasp_perturbation_{key}": value
-                        for key, value in perturbation.as_metadata().items()
-                        if key != "kind"
-                    }
-                )
-            if draw is not None:
-                metadata.update(
-                    {
-                        "believed_cube_start_x": float(episode.believed_source.x),
-                        "believed_cube_start_y": float(episode.believed_source.y),
-                        "believed_cube_start_yaw": float(episode.believed_source.yaw),
-                        "believed_target_x": float(episode.believed_target.x),
-                        "believed_target_y": float(episode.believed_target.y),
-                    }
-                )
-                metadata.update(_miscalibration_metadata(draw))
-            if sample is not None:
-                metadata.update(
-                    {
-                        "source_domain": "sim",
-                        "domain_preset": preset.name,
-                        "domain_seed": domain_seed,
-                        "domain_sample_json": sample.metadata_json(),
-                    }
-                )
+            save_episode_artifact(
+                episode_root,
+                episode,
+                result,
+                target_plate_yaw=target_plate_yaw,
+                draw=draw,
+                seed=seed,
+                episode_index=global_episode,
+                fingerprint=fingerprint,
+            )
             recording.save_episode(metadata)
             # Close the parquet writers now: until finalize runs the files carry
             # no footer and are unreadable, which is exactly how a killed worker

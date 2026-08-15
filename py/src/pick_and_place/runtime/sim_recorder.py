@@ -30,6 +30,14 @@ camera pose, so the estimate inherits the hand-eye error exactly as on hardware
 — and phase checkpoints replan the remainder from the believed readback. A
 descent that never sees the cube (or fails to settle) aborts with ``"restart"``
 just like the real executor, and the caller discards the episode.
+
+Alongside the dataset, every run produces a trajectory artifact (see
+:mod:`pick_and_place.data.trajectory_artifact`): the same episode with no images,
+holding the true joints and true cube pose next to the believed ones. The dataset
+keeps only the believed state, because that is the training label; the artifact
+keeps both, because reproducing the episode's pixels means putting the arm back
+where it physically was, and a miscalibration draw makes those two different
+places.
 """
 
 from __future__ import annotations
@@ -48,6 +56,7 @@ from pick_and_place.core.image_ops import resize_and_center_crop
 from pick_and_place.core.task_phases import PhaseSpan
 from pick_and_place.core.workspace_bounds import PAN_AXIS
 from pick_and_place.data.recording import RecordingSession
+from pick_and_place.data.trajectory_artifact import TrajectoryFrames, TrajectoryWriter
 from pick_and_place.perception.image_rectify import SQUARE_SIZE
 from pick_and_place.runtime.believed_frame import BelievedFrame
 from pick_and_place.runtime.checkpoint import fuses_into_next, replan_from_checkpoint
@@ -84,10 +93,18 @@ _HELD_MIN_Z_M = _ORACLE.resting_height_m + _ORACLE.lift_clearance_m
 
 @dataclasses.dataclass(frozen=True)
 class RecordEpisodeResult:
-    """Outcome of one episode playback plus its exact per-frame phase spans."""
+    """Outcome of one episode playback, plus the trajectory it produced.
+
+    ``frames`` is the imageless artifact: the true world and the believed one,
+    tick by tick. It is produced whether or not anything captured images, since
+    it costs a few dozen floats per tick and is the only record from which the
+    episode's pixels can be made again. The caller pairs it with the facts only
+    it knows — the seed, the drop plate's yaw — to write an artifact file.
+    """
 
     status: str  # "success", "restart", or "stopped"
     phase_spans: tuple[PhaseSpan, ...]
+    frames: TrajectoryFrames
 
 
 def fovy_from_intrinsics(intrinsics: dict[str, Any]) -> float:
@@ -326,7 +343,8 @@ def record_episode(
         )
 
     belief = BelievedFrame(model, data, episode.miscalibration, data.time)
-    recorder = None if recording is None else SimTickRecorder(recording, rig, model, data)
+    artifact = TrajectoryWriter()
+    recorder = None if recording is None else SimTickRecorder(recording, rig, data)
     servo = (
         SimWristServo(
             model,
@@ -367,8 +385,9 @@ def record_episode(
         should_stop=should_stop,
     )
 
-    def spans() -> tuple[PhaseSpan, ...]:
-        return () if recorder is None else recorder.spans
+    def outcome(status: str) -> RecordEpisodeResult:
+        """Snapshot the artifact as it stands. Reads the latest bindings when called."""
+        return RecordEpisodeResult(status, artifact.spans, artifact.frames())
 
     current_traj = episode.trajectory
     tracked_source = episode.believed_source
@@ -384,6 +403,7 @@ def record_episode(
                 belief=belief,
                 servo=servo,
                 recorder=recorder,
+                artifact=artifact,
                 tracked_source=tracked_source,
                 contacts=contacts,
                 show_wrist_mixed=show_wrist_mixed,
@@ -392,7 +412,7 @@ def record_episode(
             tracked_source = played.tracked_source
             contacts = played.contacts
             if played.outcome != "completed":
-                return RecordEpisodeResult(played.outcome, spans())
+                return outcome(played.outcome)
 
             completed = phase.name
             remaining_phases = current_traj.phases[1:]
@@ -494,7 +514,7 @@ def record_episode(
             if candidate is None:
                 if verbose:
                     print(f"No clean replan after {completed}; aborting episode.")
-                return RecordEpisodeResult("restart", spans())
+                return outcome("restart")
             current_traj = candidate
     finally:
         if servo is not None:
@@ -504,4 +524,4 @@ def record_episode(
 
     if verbose:
         print(placement_error(model, data, episode.target).summary())
-    return RecordEpisodeResult("success" if status == "success" else "restart", spans())
+    return outcome("success" if status == "success" else "restart")

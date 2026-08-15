@@ -12,6 +12,10 @@ and images as they are *before* the set point is written, which is the ordering 
 real recording has, where the motors are read before they have tracked the new
 command. Everything else in the loop follows from putting the capture first.
 
+Every tick goes into the trajectory artifact, which holds the true world and the
+believed one side by side and no pixels at all; a dataset row, with its two
+rendered cameras, is written on top of that only when something is recording.
+
 **There is no arm.** The position-servo actuators are the plant; what a real run
 would send to the servos is instead added to ``data.ctrl``, with the drawn
 joint-zero offsets folded in so physics runs the true joints while the plan and
@@ -32,6 +36,8 @@ from typing import Any, Callable
 import mujoco
 
 from pick_and_place.core.geometry import CubePose
+from pick_and_place.core.joint_frames import sim_frame_to_real
+from pick_and_place.data.trajectory_artifact import TrajectoryWriter
 from pick_and_place.planning.visual_servo import (
     DESCENT_SERVO_MAX_DURATION,
     DESCENT_SERVO_STABLE_FRAMES,
@@ -44,6 +50,7 @@ from pick_and_place.runtime.sim_tick_recorder import SimTickRecorder
 from pick_and_place.runtime.sim_wrist_servo import CubeSighting, SimWristServo
 from pick_and_place.runtime.wrist_mixed_view import blend_mixed, show_mixed
 from pick_and_place.sim.collisions import unexpected_contact_pairs
+from pick_and_place.sim.model import get_cube_qpos
 from pick_and_place.spec.robot import CONTROL_HZ
 
 #: What a tick sees when nothing looked: no tags, no pose, no solve.
@@ -95,6 +102,7 @@ def play_phase(
     belief: BelievedFrame,
     servo: SimWristServo | None = None,
     recorder: SimTickRecorder | None = None,
+    artifact: TrajectoryWriter,
     tracked_source: CubePose,
     contacts: set[tuple[str, str]] = frozenset(),
     show_wrist_mixed: bool = False,
@@ -162,8 +170,28 @@ def play_phase(
             )
 
         frame = phase.evaluate(min(phase_t, phase.duration))
+        # Read the tick's ground truth once, in both frames, and hand the same
+        # values to the artifact and to the dataset row. Two readers would drift:
+        # the pan jitter advances with the clock, so a second read is a second
+        # draw of the offsets it separates the frames by.
+        true_state, believed_state = belief.state_pair()
+        true_cube_pose = get_cube_qpos(plant.model, data)
+        action = sim_frame_to_real(frame.joints, frame.gripper)
+        artifact.record(
+            phase_name=phase.name,
+            true_state=true_state,
+            believed_state=believed_state,
+            action=action,
+            true_cube_pose=true_cube_pose,
+            believed_cube_pose=tracked_source,
+            wrist_sighting=sighting.pose,
+        )
         if recorder is not None:
-            recorder.record(frame, phase.name, belief.offsets_deg())
+            recorder.record(
+                believed_state=believed_state,
+                action=action,
+                true_cube_pose=true_cube_pose,
+            )
 
         if is_descent:
             if retry.is_backing_up():

@@ -23,7 +23,9 @@ from __future__ import annotations
 import dataclasses
 
 import mujoco
+import numpy as np
 
+from pick_and_place.core.joint_frames import sim_frame_to_real
 from pick_and_place.core.miscalibration import MiscalibrationDraw
 from pick_and_place.sim.model import get_joint
 from pick_and_place.spec.robot import ARM_JOINT_NAMES
@@ -62,6 +64,22 @@ class BelievedFrame:
             name: get_joint(self.model, self.data, name) - offsets.get(name, 0.0)
             for name in ARM_JOINT_NAMES
         }
+
+    def state_pair(self) -> tuple[np.ndarray, np.ndarray]:
+        """This tick's joints in both frames, as real-frame six-vectors.
+
+        ``(true, believed)``. The true one is where the arm physically is, which
+        is what a renderer has to reproduce; the believed one is the servo-style
+        readback, which is the training label. Storing only the believed one
+        loses the true one for good, because the pan jitter that separates them
+        is a random walk with no per-episode value to reconstruct it from.
+        """
+        arm = {name: get_joint(self.model, self.data, name) for name in ARM_JOINT_NAMES}
+        gripper = get_joint(self.model, self.data, "gripper")
+        return (
+            sim_frame_to_real(arm, gripper),
+            sim_frame_to_real(arm, gripper, self.offsets_deg()),
+        )
 
     def elapsed(self) -> float:
         return self.data.time - self.time_origin

@@ -3,11 +3,10 @@
 
 """Replay a recorded ground-truth episode's scene and re-encode its videos.
 
-A recorded simulation episode stores everything the renderer needs: the
-hardware-frame joints per frame (``observation.state``), the true cube pose per
-frame (``observation.environment_state``) and the drop-zone target pose and yaw
-in episode metadata. Replaying those through the recording scene reproduces the
-recorded frames, which makes the scene's *appearance* a free variable after the
+A recorded simulation episode's trajectory artifact stores everything the
+renderer needs: the true arm joints per frame, the true cube pose per frame, and
+the drop-zone target pose and yaw. Replaying those through the recording scene
+reproduces the recorded frames, which makes the scene's *appearance* a free variable after the
 fact — the property the DPPO retrain needs, because the pick cube has to be
 rendered blue to be legible at 96x96 but has to be recorded with its AprilTag
 faces for the descent visual servo to work.
@@ -27,11 +26,8 @@ untouched; only pixels change.
 
 from __future__ import annotations
 
-import hashlib
 import io
 import json
-import os
-import platform
 import re
 import shutil
 from collections.abc import Iterable, Iterator, Sequence
@@ -43,8 +39,8 @@ import mujoco
 import numpy as np
 import pyarrow.parquet as pq
 
-from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
 from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
+from pick_and_place.data.trajectory_artifact import ARTIFACT_FILENAME
 from pick_and_place.sim.domain_randomization import ProceduralAppearance
 from pick_and_place.sim.model import set_joint
 from pick_and_place.spec.robot import ARM_JOINT_NAMES
@@ -410,68 +406,33 @@ def rewrite_image_stats(stats_path: Path, stats_by_feature: dict[str, dict[str, 
 def assert_rerenderable(episode_root: Path) -> None:
     """Raise unless the episode's pixels are recoverable from what it stores.
 
-    Two recorded conditions are not:
+    Two things have to hold. The episode needs its trajectory artifact, which is
+    the only place the *true* arm pose lives: ``observation.state`` is the
+    servo-style readback, and under a miscalibration draw the two differ by a
+    random walk that is stored nowhere else.
 
-    * ``--miscalibration`` — ``observation.state`` is the servo-style readback,
-      the *believed* joints, which differ from the joints physics and rendering
-      used by the injected per-episode joint-zero offsets. The constant part of
-      the draw is in episode metadata, but the within-session pan jitter is a
-      random walk whose realization is not stored, so the true arm pose cannot
-      be rebuilt frame by frame.
-    * ``--domain-randomization`` — the appearance is drawn per episode. The draw
-      *is* stored (``domain_sample_json``), so this is a missing feature rather
-      than missing information: applying it needs the randomizer, its texture
-      reloads, its image postprocess and its believed wrist-camera pose, none of
-      which this replay does yet.
+    And it must not have been recorded with ``--domain-randomization``, whose
+    appearance is drawn per episode. That draw *is* stored
+    (``domain_sample_json``), so this is a missing feature rather than missing
+    information: applying it needs the randomizer, its texture reloads, its image
+    postprocess and its believed wrist-camera pose, none of which this replay
+    does yet.
     """
+    if not (episode_root / ARTIFACT_FILENAME).is_file():
+        raise ValueError(
+            f"{episode_root.name} carries no {ARTIFACT_FILENAME}, so the arm pose physics "
+            "actually used is unrecoverable and its pixels cannot be reproduced"
+        )
     metadata_paths = sorted((episode_root / "meta" / "episodes").glob("chunk-*/file-*.parquet"))
     if len(metadata_paths) != 1:
         raise ValueError(f"{episode_root.name} must contain one episode metadata parquet")
     columns = set(pq.read_schema(metadata_paths[0]).names)
-    if any(column.startswith("injected_offset_") for column in columns):
-        raise ValueError(
-            f"{episode_root.name} was recorded with --miscalibration: observation.state holds "
-            "the believed joints, not the true ones, and the pan jitter that separates them is "
-            "not stored per frame, so its pixels cannot be reproduced. Re-rendering needs the "
-            "recorder to store the true joints (or the per-frame offsets) alongside the cube pose."
-        )
     if "domain_sample_json" in columns:
         raise ValueError(
             f"{episode_root.name} was recorded with --domain-randomization, whose per-episode "
             "appearance draw this replay does not apply (the draw is stored in "
             "domain_sample_json, so support is possible; it is simply not implemented)."
         )
-
-
-def render_environment_fingerprint(
-    *, render_hw: tuple[int, int], image_hw: tuple[int, int]
-) -> dict[str, object]:
-    """Identify everything outside the dataset that moves a rendered pixel.
-
-    A re-render is only as trustworthy as the environment its verification ran
-    in. The camera calibrations are machine-local (gitignored) files, and the
-    OpenGL backend and MuJoCo version decide the shading, so a verification pass
-    is only evidence for re-renders produced under the same fingerprint.
-    """
-
-    def digest(payload: object) -> str:
-        return hashlib.sha256(
-            json.dumps(payload, sort_keys=True, default=str).encode()
-        ).hexdigest()[:16]
-
-    extrinsics = load_local_camera_extrinsics()
-    intrinsics = load_local_camera_intrinsics()
-    return {
-        "mujoco_version": mujoco.__version__,
-        "mujoco_gl": os.environ.get("MUJOCO_GL", ""),
-        "platform": f"{platform.system()}-{platform.machine()}",
-        "camera_extrinsics": sorted(extrinsics),
-        "camera_extrinsics_digest": digest(extrinsics),
-        "camera_intrinsics": sorted(intrinsics),
-        "camera_intrinsics_digest": digest(intrinsics),
-        "render_hw": list(render_hw),
-        "image_hw": list(image_hw),
-    }
 
 
 def copy_episode_scaffold(source: Path, destination: Path) -> None:

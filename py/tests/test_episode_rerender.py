@@ -11,6 +11,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from pick_and_place.core.geometry import CubePose
+
 from pick_and_place.runtime.episode_rerender import (
     DEFAULT_X264_CRF,
     DEFAULT_X264_KEYINT,
@@ -23,6 +25,13 @@ from pick_and_place.runtime.episode_rerender import (
     rewrite_image_stats,
     video_frame_count,
     x264_settings,
+)
+from pick_and_place.data.trajectory_artifact import (
+    ARTIFACT_FILENAME,
+    EpisodeFacts,
+    TrajectoryArtifact,
+    TrajectoryWriter,
+    save_trajectory,
 )
 from pick_and_place.sim.scene_appearance import (
     CUBE_COLOURS,
@@ -54,6 +63,34 @@ def _episode_metadata(root: Path, columns: dict[str, list]) -> Path:
     path = root / "meta" / "episodes" / "chunk-000"
     path.mkdir(parents=True)
     pq.write_table(pa.table(columns), path / "file-000.parquet")
+    return root
+
+
+def _with_artifact(root: Path) -> Path:
+    """Give a stub episode the trajectory artifact a real recording would write."""
+    writer = TrajectoryWriter()
+    writer.record(
+        phase_name="approach",
+        true_state=np.zeros(6),
+        believed_state=np.zeros(6),
+        action=np.zeros(6),
+        true_cube_pose=np.array([0.3, 0.0, 0.015, 1.0, 0.0, 0.0, 0.0]),
+        believed_cube_pose=CubePose(x=0.3, y=0.0, z=0.015),
+        wrist_sighting=None,
+    )
+    save_trajectory(
+        root / ARTIFACT_FILENAME,
+        TrajectoryArtifact(
+            frames=writer.frames(),
+            facts=EpisodeFacts(
+                target_xy=(0.25, 0.05),
+                target_plate_yaw=0.0,
+                verdict="success",
+                phase_spans=writer.spans,
+                fingerprint={},
+            ),
+        ),
+    )
     return root
 
 
@@ -137,28 +174,44 @@ def test_only_the_camera_statistics_are_rewritten(tmp_path):
     assert stats["observation.images.wrist"] == {"mean": [[[0.25]]] * 3}
 
 
-def test_miscalibrated_episodes_are_refused(tmp_path):
-    """observation.state is the believed readback there, so the true pose is lost."""
+def test_episodes_without_a_trajectory_artifact_are_refused(tmp_path):
+    """observation.state is the believed readback; the true pose lives only in the artifact."""
     root = _episode_metadata(
         tmp_path / "ep000000",
         {"episode_index": [0], "injected_offset_shoulder_pan_deg": [1.5]},
     )
 
-    with pytest.raises(ValueError, match="miscalibration"):
+    with pytest.raises(ValueError, match=ARTIFACT_FILENAME):
         assert_rerenderable(root)
 
 
 def test_domain_randomized_episodes_are_refused(tmp_path):
-    root = _episode_metadata(
-        tmp_path / "ep000001", {"episode_index": [1], "domain_sample_json": ["{}"]}
+    root = _with_artifact(
+        _episode_metadata(
+            tmp_path / "ep000001", {"episode_index": [1], "domain_sample_json": ["{}"]}
+        )
     )
 
     with pytest.raises(ValueError, match="domain-randomization"):
         assert_rerenderable(root)
 
 
+def test_miscalibrated_episodes_carrying_an_artifact_are_accepted(tmp_path):
+    """The whole point of the artifact: a drawn episode can be re-rendered."""
+    root = _with_artifact(
+        _episode_metadata(
+            tmp_path / "ep000002",
+            {"episode_index": [2], "injected_offset_shoulder_pan_deg": [1.5]},
+        )
+    )
+
+    assert_rerenderable(root)
+
+
 def test_plain_episodes_are_accepted(tmp_path):
-    root = _episode_metadata(tmp_path / "ep000002", {"episode_index": [2], "target_x": [0.3]})
+    root = _with_artifact(
+        _episode_metadata(tmp_path / "ep000003", {"episode_index": [3], "target_x": [0.3]})
+    )
 
     assert_rerenderable(root)
 

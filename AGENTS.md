@@ -237,7 +237,9 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
 - **`data/`** — recording and datasets: `recording`, `recorder`,
   `recording_config` (what one recording run is: the scene it draws, its frame
   sizes, where it lands), `dataset_metadata`, `dataset_subset`,
-  `sim_dataset_staging`, `diffusion_policy_dataset`.
+  `sim_dataset_staging`, `diffusion_policy_dataset`, and `trajectory_artifact`
+  (one episode's behavior with no pixels in it — the true world and the believed
+  one side by side, which is what a scene can be re-rendered from).
 - **`policies/`** — controller implementations and the contract they are scored
   against: `policy_controllers`, `policy`, `policy_evaluation` (frozen scenario
   manifests in `config/evaluation/` and a success oracle),
@@ -258,13 +260,18 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   matching set: `sim_phase_playback` (the tick loop, capturing each row *before*
   it commands it), `sim_wrist_servo` (render the wrist camera, detect the cube
   in it — inline, not on a thread, which is what keeps a recorded episode a pure
-  function of its seed), `sim_tick_recorder` (one dataset row per tick, plus its
-  phase spans), and `wrist_mixed_view` (the true and believed wrist views
-  blended, for watching the servo converge). `believed_frame` is what the two
-  worlds meet through: with a miscalibration draw, commands and recorded rows
-  live in the believed frame while physics runs the true one. `checkpoint` and
-  `descent` are shared with the hardware path, so both agree by construction on
-  which phase boundaries replan.
+  function of its seed), `sim_tick_recorder` (one dataset row per tick), and
+  `wrist_mixed_view` (the true and believed wrist views blended, for watching the
+  servo converge). `believed_frame` is what the two worlds meet through: with a
+  miscalibration draw, commands and recorded rows live in the believed frame
+  while physics runs the true one. `checkpoint` and `descent` are shared with the
+  hardware path, so both agree by construction on which phase boundaries replan.
+
+  Every sim run also emits a trajectory artifact, which is what makes appearance
+  a free variable after the fact: the dataset keeps only the believed state,
+  because that is the training label, while the artifact keeps the true joints
+  and cube pose next to it, because reproducing an episode's pixels means
+  putting the arm back where physics actually held it.
 
   Around those: `episodes` (sample one that runs clean), `preflight` (vet a
   trajectory under live physics), `frame_reader` (one background thread per

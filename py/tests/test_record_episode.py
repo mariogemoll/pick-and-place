@@ -243,15 +243,16 @@ def test_the_run_is_reproducible() -> None:
 
 
 def test_playback_without_a_recording_still_runs_the_episode() -> None:
-    """The sim viewer's path: physics and the closed loop run, nothing is written.
+    """The sim viewer's path: physics and the closed loop run, no images are written.
 
-    Phase spans are a property of the *recorded* frames, so an unrecorded run
-    reports none — there are no frames for them to index.
+    The trajectory artifact is produced regardless, because it costs a few dozen
+    floats per tick and is what an episode's pixels can be made from later.
     """
     episode = _episode()
     result = record_episode(episode, speed=SPEED, verbose=False)
     assert result.status == "success"
-    assert result.phase_spans == ()
+    assert result.phase_spans[0].name == "approach"
+    assert len(result.frames) > 0
     assert episode.data.time > 1.0
 
 
@@ -389,6 +390,46 @@ def test_the_rows_stay_believed_while_the_actuators_get_the_true_frame(
     assert any(abs(value) > 0.1 for value in offsets.values())
     start_state = sim_frame_to_real(episode.start_joints, episode.start_gripper)
     np.testing.assert_allclose(closed_loop_run.recording.states()[0], start_state, atol=1e-4)
+
+
+def test_the_artifact_keeps_the_true_arm_pose_the_dataset_drops(closed_loop_run) -> None:
+    """The whole reason the artifact exists.
+
+    ``observation.state`` is the believed readback, so a re-render driven by it
+    would put the arm several degrees from where physics held it. The artifact
+    stores both, and the difference between them is the offset in effect that
+    tick — which is not a constant, because the pan zero wanders over the
+    episode. Nothing else records that wander, so nothing else can undo it.
+    """
+    frames = closed_loop_run.result.frames
+    np.testing.assert_allclose(
+        frames.believed_state, closed_loop_run.recording.states(), atol=1e-4
+    )
+    offsets = frames.true_state[:, :5] - frames.believed_state[:, :5]
+    assert np.abs(offsets).max() > 0.1
+    # The pan offset moves within the episode; the others are drawn once and hold.
+    pan = offsets[:, 0]
+    assert pan.max() - pan.min() > 0.1
+    assert np.abs(offsets[:, 1:] - offsets[0, 1:]).max() < 1e-4
+
+
+def test_the_artifact_records_what_the_expert_believed_about_the_cube(
+    closed_loop_run,
+) -> None:
+    """Kept for analysis: the believed pose is why the expert aimed where it did."""
+    frames = closed_loop_run.result.frames
+    episode = closed_loop_run.episode
+    believed_start = frames.believed_cube_pose[0]
+    assert believed_start[:2] == pytest.approx(
+        [episode.believed_source.x, episode.believed_source.y], abs=1e-6
+    )
+    # It is a belief, so it differs from the true pose the same frame records.
+    assert np.linalg.norm(believed_start[:2] - frames.true_cube_pose[0][:2]) > 1e-3
+    # The descent's servo sees the cube, and its sightings land near the true pose.
+    assert frames.sighted.any()
+    seen = frames.wrist_sighting[frames.sighted]
+    truth = frames.true_cube_pose[frames.sighted]
+    assert np.abs(seen[:, :2] - truth[:, :2]).max() < 0.05
 
 
 def test_the_actuators_are_commanded_the_believed_action_plus_the_offsets() -> None:

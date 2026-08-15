@@ -77,11 +77,11 @@ from pick_and_place.runtime.episode_rerender import (
     episode_video_paths,
     evenly_spaced,
     mean_of,
-    render_environment_fingerprint,
     rewrite_image_stats,
     video_frame_count,
     x264_settings,
 )
+from pick_and_place.data.trajectory_artifact import render_environment_fingerprint
 from pick_and_place.sim.render_randomization import BackgroundRandomization, CameraRandomization
 from pick_and_place.sim.scene_appearance import (
     APPEARANCE_PRESETS,
