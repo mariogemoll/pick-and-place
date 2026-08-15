@@ -86,10 +86,14 @@ def regrasp_after_descent(phase, tracked: CubePose, kinematics, *, free_grasp: b
     the pre-episode plan expected them. ``current`` stands if that pose admits no
     candidate on the locked face — the arm is already there, and the plan it flew
     down on is a better guess than nothing.
+
+    Never ``None``. A caller that has just re-picked after a fumble has no
+    current grasp to stand on, and the descent phase carries the one the jaws
+    actually came down on — the same argument, one step further back.
     """
     if free_grasp:
         return phase.grasp
     for candidate in grasp_candidates(kinematics, tracked):
         if candidate.face == phase.face and candidate.elbow == phase.elbow:
             return candidate
-    return current
+    return current if current is not None else phase.grasp
