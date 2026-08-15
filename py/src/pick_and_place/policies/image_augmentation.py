@@ -5,10 +5,10 @@
 
 A dataset re-rendered from one recording carries exactly one camera pose, one
 lighting rig, one background and one exposure. The real rig has none of those
-fixed: ``SIM2REAL.md`` measures the overhead camera 10-25 mm and ~2 degrees off
-its authored pose with focal length varying +/-1.45% between sessions, on top of
-whatever the room lighting is doing that day. A policy trained on the fixed
-render has no reason to be invariant to any of it.
+fixed: the overhead camera measures 10-25 mm and ~2 degrees off its authored
+pose, with focal length varying +/-1.45% between sessions, on top of whatever
+the room lighting is doing that day. A policy trained on the fixed render has
+no reason to be invariant to any of it.
 
 Randomizing the renderer covers this properly, but only for data that is
 re-recorded. These transforms cover the part that is recoverable from pixels
@@ -189,9 +189,9 @@ def random_scale(
     """Zoom each camera stream about its center, replicating at the edge.
 
     This stands in for the overhead camera's between-session focal length, which
-    `SIM2REAL.md` measures at +/-1.45% and randomizes at +/-2.5% in the
-    renderer. A scale above 1 magnifies. One draw per sample and camera, shared
-    across the observation timesteps so the pair cannot read as approach motion.
+    measures at +/-1.45% and is randomized at +/-2.5% in the renderer. A scale
+    above 1 magnifies. One draw per sample and camera, shared across the
+    observation timesteps so the pair cannot read as approach motion.
     """
     low, high = bounds
     if not 0 < low <= high:

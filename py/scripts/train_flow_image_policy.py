@@ -316,9 +316,9 @@ def main() -> None:
                 history.append(row)
                 print(f"  validation @ {update + 1}: {validation_loss:.5f}", flush=True)
                 if wandb_run is not None:
-                    # Logged for the record, not for selection. POLICY_RESULTS.md
-                    # has held-out loss plateauing while closed-loop success kept
-                    # climbing for ~900 epochs; the score series is the signal.
+                    # Logged for the record, not for selection: held-out loss has
+                    # plateaued while closed-loop success kept climbing for ~900
+                    # epochs on this task, so the score series is the signal.
                     wandb_run.log({"validation/loss": validation_loss}, step=update + 1)
                 with (args.output / "history.json").open("w") as file:
                     json.dump(history, file, indent=2)

@@ -4,7 +4,7 @@
 """Measured real-robot miscalibration, drawn per episode for injection into sim.
 
 The real system's state estimate is systematically wrong in ways measured from
-recorded episodes (see py/SIM2REAL.md): the servo joint zeros are offset from
+recorded episodes: the servo joint zeros are offset from
 the model frame and drift day to day, and the overhead cube/target localization
 is off by millimetres. Sim episode generation and the RL env inject draws from
 those measured distributions so that sim separates *true* state (what physics
@@ -40,7 +40,7 @@ from pick_and_place.core.geometry import CubePose
 FITTED_JOINT_NAMES = ("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex")
 
 # Day-to-day spread of the per-day fitted joint zeros over 20260701-04, degrees.
-# The elbow value follows the SIM2REAL finding (~0.5 deg over the three
+# The elbow value follows the measured spread (~0.5 deg over the three
 # well-sampled days; the 5-episode 20260704 fit is an outlier).
 DEFAULT_JOINT_OFFSET_SIGMA_DEG = {
     "shoulder_pan": 1.5,

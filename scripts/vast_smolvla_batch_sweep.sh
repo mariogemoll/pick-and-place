@@ -6,10 +6,10 @@
 # Re-measure what batch size is worth to SmolVLA throughput, now that the frozen
 # vision tower is out of the step.
 #
-# `SMOLVLA_PERFORMANCE.md` concluded that batch size is not a throughput lever
-# above 32. That was measured when the tower was 65% of a step and saturated the
-# GPU at any batch, and the tower is gone: it is cached, and the frozen prefix is
-# out of the backward. Two signs the curve has changed shape -- the prefix split
+# An earlier measurement found batch size was not a throughput lever above 32.
+# That was measured when the tower was 65% of a step and saturated the GPU at
+# any batch, and the tower is gone: it is cached, and the frozen prefix is out
+# of the backward. Two signs the curve has changed shape -- the prefix split
 # is 0.74x at batch 8 against 1.51x at batch 64, which is a step that is now
 # launch-bound at the small end, and peak VRAM at batch 64 fell from 11-12 GB to
 # ~4.4 GB compiled, so batch 256 fits where 128 used to be OOM-killed.
