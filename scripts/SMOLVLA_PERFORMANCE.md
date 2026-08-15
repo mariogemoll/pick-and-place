@@ -212,8 +212,16 @@ than the model alone:
 | the same, compiled | 0.65 h | 0.42 h | **1.07 h** |
 
 At $0.78/hr that is **$4.29 against $0.83**, and a working day's iteration loop
-against a lunch break. The compiled row excludes `max-autotune`'s twenty to
-thirty minutes of startup, which is a fixed cost either way.
+against a lunch break. The compiled row excludes `max-autotune`'s startup, which
+is a fixed cost either way.
+
+**These rows are model time, not wall clock.** A run measured end to end came in
+at **1.5 h** where the compiled row says 1.07, because setup, the autotune and a
+one-off recompile at the first epoch boundary sit outside `updt_s`. See
+[How long a whole run takes, end to end](#how-long-a-whole-run-takes-end-to-end)
+for the arithmetic that predicts a real run inside 0.5%, and use that to size a
+rental. Measured there, the whole compile tax for a single batch size was about
+**14 minutes**, not the twenty to thirty the batch sweep pays across many.
 
 Two costs, both real:
 
@@ -652,6 +660,84 @@ paid for once in its evaluation artifacts.
 and a run at another batch size is not comparable to them. This is the speed
 question; whether a different batch size trains a better policy is a separate one
 that nothing here measures.
+
+
+## How long a whole run takes, end to end
+
+Every number above is a per-step or per-stage cost. This is the arithmetic that
+turns them into a wall clock, calibrated against
+`smolvla-fastpath-parity-b64-50k-seed1000` (2026-08-15, one RTX 5090, batch 64,
+compiled, prefix cache with four variants):
+
+```text
+T = T_setup + V*F/R_cache + T_compile + S*t_step + N_saves*t_save
+```
+
+| term | what it is | measured |
+| --- | --- | ---: |
+| `T_setup` | dataset fetch, unpack, precondition checks | ~60 s |
+| `F` | dataset frames | 291,618 |
+| `V` | `PREFIX_CACHE_VARIANTS` | -- |
+| `R_cache` | prefix cache build rate | **206 frames/s** |
+| `T_compile` | smoke stage (375 s) + the recompile below (460 s); **zero uncompiled** | ~835 s |
+| `S` | steps | -- |
+| `t_step` | `updt_s + data_s` | **0.056 s** |
+| `t_save` | one checkpoint | ~8 s |
+
+Against the run it was fitted to: 60 + 5,662 + 835 + 2,800 + 80 = **9,437 s**
+predicted against **9,480 s** observed, inside 0.5%.
+
+As rules of thumb: **~24 minutes and ~67 GB of disk per cache variant**
+(231 KB/frame, which is what sizes `--disk`), **~11 minutes per 640,000 samples**
+at batch 64, and a **~14 minute fixed compile tax paid once per pod rather than
+once per run**.
+
+| | cache | compile | train | total |
+| --- | ---: | ---: | ---: | ---: |
+| V=4, 3.2M samples (the parity run) | 94 | 14 | 48 | **2h37m** |
+| V=1, 3.2M samples | 24 | 14 | 48 | **1h27m** |
+| second arm on the same pod | 0 | 0 | 48 | **50m** |
+
+**This corrects the "1.07 h for a 50,000-step run at `V=1`" figure this file
+carried.** It is about **1.5 h**. That estimate came from multiplying `updt_s`
+by the step count, which leaves out setup, the compile tax and the recompile
+below. The per-step numbers were right; the wall clock built from them was not.
+
+**Absolute rates are facts about the host, not the configuration.** Marketplace
+hosts vary by 1.68x on identical specs, and this run sustained 1,111 samples/s
+at batch 64 where the sweep above measured 915.3 on a different one. Take the
+structure from here and calibrate `R_cache` and `t_step` from the smoke stage of
+whatever is actually rented.
+
+### The epoch boundary costs seven minutes, once, when compiled
+
+The parity run's loop spent **406 s on a single step -- 4,556 -- and 457 s across
+the four steps around it**, out of 3,355 s total. Nothing else in the run came
+near it, and it is not a checkpoint save: saves land on multiples of 5,000 and
+cost about 8 s each.
+
+291,618 / 64 = **4,556.5**, so step 4,556 is where the first epoch ends. The
+dataloader does not drop the short final batch, so that batch is 34 samples
+rather than 64, `torch.compile` sees a shape it has no kernel for, and
+max-autotune compiles a second one. It is paid **once**: the remaining ten
+epochs reuse it, which is why the stall appears at the first epoch boundary and
+at no later one.
+
+Three consequences worth having in hand:
+
+- Budget it as a fixed cost of compiling, not as a per-epoch one.
+- It scales with how *often* a new shape appears, so it stays a single stall as
+  long as the dataset and batch size are fixed. A run whose frame count is an
+  exact multiple of its batch size would never pay it at all.
+- The same mechanism is why `torch.compile` is only safe here because the
+  dataset carries exactly one task string and square frames. A multi-task
+  dataset gives a language length that varies per batch, and that recompiles
+  *per shape encountered*, not once.
+
+`max_autotune` also warms an on-disk inductor cache that survives the process,
+which is why the smoke stage pays 375 s and the training run's own first step
+then costs 13 s rather than minutes. Two runs on one pod pay it once; two pods
+pay it twice.
 
 
 ## NVDEC decode works, and is 3x faster -- correcting an earlier claim
