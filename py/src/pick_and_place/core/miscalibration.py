@@ -56,11 +56,35 @@ DEFAULT_PAN_JITTER_TAU_S = 10.0
 
 # Believed-cube-pose error vs true (overhead localization + physical frame
 # placement class of error): ~6-9 mm planar magnitude, ~3-5 mm vertical.
+#
+# This is an *outcome*, not a cause. Injecting it directly is what a run does
+# when nothing simulates the overhead camera; when something does, the causes
+# below are perturbed instead and this becomes the target the emergent error is
+# checked against.
 DEFAULT_CUBE_BELIEF_SIGMA_XY_M = 0.006
 DEFAULT_CUBE_BELIEF_SIGMA_Z_M = 0.004
 DEFAULT_CUBE_BELIEF_SIGMA_YAW_RAD = math.radians(2.0)
 # The drop target is localized through the same overhead chain.
 DEFAULT_TARGET_BELIEF_SIGMA_XY_M = 0.006
+
+# The causes of that outcome, both of which separate where the overhead camera
+# is believed to be from where it actually sits.
+#
+# These are *residuals*, and that is the whole reason they are so much smaller
+# than the raw figures they come from. The camera moves 25.6 mm and 1.9 degrees
+# across the measured days and the physical workspace frame sits about 14 mm
+# from where the model authors it — but the extrinsics are re-solved every
+# session against that same frame, so most of both is measured rather than
+# suffered. What is left over is what reaches the planner.
+#
+# How much is left over cannot be read off the rig directly, so it is fitted the
+# other way round: these are the values at which simulated render-and-detect
+# reproduces the 6-9 mm the rig actually misses by. See
+# ``pick_and_place.plant.overhead_check``, which is the measurement, and
+# ``scripts/check_overhead_localization.py``, which runs it.
+DEFAULT_OVERHEAD_EXTRINSICS_SIGMA_M = 0.0045
+DEFAULT_OVERHEAD_EXTRINSICS_SIGMA_DEG = 0.32
+DEFAULT_WORKSPACE_FRAME_SIGMA_M = 0.0024
 
 
 class SlowJitter:
@@ -93,6 +117,31 @@ class SlowJitter:
         return self._x
 
 
+@dataclass(frozen=True)
+class OverheadCameraError:
+    """How far the overhead camera's calibration is from where it physically sits.
+
+    Two causes, one effect. Whether the camera itself moved between sessions or
+    the frame it was calibrated against is not where the model says, what
+    reaches the planner is the same thing: poses solved through a camera pose
+    that is slightly wrong. So they compose into one rigid offset from the true
+    pose to the believed one.
+
+    Injecting the causes rather than the outcome is the whole point. An honest
+    render-and-detect in a clean scene would localize *better* than the real
+    rig, because in sim the extrinsics are exact and the frame is exactly where
+    the model puts it. Perturb the causes and the resulting localization error
+    is something that can be measured and compared against the rig's, instead of
+    a number that was assumed.
+    """
+
+    position_m: tuple[float, float, float]
+    rotation_deg: tuple[float, float, float]
+    #: How much of ``position_m`` came from the frame sitting off its authored
+    #: place, kept separate so a check can attribute the emergent error.
+    frame_placement_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+
 @dataclass
 class MiscalibrationDraw:
     """One episode's realization of the miscalibration model.
@@ -107,6 +156,10 @@ class MiscalibrationDraw:
     pan_jitter: SlowJitter | None
     cube_belief_error: tuple[float, float, float, float]  # dx, dy, dz, dyaw
     target_belief_error: tuple[float, float]  # dx, dy
+    #: Where the overhead camera is believed to be, relative to where it is.
+    #: Used instead of the two belief errors above by anything that actually
+    #: renders and detects; ignored by anything that injects the outcome.
+    overhead_camera_error: OverheadCameraError = OverheadCameraError((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
 
     def offsets_deg(self, t: float = 0.0) -> dict[str, float]:
         """Joint-zero offsets (degrees) in effect at episode time ``t``."""
@@ -151,6 +204,9 @@ class MiscalibrationModel:
     cube_belief_sigma_z_m: float = DEFAULT_CUBE_BELIEF_SIGMA_Z_M
     cube_belief_sigma_yaw_rad: float = DEFAULT_CUBE_BELIEF_SIGMA_YAW_RAD
     target_belief_sigma_xy_m: float = DEFAULT_TARGET_BELIEF_SIGMA_XY_M
+    overhead_extrinsics_sigma_m: float = DEFAULT_OVERHEAD_EXTRINSICS_SIGMA_M
+    overhead_extrinsics_sigma_deg: float = DEFAULT_OVERHEAD_EXTRINSICS_SIGMA_DEG
+    workspace_frame_sigma_m: float = DEFAULT_WORKSPACE_FRAME_SIGMA_M
 
     def sample(self, rng: np.random.Generator) -> MiscalibrationDraw:
         # Sorted so a seeded rng assigns the same draw to the same joint on
@@ -185,4 +241,28 @@ class MiscalibrationModel:
                 float(rng.normal(0.0, self.target_belief_sigma_xy_m)),
                 float(rng.normal(0.0, self.target_belief_sigma_xy_m)),
             ),
+            overhead_camera_error=self._sample_overhead_error(rng),
+        )
+
+    def _sample_overhead_error(self, rng: np.random.Generator) -> OverheadCameraError:
+        """Where the overhead camera is believed to be, relative to where it is.
+
+        The frame placement error is drawn in the table plane only: the frame is
+        a flat printed fixture that sits *on* the table, so it can be laid down
+        in the wrong place but not at the wrong height.
+        """
+        extrinsics = rng.normal(0.0, self.overhead_extrinsics_sigma_m, size=3)
+        frame = np.array(
+            [
+                rng.normal(0.0, self.workspace_frame_sigma_m),
+                rng.normal(0.0, self.workspace_frame_sigma_m),
+                0.0,
+            ]
+        )
+        return OverheadCameraError(
+            position_m=tuple(float(v) for v in extrinsics + frame),
+            rotation_deg=tuple(
+                float(rng.normal(0.0, self.overhead_extrinsics_sigma_deg)) for _ in range(3)
+            ),
+            frame_placement_m=tuple(float(v) for v in frame),
         )

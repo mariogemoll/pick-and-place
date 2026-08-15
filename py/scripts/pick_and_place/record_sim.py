@@ -60,6 +60,8 @@ from pick_and_place.sim.domain_randomization import (
     orient_cube,
 )
 from pick_and_place.scripted.episode_sampling import sample_cube
+from pick_and_place.plant.overhead import SimOverheadPerception
+from pick_and_place.rollout.localized_episode import prepare_localized_episode
 from pick_and_place.runtime.episodes import EpisodeSamplingError, prepare_episode
 from pick_and_place.sim.model import placement_error
 from pick_and_place.cli.dataset import add_dataset_arguments
@@ -138,6 +140,68 @@ def _configured_file(path: Path | None) -> dict[str, str] | None:
         "path": str(resolved),
         "sha256": hashlib.sha256(resolved.read_bytes()).hexdigest(),
     }
+
+
+def _prepare(
+    rng,
+    model,
+    data,
+    perception,
+    *,
+    source,
+    target,
+    miscalibration,
+    grasp_perturbation,
+    max_attempts: int,
+):
+    """Prepare one episode, and place the drop plate it will be recorded against.
+
+    With ``perception``, the planner's belief comes from rendering the overhead
+    camera and running the detector, and the plate has to be down before that
+    happens — so the plate is placed as part of preparing the episode. Without
+    it, the belief is the injected draw and the plate is placed afterwards, its
+    yaw drawn last so an episode index keeps the poses it had before the plate
+    started rotating.
+    """
+    if perception is not None:
+        localized = prepare_localized_episode(
+            rng,
+            model,
+            data,
+            perception,
+            source=source,
+            target=target,
+            include_environment=True,
+            miscalibration=miscalibration,
+            grasp_perturbation=grasp_perturbation,
+            max_attempts=max_attempts,
+        )
+        return localized.episode, localized.target_plate_yaw
+
+    episode = prepare_episode(
+        rng,
+        source,
+        target,
+        model=model,
+        data=data,
+        verbose=False,
+        include_environment=True,
+        miscalibration=miscalibration,
+        grasp_perturbation=grasp_perturbation,
+        max_attempts=max_attempts,
+    )
+    plate_yaw = sample_target_plate_yaw(
+        rng, episode.target.x, episode.target.y, half_size=DROP_ZONE_HALF_SIZE
+    )
+    place_paper_target_marker(
+        model,
+        (episode.target.x, episode.target.y),
+        plate_yaw,
+        (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
+        usable=is_cube_drop_allowed(episode.target.x, episode.target.y),
+        alpha=1.0,
+    )
+    return episode, plate_yaw
 
 
 def run_recording(
@@ -239,6 +303,13 @@ def run_recording(
     miscalibration_model = (
         MiscalibrationModel() if scene.miscalibration and preset is None else None
     )
+    # Rendered at detection resolution, separately from the recorded
+    # observations: the detector needs more pixels than a dataset frame carries.
+    perception = (
+        SimOverheadPerception(model, data, detector=None)
+        if scene.overhead_perception
+        else None
+    )
     viewer_cm = mujoco.viewer.launch_passive(model, data) if use_viewer else None
     viewer = viewer_cm.__enter__() if viewer_cm is not None else _MockViewer()
 
@@ -324,15 +395,16 @@ def run_recording(
                 magnitude_m=perturbation_magnitude_m,
                 max_source_radius_m=perturbation_max_source_radius_m,
             )
+            if perception is not None:
+                perception.set_error(draw.overhead_camera_error)
             try:
-                episode = prepare_episode(
+                episode, target_plate_yaw = _prepare(
                     rng,
-                    episode_source,
-                    target,
-                    model=model,
-                    data=data,
-                    verbose=False,
-                    include_environment=True,
+                    model,
+                    data,
+                    perception,
+                    source=episode_source,
+                    target=target,
                     miscalibration=draw,
                     grasp_perturbation=perturbation,
                     max_attempts=max_attempts,
@@ -342,23 +414,6 @@ def run_recording(
                 progress.set_postfix(saved=recorded, skipped=attempted - recorded)
                 continue
 
-            # Render the black drop-zone square at the episode's target so the
-            # frames match a real recording, where a physical paper square sits on
-            # the table marking where the cube must be placed. The yaw is drawn
-            # after `prepare_episode` so it does not perturb the pose stream: an
-            # episode index keeps the poses it had before the plate rotated.
-            ep_target = episode.target
-            target_plate_yaw = sample_target_plate_yaw(
-                rng, ep_target.x, ep_target.y, half_size=DROP_ZONE_HALF_SIZE
-            )
-            place_paper_target_marker(
-                model,
-                (ep_target.x, ep_target.y),
-                target_plate_yaw,
-                (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
-                usable=is_cube_drop_allowed(ep_target.x, ep_target.y),
-                alpha=1.0,
-            )
             if randomizer is not None:
                 randomizer.tint_episode_markers()
             # `place_paper_target_marker` writes `model.body_pos`/`body_quat`,
@@ -429,6 +484,8 @@ def run_recording(
     finally:
         if viewer_cm is not None:
             viewer_cm.__exit__(None, None, None)
+        if perception is not None:
+            perception.close()
         rig.close()
         if recording is not None and recording.dataset is not None:
             recording.finalize()
@@ -746,6 +803,19 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--overhead-perception",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "localize the cube and drop plate by rendering the overhead camera and "
+            "running the detector, instead of taking the true poses and adding the "
+            "draw's noise to them. The planner's belief error becomes an outcome of "
+            "a calibration that is slightly wrong, and the arm blocking its own view "
+            "becomes a real failure mode -- so the rig's hunt behavior runs here too. "
+            "Costs one 1920x1080 render per search pose, once per episode"
+        ),
+    )
+    parser.add_argument(
         "--domain-randomization",
         type=Path,
         default=None,
@@ -824,6 +894,7 @@ def main() -> None:
         background_panorama=args.background_panorama,
         table_texture=args.table_texture,
         miscalibration=args.miscalibration,
+        overhead_perception=args.overhead_perception,
         domain_randomization=args.domain_randomization,
     )
     try:
@@ -857,6 +928,7 @@ def main() -> None:
         "render_width": args.render_width,
         "render_height": args.render_height,
         "miscalibration": args.miscalibration,
+        "overhead_perception": args.overhead_perception,
         "domain_randomization": _configured_file(args.domain_randomization),
         "max_attempts": args.max_attempts,
         "perturbed_fraction": args.perturbed_fraction,

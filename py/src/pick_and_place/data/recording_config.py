@@ -40,6 +40,11 @@ class SceneDraw:
     background_panorama: Path | None = None
     table_texture: Path | None = None
     miscalibration: bool = False
+    #: Localize the cube and the plate by rendering the overhead camera and
+    #: running the detector, instead of taking the true poses and adding noise
+    #: to them. Makes the planner's belief error an *outcome* of a calibration
+    #: that is slightly wrong, and brings the rig's hunt behavior with it.
+    overhead_perception: bool = False
     domain_randomization: Path | None = None
 
 
