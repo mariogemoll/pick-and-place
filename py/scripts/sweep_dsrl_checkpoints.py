@@ -135,7 +135,7 @@ def main() -> None:
     from pick_and_place.dppo_rl.vector_env import DppoVectorEnv
     from pick_and_place.dsrl.noise_policy import denoise, latent_shape, visual_features
     from pick_and_place.dsrl.sac import LatentActor, SacConfig, TwinCritic
-    from pick_and_place.sim.scene_appearance import parse_appearance
+    from pick_and_place.variants.appearance import parse_appearance
 
     with np.load(args.normalization) as bounds:
         action_encoding = read_action_encoding(bounds)

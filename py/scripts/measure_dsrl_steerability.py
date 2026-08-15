@@ -77,7 +77,7 @@ def _run_spread(args: argparse.Namespace) -> dict:
     from pick_and_place.dppo_rl.env import EnvConfig
     from pick_and_place.dppo_rl.vector_env import DppoVectorEnv
     from pick_and_place.dsrl.noise_policy import denoise, latent_shape
-    from pick_and_place.sim.scene_appearance import parse_appearance
+    from pick_and_place.variants.appearance import parse_appearance
 
     config = OmegaConf.load(args.config)
     config.base_policy_path = str(args.checkpoint)

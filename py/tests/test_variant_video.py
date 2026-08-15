@@ -13,13 +13,13 @@ import pytest
 
 from pick_and_place.core.geometry import CubePose
 
-from pick_and_place.runtime.episode_rerender import (
+from pick_and_place.variants.render import assert_rerenderable
+from pick_and_place.variants.video import (
     DEFAULT_X264_CRF,
     DEFAULT_X264_KEYINT,
     STATS_PIXEL_STRIDE,
     ImageStatsAccumulator,
     VideoWriter,
-    assert_rerenderable,
     encode_decode,
     evenly_spaced,
     rewrite_image_stats,
@@ -33,7 +33,7 @@ from pick_and_place.data.trajectory_artifact import (
     TrajectoryWriter,
     save_trajectory,
 )
-from pick_and_place.sim.scene_appearance import (
+from pick_and_place.variants.appearance import (
     CUBE_COLOURS,
     SceneAppearance,
     SceneAppearanceOverride,
@@ -185,15 +185,15 @@ def test_episodes_without_a_trajectory_artifact_are_refused(tmp_path):
         assert_rerenderable(root)
 
 
-def test_domain_randomized_episodes_are_refused(tmp_path):
+def test_domain_randomized_episodes_are_accepted(tmp_path):
+    """Their appearance draw is a look, and looks are what a variant pass replaces."""
     root = _with_artifact(
         _episode_metadata(
             tmp_path / "ep000001", {"episode_index": [1], "domain_sample_json": ["{}"]}
         )
     )
 
-    with pytest.raises(ValueError, match="domain-randomization"):
-        assert_rerenderable(root)
+    assert_rerenderable(root)
 
 
 def test_miscalibrated_episodes_carrying_an_artifact_are_accepted(tmp_path):
@@ -279,7 +279,7 @@ def test_variant_specs_name_their_own_staging_root(tmp_path):
 
     preset = module.parse_variant("blue-cube")
     assert preset.appearance == SceneAppearance(cube="blue")
-    assert preset.staging_root(tmp_path).name == "blue-cube_episodes"
+    assert module.variant_staging_root(preset, tmp_path).name == "blue-cube_episodes"
 
     ad_hoc = module.parse_variant("cube=blue,floor=dark-gray")
     assert ad_hoc.appearance == SceneAppearance(floor="dark-gray", cube="blue")

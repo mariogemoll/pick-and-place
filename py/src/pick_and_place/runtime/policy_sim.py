@@ -20,10 +20,11 @@ from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
 from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_spec
 from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
 from pick_and_place.sim.domain_randomization import (
-    DomainRandomizer,
     DomainSample,
+    WristMountRandomizer,
     reload_renderer_textures,
 )
+from pick_and_place.variants.scene import AppearanceRandomizer
 from pick_and_place.sim.collisions import build_geom_sets, is_unexpected, scan_contacts
 from pick_and_place.spec.robot import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 from pick_and_place.spec.robot import ARM_JOINT_NAMES, GRIPPER_INDEX, JOINT_NAMES
@@ -45,7 +46,7 @@ from pick_and_place.core.robot_dynamics import (
     tracking_bias_rad,
     tracking_bias_vector,
 )
-from pick_and_place.sim.scene_appearance import SceneAppearance, SceneAppearanceOverride
+from pick_and_place.variants.appearance import SceneAppearance, SceneAppearanceOverride
 from pick_and_place.core.image_ops import resize_and_center_crop
 from pick_and_place.core.workspace_bounds import is_cube_drop_allowed
 
@@ -200,7 +201,10 @@ class PolicySimEnv(gym.Env):
         self._renderer_factory = renderer_factory
         self._renderer: Any | None = None
         self.include_images = include_images
-        self._randomizer = DomainRandomizer(self.model)
+        # The draw splits: the wrist mount is something the policy has to cope
+        # with, the rest is only pixels.
+        self._wrist_mount = WristMountRandomizer(self.model)
+        self._randomizer = AppearanceRandomizer(self.model)
         # A policy must be rolled out in the appearance it was trained on: the
         # blue-cube checkpoints see a recoloured cube that the compiled scene,
         # which carries the physical rig's AprilTag cube, does not have.
@@ -348,8 +352,10 @@ class PolicySimEnv(gym.Env):
         mujoco.mj_resetData(self.model, self.data)
         if self._domain_sample is None:
             self._randomizer.reset()
+            self._wrist_mount.reset()
         else:
-            self._randomizer.apply(self._domain_sample)
+            self._randomizer.apply(self._domain_sample.appearance())
+            self._wrist_mount.apply(self._domain_sample)
         if self._renderer is not None:
             reload_renderer_textures(self._renderer, self._randomizer.texture_ids)
         self._set_robot_state(scenario.initial_robot_state_real)

@@ -175,7 +175,7 @@ left out.
 | Directory | Contents |
 | --- | --- |
 | `SO-ARM100/` | Vendored hardware submodule: CAD, STL, URDF, MJCF, BOM. |
-| `py/` | The `pick_and_place` package (100 modules in 13 subpackages), 85 CLI scripts, 48 test files. Simulation, real-robot control, calibration, datasets, policies. |
+| `py/` | The `pick_and_place` package (141 modules in 15 subpackages), 85 CLI scripts, 79 test files. Simulation, real-robot control, calibration, datasets, policies. |
 | `ts/` | Vite + Three.js browser app: the visualizations embedded in the web page. |
 | `mesh_optimization/` | Standalone Python subproject that decimates high-poly STL into web-ready GLB. |
 | `scripts/` | Repository-level shell/TS tooling: license headers, file-size check, mesh pipeline, remote-GPU job scripts. |
@@ -196,7 +196,7 @@ above, where work genuinely combines capabilities.
 | --- | --- | --- |
 | Foundation | `spec`, `core` | `spec` imports nothing else in the package; `core` imports only `spec`. |
 | Capability branches | `planning`, `perception`, `sim`, `hardware`, `data`, `policies` | Each owns one heavy dependency. **No branch may import another.** |
-| Convergence | `runtime`, `calibration`, `analysis`, `cli` | May import anything, including each other. Nothing below them may import them. |
+| Convergence | `runtime`, `variants`, `calibration`, `analysis`, `cli` | May import anything, including each other. Nothing below them may import them. |
 
 `scripts/check_package_layering.py` enforces this in CI. When a module needs
 two capabilities it belongs in the convergence tier by construction; when it
@@ -212,6 +212,7 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
 - **`core/`** — pure computation over the spec: `geometry`, `transforms`,
   `rotations`, `ik`, `kinematics`, `workspace_bounds`, `joint_frames` (sim↔real
   conversions and the joint-limit clamp), `image_ops`, `miscalibration`,
+  `appearance` (its opposite: one draw of everything that is only pixels),
   `robot_dynamics`, `camera_calibration` (the rig's measured calibration files),
   `paths`.
 - **`planning/`** — the analytic planner, which generates every demonstration
@@ -227,8 +228,10 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   `model` (compile a runnable model and move things in it), `collisions`,
   `environment`, `materials`, `wrist_camera`, `camera_module`,
   `workspace_overlays`, `paper_target_marker`, `frame_tags`,
-  `derive_kinematics`, `domain_randomization`, `render_randomization`,
-  `camera_pose_envelope`, `camera_extrinsics`, `export`. Loads the stock MJCF
+  `derive_kinematics`, `camera_pose_envelope`, `camera_extrinsics`, `export`,
+  and `domain_randomization` — the randomization envelope plus the half of a
+  draw that shapes behavior (the wrist camera's mount error, the cube's resting
+  orientation, the miscalibration). Loads the stock MJCF
   from `SO-ARM100/` with `MjSpec` and replaces full-mesh collision geoms with
   the hand-tuned box model; `python -m pick_and_place.sim.export` writes
   standalone MJCF plus a web manifest.
@@ -276,8 +279,23 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   Around those: `episodes` (sample one that runs clean), `preflight` (vet a
   trajectory under live physics), `frame_reader` (one background thread per
   camera, holding only the newest frame), `ramp` (ease the arm onto a pose),
-  `scripted_policy`, `episode_rerender`, `policy_sim`, `policy_real`,
+  `scripted_policy`, `policy_sim`, `policy_real`,
   `overhead_detection`, `episode_loop`, `training_scenes`.
+- **`variants/`** — one recorded trajectory, rendered many ways. Everything here
+  answers "no" to the question that organizes the sim/real split: *if I change
+  this, does the correct action change?* Lighting, materials, colours,
+  backgrounds, viewpoint, exposure and noise move pixels and nothing else, so
+  they are drawn against an episode that already succeeded and its action labels
+  stay correct. `appearance` (the named palettes), `draw` (the envelopes a
+  variant samples from), `scene` (applying a draw to a compiled model),
+  `renderer` (replaying an artifact through the recording camera pipeline),
+  `render` (one artifact into N variants — variant outer, frame inner, so the
+  scene is restyled once instead of per frame), `video` (encoding a variant the
+  way the recording was encoded).
+
+  The input is a trajectory artifact, which is why none of this needs the
+  planner, the detectors or physics — and why a domain-randomization experiment
+  costs a render pass rather than a fresh collection run.
 - **`calibration/`** — solving the rig by rendering the scene and comparing it
   to a real image: `cam_align_solve`, `camera_compare`,
   `camera_calibration_export`, `session_calibration`.

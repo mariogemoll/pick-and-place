@@ -49,6 +49,7 @@ from pick_and_place.core.camera_calibration import (
     load_local_camera_extrinsics,
     load_local_camera_intrinsics,
 )
+from pick_and_place.core.appearance import AppearanceDraw
 from pick_and_place.core.geometry import CubePose, PlacementError
 from pick_and_place.core.miscalibration import MiscalibrationDraw
 from pick_and_place.core.task_phases import PhaseSpan, phase_spans_from_json, phase_spans_json
@@ -57,7 +58,7 @@ from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 
 #: Bumped whenever the stored fields change meaning. A reader refuses anything
 #: it was not written against rather than silently misinterpreting a column.
-ARTIFACT_VERSION = 1
+ARTIFACT_VERSION = 2
 
 #: What the artifact is called inside a staged episode directory.
 ARTIFACT_FILENAME = "trajectory.npz"
@@ -186,12 +187,44 @@ class MiscalibrationRecord:
 
 
 @dataclasses.dataclass(frozen=True)
+class WristCameraMount:
+    """Where the wrist camera physically sat, as an offset from its authored mount.
+
+    Drawn when the episode was generated, because the expert had to servo through
+    it — but recorded here because it also moves pixels: rebuild the picture with
+    the camera on its nominal mount and every wrist frame is subtly wrong. It is
+    the one L1 draw a renderer has to know about.
+    """
+
+    position_m: tuple[float, float, float]
+    rotation_deg: tuple[float, float, float]
+
+    def as_json(self) -> dict[str, Any]:
+        return {
+            "position_m": list(self.position_m),
+            "rotation_deg": list(self.rotation_deg),
+        }
+
+    @staticmethod
+    def from_json(payload: dict[str, Any]) -> WristCameraMount:
+        return WristCameraMount(
+            position_m=tuple(float(v) for v in payload["position_m"]),
+            rotation_deg=tuple(float(v) for v in payload["rotation_deg"]),
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class EpisodeFacts:
     """What is true of the whole episode rather than of any one tick.
 
     ``target_xy`` and ``target_plate_yaw`` are here because the drop zone does not
     move: a renderer places the plate once and then runs every frame through it.
-    ``seed`` and ``miscalibration`` are what make the episode reproducible;
+    ``seed``, ``miscalibration`` and ``wrist_camera_mount`` are what make the
+    episode reproducible. ``recorded_appearance`` is the look its pixels were
+    actually made with, kept so a re-render can reproduce the recording rather
+    than only replace it — which is what lets a randomized recording be verified
+    against its own video. A variant pass overrides it.
+
     ``verdict`` and the placement error derived from the last frame are what a
     consumer filters on.
     """
@@ -204,6 +237,8 @@ class EpisodeFacts:
     seed: int | None = None
     episode_index: int | None = None
     miscalibration: MiscalibrationRecord | None = None
+    wrist_camera_mount: WristCameraMount | None = None
+    recorded_appearance: AppearanceDraw | None = None
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -218,6 +253,12 @@ class EpisodeFacts:
             "miscalibration": (
                 None if self.miscalibration is None else self.miscalibration.as_json()
             ),
+            "wrist_camera_mount": (
+                None if self.wrist_camera_mount is None else self.wrist_camera_mount.as_json()
+            ),
+            "recorded_appearance": (
+                None if self.recorded_appearance is None else self.recorded_appearance.as_json()
+            ),
         }
 
     @staticmethod
@@ -230,6 +271,8 @@ class EpisodeFacts:
             )
         target_x, target_y = payload["target_xy"]
         miscalibration = payload["miscalibration"]
+        mount = payload["wrist_camera_mount"]
+        appearance = payload["recorded_appearance"]
         return EpisodeFacts(
             target_xy=(float(target_x), float(target_y)),
             target_plate_yaw=float(payload["target_plate_yaw"]),
@@ -244,6 +287,12 @@ class EpisodeFacts:
                 None
                 if miscalibration is None
                 else MiscalibrationRecord.from_json(miscalibration)
+            ),
+            wrist_camera_mount=(
+                None if mount is None else WristCameraMount.from_json(mount)
+            ),
+            recorded_appearance=(
+                None if appearance is None else AppearanceDraw.from_json(appearance)
             ),
         )
 

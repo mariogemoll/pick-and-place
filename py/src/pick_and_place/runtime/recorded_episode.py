@@ -7,7 +7,8 @@ A finished episode leaves two records, and they are not the same record. The
 dataset metadata row describes it to whatever will *train* on it: where the cube
 started, where it landed, which phases ran, whether the grasp was deliberately
 fumbled. The trajectory artifact describes it to whatever will *render* it
-again: the true arm and cube poses, and where the drop plate was.
+again: the true arm and cube poses, the drop plate, the camera mount, the look
+its pixels were made under.
 
 They are built together here because they come from the same handful of values,
 and keeping them apart in the recorder is how one of them ends up missing a
@@ -29,6 +30,7 @@ from pick_and_place.data.trajectory_artifact import (
     EpisodeFacts,
     MiscalibrationRecord,
     TrajectoryArtifact,
+    WristCameraMount,
     save_trajectory,
 )
 from pick_and_place.runtime.episodes import Episode
@@ -123,6 +125,7 @@ def save_episode_artifact(
     *,
     target_plate_yaw: float,
     draw: MiscalibrationDraw | None,
+    sample: DomainSample | None,
     seed: int | None,
     episode_index: int,
     fingerprint: dict[str, Any],
@@ -146,6 +149,15 @@ def save_episode_artifact(
                 seed=seed,
                 episode_index=episode_index,
                 miscalibration=MiscalibrationRecord.of(draw),
+                wrist_camera_mount=(
+                    None
+                    if sample is None
+                    else WristCameraMount(
+                        position_m=sample.wrist_camera_position_m,
+                        rotation_deg=sample.wrist_camera_rotation_deg,
+                    )
+                ),
+                recorded_appearance=None if sample is None else sample.appearance(),
             ),
         ),
     )

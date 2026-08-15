@@ -46,7 +46,7 @@ from pick_and_place.cli.policy import (
     add_policy_arguments,
 )
 from pick_and_place.cli.scene import add_render_size_arguments, add_scene_appearance_arguments
-from pick_and_place.sim.scene_appearance import parse_appearance
+from pick_and_place.variants.appearance import parse_appearance
 from pick_and_place.core.workspace_bounds import workspace_interior_corners_world
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]

@@ -14,7 +14,7 @@ from pathlib import Path
 
 from pick_and_place.data.recording_config import RENDER_HEIGHT, RENDER_WIDTH
 from pick_and_place.runtime.preflight import PreflightDebug
-from pick_and_place.sim.scene_appearance import APPEARANCE_PRESETS
+from pick_and_place.variants.appearance import APPEARANCE_PRESETS
 
 
 

@@ -1,27 +1,17 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Replay a recorded ground-truth episode's scene and re-encode its videos.
+"""Writing a variant's videos so they sit beside a recording as equals.
 
-A recorded simulation episode's trajectory artifact stores everything the
-renderer needs: the true arm joints per frame, the true cube pose per frame, and
-the drop-zone target pose and yaw. Replaying those through the recording scene
-reproduces the recorded frames, which makes the scene's *appearance* a free variable after the
-fact — the property the DPPO retrain needs, because the pick cube has to be
-rendered blue to be legible at 96x96 but has to be recorded with its AprilTag
-faces for the descent visual servo to work.
+A re-render is only comparable to the recording it came from if it is encoded
+the way that recording was, so an episode's own video is asked what settings it
+was written with rather than assumed to have used the current defaults. The same
+reasoning drives :func:`encode_decode`, which measures the codec's own noise
+floor: a recorded video is lossy, so even a pixel-perfect re-render differs from
+it, and the difference that matters is the part above that floor.
 
-Everything here is about reproducing the recording pipeline rather than merely
-resembling it: the scene comes from
-:func:`pick_and_place.runtime.sim_recorder.build_recording_scene` (the function the
-recorder itself builds through), the images go through the same
-:class:`~pick_and_place.runtime.sim_recorder.SimCameraRig` at the recorded resolution,
-and the H.264 settings are read back out of the episode's own video rather than
-assumed. What cannot be reproduced is flagged instead of papered over: see
-:func:`assert_rerenderable`.
-
-The states, actions and all other recorded columns are copied through
-untouched; only pixels change.
+The states, actions and every other recorded column are copied through
+untouched. Only pixels change.
 """
 
 from __future__ import annotations
@@ -35,33 +25,12 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
-import mujoco
 import numpy as np
-import pyarrow.parquet as pq
 
-from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
-from pick_and_place.data.trajectory_artifact import ARTIFACT_FILENAME
-from pick_and_place.sim.domain_randomization import ProceduralAppearance
-from pick_and_place.sim.model import set_joint
-from pick_and_place.spec.robot import ARM_JOINT_NAMES
-from pick_and_place.core.joint_frames import real_frame_to_sim
-from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
-from pick_and_place.sim.paper_target_marker import place_paper_target_marker
-from pick_and_place.sim.render_randomization import (
-    CameraJitter,
-    scene_texture_ids,
-    set_camera_jitter,
-    set_scene_texture,
-    snapshot_overhead_camera,
-)
-from pick_and_place.sim.scene_appearance import SceneAppearance, SceneAppearanceOverride
 from pick_and_place.runtime.sim_recorder import (
     OVERHEAD_CAMERA,
     WRIST_CAMERA,
-    SimCameraRig,
-    build_recording_scene,
 )
-from pick_and_place.core.workspace_bounds import is_cube_drop_allowed
 
 #: Dataset feature name of each camera, and the MuJoCo camera it renders from.
 CAMERA_FEATURES: dict[str, str] = {
@@ -245,110 +214,6 @@ def encode_decode(
     return decoded
 
 
-class EpisodeRenderer:
-    """Re-render recorded ground truth through the recording camera pipeline."""
-
-    def __init__(
-        self,
-        *,
-        render_hw: tuple[int, int],
-        image_hw: tuple[int, int],
-        background_panorama: Path | str | np.ndarray | None = None,
-        table_texture: Path | str | np.ndarray | None = None,
-    ) -> None:
-        render_height, render_width = render_hw
-        image_height, image_width = image_hw
-        self.model, self.data = build_recording_scene(
-            render_width=render_width,
-            render_height=render_height,
-            background_panorama=background_panorama,
-            table_texture=table_texture,
-        )
-        self.rig = SimCameraRig(
-            self.model,
-            load_local_camera_intrinsics(),
-            width=image_width,
-            height=image_height,
-            render_width=render_width,
-            render_height=render_height,
-        )
-        self.appearance = SceneAppearanceOverride(self.model)
-        cube_body = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "pick_cube")
-        self._cube_qpos_adr = int(self.model.jnt_qposadr[self.model.body_jntadr[cube_body]])
-
-        # Authored overhead camera pose/focal and its hardware geoms' base poses,
-        # snapshotted once so a jittered episode can be restored to it exactly.
-        self._overhead_base = snapshot_overhead_camera(self.model, OVERHEAD_CAMERA)
-
-        # Present only when built with the finite-floor scene (background_panorama
-        # or table_texture given); empty otherwise, making set_scene_texture a no-op.
-        self._scene_texture_ids = scene_texture_ids(self.model)
-        self._scene_tex_data_base = self.model.tex_data.copy()
-
-    def set_camera_jitter(self, jitter: CameraJitter | None) -> None:
-        """Apply an overhead-camera pose+focal jitter, or restore the authored pose."""
-        set_camera_jitter(self.model, self._overhead_base, jitter)
-
-    def set_scene_texture(self, appearance: ProceduralAppearance | None) -> None:
-        """Apply a background/table appearance, or restore the one built at construction.
-
-        A no-op unless the renderer was built with ``background_panorama`` or
-        ``table_texture`` (the finite-floor scene) -- there is nothing to vary
-        under the infinite groundplane every plain recording has used so far.
-        """
-        if not self._scene_texture_ids:
-            return
-        set_scene_texture(
-            self.model, self._scene_texture_ids, appearance, self._scene_tex_data_base
-        )
-        self.rig.reload_textures(self._scene_texture_ids)
-
-    def set_episode(
-        self,
-        target_xy: tuple[float, float],
-        target_plate_yaw: float,
-        *,
-        camera_jitter: CameraJitter | None = None,
-        scene_texture: ProceduralAppearance | None = None,
-    ) -> None:
-        """Place the drop-zone marker, overhead camera and scene texture for this episode."""
-        place_paper_target_marker(
-            self.model,
-            target_xy,
-            target_plate_yaw,
-            (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
-            usable=is_cube_drop_allowed(*target_xy),
-            alpha=1.0,
-        )
-        self.set_camera_jitter(camera_jitter)
-        self.set_scene_texture(scene_texture)
-        mujoco.mj_forward(self.model, self.data)
-        # The placement decides this episode's plate colour, which is what an
-        # appearance leaving the target unset must restore.
-        self.appearance.refresh_plate_baseline()
-
-    def set_frame(self, state_real: np.ndarray, cube_pose: np.ndarray) -> None:
-        """Pose the arm and cube at one recorded frame's ground truth."""
-        arm_rad, gripper_rad = real_frame_to_sim(np.asarray(state_real, dtype=np.float64))
-        for name in ARM_JOINT_NAMES:
-            set_joint(self.model, self.data, name, arm_rad[name])
-        set_joint(self.model, self.data, "gripper", gripper_rad)
-        self.data.qpos[self._cube_qpos_adr : self._cube_qpos_adr + 7] = cube_pose
-        mujoco.mj_forward(self.model, self.data)
-
-    def capture(self, appearance: SceneAppearance) -> dict[str, np.ndarray]:
-        """Render both cameras under ``appearance``, keyed by dataset feature."""
-        self.appearance.apply(appearance)
-        wrist, overhead = self.rig.capture(self.data)
-        return {
-            "observation.images.wrist": wrist,
-            "observation.images.overhead": overhead,
-        }
-
-    def close(self) -> None:
-        self.rig.close()
-
-
 class ImageStatsAccumulator:
     """Accumulate LeRobot-shaped image statistics over re-rendered frames.
 
@@ -401,38 +266,6 @@ def rewrite_image_stats(stats_path: Path, stats_by_feature: dict[str, dict[str, 
     with stats_path.open("w") as file:
         json.dump(stats, file, indent=4)
         file.write("\n")
-
-
-def assert_rerenderable(episode_root: Path) -> None:
-    """Raise unless the episode's pixels are recoverable from what it stores.
-
-    Two things have to hold. The episode needs its trajectory artifact, which is
-    the only place the *true* arm pose lives: ``observation.state`` is the
-    servo-style readback, and under a miscalibration draw the two differ by a
-    random walk that is stored nowhere else.
-
-    And it must not have been recorded with ``--domain-randomization``, whose
-    appearance is drawn per episode. That draw *is* stored
-    (``domain_sample_json``), so this is a missing feature rather than missing
-    information: applying it needs the randomizer, its texture reloads, its image
-    postprocess and its believed wrist-camera pose, none of which this replay
-    does yet.
-    """
-    if not (episode_root / ARTIFACT_FILENAME).is_file():
-        raise ValueError(
-            f"{episode_root.name} carries no {ARTIFACT_FILENAME}, so the arm pose physics "
-            "actually used is unrecoverable and its pixels cannot be reproduced"
-        )
-    metadata_paths = sorted((episode_root / "meta" / "episodes").glob("chunk-*/file-*.parquet"))
-    if len(metadata_paths) != 1:
-        raise ValueError(f"{episode_root.name} must contain one episode metadata parquet")
-    columns = set(pq.read_schema(metadata_paths[0]).names)
-    if "domain_sample_json" in columns:
-        raise ValueError(
-            f"{episode_root.name} was recorded with --domain-randomization, whose per-episode "
-            "appearance draw this replay does not apply (the draw is stored in "
-            "domain_sample_json, so support is possible; it is simply not implemented)."
-        )
 
 
 def copy_episode_scaffold(source: Path, destination: Path) -> None:

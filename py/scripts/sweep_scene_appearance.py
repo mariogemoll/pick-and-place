@@ -36,7 +36,7 @@ from typing import Any
 
 import numpy as np
 
-from pick_and_place.sim.scene_appearance import (
+from pick_and_place.variants.appearance import (
     CUBE_COLOURS,
     FLOOR_COLOURS,
     TARGET_COLOURS,

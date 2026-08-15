@@ -1,11 +1,31 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Deterministic visual and calibration randomization for sim recording."""
+"""The envelope a randomized episode is drawn from, and the half of it that shapes behavior.
+
+A preset describes one envelope over every axis a run may vary, and
+:meth:`DomainRandomizationPreset.sample` draws one episode from it. The draw is
+deliberately whole: the axes are described in one file because they belong to
+one experiment, and splitting the *description* would only make an envelope
+harder to read.
+
+What the draw is used for does split, along the one line that matters — if I
+change this, does the correct action change?
+
+* **Yes**, so it has to be applied while the trajectory is generated: the wrist
+  camera's mount error (:class:`WristMountRandomizer`), which the expert servos
+  through; the cube's resting orientation (:func:`orient_cube`), which decides
+  what there is to grasp; and the miscalibration draw, which is what the whole
+  closed loop exists to correct.
+* **No**, so it can be applied to an already-recorded episode as often as
+  wanted: lighting, materials, the background, the overhead viewpoint and the
+  camera response. Those live in :mod:`pick_and_place.variants`.
+"""
 
 from __future__ import annotations
 
 import colorsys
+import dataclasses
 import json
 import math
 import warnings
@@ -20,24 +40,17 @@ from scipy.spatial.transform import Rotation
 
 from pick_and_place.sim.background_panorama import equirect_to_skybox
 from pick_and_place.sim.camera_pose_envelope import (
-    apply_camera_jitter,
-    camera_module_geoms,
+    CameraJitter,
     draw_camera_jitter,
     draw_overhead_camera_jitter,
+    set_camera_jitter,
+    snapshot_camera,
 )
+from pick_and_place.core.appearance import MATERIAL_FAMILIES, AppearanceDraw
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.core.miscalibration import MiscalibrationDraw, MiscalibrationModel
 
-_MATERIAL_FAMILIES = (
-    "plastic",
-    "environment_plastic",
-    "motor",
-    "camera",
-    "mdf",
-    "groundplane",
-    "cube",
-    "target",
-)
+WRIST_CAMERA = "wrist_camera"
 
 _RANGE_FIELDS = {
     "light_intensity",
@@ -196,7 +209,7 @@ class DomainRandomizationPreset:
         )
 
         factors = {}
-        for family in _MATERIAL_FAMILIES:
+        for family in MATERIAL_FAMILIES:
             brightness = draw("material_brightness")
             tint = rng.uniform(*self.ranges["material_tint"], size=3)
             factors[family] = tuple(float(x) for x in brightness * tint)
@@ -297,6 +310,20 @@ class DomainSample:
     blur_sigma: float
     miscalibration: MiscalibrationDraw
 
+    def appearance(self) -> AppearanceDraw:
+        """The half of this draw that is only pixels.
+
+        Everything left behind — the wrist mount, the cube's resting
+        orientation, the miscalibration — had to be applied while the trajectory
+        was being generated, and is baked into the episode that resulted.
+        """
+        return AppearanceDraw(
+            **{
+                field.name: getattr(self, field.name)
+                for field in dataclasses.fields(AppearanceDraw)
+            }
+        )
+
     def metadata_json(self) -> str:
         payload = {name: value for name, value in self.__dict__.items() if name != "miscalibration"}
         payload["miscalibration"] = {
@@ -318,11 +345,9 @@ def write_procedural_textures(
 ) -> None:
     """Write a procedural background/table appearance into ``model.tex_data``.
 
-    Shared by :class:`DomainRandomizer` (recording) and
-    :class:`~pick_and_place.runtime.episode_rerender.EpisodeRenderer` (re-rendering with
-    the finite-floor + skybox scene), so both draw the same texture pipeline.
-    The caller still has to push the change into a live GL context, e.g. via
-    :func:`reload_renderer_textures`.
+    Shared by every path that paints the finite-floor + skybox scene, so all of
+    them draw the same texture pipeline. The caller still has to push the change
+    into a live GL context, e.g. via :func:`reload_renderer_textures`.
     """
     for texture_id in texture_ids:
         name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_TEXTURE, texture_id)
@@ -340,7 +365,7 @@ def write_procedural_textures(
 
 
 def generate_procedural_appearance(
-    sample: DomainSample,
+    sample: AppearanceDraw,
     *,
     background_size: tuple[int, int] = (128, 256),
     table_size: tuple[int, int] = (256, 256),
@@ -421,210 +446,40 @@ def _cube_rotations() -> tuple[Rotation, ...]:
     return tuple(rotations)
 
 
-class DomainRandomizer:
-    """Restore a compiled model's canonical values before applying each sample."""
+class WristMountRandomizer:
+    """The wrist camera's physical mount error, applied to a compiled scene.
+
+    This is the one camera displacement that is *not* appearance. The expert has
+    to servo through it, and the correction it makes ends up in the recorded
+    trajectory — which is exactly what puts recovery behavior into the dataset,
+    and exactly why it cannot be added to an episode after the fact.
+
+    The controller is not told about it: it maps detections through
+    :attr:`believed_wrist_camera_pose`, the nominal mount the calibration says is
+    there, so every solve inherits the full hand-eye error the way it does on
+    hardware.
+    """
 
     def __init__(self, model: mujoco.MjModel) -> None:
         self.model = model
-        self._light_pos = model.light_pos.copy()
-        self._light_dir = model.light_dir.copy()
-        self._light_diffuse = model.light_diffuse.copy()
-        self._light_ambient = model.light_ambient.copy()
-        self._light_specular = model.light_specular.copy()
-        self._light_castshadow = model.light_castshadow.copy()
-        self._light_bulbradius = model.light_bulbradius.copy()
-        self._headlight_diffuse = np.array(model.vis.headlight.diffuse)
-        self._headlight_ambient = np.array(model.vis.headlight.ambient)
-        self._headlight_specular = np.array(model.vis.headlight.specular)
-        self._mat_rgba = model.mat_rgba.copy()
-        self._geom_rgba = model.geom_rgba.copy()
-        self._cam_pos = model.cam_pos.copy()
-        self._cam_quat = model.cam_quat.copy()
-        # A camera jitter carries its lens and board with it, so those geom poses
-        # are randomized state and need restoring like everything else.
-        self._geom_pos = model.geom_pos.copy()
-        self._geom_quat = model.geom_quat.copy()
-        self._geom_sameframe = model.geom_sameframe.copy()
-        self._camera_modules: dict[int, dict[int, tuple[np.ndarray, np.ndarray]]] = {}
-        # cam_fovy is captured on first use, not here: SimCameraRig overrides it
-        # from the calibrated intrinsics *after* this randomizer is constructed
-        # (record_sim.py builds them in that order), so snapshotting now would
-        # bank the authored value and reset() would quietly undo the calibration.
-        self._cam_fovy: np.ndarray | None = None
-        self._tex_data = model.tex_data.copy()
-        self._texture_ids = tuple(
-            ident
-            for name in ("table_texture", "background_panorama")
-            if (ident := mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_TEXTURE, name)) >= 0
-        )
-        self._frame = 0
-        self._image_rng_seed = 0
-
-    @property
-    def texture_ids(self) -> tuple[int, ...]:
-        return self._texture_ids
+        self._base = snapshot_camera(model, WRIST_CAMERA)
 
     @property
     def believed_wrist_camera_pose(self) -> tuple[np.ndarray, np.ndarray]:
-        camera = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, "wrist_camera")
-        return self._cam_pos[camera].copy(), self._cam_quat[camera].copy()
+        """The mount the controller believes in: the authored, unperturbed pose."""
+        return self._base.pos.copy(), self._base.quat.copy()
 
     def reset(self) -> None:
-        """Restore the canonical compiled model after a randomized episode."""
-        model = self.model
-        model.light_pos[:] = self._light_pos
-        model.light_dir[:] = self._light_dir
-        model.light_diffuse[:] = self._light_diffuse
-        model.light_ambient[:] = self._light_ambient
-        model.light_specular[:] = self._light_specular
-        model.light_castshadow[:] = self._light_castshadow
-        model.light_bulbradius[:] = self._light_bulbradius
-        model.vis.headlight.diffuse = self._headlight_diffuse
-        model.vis.headlight.ambient = self._headlight_ambient
-        model.vis.headlight.specular = self._headlight_specular
-        model.mat_rgba[:] = self._mat_rgba
-        model.geom_rgba[:] = self._geom_rgba
-        model.cam_pos[:] = self._cam_pos
-        model.cam_quat[:] = self._cam_quat
-        if self._cam_fovy is not None:
-            model.cam_fovy[:] = self._cam_fovy
-        model.geom_pos[:] = self._geom_pos
-        model.geom_quat[:] = self._geom_quat
-        model.geom_sameframe[:] = self._geom_sameframe
-        model.tex_data[:] = self._tex_data
-        self._sample = None
-        self._frame = 0
-        self._image_rng_seed = 0
+        """Put the camera back on its authored mount."""
+        set_camera_jitter(self.model, self._base, None)
 
     def apply(self, sample: DomainSample) -> None:
-        self.reset()
-        model = self.model
-
-        cool = np.array((1.0 / sample.light_warm_cool, 1.0, sample.light_warm_cool))
-        fill = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_LIGHT, "scene_light")
-        key = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_LIGHT, "warm_spotlight")
-        if fill >= 0:
-            model.light_diffuse[fill] *= sample.fill_light_intensity
-            model.light_ambient[fill] *= sample.fill_light_intensity
-            model.light_specular[fill] *= sample.fill_light_intensity
-            model.light_castshadow[fill] = False
-        if key >= 0:
-            model.light_pos[key] = sample.key_light_position
-            direction = np.asarray(sample.key_light_target) - np.asarray(sample.key_light_position)
-            model.light_dir[key] = direction / np.linalg.norm(direction)
-            model.light_diffuse[key] = (
-                np.mean(self._light_diffuse[key]) * sample.light_intensity * cool
-            )
-            model.light_ambient[key] = (
-                np.mean(self._light_ambient[key]) * sample.light_intensity * cool
-            )
-            model.light_specular[key] = (
-                np.mean(self._light_specular[key]) * sample.light_intensity * cool
-            )
-            model.light_castshadow[key] = True
-            model.light_bulbradius[key] = sample.key_light_bulb_radius
-            model.light_cutoff[key] = 80.0
-            model.light_exponent[key] = 2.0
-        model.vis.headlight.diffuse = self._headlight_diffuse * sample.fill_light_intensity
-        model.vis.headlight.ambient = self._headlight_ambient * sample.fill_light_intensity
-        model.vis.headlight.specular = self._headlight_specular * sample.fill_light_intensity
-
-        for name in _MATERIAL_FAMILIES[:-2]:
-            ident = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_MATERIAL, name)
-            if ident >= 0:
-                model.mat_rgba[ident, :3] = np.clip(
-                    self._mat_rgba[ident, :3] * sample.material_factors[name], 0.0, 1.0
-                )
-
-        self._apply_camera(
-            "overhead_camera",
-            sample.overhead_camera_position_m,
-            sample.overhead_camera_rotation_deg,
-        )
-        self._apply_camera_focal("overhead_camera", sample.overhead_camera_focal_scale)
-        self._apply_camera(
-            "wrist_camera", sample.wrist_camera_position_m, sample.wrist_camera_rotation_deg
-        )
-        self._apply_procedural_textures(sample)
-        self._sample = sample
-        self._frame = 0
-        self._image_rng_seed = sample.seed
-
-    def _apply_camera(
-        self,
-        name: str,
-        position: tuple[float, float, float],
-        rotation_deg: tuple[float, float, float],
-    ) -> None:
-        camera = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, name)
-        if camera < 0:
-            return
-        apply_camera_jitter(
+        """Displace the camera and its housing by this episode's drawn mount error."""
+        set_camera_jitter(
             self.model,
-            camera,
-            self._cam_pos[camera],
-            self._cam_quat[camera],
-            self._camera_module_base(camera),
-            np.asarray(position, float),
-            np.asarray(rotation_deg, float),
+            self._base,
+            CameraJitter(
+                position_m=sample.wrist_camera_position_m,
+                rotation_deg=sample.wrist_camera_rotation_deg,
+            ),
         )
-
-    def _apply_camera_focal(self, name: str, focal_scale: float) -> None:
-        """Scale a camera's focal length, expressed through ``cam_fovy``.
-
-        Focal length is the only intrinsic that survives into a recorded frame:
-        both pipelines store rectified images, and the rectification pins the
-        principal point to the image centre and removes the distortion. The real
-        camera's focal length varies ~1.5% between sessions, so this is the one
-        intrinsic worth randomizing.
-        """
-        camera = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, name)
-        if camera < 0:
-            return
-        if self._cam_fovy is None:
-            self._cam_fovy = self.model.cam_fovy.copy()
-        half = math.radians(self._cam_fovy[camera]) / 2.0
-        self.model.cam_fovy[camera] = math.degrees(2.0 * math.atan(math.tan(half) / focal_scale))
-
-    def _camera_module_base(self, camera: int) -> dict[int, tuple[np.ndarray, np.ndarray]]:
-        """Canonical geom poses of a camera's own hardware, from the reset snapshot."""
-        if camera not in self._camera_modules:
-            self._camera_modules[camera] = {
-                geom: (self._geom_pos[geom].copy(), self._geom_quat[geom].copy())
-                for geom in camera_module_geoms(self.model, camera)
-            }
-        return self._camera_modules[camera]
-
-    def _apply_procedural_textures(self, sample: DomainSample) -> None:
-        write_procedural_textures(
-            self.model, self._texture_ids, generate_procedural_appearance(sample)
-        )
-
-    def tint_episode_markers(self) -> None:
-        sample = getattr(self, "_sample", None)
-        if sample is None:
-            return
-        for name, family in (("pick_cube", "cube"), ("paper_target_marker_geom", "target")):
-            ident = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, name)
-            if ident >= 0:
-                self.model.geom_rgba[ident, :3] = np.clip(
-                    self.model.geom_rgba[ident, :3] * sample.material_factors[family], 0.0, 1.0
-                )
-
-    def postprocess(self, image: np.ndarray) -> np.ndarray:
-        rng = np.random.default_rng(
-            np.random.SeedSequence([self._image_rng_seed, self._frame, 0x1A6E])
-        )
-        self._frame += 1
-        sample = getattr(self, "_sample", None)
-        if sample is None:
-            return image
-        result = image.astype(np.float32) * sample.exposure
-        result = np.clip(result / 255.0, 0.0, 1.0) ** (1.0 / sample.gamma)
-        result *= np.asarray(sample.white_balance)
-        result = np.clip(result * 255.0, 0.0, 255.0)
-        if sample.blur_sigma > 0:
-            result = cv2.GaussianBlur(result, (0, 0), sample.blur_sigma)
-        if sample.noise_sigma > 0:
-            result += rng.normal(0.0, sample.noise_sigma, result.shape)
-        return np.clip(result, 0.0, 255.0).astype(np.uint8)

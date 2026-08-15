@@ -45,7 +45,7 @@ from pick_and_place.runtime.training_scenes import (
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
 from pick_and_place.spec.robot import JOINT_NAMES
 from pick_and_place.runtime.policy_sim import PolicySimEnv
-from pick_and_place.sim.scene_appearance import SceneAppearance
+from pick_and_place.variants.appearance import SceneAppearance
 
 # The resolution the blue-cube dataset's videos were recorded at
 # (``source_video_hw`` in its export manifest).

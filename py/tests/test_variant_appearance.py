@@ -3,7 +3,7 @@
 
 import pytest
 
-from pick_and_place.sim.scene_appearance import AS_RECORDED, SceneAppearance, parse_appearance
+from pick_and_place.variants.appearance import AS_RECORDED, SceneAppearance, parse_appearance
 
 
 def test_named_presets_keep_their_name():

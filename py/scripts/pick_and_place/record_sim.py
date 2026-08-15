@@ -54,7 +54,7 @@ from tqdm import tqdm
 from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
 from pick_and_place.sim.domain_randomization import (
     DomainRandomizationPreset,
-    DomainRandomizer,
+    WristMountRandomizer,
     domain_seed,
     generate_procedural_appearance,
     orient_cube,
@@ -82,6 +82,7 @@ from pick_and_place.core.grasp_perturbation import (
     GraspPerturbation,
 )
 from pick_and_place.data.recording import RecordingSession
+from pick_and_place.variants.scene import AppearanceRandomizer
 from pick_and_place.data.trajectory_artifact import render_environment_fingerprint
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
@@ -193,7 +194,7 @@ def run_recording(
     table_texture = scene.table_texture
     background_panorama = scene.background_panorama
     if preset is not None:
-        initial_appearance = generate_procedural_appearance(initial_sample)
+        initial_appearance = generate_procedural_appearance(initial_sample.appearance())
         table_texture = initial_appearance.table_rgb
         background_panorama = initial_appearance.background_rgb
     source = _to_cube(scene.source_xy)
@@ -215,7 +216,10 @@ def run_recording(
         table_texture=table_texture,
     )
 
-    randomizer = DomainRandomizer(model) if preset is not None else None
+    # The preset's two halves are applied by different owners: the wrist mount
+    # while the trajectory is generated, the appearance while it is rendered.
+    wrist_mount = WristMountRandomizer(model) if preset is not None else None
+    randomizer = AppearanceRandomizer(model) if preset is not None else None
     rig = SimCameraRig(
         model,
         load_local_camera_intrinsics(),
@@ -293,7 +297,8 @@ def run_recording(
                 )
             )
             if sample is not None:
-                randomizer.apply(sample)
+                randomizer.apply(sample.appearance())
+                wrist_mount.apply(sample)
                 rig.reload_textures(randomizer.texture_ids)
             # Every recording draws one of the cube's 24 rotational orientations,
             # not just its yaw -- a DR preset's own draw when one is active,
@@ -370,7 +375,9 @@ def run_recording(
                 viewer=viewer if use_viewer else None,
                 speed=speed,
                 believed_wrist_camera_pose=(
-                    randomizer.believed_wrist_camera_pose if randomizer is not None else None
+                    wrist_mount.believed_wrist_camera_pose
+                    if wrist_mount is not None
+                    else None
                 ),
                 detector_crash_dump_dir=detector_crash_dump_dir,
                 verbose=False,
@@ -404,6 +411,7 @@ def run_recording(
                 result,
                 target_plate_yaw=target_plate_yaw,
                 draw=draw,
+                sample=sample,
                 seed=seed,
                 episode_index=global_episode,
                 fingerprint=fingerprint,

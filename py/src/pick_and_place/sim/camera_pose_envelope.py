@@ -30,6 +30,7 @@ from __future__ import annotations
 import functools
 import json
 import math
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -128,6 +129,76 @@ def apply_camera_jitter(
         model.geom_quat[geom] = (delta * Rotation.from_quat(geom_quat[[1, 2, 3, 0]])).as_quat()[
             [3, 0, 1, 2]
         ]
+
+
+@dataclass(frozen=True)
+class CameraJitter:
+    """One camera pose+focal draw, as a rigid transform from the authored pose."""
+
+    position_m: tuple[float, float, float]
+    rotation_deg: tuple[float, float, float]
+    focal_scale: float = 1.0
+
+
+@dataclass(frozen=True)
+class CameraBase:
+    """A camera's authored pose, focal length and rigidly attached hardware geoms.
+
+    Snapshotted once so a jittered scene can be restored exactly, and so every
+    jitter is applied to the authored pose rather than compounding onto the
+    previous episode's. Per camera rather than per model, which is what lets the
+    wrist mount (drawn when the episode is generated) and the overhead viewpoint
+    (drawn when it is rendered) be randomized independently without one's restore
+    undoing the other's draw.
+    """
+
+    camera: int
+    pos: np.ndarray
+    quat: np.ndarray
+    fovy: float
+    geoms: dict[int, tuple[np.ndarray, np.ndarray]]
+
+
+def snapshot_camera(model: mujoco.MjModel, camera_name: str) -> CameraBase:
+    """Capture a camera's authored pose, focal length and rigidly attached geoms."""
+    camera = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
+    if camera < 0:
+        raise ValueError(f"scene is missing the {camera_name!r} camera")
+    return CameraBase(
+        camera=camera,
+        pos=model.cam_pos[camera].copy(),
+        quat=model.cam_quat[camera].copy(),
+        fovy=float(model.cam_fovy[camera]),
+        geoms={
+            geom: (model.geom_pos[geom].copy(), model.geom_quat[geom].copy())
+            for geom in camera_module_geoms(model, camera)
+        },
+    )
+
+
+def set_camera_jitter(
+    model: mujoco.MjModel, base: CameraBase, jitter: CameraJitter | None
+) -> None:
+    """Apply a pose+focal jitter to a snapshotted camera, or restore its authored pose."""
+    if jitter is None:
+        model.cam_pos[base.camera] = base.pos
+        model.cam_quat[base.camera] = base.quat
+        model.cam_fovy[base.camera] = base.fovy
+        for geom, (geom_pos, geom_quat) in base.geoms.items():
+            model.geom_pos[geom] = geom_pos
+            model.geom_quat[geom] = geom_quat
+        return
+    apply_camera_jitter(
+        model,
+        base.camera,
+        base.pos,
+        base.quat,
+        base.geoms,
+        np.asarray(jitter.position_m, float),
+        np.asarray(jitter.rotation_deg, float),
+    )
+    half = math.radians(base.fovy) / 2.0
+    model.cam_fovy[base.camera] = math.degrees(2.0 * math.atan(math.tan(half) / jitter.focal_scale))
 
 
 def _geom_surface_points(model: mujoco.MjModel, geom: int) -> np.ndarray:
