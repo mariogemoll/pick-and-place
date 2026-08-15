@@ -59,7 +59,7 @@ from pick_and_place.sim.domain_randomization import (
     generate_procedural_appearance,
     orient_cube,
 )
-from pick_and_place.planning.episode_sampling import sample_cube
+from pick_and_place.scripted.episode_sampling import sample_cube
 from pick_and_place.runtime.episodes import EpisodeSamplingError, prepare_episode
 from pick_and_place.sim.model import placement_error
 from pick_and_place.cli.dataset import add_dataset_arguments

@@ -12,7 +12,7 @@ import mujoco.viewer
 import numpy as np
 
 from pick_and_place.sim.scene import build_scene
-from pick_and_place.planning.motion import smoothstep
+from pick_and_place.scripted.motion import smoothstep
 from pick_and_place.spec.robot import ARM_JOINT_NAMES
 from pick_and_place.core.joint_frames import action_to_joints, joints_to_action, real_frame_to_sim
 from pick_and_place.hardware.follower import make_so101_follower, make_so101_leader

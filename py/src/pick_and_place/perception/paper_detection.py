@@ -5,45 +5,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 
 import cv2
 import numpy as np
 from numpy.typing import NDArray
 
 from pick_and_place.core.camera_projection import pixel_to_world_plane, project_to_pixel
-
-
-@dataclass(frozen=True)
-class PaperTarget:
-    """Detected drop-zone geometry in the image and on a horizontal world plane."""
-
-    center_px: NDArray
-    corners_px: NDArray
-    center_world: NDArray
-    corners_world: NDArray
-    area_px: float
-    rectangularity: float
-
-    @property
-    def xy(self) -> tuple[float, float]:
-        return float(self.center_world[0]), float(self.center_world[1])
-
-    @property
-    def yaw(self) -> float:
-        """Yaw angle (radians) of the square's first edge in world XY."""
-        edge = self.corners_world[1] - self.corners_world[0]
-        return float(np.arctan2(edge[1], edge[0]))
-
-    @property
-    def half_extent(self) -> tuple[float, float]:
-        """Half side lengths (metres) along the square's own two edge directions."""
-        edge_x = self.corners_world[1] - self.corners_world[0]
-        edge_y = self.corners_world[2] - self.corners_world[1]
-        return (
-            float(np.linalg.norm(edge_x[:2])) / 2.0,
-            float(np.linalg.norm(edge_y[:2])) / 2.0,
-        )
+from pick_and_place.spec.drop_zone import PaperTarget
 
 
 class PaperTracker:

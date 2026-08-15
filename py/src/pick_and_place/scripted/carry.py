@@ -28,8 +28,8 @@ from pick_and_place.core.workspace_bounds import (
     PAN_AXIS,
     is_cube_drop_allowed,
 )
-from pick_and_place.planning.grasp import GraspChoice, free_grasp_candidates
-from pick_and_place.planning.motion import _lerp_joints
+from pick_and_place.scripted.grasp import GraspChoice, free_grasp_candidates
+from pick_and_place.scripted.motion import _lerp_joints
 
 
 # Cube-center height of the level cruise. Above the predrop hover so the cube

@@ -31,7 +31,7 @@ from typing import Any, Callable
 import numpy as np
 
 from pick_and_place.core.geometry import CubePose
-from pick_and_place.planning.visual_servo import WristServoEstimate, WristServoPreview
+from pick_and_place.scripted.visual_servo import WristServoEstimate, WristServoPreview
 from pick_and_place.runtime.frame_reader import FrameReader, open_capture
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 

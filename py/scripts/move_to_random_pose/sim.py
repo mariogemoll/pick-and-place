@@ -31,7 +31,7 @@ import numpy as np
 from pick_and_place.sim.scene import build_scene
 from pick_and_place.runtime.episode_loop import episode_loop
 from pick_and_place.spec.robot import ARM_JOINT_NAMES
-from pick_and_place.planning.motion import smoothstep
+from pick_and_place.scripted.motion import smoothstep
 from pick_and_place.runtime.move_to_random_pose import (
     current_pose,
     joint_qpos_adr as compute_joint_qpos_adr,

@@ -28,7 +28,8 @@ from pick_and_place.core.geometry import CubePose, PlacementError
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.camera_projection import project_to_pixel
 from pick_and_place.sim.paper_target_marker import place_paper_target_marker
-from pick_and_place.perception.paper_detection import PaperTarget, PaperTracker
+from pick_and_place.perception.paper_detection import PaperTracker
+from pick_and_place.spec.drop_zone import PaperTarget
 from pick_and_place.core.workspace_bounds import (
     is_cube_drop_allowed,
     is_cube_pickup_allowed,

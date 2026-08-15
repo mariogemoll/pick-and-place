@@ -14,14 +14,12 @@ from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
 from pick_and_place.runtime.preflight import PreflightDebug
-from pick_and_place.runtime.scripted_policy import (
-    AsyncWristLocalization,
-    ScriptedPolicy,
-    ScriptedPolicyState,
-)
-from pick_and_place.planning.grasp import GraspChoice
-from pick_and_place.planning.motion import Frame
-from pick_and_place.planning.trajectory import DescentPhase, Trajectory
+from pick_and_place.plant.wrist_localizer import AsyncWristLocalization
+from pick_and_place.rollout.scripted import scripted_policy
+from pick_and_place.scripted.policy import ScriptedPolicyState
+from pick_and_place.scripted.grasp import GraspChoice
+from pick_and_place.scripted.motion import Frame
+from pick_and_place.scripted.trajectory import DescentPhase, Trajectory
 
 
 class StubLocalizer:
@@ -54,7 +52,7 @@ def _observation(state=None):
 
 
 def _policy(localizer, *, max_steps=2):
-    return ScriptedPolicy(
+    return scripted_policy(
         localizer,
         np.ones((4, 3)),
         max_localization_steps=max_steps,
@@ -154,7 +152,7 @@ def test_scripted_policy_turns_bad_image_observation_into_terminal_failure():
 
 
 def test_scripted_policy_searches_from_fixed_rng_and_reset_replays_search():
-    policy = ScriptedPolicy(
+    policy = scripted_policy(
         StubLocalizer(),
         np.ones((4, 3)),
         max_localization_steps=3,
@@ -173,7 +171,7 @@ def test_scripted_policy_searches_from_fixed_rng_and_reset_replays_search():
 
 
 def test_scripted_policy_holds_search_target_until_the_next_search_draw():
-    policy = ScriptedPolicy(
+    policy = scripted_policy(
         StubLocalizer(),
         np.ones((4, 3)),
         max_localization_steps=5,
@@ -199,7 +197,7 @@ def test_scripted_policy_plans_from_localized_poses_and_latest_reported_joints()
         calls.append((args, kwargs))
         return SimpleNamespace(trajectory="planned")
 
-    policy = ScriptedPolicy(
+    policy = scripted_policy(
         StubLocalizer(cubes=[cube], targets=[target]),
         np.ones((4, 3)),
         plan_episode=plan_episode,
@@ -230,7 +228,7 @@ def test_scripted_policy_recovery_samples_target_without_a_source_override():
         del rng
         return CubePose(0.2, -0.1, CUBE_HALF_SIZE)
 
-    policy = ScriptedPolicy(
+    policy = scripted_policy(
         localizer,
         np.ones((4, 3)),
         target_sampler=sample_target,
@@ -255,12 +253,11 @@ def test_scripted_policy_forwards_planning_diagnostics():
     target = SimpleNamespace(xy=(0.2, -0.1))
     calls = []
 
-    policy = ScriptedPolicy(
+    policy = scripted_policy(
         StubLocalizer(cubes=[cube], targets=[target]),
         np.ones((4, 3)),
         planning_max_attempts=7,
         planning_verbose=True,
-        debug=PreflightDebug(print_contacts=True, contact_limit=3, trajectory_limit=2),
         plan_episode=lambda *args, **kwargs: calls.append(kwargs)
         or SimpleNamespace(trajectory="planned"),
     )
@@ -269,9 +266,18 @@ def test_scripted_policy_forwards_planning_diagnostics():
 
     assert calls[0]["max_attempts"] == 7
     assert calls[0]["verbose"] is True
-    assert calls[0]["debug"] == PreflightDebug(
-        print_contacts=True, contact_limit=3, trajectory_limit=2
-    )
+    # Not "debug": what a rejected candidate reports is a property of the
+    # physics pass, so it is bound into the episode preparer rather than
+    # forwarded by a controller that never runs physics.
+    assert "debug" not in calls[0]
+
+
+def test_the_preflight_diagnostics_are_bound_into_the_episode_preparer():
+    debug = PreflightDebug(print_contacts=True, contact_limit=3, trajectory_limit=2)
+
+    policy = scripted_policy(StubLocalizer(), np.ones((4, 3)), debug=debug)
+
+    assert policy._plan_episode.keywords == {"debug": debug}
 
 
 def test_scripted_policy_reports_planning_failure_and_holds():
@@ -281,7 +287,7 @@ def test_scripted_policy_reports_planning_failure_and_holds():
     def fail_plan(*args, **kwargs):
         raise RuntimeError("no feasible trajectory")
 
-    policy = ScriptedPolicy(
+    policy = scripted_policy(
         StubLocalizer(cubes=[cube], targets=[target]),
         np.ones((4, 3)),
         plan_episode=fail_plan,
@@ -324,7 +330,7 @@ def test_scripted_policy_executes_one_trajectory_sample_per_control_tick():
     target = SimpleNamespace(xy=(0.2, -0.1))
     phase = StubPhase("retreat", duration=1.0, value=0.25)
     trajectory = Trajectory((phase,))
-    policy = ScriptedPolicy(
+    policy = scripted_policy(
         StubLocalizer(cubes=[cube], targets=[target]),
         np.ones((4, 3)),
         control_hz=2.0,
@@ -368,7 +374,7 @@ def test_scripted_policy_replans_at_checkpoint_from_latest_reported_joints():
         calls.append((args, kwargs))
         return [replanned]
 
-    policy = ScriptedPolicy(
+    policy = scripted_policy(
         StubLocalizer(cubes=[cube], targets=[target]),
         np.ones((4, 3)),
         plan_episode=lambda *args, **kwargs: _planned_episode(initial),
@@ -424,7 +430,7 @@ def test_scripted_policy_wrist_servo_uses_only_image_and_reported_state():
         calls.append((image.copy(), measured_joints, measured_gripper, prior))
         return estimate
 
-    policy = ScriptedPolicy(
+    policy = scripted_policy(
         StubLocalizer(cubes=[cube], targets=[target]),
         np.ones((4, 3)),
         wrist_localizer=wrist_localizer,
@@ -468,7 +474,7 @@ def test_scripted_policy_safely_holds_after_wrist_servo_timeout():
         inward_normal=np.zeros(3),
     )
     trajectory = Trajectory((DescentPhase(object(), grasp),), grasp=grasp)
-    policy = ScriptedPolicy(
+    policy = scripted_policy(
         StubLocalizer(cubes=[cube], targets=[target]),
         np.ones((4, 3)),
         control_hz=1.0,

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from pick_and_place.planning.episode_sampling import sample_cube, sample_target
+from pick_and_place.scripted.episode_sampling import sample_cube, sample_target
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.core.workspace_bounds import (
     CANONICAL_PICKUP_SECTOR,

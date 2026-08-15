@@ -34,7 +34,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
-from pick_and_place.planning.episode_sampling import sample_target
+from pick_and_place.scripted.episode_sampling import sample_target
 from pick_and_place.runtime.episodes import Episode, EpisodeSamplingError, prepare_episode
 from pick_and_place.sim.collisions import is_unexpected, scan_contacts
 from pick_and_place.sim.model import build_model, placement_error

@@ -21,10 +21,10 @@ from pick_and_place.core import transforms as tf
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.core.ik import solve_simple_grasp_ik
 from pick_and_place.core.kinematics import So101Kinematics
-from pick_and_place.planning.carry import nominal_drop_center_z, plan_carry_candidates
-from pick_and_place.planning.grasp import GraspChoice, free_grasp_candidates, grasp_candidates
-from pick_and_place.planning.motion import _joint_distance
-from pick_and_place.planning.trajectory import (
+from pick_and_place.scripted.carry import nominal_drop_center_z, plan_carry_candidates
+from pick_and_place.scripted.grasp import GraspChoice, free_grasp_candidates, grasp_candidates
+from pick_and_place.scripted.motion import _joint_distance
+from pick_and_place.scripted.trajectory import (
     ApproachPhase,
     CarryPhase,
     DROP_DWELL_DURATION,

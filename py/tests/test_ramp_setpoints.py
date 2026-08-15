@@ -6,7 +6,7 @@
 import numpy as np
 import pytest
 
-from pick_and_place.planning.motion import ramp_setpoints
+from pick_and_place.scripted.motion import ramp_setpoints
 
 
 def test_single_step_is_the_undivided_target() -> None:

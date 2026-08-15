@@ -8,16 +8,16 @@ import numpy as np
 import pytest
 
 import pick_and_place.runtime.episodes as episodes
-from pick_and_place.planning.episode_sampling import sample_recovery_cube
+from pick_and_place.scripted.episode_sampling import sample_recovery_cube
 from pick_and_place.runtime.episodes import EpisodeSamplingError, prepare_episode
 from pick_and_place.sim.model import build_model, placement_error, set_cube_pose
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CANONICAL_PREGRASP_DISTANCE, CubePose
 from pick_and_place.core.ik import solve_simple_grasp_ik
 from pick_and_place.sim.derive_kinematics import derive_kinematics
-from pick_and_place.planning.carry import DROP_CUBE_CENTER_Z, plan_carry_candidates
-from pick_and_place.planning.grasp import grasp_candidates
-from pick_and_place.planning.trajectory import (
+from pick_and_place.scripted.carry import DROP_CUBE_CENTER_Z, plan_carry_candidates
+from pick_and_place.scripted.grasp import grasp_candidates
+from pick_and_place.scripted.trajectory import (
     GRASP_CLOSE_DURATION,
     GRASP_SETTLE_DURATION,
     GraspPhase,

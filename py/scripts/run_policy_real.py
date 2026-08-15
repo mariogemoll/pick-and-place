@@ -96,7 +96,7 @@ from pick_and_place.core.camera_calibration import (
 from pick_and_place.policies.dataset_export import resolve_recording_hw
 from pick_and_place.policies.diffusion_policy_client import DiffusionPolicyController
 from pick_and_place.policies.flow_image_policy import FlowImagePolicyController
-from pick_and_place.planning.episode_sampling import sample_hunt_pose, sample_near_neutral
+from pick_and_place.scripted.episode_sampling import sample_hunt_pose, sample_near_neutral
 from pick_and_place.cli.policy import (
     add_diffusion_policy_arguments,
     add_flow_image_arguments,
@@ -117,7 +117,7 @@ from pick_and_place.core.robot_dynamics import (
     tracking_bias_deg,
     tracking_bias_vector,
 )
-from pick_and_place.planning.motion import ramp_setpoints
+from pick_and_place.scripted.motion import ramp_setpoints
 from pick_and_place.spec.robot import CONTROL_HZ, GRIPPER_INDEX, JOINT_NAMES
 from pick_and_place.core.joint_frames import (
     action_to_joints,

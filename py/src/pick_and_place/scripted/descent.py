@@ -28,8 +28,8 @@ from __future__ import annotations
 import dataclasses
 
 from pick_and_place.core.geometry import CubePose
-from pick_and_place.planning.grasp import fold_cube_yaw, grasp_candidates
-from pick_and_place.planning.motion import shortest_delta
+from pick_and_place.scripted.grasp import fold_cube_yaw, grasp_candidates
+from pick_and_place.scripted.motion import shortest_delta
 
 #: How far the tracked pose moves toward each new reading. Low enough that a
 #: single bad solve cannot throw the descent, high enough to converge within it.

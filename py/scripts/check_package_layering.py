@@ -9,7 +9,7 @@ The package is a fan, not a stack:
 * ``spec`` holds the physical facts and the contracts, and imports nothing else
   in the package; ``core`` is pure computation over them and imports only
   ``spec``.
-* ``planning``, ``perception``, ``sim``, ``hardware``, ``data`` and ``policies``
+* ``scripted``, ``perception``, ``sim``, ``hardware``, ``data`` and ``policies``
   are capability branches. Each owns one heavy dependency and **none may import
   another** — they meet only above.
 * ``runtime``, ``plant``, ``rollout``, ``variants``, ``calibration``, ``analysis``
@@ -40,7 +40,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1] / "src" / "pick_and_place"
 
 FOUNDATION = ("spec", "core")
-BRANCHES = ("planning", "perception", "sim", "hardware", "data", "policies")
+BRANCHES = ("scripted", "perception", "sim", "hardware", "data", "policies")
 CONVERGENCE = (
     "runtime",
     "plant",

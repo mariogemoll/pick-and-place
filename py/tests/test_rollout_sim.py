@@ -490,7 +490,7 @@ def test_a_descent_that_never_sees_the_cube_retries_then_asks_for_a_restart(
 
 
 def test_a_checkpoint_with_no_clean_replan_asks_for_a_restart(monkeypatch, capsys) -> None:
-    from pick_and_place.runtime import checkpoint
+    from pick_and_place.rollout import checkpoint
 
     monkeypatch.setattr(checkpoint, "replan_remaining_candidates", lambda *a, **k: iter(()))
     result, _, _ = _run(_episode(closed_loop=True), verbose=True)

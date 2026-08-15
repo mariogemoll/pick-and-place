@@ -30,13 +30,13 @@ from typing import Any, Callable
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.data.trajectory_artifact import TrajectoryWriter
 from pick_and_place.plant.interface import NOTHING_SEEN, Observation, Plant, Sighting
-from pick_and_place.planning.visual_servo import (
+from pick_and_place.scripted.visual_servo import (
     DESCENT_SERVO_MAX_DURATION,
     DESCENT_SERVO_STABLE_FRAMES,
     DescentServoConvergence,
     DescentServoRetryState,
 )
-from pick_and_place.runtime.descent import follow_estimate
+from pick_and_place.scripted.descent import follow_estimate
 
 
 def _noop(*args: Any, **kwargs: Any) -> None:
@@ -109,7 +109,7 @@ def play_phase(
     ``watch`` asks for a sighting on every tick rather than only during the
     descent, which a preview window wants and control does not.
     """
-    from pick_and_place.planning.trajectory import DescentPhase
+    from pick_and_place.scripted.trajectory import DescentPhase
 
     # Without a wrist camera the descent is not a servo at all: it plays out
     # open loop, which is what a vetted feedforward plan wants.

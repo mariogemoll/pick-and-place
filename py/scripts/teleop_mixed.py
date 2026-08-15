@@ -28,7 +28,7 @@ import numpy as np
 
 from pick_and_place.calibration.camera_compare import draw_hud, draw_tag_detections, load_intrinsics, RealSource
 
-from pick_and_place.planning.motion import smoothstep
+from pick_and_place.scripted.motion import smoothstep
 from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
 from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
 from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR

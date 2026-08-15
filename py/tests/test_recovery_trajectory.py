@@ -6,8 +6,8 @@ import numpy as np
 from pick_and_place.runtime.episodes import prepare_episode
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
-from pick_and_place.planning.carry import nominal_drop_center_z
-from pick_and_place.planning.grasp import RECOVERY_LIFT_CUBE_Z
+from pick_and_place.scripted.carry import nominal_drop_center_z
+from pick_and_place.scripted.grasp import RECOVERY_LIFT_CUBE_Z
 
 
 def test_free_grasp_recovery_lifts_vertically_before_carry():
