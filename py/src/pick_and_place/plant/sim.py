@@ -51,6 +51,7 @@ class SimPlant:
         kinematics: Any,
         substeps_per_tick: int,
         servo: SimWristServo | None = None,
+        tracking_bias_rad: dict[str, float] | None = None,
         speed: float = 1.0,
         realtime: bool = False,
     ) -> None:
@@ -63,6 +64,10 @@ class SimPlant:
         self.kinematics = kinematics
         self.substeps_per_tick = substeps_per_tick
         self.servo = servo
+        # Where a commanded joint actually settles. A *tracking* error, so it
+        # goes into the command and stays out of the readback: the arm really
+        # does fall short of what it was asked for, and reports that truthfully.
+        self.tracking_bias_rad = tracking_bias_rad or {}
         self.speed = speed
         self.realtime = realtime
         self._tick_started = time.monotonic()
@@ -108,13 +113,18 @@ class SimPlant:
     def step(self, joints: Mapping[str, float], gripper: float) -> np.ndarray:
         """Write the set point into the actuators and advance one control tick.
 
-        The drawn joint-zero offsets are added on the way in, which is what puts
-        physics in the true frame while the plan and the recorded rows stay in
-        the believed one — a servo commanded ``theta`` rests at ``theta + offset``.
+        Two things are folded in on the way, and they are not the same thing. The
+        drawn joint-zero offsets put physics in the true frame while the plan and
+        the recorded rows stay in the believed one — a servo commanded ``theta``
+        rests at ``theta + offset`` and reports ``theta``. The tracking bias is a
+        droop the arm never corrects and never hides, so it moves where the joint
+        settles and the readback follows it.
         """
         offsets = self.belief.offsets_rad()
         for name, value in joints.items():
-            self.data.ctrl[self.actuator_id[name]] = value + offsets.get(name, 0.0)
+            self.data.ctrl[self.actuator_id[name]] = (
+                value + offsets.get(name, 0.0) + self.tracking_bias_rad.get(name, 0.0)
+            )
         self.data.ctrl[self.actuator_id["gripper"]] = gripper
         mujoco.mj_step(self.model, self.data, nstep=self.substeps_per_tick)
         if self.realtime:

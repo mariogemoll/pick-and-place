@@ -8,6 +8,8 @@ import types
 from pathlib import Path
 
 import numpy as np
+
+from pick_and_place.rollout.episode_setup import appearance_seed, episode_rng
 import pandas as pd
 import pytest
 
@@ -188,11 +190,10 @@ def test_successful_episode_selection_uses_recorded_placement(tmp_path, monkeypa
 
 
 def test_episode_rng_depends_only_on_root_seed_and_global_episode():
-    module = _record_sim_module()
 
-    first = module._episode_rng(17, 6).integers(2**31, size=4)
-    repeated = module._episode_rng(17, 6).integers(2**31, size=4)
-    neighboring = module._episode_rng(17, 7).integers(2**31, size=4)
+    first = episode_rng(17, 6).integers(2**31, size=4)
+    repeated = episode_rng(17, 6).integers(2**31, size=4)
+    neighboring = episode_rng(17, 7).integers(2**31, size=4)
 
     np.testing.assert_array_equal(first, repeated)
     assert not np.array_equal(first, neighboring)
@@ -205,18 +206,17 @@ def test_queue_order_does_not_change_what_each_episode_records():
     per-episode streams key off the global index alone, so an arbitrary
     interleaving must still reproduce the sequential streams exactly.
     """
-    module = _record_sim_module()
-    sequential = [module._episode_rng(23, index).integers(2**31) for index in range(10)]
+    sequential = [episode_rng(23, index).integers(2**31) for index in range(10)]
 
     scrambled_order = [7, 0, 3, 9, 1, 8, 2, 6, 4, 5]
     out_of_order = {
-        index: module._episode_rng(23, index).integers(2**31) for index in scrambled_order
+        index: episode_rng(23, index).integers(2**31) for index in scrambled_order
     }
 
     assert [out_of_order[index] for index in range(10)] == sequential
 
-    domain_sequential = [module._domain_seed(23, index) for index in range(10)]
-    domain_scrambled = {index: module._domain_seed(23, index) for index in scrambled_order}
+    domain_sequential = [appearance_seed(23, index) for index in range(10)]
+    domain_scrambled = {index: appearance_seed(23, index) for index in scrambled_order}
     assert [domain_scrambled[index] for index in range(10)] == domain_sequential
 
 
@@ -226,13 +226,12 @@ def test_a_requeued_episode_reproduces_the_same_draw():
     Otherwise a wedge would silently change what episode index N contains,
     breaking the index-addressability a resume depends on.
     """
-    module = _record_sim_module()
 
-    first_attempt = module._episode_rng(11, 42).integers(2**31, size=4)
-    after_requeue = module._episode_rng(11, 42).integers(2**31, size=4)
+    first_attempt = episode_rng(11, 42).integers(2**31, size=4)
+    after_requeue = episode_rng(11, 42).integers(2**31, size=4)
 
     np.testing.assert_array_equal(first_attempt, after_requeue)
-    assert module._domain_seed(11, 42) == module._domain_seed(11, 42)
+    assert appearance_seed(11, 42) == appearance_seed(11, 42)
 
 
 def test_resuming_at_an_offset_extends_the_run_instead_of_repeating_it():
@@ -243,16 +242,15 @@ def test_resuming_at_an_offset_extends_the_run_instead_of_repeating_it():
     index, so offsetting the resume past the last index the original run reached
     has to yield episodes disjoint from everything already banked.
     """
-    module = _record_sim_module()
 
-    banked = [module._episode_rng(0, index).integers(2**31) for index in range(300)]
-    resumed = [module._episode_rng(0, 300 + index).integers(2**31) for index in range(50)]
+    banked = [episode_rng(0, index).integers(2**31) for index in range(300)]
+    resumed = [episode_rng(0, 300 + index).integers(2**31) for index in range(50)]
     assert not set(banked) & set(resumed)
 
     # The domain-randomization stream is keyed the same way, so it carries the
     # same guarantee -- otherwise a resume would repeat appearances already banked.
-    banked_domain = {module._domain_seed(0, index) for index in range(300)}
-    resumed_domain = {module._domain_seed(0, 300 + index) for index in range(50)}
+    banked_domain = {appearance_seed(0, index) for index in range(300)}
+    resumed_domain = {appearance_seed(0, 300 + index) for index in range(50)}
     assert not banked_domain & resumed_domain
 
 

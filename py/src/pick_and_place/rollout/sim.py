@@ -286,6 +286,7 @@ def record_episode(
     should_stop: Callable[[], bool] | None = None,
     show_wrist_mixed: bool = False,
     believed_wrist_camera_pose: tuple[np.ndarray, np.ndarray] | None = None,
+    tracking_bias_rad: dict[str, float] | None = None,
     detector_crash_dump_dir: str | None = None,
     verbose: bool = True,
 ) -> RecordEpisodeResult:
@@ -382,6 +383,7 @@ def record_episode(
         kinematics=kinematics,
         substeps_per_tick=substeps_per_tick,
         servo=servo,
+        tracking_bias_rad=tracking_bias_rad,
         speed=speed,
         realtime=realtime,
     )

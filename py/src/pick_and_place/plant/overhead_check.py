@@ -26,7 +26,7 @@ import mujoco
 import numpy as np
 
 from pick_and_place.core.geometry import CubePose
-from pick_and_place.core.miscalibration import MiscalibrationModel
+from pick_and_place.core.miscalibration import OverheadCameraModel
 from pick_and_place.core.workspace_bounds import is_cube_drop_allowed
 from pick_and_place.plant.overhead import SimOverheadPerception
 from pick_and_place.scripted.episode_sampling import sample_cube, sample_hunt_pose, sample_target
@@ -155,7 +155,7 @@ def measure(
     *,
     episodes: int,
     seed: int,
-    model_sigmas: MiscalibrationModel = MiscalibrationModel(),
+    model_sigmas: OverheadCameraModel = OverheadCameraModel(),
     detector=None,
 ) -> ErrorSummary:
     """Draw ``episodes`` overhead calibrations and report the error they produce.
@@ -169,7 +169,7 @@ def measure(
     try:
         for index in range(episodes):
             rng = np.random.default_rng(np.random.SeedSequence([seed, index]))
-            perception.set_error(model_sigmas.sample(rng).overhead_camera_error)
+            perception.set_error(model_sigmas.sample(rng))
             error = measure_episode(model, data, perception, rng)
             if error is not None:
                 errors.append(error)

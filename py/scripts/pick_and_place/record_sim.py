@@ -38,7 +38,6 @@ from __future__ import annotations
 import argparse
 import datetime
 import hashlib
-import math
 import multiprocessing
 import queue as queue_module
 import shutil
@@ -48,21 +47,32 @@ from pathlib import Path
 
 import mujoco
 import mujoco.viewer
-import numpy as np
 from tqdm import tqdm
 
 from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
 from pick_and_place.sim.domain_randomization import (
     DomainRandomizationPreset,
     WristMountRandomizer,
-    domain_seed,
     generate_procedural_appearance,
     orient_cube,
 )
 from pick_and_place.scripted.episode_sampling import sample_cube
+from pick_and_place.core.physics import PhysicsModel
+from pick_and_place.core.robot_dynamics import (
+    load_robot_dynamics_config,
+    tracking_bias_rad,
+)
 from pick_and_place.plant.overhead import SimOverheadPerception
-from pick_and_place.rollout.localized_episode import prepare_localized_episode
-from pick_and_place.runtime.episodes import EpisodeSamplingError, prepare_episode
+from pick_and_place.sim.physics import PhysicsRandomizer, tracking_bias_offsets
+from pick_and_place.rollout.episode_setup import (
+    appearance_seed,
+    episode_rng,
+    overhead_rng,
+    physics_rng,
+    prepare_for_recording,
+    sample_grasp_perturbation,
+)
+from pick_and_place.runtime.episodes import EpisodeSamplingError
 from pick_and_place.sim.model import placement_error
 from pick_and_place.cli.dataset import add_dataset_arguments
 from pick_and_place.data.recording_config import (
@@ -78,17 +88,15 @@ from pick_and_place.cli.scene import (
     add_scene_texture_arguments,
 )
 from pick_and_place.spec.robot import CONTROL_HZ
-from pick_and_place.core.miscalibration import MiscalibrationModel
+from pick_and_place.core.miscalibration import MiscalibrationModel, OverheadCameraModel
 from pick_and_place.core.grasp_perturbation import (
     DEFAULT_MAGNITUDE_M,
-    GraspPerturbation,
 )
 from pick_and_place.data.recording import RecordingSession
 from pick_and_place.variants.scene import AppearanceRandomizer
 from pick_and_place.data.trajectory_artifact import render_environment_fingerprint
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
-from pick_and_place.sim.paper_target_marker import place_paper_target_marker
 from pick_and_place.core.paths import datasets_root
 from pick_and_place.rollout.records import episode_metadata, save_episode_artifact
 from pick_and_place.rollout.sim import SimCameraRig, build_recording_scene, record_episode
@@ -100,21 +108,11 @@ from pick_and_place.data.sim_dataset_staging import (
     next_episode_index,
     successful_episode_datasets,
 )
-from pick_and_place.core.workspace_bounds import (
-    PAN_AXIS,
-    is_cube_drop_allowed,
-    sample_target_plate_yaw,
-)
 
 
 # ~8.5x the ~35 s nominal episode under libx264, so an episode that burns many
 # trajectory resamples (up to --max-attempts) is not mistaken for a wedge.
 DEFAULT_EPISODE_TIMEOUT = 300.0
-
-# Salt distinguishing the fumble-or-not stream from the pose and domain streams
-# keyed off the same (seed, episode) pair. Arbitrary, and must not change: it is
-# part of what makes a recorded episode a pure function of its index.
-PERTURBATION_SEED_SALT = 0x50455254
 
 
 class _MockViewer:
@@ -140,68 +138,6 @@ def _configured_file(path: Path | None) -> dict[str, str] | None:
         "path": str(resolved),
         "sha256": hashlib.sha256(resolved.read_bytes()).hexdigest(),
     }
-
-
-def _prepare(
-    rng,
-    model,
-    data,
-    perception,
-    *,
-    source,
-    target,
-    miscalibration,
-    grasp_perturbation,
-    max_attempts: int,
-):
-    """Prepare one episode, and place the drop plate it will be recorded against.
-
-    With ``perception``, the planner's belief comes from rendering the overhead
-    camera and running the detector, and the plate has to be down before that
-    happens — so the plate is placed as part of preparing the episode. Without
-    it, the belief is the injected draw and the plate is placed afterwards, its
-    yaw drawn last so an episode index keeps the poses it had before the plate
-    started rotating.
-    """
-    if perception is not None:
-        localized = prepare_localized_episode(
-            rng,
-            model,
-            data,
-            perception,
-            source=source,
-            target=target,
-            include_environment=True,
-            miscalibration=miscalibration,
-            grasp_perturbation=grasp_perturbation,
-            max_attempts=max_attempts,
-        )
-        return localized.episode, localized.target_plate_yaw
-
-    episode = prepare_episode(
-        rng,
-        source,
-        target,
-        model=model,
-        data=data,
-        verbose=False,
-        include_environment=True,
-        miscalibration=miscalibration,
-        grasp_perturbation=grasp_perturbation,
-        max_attempts=max_attempts,
-    )
-    plate_yaw = sample_target_plate_yaw(
-        rng, episode.target.x, episode.target.y, half_size=DROP_ZONE_HALF_SIZE
-    )
-    place_paper_target_marker(
-        model,
-        (episode.target.x, episode.target.y),
-        plate_yaw,
-        (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
-        usable=is_cube_drop_allowed(episode.target.x, episode.target.y),
-        alpha=1.0,
-    )
-    return episode, plate_yaw
 
 
 def run_recording(
@@ -254,7 +190,7 @@ def run_recording(
     )
     # Appearance is re-applied per episode from that episode's own domain seed,
     # so this initial sample only seeds the textures the scene is built with.
-    initial_sample = preset.sample(_domain_seed(seed, 0)) if preset is not None else None
+    initial_sample = preset.sample(appearance_seed(seed, 0)) if preset is not None else None
     table_texture = scene.table_texture
     background_panorama = scene.background_panorama
     if preset is not None:
@@ -310,6 +246,13 @@ def run_recording(
         if scene.overhead_perception
         else None
     )
+    # Without a miscalibration draw the camera sits exactly where its
+    # calibration says, which localizes far better than the rig -- honest, and
+    # the reason --overhead-perception is usually paired with --miscalibration.
+    overhead_model = OverheadCameraModel() if scene.miscalibration else OverheadCameraModel(0.0, 0.0, 0.0)
+    physics_model = PhysicsModel(amount=scene.physics_amount)
+    physics = PhysicsRandomizer(model) if scene.physics_amount else None
+    fitted_bias = tracking_bias_rad(load_robot_dynamics_config()) if physics else {}
     viewer_cm = mujoco.viewer.launch_passive(model, data) if use_viewer else None
     viewer = viewer_cm.__enter__() if viewer_cm is not None else _MockViewer()
 
@@ -357,8 +300,8 @@ def run_recording(
                 image_writer_threads=output.image_writer_threads,
             )
 
-            rng = _episode_rng(seed, global_episode)
-            domain_seed = _domain_seed(seed, global_episode) if preset is not None else None
+            rng = episode_rng(seed, global_episode)
+            domain_seed = appearance_seed(seed, global_episode) if preset is not None else None
             sample = preset.sample(domain_seed) if preset is not None else None
             draw = (
                 sample.miscalibration
@@ -387,7 +330,7 @@ def run_recording(
             # turning the fraction or source-radius gate up or down leaves every
             # episode's poses untouched. This keeps dataset arms paired: only the
             # deliberate perturbation changes.
-            perturbation = _sample_grasp_perturbation(
+            perturbation = sample_grasp_perturbation(
                 seed,
                 global_episode,
                 episode_source,
@@ -395,10 +338,19 @@ def run_recording(
                 magnitude_m=perturbation_magnitude_m,
                 max_source_radius_m=perturbation_max_source_radius_m,
             )
+            # Applied before the episode is planned, because planning ends in a
+            # preflight and preflight runs live physics: vetting a candidate
+            # against the nominal arm when a drawn one will fly it is checking a
+            # different world than the one that follows.
+            physics_draw = physics_model.sample(physics_rng(seed, global_episode))
+            if physics is not None:
+                physics.apply(physics_draw)
             if perception is not None:
-                perception.set_error(draw.overhead_camera_error)
+                perception.set_error(
+                    overhead_model.sample(overhead_rng(seed, global_episode))
+                )
             try:
-                episode, target_plate_yaw = _prepare(
+                episode, target_plate_yaw = prepare_for_recording(
                     rng,
                     model,
                     data,
@@ -434,6 +386,7 @@ def run_recording(
                     if wrist_mount is not None
                     else None
                 ),
+                tracking_bias_rad=tracking_bias_offsets(fitted_bias, physics_draw),
                 detector_crash_dump_dir=detector_crash_dump_dir,
                 verbose=False,
             )
@@ -456,6 +409,7 @@ def run_recording(
                 orientation_index=orientation_index,
                 perturbation=perturbation,
                 draw=draw,
+                physics=physics_draw,
                 sample=sample,
                 preset_name=preset.name if preset is not None else None,
                 domain_seed=domain_seed,
@@ -466,6 +420,7 @@ def run_recording(
                 result,
                 target_plate_yaw=target_plate_yaw,
                 draw=draw,
+                physics=physics_draw,
                 sample=sample,
                 seed=seed,
                 episode_index=global_episode,
@@ -511,62 +466,6 @@ def _worker(kwargs: dict, index_queue, status, worker_id: int) -> None:
 
     report(None)
     run_recording(index_source=next_index, heartbeat=report, **kwargs)
-
-
-def _episode_rng(root_seed: int | None, global_episode: int) -> np.random.Generator:
-    """Return the deterministic RNG stream for one globally numbered episode."""
-    if root_seed is None:
-        return np.random.default_rng()
-    return np.random.default_rng(np.random.SeedSequence([root_seed, global_episode]))
-
-
-def _domain_seed(root_seed: int | None, global_episode: int) -> int:
-    """Stable per-episode seed for domain sampling, independent of pose draws."""
-    return domain_seed(root_seed, global_episode)
-
-
-def _perturbation_rng(root_seed: int | None, global_episode: int) -> np.random.Generator:
-    """Deterministic stream deciding whether episode ``global_episode`` is fumbled.
-
-    Salted so it is independent of the pose and domain streams. That independence
-    is the point: changing ``--perturbed-fraction`` must not move any other
-    episode's cube, or the perturbed and unperturbed dataset arms would differ in
-    their entire pose distribution and the comparison would stop being paired.
-    """
-    if root_seed is None:
-        return np.random.default_rng()
-    return np.random.default_rng(
-        np.random.SeedSequence([root_seed, global_episode, PERTURBATION_SEED_SALT])
-    )
-
-
-def _sample_grasp_perturbation(
-    root_seed: int | None,
-    global_episode: int,
-    source: CubePose,
-    *,
-    fraction: float,
-    magnitude_m: float,
-    max_source_radius_m: float | None,
-) -> GraspPerturbation | None:
-    """Sample the episode's fumble, optionally excluding distant cube starts.
-
-    The probability and direction retain the original salted stream and draw
-    order. The source-radius gate only suppresses a selected perturbation, so
-    every included episode gets exactly the perturbation it did before the gate
-    existed and every episode keeps its original pose stream.
-    """
-    if fraction <= 0.0:
-        return None
-    perturb_rng = _perturbation_rng(root_seed, global_episode)
-    selected = perturb_rng.random() < fraction
-    source_radius_m = math.hypot(source.x - PAN_AXIS[0], source.y - PAN_AXIS[1])
-    within_radius = (
-        max_source_radius_m is None or source_radius_m <= max_source_radius_m
-    )
-    if not selected or not within_radius:
-        return None
-    return GraspPerturbation.sample(perturb_rng, magnitude_m=magnitude_m)
 
 
 def find_wedged_workers(
@@ -816,6 +715,23 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--physics-randomization",
+        type=float,
+        default=0.0,
+        metavar="AMOUNT",
+        help=(
+            "how far each episode's arm may differ from the nominal one: servo "
+            "gain and time constant, link mass, surface friction, joint damping, "
+            "stiction standing in for backlash, and how far a joint droops from "
+            "its command. One dial over all of them, 0 for the nominal arm every "
+            "demonstration has shared so far, 1 for the authored spread. The "
+            "spread is a judgment rather than a measurement -- there is one "
+            "fitted dynamics config, so there is no observed day-to-day variation "
+            "to draw from. Expect yield to fall as it goes up: the planner "
+            "assumes the nominal arm, which is why the dial exists"
+        ),
+    )
+    parser.add_argument(
         "--domain-randomization",
         type=Path,
         default=None,
@@ -895,6 +811,7 @@ def main() -> None:
         table_texture=args.table_texture,
         miscalibration=args.miscalibration,
         overhead_perception=args.overhead_perception,
+        physics_amount=args.physics_randomization,
         domain_randomization=args.domain_randomization,
     )
     try:
@@ -929,6 +846,7 @@ def main() -> None:
         "render_height": args.render_height,
         "miscalibration": args.miscalibration,
         "overhead_perception": args.overhead_perception,
+        "physics_randomization": args.physics_randomization,
         "domain_randomization": _configured_file(args.domain_randomization),
         "max_attempts": args.max_attempts,
         "perturbed_fraction": args.perturbed_fraction,
