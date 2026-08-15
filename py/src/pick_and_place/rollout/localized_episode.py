@@ -45,6 +45,12 @@ from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
 #: plate rather than one where the arm happens to be in the way.
 MAX_HUNT_POSES = 8
 
+#: How hard to try to plan one localized scene before drawing another. Small,
+#: because the cube and plate are pinned to what was measured, so the planner
+#: can only vary the start and end pose — if that does not find a clean
+#: trajectory in a few goes, a different scene is the cheaper next move.
+PLAN_ATTEMPTS_PER_SCENE = 8
+
 
 @dataclass(frozen=True)
 class LocalizedEpisode:
@@ -93,6 +99,7 @@ def prepare_localized_episode(
     target: CubePose | None = None,
     target_sampler: Callable[[np.random.Generator], CubePose] | None = None,
     max_attempts: int = 20,
+    plan_attempts: int = PLAN_ATTEMPTS_PER_SCENE,
     max_hunts: int = MAX_HUNT_POSES,
     verbose: bool = False,
     **kwargs: Any,
@@ -102,6 +109,12 @@ def prepare_localized_episode(
     Every attempt draws a whole scene — cube, plate, plate yaw — because a scene
     that could not be seen is not one to retry with a different arm pose; the
     hunt already did that.
+
+    The planner gets a *small* budget per scene. Its own resampling loop cannot
+    help here — the cube and plate are pinned to the poses the belief was
+    measured from, so all it can vary is the start and end pose — and left
+    unbounded it will spin on an unplannable scene forever rather than let the
+    outer loop draw a better one.
     """
     for attempt in range(1, max_attempts + 1):
         ep_source = source if source is not None else sample_cube(rng)
@@ -138,6 +151,7 @@ def prepare_localized_episode(
                 believed_target=CubePose(
                     x=reading.target.xy[0], y=reading.target.xy[1], z=CUBE_HALF_SIZE
                 ),
+                max_attempts=plan_attempts,
                 verbose=verbose,
                 **kwargs,
             )
