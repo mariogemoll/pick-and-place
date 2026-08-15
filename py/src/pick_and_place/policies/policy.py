@@ -206,6 +206,20 @@ def make_policy(
             )
         config.n_action_steps = n_action_steps
 
+    # compile_model is a training-time setting that the checkpoint carries with
+    # it, and honoring it at inference would change the result in three ways at
+    # once. SmolVLA wraps sample_actions with torch.compile at compile_mode,
+    # which defaults to max-autotune: every scoring process would spend minutes
+    # autotuning before its first scenario, and an evaluation runs one shard per
+    # core against a single GPU. It also calls
+    # torch.set_float32_matmul_precision("high") globally, so fp32 matmuls
+    # become TF32 and a compiled checkpoint is scored under different numerics
+    # than one trained without it -- which would confound exactly the comparison
+    # a shared manifest exists to make. An evaluation issues too few forward
+    # passes to earn any of that back.
+    if getattr(config, "compile_model", False):
+        config.compile_model = False
+
     policy_cls = get_policy_class(config.type)
     base = _peft_base_checkpoint(checkpoint, base_checkpoint)
     if base is None:
