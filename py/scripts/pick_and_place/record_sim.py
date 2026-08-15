@@ -246,10 +246,18 @@ def run_recording(
         if scene.overhead_perception
         else None
     )
-    # Without a miscalibration draw the camera sits exactly where its
-    # calibration says, which localizes far better than the rig -- honest, and
-    # the reason --overhead-perception is usually paired with --miscalibration.
-    overhead_model = OverheadCameraModel() if scene.miscalibration else OverheadCameraModel(0.0, 0.0, 0.0)
+    # A run is miscalibrated either because --miscalibration asked for it or
+    # because a domain-randomization preset draws one per episode; the overhead
+    # camera has to be off by the same token, or a randomized run would localize
+    # perfectly while every other axis of its calibration was wrong. Without
+    # either, the camera sits exactly where its calibration says and localizes
+    # far better than the rig -- honest, and the reason --overhead-perception is
+    # worth little on its own.
+    overhead_model = (
+        OverheadCameraModel()
+        if scene.miscalibration or preset is not None
+        else OverheadCameraModel(0.0, 0.0, 0.0)
+    )
     physics_model = PhysicsModel(amount=scene.physics_amount)
     physics = PhysicsRandomizer(model) if scene.physics_amount else None
     fitted_bias = tracking_bias_rad(load_robot_dynamics_config()) if physics else {}
