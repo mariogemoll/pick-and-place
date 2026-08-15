@@ -377,6 +377,59 @@ The same arithmetic as the pi0.5 section, at SmolVLA's batch size:
 `scheduler_decay_steps`, so the cosine decay lands at the end of the run rather
 than being truncated mid-schedule. Change one and consider the other.
 
+#### How many samples this task actually needed
+
+Not arithmetic but measurement: ten checkpoints of one 50,000-step run, every
+one scored on the same 100 scenarios of `canonical_100_v1`.
+
+| steps | samples | epochs | success |
+| ---: | ---: | ---: | ---: |
+| 5,000 | 320,000 | 1.10 | 1/100 — the cube never moves |
+| 10,000 | 640,000 | 2.19 | 30/100 |
+| 15,000 | 960,000 | 3.29 | 33/100 |
+| 20,000 | 1,280,000 | 4.39 | 44/100 |
+| 25,000 | 1,600,000 | 5.49 | 38/100 |
+| 30,000 | 1,920,000 | 6.58 | 49/100 |
+| 35,000 | 2,240,000 | 7.68 | 54/100 |
+| **40,000** | **2,560,000** | **8.78** | **58/100** |
+| 45,000 | 2,880,000 | 9.88 | 42/100 |
+| 50,000 | 3,200,000 | 10.97 | 47/100 |
+
+**Budget 2 to 2.5 million samples** — 30,000 to 40,000 steps at batch 64, which
+is 8 to 9 epochs over 2.7 hours of demonstrations. SmolVLA's own LIBERO recipe
+is 30,000 steps at batch 64, so the stock recipe already lands in that window
+and this run reached it independently.
+
+Three thresholds are worth carrying to another task:
+
+- **Below ~1.5 epochs nothing works at all.** The 5,000-step rung is 1.10
+  epochs, which is *exactly* what the whole pi0.5 run saw before scoring 0/100 —
+  matched by construction rather than by argument. The model that does work here
+  also cannot move the cube at that budget, which is the cleanest evidence in the
+  project that pi0.5's zero was a budget rather than a verdict.
+- **The steep part is over by 4 to 5 epochs**, which already buys 76% of the
+  eventual peak.
+- **Past ~9 epochs the money is wasted.** 45,000 and 50,000 both score *below*
+  40,000 while training loss falls another 33%. Loss is decoupled from success on
+  this task, and `DP_TRAINING.md` records the same lesson twice more.
+
+**Count samples, not steps.** 10,000 steps at batch 128 is twice the data of
+10,000 at batch 64, so a step count with no batch size attached says nothing.
+
+Two caveats, both load-bearing:
+
+- **The plateau is noisy, so 40,000 is a selection rather than an optimum.** The
+  last seven rungs run 44, 38, 49, 54, 58, 42, 47 — a range of 38–58 where
+  binomial noise alone predicts about ±5. "Somewhere around 2 to 2.5M samples" is
+  the finding; the peak's exact location is not. On a held-out stream the same
+  checkpoint scored 0.559, not 0.58.
+- **More data of the same kind is not the lever here.** At the peak, 94% of
+  episodes reach the cube and 60% lift it, and the near band has ~1.9x the
+  demonstrations of the far band at roughly half the success. The constraint is
+  what the data *contains*, not how much of it there is; see the recovery-data
+  sections of `POLICY_RESULTS.md`, where targeting that failure directly moved
+  `cube_lifted` +5.3 points and cost the same amount back elsewhere.
+
 ### The 512x512 dataset
 
 `two-variant-1000-as-recorded-512x512-lerobot.tar.zst` is the same 1000
