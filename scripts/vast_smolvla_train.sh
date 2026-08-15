@@ -356,13 +356,13 @@ cp "$0" "$output_root/job-metadata/launcher.sh"
 # The augmentation has to move into the cache with it: lerobot's image
 # transforms run on pixels a cached run never reads, so PREFIX_CACHE_VARIANTS
 # stores that many independently augmented passes and each read draws one.
-# Leave it at 1 and the run is the no-augmentation arm, which SMOLVLA.md calls
-# the cheapest open question in the file.
+# Leave it at 1 and the run is the no-augmentation arm, the cheapest open
+# question this task has.
 #
 # The cached trainer also drops the 36 language tokens that are padding and
 # keeps the frozen prefix out of the backward, both of which are on by default
-# and both worth more than a quarter of a step each. SMOLVLA_PERFORMANCE.md has
-# the measurements and the flags that turn them off for an A/B.
+# and both worth more than a quarter of a step each; each has a flag that turns
+# it off for an A/B.
 prefix_cache="${PREFIX_CACHE:-0}"
 prefix_cache_variants="${PREFIX_CACHE_VARIANTS:-1}"
 prefix_cache_dir="$workspace/prefix-cache"

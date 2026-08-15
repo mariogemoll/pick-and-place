@@ -299,9 +299,8 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   of return variance, and no log-probability clamping — none of which the visual
   strand ever achieved. The leading untested suspect is that the likelihood
   floor is three to six times wider than the SDE's own per-step standard
-  deviation. No fine-tuned checkpoint is worth scoring; see
-  `docs/FLOW_RL_STATUS.md`. The **visual Diffusion Policy** uses DPPO's own
-  diffusion model, and
+  deviation. No fine-tuned checkpoint is worth scoring. The **visual Diffusion
+  Policy** uses DPPO's own diffusion model, and
   **works as a train-and-select procedure on the recovery base, not as a reliable
   optimizer**: across six seeds (2026-08-08) there is no average effect at any
   fixed iteration, but four of six produced a significantly-better checkpoint at
@@ -321,8 +320,7 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   ~0.74 is a property of the setup rather than a lucky seed. `reward_horizon`
   was found defaulting to 4 against `act_steps` 8 — half of every executed chunk
   was excluded from the gradient — and is now bound to `act_steps`; the fix is
-  correct and made no measurable difference. Read the August 8–9 sections of
-  `docs/DPPO_RL_FINETUNING.md` before opening a new configuration.
+  correct and made no measurable difference.
 - **`dsrl/`** — the second RL strand: freeze the Diffusion Policy entirely and
   learn which input noise it denoises from
   ([arXiv:2506.15799](https://arxiv.org/abs/2506.15799)). `noise_policy`
@@ -333,7 +331,7 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   them to the unchanged `dppo_rl` environment; `steerability` measures the
   precondition the method rests on — that the noise moves the action at all.
   The base weights are loaded read-only, so
-  unlike DPPO a bad run cannot degrade the policy. Read `docs/RL_DSRL.md` first.
+  unlike DPPO a bad run cannot degrade the policy.
 
 ### Script categories
 
@@ -399,10 +397,6 @@ default is 100. Full provenance and episode records are at:
 s3://allyouneed/pick-and-place/outputs/flow-policy-unet1d-rot6-cubeaug-30k-seed0/evaluation-selection-seed6m-20260810/
 ```
 
-Read `docs/FLOW_POLICY.md` for the matched augmentation experiment and 100,000-
-update overfitting result, and `docs/POLICY_EVALUATION.md` before running the
-untouched validation stream.
-
 ## Mesh pipeline
 
 Two mandatory steps turn raw hardware STL into web-ready assets:
@@ -424,16 +418,16 @@ Gitignored, machine-local, and sometimes very large:
 
 | Path | Contents |
 | --- | --- |
-| `docs/` | Working notes. **Not version controlled** — treat as a lab notebook, not documentation. `docs/README.md` indexes it. |
 | `ts/public/` | All generated web assets. |
 | `datasets/` | Recorded and simulated LeRobot datasets. Tens of GB. |
 | `outputs/`, `output/` | Training runs, checkpoints, diagnostics. |
 | `intermediary-glb/`, `dist_assets/` | Mesh pipeline intermediates. |
 | `config/camera_{intrinsics,extrinsics}/*.json` | Measured per-rig calibration. |
 
-Because `docs/` is not committed, nothing in the repository may depend on it.
-Do not add code comments that reference a `docs/` file; write the rationale
-into the comment itself so it stands alone.
+**Working notes, research write-ups, and dev-process material do not belong in
+this repository.** Do not add code comments that reference an external
+document for context; write the rationale into the comment itself so it
+stands alone.
 
 Scripts must not default to writing inside the repository. Resolve a default
 through `pick_and_place.core.paths` instead — see [`PAP_DATA_ROOT`](#pap_data_root).

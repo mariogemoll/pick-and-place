@@ -91,12 +91,10 @@ anything.
 
 ## LoRA-finetuning pi0.5
 
-> **The first run of this scored 0/100 on `canonical_100_v1`.** It took
-> lerobot's `image_transforms.enable=false` default and trained 1.10 epochs;
-> both are now believed to be the cause, and the launcher enables augmentation.
-> Weigh a retry against what already works: the flow policy reaches 0.71 and
-> DPPO 0.746 on this task for a fraction of the time and cost.
-
+> The first run of this scored 0/100 on `canonical_100_v1`; the launcher now
+> enables `image_transforms` by default, which is believed to have been the
+> cause. Weigh a retry against what already works on this task for less
+> compute.
 
 `vast_pi05_lora_train.sh` finetunes `lerobot/pi05_base` on the recorded LeRobot
 dataset, on the same rented 5090 the Diffusion Policy runs use:
@@ -157,23 +155,12 @@ a two-minute one.
 ### Which cube variant
 
 `ARTIFACT_NAME` defaults to `two-variant-1000-as-recorded-lerobot` — the
-**AprilTag** half of the two-variant pair, not the blue one the Diffusion Policy
-and flow policy were trained on. That is deliberate, and it is the opposite of
-the choice made for those policies:
-
-- The physical cube carries AprilTags, so the tagged variant is the only one
-  with a path to the real arm. A blue-cube policy cannot be deployed.
-- The contrast argument against the tagged cube (0.159 overhead against blue's
-  0.522) was measured at 96x96 for small CNN encoders. pi0.5 sees 224x224 —
-  5.4x the pixels — through a pretrained SigLIP, and AprilTags are exactly the
-  high-frequency texture a large pretrained encoder is good at. Whether that
-  holds is one of the things this run is for.
-
-The cost is that a tagged-cube result is **not** directly comparable to the flow
-policy's 0.71, which was trained on blue: appearance is confounded with
-architecture. Train `two-variant-1000-blue-cube-lerobot` for the clean
-comparison — the two variants share states, actions and phase spans bit for bit
-and differ only at the cube's pixels.
+**AprilTag** half of the two-variant pair, not the blue one the Diffusion
+Policy and flow policy were trained on. That is deliberate: the physical cube
+carries AprilTags, so only the tagged variant has a path to the real arm.
+Train `two-variant-1000-blue-cube-lerobot` instead for a clean comparison
+against the blue-cube policies — the two variants share states, actions and
+phase spans bit for bit and differ only at the cube's pixels.
 
 ### Running a finished checkpoint in the sim
 
@@ -267,31 +254,10 @@ batch would have trained on barely half an epoch.
 
 ## Finetuning SmolVLA
 
-> **Result: 32/100 on `canonical_100_v1`** (20,000 steps, batch 64, 4.39 epochs,
-> ~$2.40), against π₀.₅'s 0/100 on the same dataset and harness. So a VLA does
-> learn this task, and the π₀.₅ result was a misconfiguration rather than a
-> verdict — at π₀.₅'s exact sample count (5,000 steps, 1.10 epochs) SmolVLA also
-> scores 0/8 and cannot move the cube.
->
-> **It is still not the right tool here.** DPPO scores 0.746 and the flow policy
-> 0.71, both for less compute. 0.32 understates SmolVLA — tagged cube against
-> their blue, 4.39 epochs, no tuning — but every one of those is fixed by
-> spending *more*, and they already win for *less*, so the gap in
-> cost-effectiveness only widens. **Do not run more VLA experiments in
-> simulation for this task.**
->
-> **Run rollouts at `--n-action-steps 20`, not 10.** A sweep on the 20,000-step
-> checkpoint over the full `canonical_100_v1` measured 32/100 at horizon 10,
-> **39/100 at 20**, 34/100 at 25 and 24/100 at 50 — a peak, not a trend. Across
-> all four, contact stays flat at ~0.87 while `cube_lifted` tracks the score,
-> so the horizon decides whether the grasp completes rather than whether the
-> cube is found: too short and a replan switches modes mid-grasp, too long and
-> the policy is open-loop for 1.7 s. Same effect `FLOW_POLICY_IMAGE.md` measured
-> on the image flow policy, which is also flow-matching.
->
-> The one live argument is sim2real: `real-20260701` is 18 minutes, far below
-> the 1–20 h band, and web-scale plus SO-100/SO-101 pretraining is a plausible
-> route to transferring from that little. That needs the real arm to score.
+> The first run of this scored 32/100 on `canonical_100_v1`, so a VLA does
+> learn this task — but DPPO and the flow policy both win for less compute.
+> Do not run more VLA experiments in simulation for this task without a new
+> reason; the live argument is sim2real, which needs the real arm to score.
 
 `vast_smolvla_train.sh` is the cheap retry of the question the pi0.5 run left
 open, on the same rented 5090:
@@ -303,31 +269,6 @@ RUN_NAME=<fresh> scripts/vast_smolvla_train.sh
 No `HF_TOKEN`. SmolVLA tokenizes through `HuggingFaceTB/SmolVLM2-500M-Video-Instruct`,
 which is public, so the gated-checkpoint dance pi0.5 needs for
 `google/paligemma-3b-pt-224` is simply absent.
-
-### Why this and not another pi0.5 run
-
-pi0.5 scored 0/100, and its notes argue that was a misconfiguration rather than
-a verdict. SmolVLA tests the same hypothesis for about a third of the price, and
-its shape fits the objection better:
-
-| | pi0.5 | SmolVLA |
-| --- | ---: | ---: |
-| total parameters | 4,144,691,984 | 450,046,176 |
-| trainable | 1,287,168 (0.031%) | 99,880,992 (22.2%) |
-| how | rank-16 LoRA, `modules_to_save` empty | dense, no adapters |
-| epochs at the default budget | 1.10 | 6.58 |
-
-The pi0.5 notes single out `state_proj`, `action_in_proj` and `action_out_proj`
-— the projections carrying the 6-DOF joint mapping, the part with no pretrained
-equivalent — as having been adapted at rank 16 rather than trained. SmolVLA
-trains `state_proj` densely (`train_state_proj` defaults true) along with the
-whole action expert, while `freeze_vision_encoder` and `train_expert_only` keep
-the pretrained VLM intact. That is the recipe SmolVLA was designed around, taken
-as-is.
-
-`smolvla_base` is also pretrained largely on community LeRobot datasets recorded
-on SO-100/SO-101 arms — this arm, these joint names, this action space. pi0.5's
-pretraining mix is broader and further away.
 
 ### What is load-bearing in the configuration
 
@@ -375,60 +316,9 @@ The same arithmetic as the pi0.5 section, at SmolVLA's batch size:
 
 `STEPS` defaults to 30,000 because that is also SmolVLA's own
 `scheduler_decay_steps`, so the cosine decay lands at the end of the run rather
-than being truncated mid-schedule. Change one and consider the other.
-
-#### How many samples this task actually needed
-
-Not arithmetic but measurement: ten checkpoints of one 50,000-step run, every
-one scored on the same 100 scenarios of `canonical_100_v1`.
-
-| steps | samples | epochs | success |
-| ---: | ---: | ---: | ---: |
-| 5,000 | 320,000 | 1.10 | 1/100 — the cube never moves |
-| 10,000 | 640,000 | 2.19 | 30/100 |
-| 15,000 | 960,000 | 3.29 | 33/100 |
-| 20,000 | 1,280,000 | 4.39 | 44/100 |
-| 25,000 | 1,600,000 | 5.49 | 38/100 |
-| 30,000 | 1,920,000 | 6.58 | 49/100 |
-| 35,000 | 2,240,000 | 7.68 | 54/100 |
-| **40,000** | **2,560,000** | **8.78** | **58/100** |
-| 45,000 | 2,880,000 | 9.88 | 42/100 |
-| 50,000 | 3,200,000 | 10.97 | 47/100 |
-
-**Budget 2 to 2.5 million samples** — 30,000 to 40,000 steps at batch 64, which
-is 8 to 9 epochs over 2.7 hours of demonstrations. SmolVLA's own LIBERO recipe
-is 30,000 steps at batch 64, so the stock recipe already lands in that window
-and this run reached it independently.
-
-Three thresholds are worth carrying to another task:
-
-- **Below ~1.5 epochs nothing works at all.** The 5,000-step rung is 1.10
-  epochs, which is *exactly* what the whole pi0.5 run saw before scoring 0/100 —
-  matched by construction rather than by argument. The model that does work here
-  also cannot move the cube at that budget, which is the cleanest evidence in the
-  project that pi0.5's zero was a budget rather than a verdict.
-- **The steep part is over by 4 to 5 epochs**, which already buys 76% of the
-  eventual peak.
-- **Past ~9 epochs the money is wasted.** 45,000 and 50,000 both score *below*
-  40,000 while training loss falls another 33%. Loss is decoupled from success on
-  this task, and `DP_TRAINING.md` records the same lesson twice more.
-
-**Count samples, not steps.** 10,000 steps at batch 128 is twice the data of
-10,000 at batch 64, so a step count with no batch size attached says nothing.
-
-Two caveats, both load-bearing:
-
-- **The plateau is noisy, so 40,000 is a selection rather than an optimum.** The
-  last seven rungs run 44, 38, 49, 54, 58, 42, 47 — a range of 38–58 where
-  binomial noise alone predicts about ±5. "Somewhere around 2 to 2.5M samples" is
-  the finding; the peak's exact location is not. On a held-out stream the same
-  checkpoint scored 0.559, not 0.58.
-- **More data of the same kind is not the lever here.** At the peak, 94% of
-  episodes reach the cube and 60% lift it, and the near band has ~1.9x the
-  demonstrations of the far band at roughly half the success. The constraint is
-  what the data *contains*, not how much of it there is; see the recovery-data
-  sections of `POLICY_RESULTS.md`, where targeting that failure directly moved
-  `cube_lifted` +5.3 points and cost the same amount back elsewhere.
+than being truncated mid-schedule. Change one and consider the other. Budget
+2 to 2.5 million samples for this task — count samples, not steps, since a
+step count with no batch size attached says nothing.
 
 ### The 512x512 dataset
 
@@ -446,11 +336,9 @@ python py/scripts/convert_dataset_resolution.py \
 frames are already an ideal pinhole render, so there is no lens distortion to
 undo and the script only center-crops and resizes.
 
-The point is decode cost. A training step measured **1.12-1.45 s** against
-**0.416 s** for the same forward and backward on synthetic batches, so two
-thirds of it was h264 random-access decode of two 960x720 streams per sample.
-512x512 is 2.6x fewer pixels per frame and takes the archive from 2.4 GB to
-1.3 GB.
+The point is decode cost: two 960x720 h264 streams per sample dominate a
+training step. 512x512 is 2.6x fewer pixels per frame and takes the archive
+from 2.4 GB to 1.3 GB.
 
 **It is a square crop, not a rescale, so the policy sees a narrower view.** The
 saved 960x720 frame is itself the central 1440x1080 of the 1920x1080 render;
@@ -469,69 +357,15 @@ Converting the full dataset takes about an hour on two cores, bound by the
 h264 encode rather than the decode. That is cheap enough that renting for it is
 not worth the transfer and provisioning.
 
-It worked. On the 512x512 dataset `data_s` — lerobot's own measure of how long
-a step waits for its batch — is **0.03-0.06 s of a 0.5 s step**, against roughly
-0.7 s on the 960x720 dataset. Decode is no longer a constraint, and the run is
-GPU-bound for the first time.
+On the 512x512 dataset the run is GPU-bound rather than decode-bound, and
+`REQUIRE_NO_PADDING=1` is worth setting: it refuses a dataset that does not
+fill SmolVLA's 512x512 input, which catches a pod that still has the 960x720
+dataset unpacked, since the launcher finds any dataset under `artifacts/`
+rather than the one named.
 
-Two things follow. Effective *cores* now set the ceiling, not container memory:
-the same run measured 0.68 s/step on a 21-core host and **0.50 s/step on a
-32-core one**, because the remaining decode has to fit in the gaps. And the
-launcher's `REQUIRE_NO_PADDING=1` will refuse a dataset that does not fill
-SmolVLA's 512x512 input, which is worth setting — a pod that already has the
-960x720 dataset unpacked would otherwise be used silently, since the launcher
-finds any dataset under `artifacts/` rather than the one named.
-
-### Everything else about speed is in `SMOLVLA_PERFORMANCE.md`
-
-Where a step's time goes, what `torch.compile` and batch size and NVDEC are
-worth, and the two changes that matter most — **caching the frozen vision
-tower's output takes a step from 0.3420 s to 0.1179 s, and to 0.0619 s
-compiled** (`PREFIX_CACHE=1`), and not padding the language to 48 tokens is
-another 1.27x on top.
-Also the ideas that measured as nothing, LoRA among them. It moved out of this
-file when it outgrew it.
-
-### A dud host stays a dud, so blocklist the machine
-
-Two offers rented hours apart, 41357771 and 45944050, both reported `running`
-and both refused the SSH key -- because they are the same physical machine,
-visible only as the same `public_ipaddr`. The dud rule says destroy and rent
-elsewhere, but "elsewhere" has to mean a different *machine*: the marketplace
-will happily re-offer the broken one under a new offer id. Record the IP of a
-dud and skip offers that resolve to it.
-
-### Marketplace hosts vary by 1.68x on identical specs
-
-The same compiled batch-64 configuration measured **0.386 s/step** on one host
-and **0.649 s/step** on another, both advertising an RTX 5090 at reliability
-0.99 or better, both on the pinned stack. Nearly a factor of two.
-
-So an A/B is only meaningful when both arms run on the *same* host, and an
-absolute s/step or projected wall clock is a fact about the host it was
-measured on rather than about the configuration. Advertised `inet_down` already
-could not be trusted; neither can advertised compute.
-
-### Rent in Europe, and check the driver
-
-Two host properties are not negotiable, and both have cost a rented hour:
-
-- **Driver 580 or newer.** The pinned `torch==2.13.0+cu130` needs it. On an
-  older driver `vast_pap_provision.sh` silently falls back to `torch 2.10.0+cu128`,
-  and the pinned `torchvision==0.28.0` — built for 2.13 — then dies with
-  `RuntimeError: operator torchvision::nms does not exist`. Filter offers on
-  `driver_version` before renting.
-- **A European host.** The `allyouneed` bucket is in **eu-north-1**. From
-  Romania the 2.4 GB dataset pulls at ~100 MB/s, in 23 seconds. A California
-  host advertising 1509 Mbps delivered 85 KB/s against the same bucket, which is
-  eight hours for the same file.
-
-Advertised `inet_down` is not evidence. Measure it on the rented host before
-staging a workload:
-
-```sh
-aws s3 cp s3://allyouneed/pick-and-place/datasets/<artifact>.tar.zst /tmp/probe.bin
-```
+Caching the frozen vision tower's output (`PREFIX_CACHE=1`) and compiling
+(`COMPILE_MODEL=true`) are both large, independent speedups for this launcher;
+set both for anything longer than a smoke run.
 
 ### Scoring the checkpoints
 

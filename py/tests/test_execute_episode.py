@@ -12,7 +12,8 @@ Two levels of double are used, and they buy different guarantees:
 - With ``recording=None`` and ``wrist_camera=None`` the executor needs only a
   follower that accepts actions and a viewer that says it is running. That path
   is **deterministic** — the commanded joint stream is bit-identical run to run,
-  which is what makes it a refactoring oracle (see ``docs/fingerprint_executor.py``).
+  which is what makes it a refactoring oracle: pin it once, then diff future
+  runs against the pinned stream.
 - With a looping fake capture and a recording spy, the wrist-servo and recording
   branches come under test too. Those run their own threads at rates unrelated
   to the control loop, so they are **not** bit-reproducible; the assertions are
