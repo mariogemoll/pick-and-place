@@ -131,6 +131,25 @@ for calibration in config/camera_extrinsics/overhead_camera.json \
 done
 V="$workspace/venvs/pick-and-place/bin/python"
 
+# A worker that dies mid-episode leaves a directory with a meta/ but no
+# meta/episodes/, and the success count concatenates across every staged
+# directory without skipping incomplete ones -- so one corpse makes pandas raise
+# "No objects to concatenate" and takes the whole run down at the *next* tally,
+# after the episodes it is counting recorded fine. Sweep them first.
+drop_partial_episodes() {
+  local root="${staging}_episodes" removed=0
+  [ -d "$root" ] || return 0
+  for dir in "$root"/ep*; do
+    [ -d "$dir" ] || continue
+    if [ ! -d "$dir/meta/episodes" ]; then
+      rm -rf "$dir"
+      removed=$(( removed + 1 ))
+    fi
+  done
+  [ "$removed" -gt 0 ] && echo "swept $removed partial episode directory(ies)"
+  return 0
+}
+
 count_complete() {
   "$V" - "${staging}_episodes" <<'PY'
 import sys
@@ -168,6 +187,7 @@ stage 1 "generate until $episodes episodes place successfully"
 # what the finalizer can merge -- an episode that records cleanly but places
 # 50 mm out is not one of the thousand.
 for attempt in 1 2 3 4 5 6; do
+  drop_partial_episodes
   successes=$(count_successful)
   complete=$(count_complete)
   echo "attempt $attempt: $successes successful of $complete complete (want $episodes)"
@@ -196,6 +216,7 @@ for attempt in 1 2 3 4 5 6; do
     --dataset-root "$staging" \
     --repo-id "local/$run_name" || echo "recorder returned $?; will re-count"
 done
+drop_partial_episodes
 successes=$(count_successful)
 echo "successful staged episodes: $successes"
 if [ "$successes" -lt 1 ]; then
