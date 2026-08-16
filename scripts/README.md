@@ -12,6 +12,24 @@ textures, which are not in the repository — see "The simulator needs generated
 AprilTag textures" in `AGENTS.md`. `vast_pap_provision.sh` renders them, so
 rented pods are covered; a fresh local clone is not.
 
+## Paired randomized image-flow evaluation
+
+`vast_flow_image_paired_eval.sh` fetches two completed image-flow arms,
+verifies each training `SHA256SUMS` manifest, scores both on the frozen
+`randomized_selection_200_v1` suite, compares every paired scenario, and
+publishes a checksummed evaluation bundle. It fixes the operating point at
+Euler-10, 8 executed actions, and flow seed 0:
+
+```sh
+RUN_PREFIX=flow-image-randomized-maxretry1-224-300k-seed0 \
+  scripts/vast_flow_image_paired_eval.sh
+```
+
+Run it only after `vast_pap_provision.sh` on a verified evaluation pod. The
+two training output prefixes must already contain final `SHA256SUMS` files;
+the script deliberately refuses partial uploads. Results land under
+`s3://allyouneed/pick-and-place/evaluations/randomized_selection_200_v1/`.
+
 ## Does the cube's appearance decide whether the policy learns?
 
 The working Diffusion Policy is trained on a blue cube. The physical cube
