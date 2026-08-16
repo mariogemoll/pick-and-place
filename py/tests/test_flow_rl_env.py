@@ -68,6 +68,22 @@ def test_the_flow_observation_is_packed_in_the_exports_declared_order(tmp_path):
     assert raw[15:] == pytest.approx([0.4, 0.5], abs=1e-5)
 
 
+def test_the_flow_observation_uses_belief_when_the_environment_provides_it(tmp_path):
+    codec = FlowStateObservation(export_dir=_export(tmp_path)).build()
+    observation, info = _simulator_step()
+    info["believed_task_state"] = {
+        **info["task_state"],
+        "cube_position_m": (0.6, 0.7, 0.8),
+        "target_xy_m": (0.9, 1.0),
+    }
+
+    packed = codec.observe(observation, info)["state"]
+    raw = packed / 2 * 10 + 5
+
+    assert raw[6:9] == pytest.approx([0.6, 0.7, 0.8], abs=1e-5)
+    assert raw[15:] == pytest.approx([0.9, 1.0], abs=1e-5)
+
+
 def test_an_absolute_command_does_not_depend_on_the_measured_joints(tmp_path):
     codec = FlowStateObservation(export_dir=_export(tmp_path)).build()
 

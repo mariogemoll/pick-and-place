@@ -46,6 +46,7 @@ not the policy.
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 import lzma
 from pathlib import Path
@@ -57,6 +58,11 @@ from pick_and_place.sim.domain_randomization import (
     domain_seed,
 )
 from pick_and_place.core.geometry import cube_quat_from_pose
+from pick_and_place.core.miscalibration import (
+    DEFAULT_PAN_JITTER_SIGMA_DEG,
+    DEFAULT_PAN_JITTER_TAU_S,
+)
+from pick_and_place.core.physics import NOMINAL
 from pick_and_place.policies.policy_evaluation import SCENARIO_MANIFEST_VERSION
 from pick_and_place.scripted.scenario_sampling import sample_scene, workspace_region
 
@@ -91,15 +97,16 @@ def _domain_layer(
     draws -- and serialized as the env's :func:`_domain_sample_from_scenario`
     expects: every ``DomainSample`` field except ``miscalibration``, plus
     ``enabled``. The joint-offset miscalibration drawn alongside it becomes the
-    separate ``miscalibration_sample`` (the env consumes only the joint offsets;
-    pan jitter and belief errors are not applied during eval)."""
+    separate, fully materialized ``miscalibration_sample``."""
     if preset is None:
         return {
             "domain_randomization_preset": None,
             "domain_randomization_sample": {"enabled": False},
             "miscalibration_sample": {"joint_offsets_deg": {}},
+            "physics_sample": asdict(NOMINAL),
         }
-    sample = preset.sample(domain_seed(seed_base, index))
+    sample_seed = domain_seed(seed_base, index)
+    sample = preset.sample(sample_seed)
     domain_sample = _round_sample(
         {name: value for name, value in sample.__dict__.items() if name != "miscalibration"}
     )
@@ -109,7 +116,19 @@ def _domain_layer(
         "domain_randomization_sample": domain_sample,
         "miscalibration_sample": {
             "joint_offsets_deg": _round_sample(sample.miscalibration.base_offsets_deg),
+            "pan_jitter": {
+                "sigma_deg": DEFAULT_PAN_JITTER_SIGMA_DEG,
+                "tau_s": DEFAULT_PAN_JITTER_TAU_S,
+                "seed": int(
+                    np.random.default_rng(
+                        np.random.SeedSequence([sample_seed, 0x50414E])
+                    ).integers(2**63)
+                ),
+            },
+            "cube_belief_error": _round_sample(sample.miscalibration.cube_belief_error),
+            "target_belief_error": _round_sample(sample.miscalibration.target_belief_error),
         },
+        "physics_sample": asdict(NOMINAL),
     }
 
 

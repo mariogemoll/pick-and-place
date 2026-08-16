@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from pick_and_place.spec.controller import ControllerFailure, OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
 from pick_and_place.policies.policy_controllers import NoOpPolicyController
@@ -150,6 +151,84 @@ def test_joint_miscalibration_lives_in_environment_and_is_hidden_from_observatio
         np.testing.assert_allclose(true_qpos[0], initial_ctrl[0] + np.deg2rad(7.5))
         assert set(observation) == {STATE_FEATURE, OVERHEAD_FEATURE, WRIST_FEATURE}
         assert "miscalibration" not in info
+    finally:
+        env.close()
+
+
+def test_full_miscalibration_is_reproducible_and_separates_belief_from_truth():
+    env = PolicySimEnv(
+        image_hw=(16, 16),
+        render_hw=(32, 32),
+        renderer_factory=DummyRenderer,
+        include_images=False,
+    )
+    scenario = replace(
+        _scenario(),
+        miscalibration_sample={
+            "joint_offsets_deg": {},
+            "pan_jitter": {"sigma_deg": 2.0, "tau_s": 10.0, "seed": 42},
+            "cube_belief_error": [0.01, -0.02, 0.003, 0.1],
+            "target_belief_error": [-0.04, 0.05],
+        },
+    )
+    try:
+        first_observation, first_info = env.reset(options={"scenario": scenario})
+        first_pan_offset = env._joint_offsets_rad()["shoulder_pan"]
+        env.step(first_observation[STATE_FEATURE])
+        assert env._joint_offsets_rad()["shoulder_pan"] != pytest.approx(first_pan_offset)
+        _, second_info = env.reset(options={"scenario": scenario})
+
+        truth = second_info["task_state"]
+        belief = second_info["believed_task_state"]
+        assert belief["cube_position_m"] == pytest.approx(
+            np.asarray(truth["cube_position_m"]) + [0.01, -0.02, 0.003]
+        )
+        assert belief["target_xy_m"] == pytest.approx(
+            np.asarray(truth["target_xy_m"]) + [-0.04, 0.05]
+        )
+        assert belief["cube_orientation_wxyz"] != pytest.approx(
+            truth["cube_orientation_wxyz"]
+        )
+        assert env._joint_offsets_rad()["shoulder_pan"] == pytest.approx(first_pan_offset)
+        assert first_info["believed_task_state"] == second_info["believed_task_state"]
+    finally:
+        env.close()
+
+
+def test_physics_draw_is_applied_and_nominal_reset_restores_the_model():
+    env = PolicySimEnv(
+        image_hw=(16, 16),
+        render_hw=(32, 32),
+        renderer_factory=DummyRenderer,
+        include_images=False,
+    )
+    nominal = _scenario()
+    perturbed = replace(
+        nominal,
+        physics_sample={
+            "joint_gain_scale": {"shoulder_pan": 0.8},
+            "joint_time_constant_scale": {"shoulder_pan": 1.2},
+            "extra_joint_friction": {"shoulder_pan": 0.01},
+            "tracking_bias_scale": 0.5,
+            "mass_scale": 1.1,
+            "friction_scale": 1.3,
+            "damping_scale": 0.9,
+        },
+    )
+    try:
+        env.reset(options={"scenario": nominal})
+        nominal_mass = env.model.body_mass.copy()
+        nominal_friction = env.model.geom_friction.copy()
+
+        env.reset(options={"scenario": perturbed})
+        np.testing.assert_allclose(env.model.body_mass, nominal_mass * 1.1)
+        np.testing.assert_allclose(env.model.geom_friction, nominal_friction * 1.3)
+        assert np.any(env._tracking_bias)
+
+        env.reset(options={"scenario": nominal})
+        np.testing.assert_array_equal(env.model.body_mass, nominal_mass)
+        np.testing.assert_array_equal(env.model.geom_friction, nominal_friction)
+        np.testing.assert_array_equal(env._tracking_bias, 0.0)
     finally:
         env.close()
 

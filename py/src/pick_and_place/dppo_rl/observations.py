@@ -13,7 +13,7 @@ against, so each family's bounds are read from that export rather than assumed.
   overhead-then-wrist on the channel axis.
 - :class:`FlowStateObservation` is the state flow policy's view -- the same six
   coordinates plus the cube's position, the first two columns of its rotation
-  matrix, and the target, which the simulator supplies directly.
+  matrix, and the target, which the simulator supplies from its believed state.
 
 A specification is a small frozen value so it can be pickled to a worker
 process; the arrays it names are loaded there, once, by :meth:`build`.

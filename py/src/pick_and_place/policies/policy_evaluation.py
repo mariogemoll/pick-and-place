@@ -16,13 +16,14 @@ import json
 import lzma
 import math
 import subprocess
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from statistics import median
 from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from pick_and_place.core.physics import NOMINAL
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 
 # v2 added the required target_plate_yaw_rad field to each scenario.
@@ -67,6 +68,9 @@ class EvaluationScenario:
     # Drop-plate yaw in radians. The plate is square, so all distinct
     # orientations live in [0, pi/2).
     target_plate_yaw_rad: float
+    # Added without a manifest-version bump: manifests written before physics
+    # evaluation existed deserialize as the nominal arm.
+    physics_sample: dict[str, Any] = field(default_factory=lambda: asdict(NOMINAL))
 
     def __post_init__(self) -> None:
         if not self.scenario_id:
@@ -86,10 +90,11 @@ class EvaluationScenario:
     @classmethod
     def from_dict(cls, payload: Mapping[str, object]) -> "EvaluationScenario":
         expected = {field.name for field in fields(cls)}
-        if set(payload) != expected:
+        required = expected - {"physics_sample"}
+        if not required <= set(payload) or not set(payload) <= expected:
             raise ValueError(
                 "invalid scenario fields; "
-                f"missing={sorted(expected - set(payload))}, "
+                f"missing={sorted(required - set(payload))}, "
                 f"unknown={sorted(set(payload) - expected)}"
             )
         preset = payload["domain_randomization_preset"]
@@ -118,10 +123,18 @@ class EvaluationScenario:
             control_hz=float(payload["control_hz"]),
             max_steps=int(payload["max_steps"]),
             target_plate_yaw_rad=float(payload["target_plate_yaw_rad"]),
+            physics_sample=_json_mapping(
+                payload.get("physics_sample", asdict(NOMINAL)), "physics_sample"
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        # Keep the canonical representation (and therefore the published hash)
+        # of pre-physics manifests stable. A non-nominal draw is always written.
+        if self.physics_sample == asdict(NOMINAL):
+            del payload["physics_sample"]
+        return payload
 
 
 @dataclass(frozen=True)

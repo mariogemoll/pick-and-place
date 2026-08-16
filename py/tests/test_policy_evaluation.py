@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: 0BSD
 
 import json
-from dataclasses import replace
+import lzma
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pytest
 
+from pick_and_place.core.physics import NOMINAL
 from pick_and_place.policies.policy_evaluation import (
     EpisodeResult,
     FailureFlags,
@@ -86,6 +88,14 @@ def test_compressed_headline_manifests_are_frozen_and_paired():
         scenario.domain_randomization_preset == "act_mild_v1"
         for scenario in randomized.scenarios
     )
+    assert all(scenario.physics_sample == asdict(NOMINAL) for scenario in canonical.scenarios)
+    raw = json.loads(
+        lzma.decompress(
+            (REPOSITORY_ROOT / "config/evaluation/canonical_100_v1.json.xz").read_bytes()
+        )
+    )
+    assert "physics_sample" not in raw["scenarios"][0]
+    assert json.loads(canonical.canonical_json()) == raw
 
 
 def test_scripted_perturbation_smoke_manifest_has_frozen_joint_and_camera_offsets():
