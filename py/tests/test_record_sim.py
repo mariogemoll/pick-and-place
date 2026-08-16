@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from pick_and_place.rollout.episode_setup import appearance_seed, episode_rng
+from pick_and_place.rollout.worker_pool import claim_retry, find_wedged_workers
 import pandas as pd
 import pytest
 
@@ -352,7 +353,6 @@ def test_downsample_through_recording_postprocesses_at_the_recording_size():
 
 
 def test_watchdog_flags_only_workers_past_the_deadline():
-    module = _record_sim_module()
     now = 1000.0
     status = {
         0: (5, now - 10.0),    # healthy, well inside the limit
@@ -360,7 +360,7 @@ def test_watchdog_flags_only_workers_past_the_deadline():
         2: (9, now - 300.0),   # exactly at the limit, not past it
     }
 
-    wedged = module.find_wedged_workers(status, [0, 1, 2], now=now, episode_timeout=300.0)
+    wedged = find_wedged_workers(status, [0, 1, 2], now=now, episode_timeout=300.0)
 
     assert [(wid, ep) for wid, ep, _ in wedged] == [(1, 7)]
 
@@ -371,28 +371,25 @@ def test_watchdog_never_kills_a_worker_between_episodes():
     Once the queue drains, workers sit idle before exiting. If idleness counted
     against the deadline the pool would kill and respawn workers indefinitely.
     """
-    module = _record_sim_module()
     now = 1000.0
     status = {0: (None, now - 99999.0), 1: (None, now - 5.0)}
 
-    assert module.find_wedged_workers(status, [0, 1], now=now, episode_timeout=300.0) == []
+    assert find_wedged_workers(status, [0, 1], now=now, episode_timeout=300.0) == []
 
 
 def test_watchdog_tolerates_a_worker_that_has_not_reported_yet():
     """A just-spawned worker may have no status entry; that is not a wedge."""
-    module = _record_sim_module()
     now = 1000.0
 
-    assert module.find_wedged_workers({}, [0, 1], now=now, episode_timeout=300.0) == []
+    assert find_wedged_workers({}, [0, 1], now=now, episode_timeout=300.0) == []
 
 
 def test_watchdog_reports_every_wedged_worker_not_just_the_first():
     """The doc records runs losing two workers at once."""
-    module = _record_sim_module()
     now = 1000.0
     status = {0: (1, now - 900.0), 1: (2, now - 10.0), 2: (3, now - 600.0)}
 
-    wedged = module.find_wedged_workers(status, [0, 1, 2], now=now, episode_timeout=300.0)
+    wedged = find_wedged_workers(status, [0, 1, 2], now=now, episode_timeout=300.0)
 
     assert [(wid, ep) for wid, ep, _ in wedged] == [(0, 1), (2, 3)]
 
@@ -415,30 +412,27 @@ def test_vcodec_defaults_to_software_h264():
 
 def test_wedged_episode_is_abandoned_once_retries_run_out():
     """Unbounded requeuing would spin forever on a deterministically bad index."""
-    module = _record_sim_module()
     attempts = {}
 
-    decisions = [module.claim_retry(attempts, 42, 1) for _ in range(3)]
+    decisions = [claim_retry(attempts, 42, 1) for _ in range(3)]
 
     assert decisions == [True, False, False]
 
 
 def test_zero_retries_marks_a_wedged_episode_failed_immediately():
-    module = _record_sim_module()
     attempts = {}
 
-    assert module.claim_retry(attempts, 7, 0) is False
+    assert claim_retry(attempts, 7, 0) is False
 
 
 def test_retry_budget_is_tracked_per_episode():
     """One bad index must not consume another index's retry budget."""
-    module = _record_sim_module()
     attempts = {}
 
-    assert module.claim_retry(attempts, 1, 1) is True
-    assert module.claim_retry(attempts, 2, 1) is True
-    assert module.claim_retry(attempts, 1, 1) is False
-    assert module.claim_retry(attempts, 2, 1) is False
+    assert claim_retry(attempts, 1, 1) is True
+    assert claim_retry(attempts, 2, 1) is True
+    assert claim_retry(attempts, 1, 1) is False
+    assert claim_retry(attempts, 2, 1) is False
 
 
 class _ExitedProcess:
