@@ -89,6 +89,17 @@ nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader
 if [ ! -d "$artifact_root" ]; then
   if aws s3 ls "$artifact_s3" >/dev/null 2>&1; then
     echo "Downloading existing image export $artifact_s3"
+    # The archive becomes visible before its publisher finishes the independent
+    # read-back and uploads the checksum. Wait for that completion signal so a
+    # second arm cannot consume an artifact that has not yet been verified.
+    for _ in $(seq 1 60); do
+      aws s3 ls "$artifact_s3.sha256" >/dev/null 2>&1 && break
+      sleep 30
+    done
+    if ! aws s3 ls "$artifact_s3.sha256" >/dev/null 2>&1; then
+      echo "verified checksum did not appear for $artifact_s3" >&2
+      exit 1
+    fi
     aws s3 cp "$artifact_s3" "$artifacts/$ARTIFACT_NAME.tar.zst" --only-show-errors
     aws s3 cp "$artifact_s3.sha256" "$artifacts/$ARTIFACT_NAME.tar.zst.sha256" \
       --only-show-errors
