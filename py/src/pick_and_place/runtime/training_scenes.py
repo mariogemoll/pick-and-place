@@ -15,12 +15,13 @@ blue-cube dataset the policy was pretrained on.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 import numpy as np
 
 from pick_and_place.core.geometry import cube_quat_from_pose
 from pick_and_place.core.joint_frames import sim_frame_to_real
+from pick_and_place.core.physics import NOMINAL
 from pick_and_place.policies.policy_evaluation import EvaluationScenario
 from pick_and_place.scripted.scenario_sampling import sample_scene, workspace_region
 from pick_and_place.spec.robot import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
@@ -63,10 +64,16 @@ def training_scenario(
         initial_robot_state_real=NEUTRAL_ROBOT_STATE_REAL,
         domain_randomization_preset=None,
         domain_randomization_sample={"enabled": False},
-        miscalibration_sample={"joint_offsets_deg": {}},
+        miscalibration_sample={
+            "joint_offsets_deg": {},
+            "pan_jitter": None,
+            "cube_belief_error": [0.0, 0.0, 0.0, 0.0],
+            "target_belief_error": [0.0, 0.0],
+        },
         control_hz=control_hz,
         max_steps=max_steps,
         target_plate_yaw_rad=scene.plate_yaw_rad,
+        physics_sample=asdict(NOMINAL),
     )
 
 

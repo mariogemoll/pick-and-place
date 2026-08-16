@@ -1,114 +1,28 @@
 {
+  "schema_version": 3,
+  "suite": "scripted_perturbation_smoke_v1",
   "scenarios": [
     {
-      "control_hz": 30.0,
-      "domain_randomization_preset": "act_mild_v1",
-      "domain_randomization_sample": {
-        "appearance_blob_count": 10,
-        "appearance_blur_sigma": 13.371971249549764,
-        "appearance_mode": "realistic",
-        "appearance_seed": 1043191556463451350,
-        "background_rgb": [
-          0.698263238828553,
-          0.6890721494055999,
-          0.652450076046021
-        ],
-        "blur_sigma": 0.36235337226415265,
-        "cube_orientation_index": 17,
-        "enabled": true,
-        "exposure": 0.8560094534261319,
-        "fill_light_intensity": 0.2573283738222445,
-        "gamma": 0.9839789803780699,
-        "key_light_bulb_radius": 0.042731362699561626,
-        "key_light_position": [
-          -0.6864643317674061,
-          0.4555465880626356,
-          1.277642030156928
-        ],
-        "key_light_target": [
-          -0.0015609408586799935,
-          0.06887939741903444,
-          0.0
-        ],
-        "light_intensity": 0.8648622811588204,
-        "light_warm_cool": 1.0918819779233897,
-        "material_factors": {
-          "camera": [
-            1.0591793477137603,
-            1.0281251922731267,
-            1.0449995173870625
-          ],
-          "cube": [
-            1.0790261096634062,
-            1.0667434869657313,
-            1.0606088355040508
-          ],
-          "environment_plastic": [
-            0.9010477686212502,
-            0.8695988998458726,
-            0.8845808145233134
-          ],
-          "groundplane": [
-            1.0650243710911969,
-            1.0650207579015338,
-            1.060664791806811
-          ],
-          "mdf": [
-            1.0256918858723651,
-            1.0052121806283256,
-            1.056786129648154
-          ],
-          "motor": [
-            1.0616837628800149,
-            1.0821429874894084,
-            1.0532791584557906
-          ],
-          "plastic": [
-            1.0316485098744896,
-            0.9868052385581672,
-            0.9986619844157187
-          ],
-          "target": [
-            1.1457274124183245,
-            1.126975154131959,
-            1.1027068469940962
-          ]
-        },
-        "noise_sigma": 1.5211382527810184,
-        "overhead_camera_focal_scale": 1.0,
-        "overhead_camera_position_m": [
-          0.0003059140793858339,
-          0.004964060935279692,
-          -0.004341601916348537
-        ],
-        "overhead_camera_rotation_deg": [
-          -0.2367249568420764,
-          -0.8462139509607947,
-          0.9365451866410814
-        ],
-        "seed": 2701,
-        "table_rgb": [
-          0.674791230765497,
-          0.6737573208225465,
-          0.6725487859115249
-        ],
-        "white_balance": [
-          0.9805687720088084,
-          0.9834642129816055,
-          1.0087965624589323
-        ],
-        "wrist_camera_position_m": [
-          0.0013161460340904505,
-          -0.0006871296628620815,
-          -0.001093657740998961
-        ],
-        "wrist_camera_rotation_deg": [
-          -0.3792011329955265,
-          -0.3718931314416214,
-          0.8096905165821007
-        ]
-      },
-      "group": "joint-camera-perturbation",
+      "scenario_id": "scripted_perturbation_smoke_v1-000",
+      "group": "domain_randomized",
+      "workspace_region": "mid",
+      "seed": 2701,
+      "source_position_m": [
+        0.216151,
+        -0.149317,
+        0.015
+      ],
+      "source_orientation_wxyz": [
+        0.620932,
+        -0.338296,
+        -0.620932,
+        -0.338296
+      ],
+      "target_position_m": [
+        0.237127,
+        0.117924,
+        0.015
+      ],
       "initial_robot_state_real": [
         0.0,
         0.0,
@@ -117,145 +31,169 @@
         -90.0,
         39.3
       ],
-      "max_steps": 450,
+      "domain_randomization_preset": "act_mild_v1",
+      "domain_randomization_sample": {
+        "seed": 2178763593675123950,
+        "light_intensity": 0.926934,
+        "light_warm_cool": 0.957578,
+        "key_light_position": [
+          0.344833,
+          0.084663,
+          1.217211
+        ],
+        "key_light_target": [
+          0.068809,
+          0.031588,
+          0.0
+        ],
+        "key_light_bulb_radius": 0.034304,
+        "fill_light_intensity": 0.513256,
+        "material_factors": {
+          "plastic": [
+            0.94362,
+            0.979751,
+            0.98742
+          ],
+          "environment_plastic": [
+            1.032577,
+            1.059698,
+            1.063091
+          ],
+          "motor": [
+            1.070393,
+            1.055748,
+            1.082661
+          ],
+          "camera": [
+            1.001036,
+            1.038712,
+            0.984555
+          ],
+          "mdf": [
+            1.042322,
+            1.060943,
+            1.056014
+          ],
+          "groundplane": [
+            1.145969,
+            1.119797,
+            1.136535
+          ],
+          "cube": [
+            0.874051,
+            0.858821,
+            0.873531
+          ],
+          "target": [
+            0.884879,
+            0.897187,
+            0.909652
+          ]
+        },
+        "overhead_camera_position_m": [
+          -0.015392,
+          -0.021529,
+          -0.020097
+        ],
+        "overhead_camera_rotation_deg": [
+          -0.03599,
+          -0.10681,
+          1.903483
+        ],
+        "overhead_camera_focal_scale": 0.99605,
+        "wrist_camera_position_m": [
+          0.002825,
+          0.00162,
+          -0.002452
+        ],
+        "wrist_camera_rotation_deg": [
+          -0.843663,
+          -0.296153,
+          0.249153
+        ],
+        "cube_orientation_index": 16,
+        "appearance_seed": 7492313729394089743,
+        "appearance_mode": "colorful",
+        "background_rgb": [
+          0.559147,
+          0.667006,
+          0.563623
+        ],
+        "table_rgb": [
+          0.478999,
+          0.434694,
+          0.449857
+        ],
+        "appearance_blur_sigma": 12.49921,
+        "appearance_blob_count": 7,
+        "exposure": 1.112675,
+        "gamma": 1.001554,
+        "white_balance": [
+          0.994311,
+          1.015343,
+          0.992094
+        ],
+        "noise_sigma": 2.739355,
+        "blur_sigma": 0.489541,
+        "enabled": true
+      },
       "miscalibration_sample": {
         "joint_offsets_deg": {
-          "elbow_flex": 0.35,
-          "shoulder_lift": -0.7,
-          "shoulder_pan": 1.2,
-          "wrist_flex": -1.0
-        }
+          "elbow_flex": -0.006493,
+          "shoulder_lift": -1.817216,
+          "shoulder_pan": 0.328143,
+          "wrist_flex": 1.682006
+        },
+        "pan_jitter": {
+          "sigma_deg": 2.2,
+          "tau_s": 10.0,
+          "seed": 4316604925511936551
+        },
+        "cube_belief_error": [
+          -0.00547,
+          -0.00564,
+          -0.003863,
+          0.028715
+        ],
+        "target_belief_error": [
+          -0.002787,
+          0.009446
+        ]
       },
-      "scenario_id": "scripted-perturbed-000",
-      "seed": 2701,
-      "source_orientation_wxyz": [
-        0.972655477,
-        0.0,
-        0.0,
-        -0.232252713
-      ],
-      "source_position_m": [
-        0.212880144,
-        -0.160945783,
-        0.015
-      ],
-      "target_plate_yaw_rad": 0.0,
-      "target_position_m": [
-        0.099963453,
-        0.127271062,
-        0.015
-      ],
-      "workspace_region": "mid"
+      "physics_sample": {
+        "joint_gain_scale": {},
+        "joint_time_constant_scale": {},
+        "extra_joint_friction": {},
+        "tracking_bias_scale": 0.0,
+        "mass_scale": 1.0,
+        "friction_scale": 1.0,
+        "damping_scale": 1.0
+      },
+      "control_hz": 30.0,
+      "max_steps": 450,
+      "target_plate_yaw_rad": 1.100067
     },
     {
-      "control_hz": 30.0,
-      "domain_randomization_preset": "act_mild_v1",
-      "domain_randomization_sample": {
-        "appearance_blob_count": 5,
-        "appearance_blur_sigma": 13.956110881360956,
-        "appearance_mode": "realistic",
-        "appearance_seed": 2590056065939150304,
-        "background_rgb": [
-          0.4501129310632845,
-          0.44570601839115664,
-          0.4397461935427554
-        ],
-        "blur_sigma": 0.2243598355812081,
-        "cube_orientation_index": 15,
-        "enabled": true,
-        "exposure": 1.0350735974249177,
-        "fill_light_intensity": 0.4933685398883708,
-        "gamma": 1.0459891102007286,
-        "key_light_bulb_radius": 0.4471966425650537,
-        "key_light_position": [
-          0.6111553509984097,
-          0.2532503666036779,
-          0.816546013158065
-        ],
-        "key_light_target": [
-          0.03785611209369284,
-          -0.04835636050920067,
-          0.0
-        ],
-        "light_intensity": 1.1378059657392765,
-        "light_warm_cool": 1.0662238341412607,
-        "material_factors": {
-          "camera": [
-            0.9021788180695808,
-            0.8839911192522342,
-            0.9180602918531235
-          ],
-          "cube": [
-            0.9903143428067431,
-            0.9760294158620535,
-            0.9816087196111195
-          ],
-          "environment_plastic": [
-            1.1208011772699042,
-            1.1297349600423878,
-            1.1353863611483082
-          ],
-          "groundplane": [
-            0.8905915554986567,
-            0.8528422470754937,
-            0.8820170110996438
-          ],
-          "mdf": [
-            1.104527729423648,
-            1.1151561919868493,
-            1.1531026947223295
-          ],
-          "motor": [
-            0.9164917881074209,
-            0.9159829792038784,
-            0.9174505027136625
-          ],
-          "plastic": [
-            0.9153834241770478,
-            0.9015871242268833,
-            0.9085289976259561
-          ],
-          "target": [
-            1.0161891162171408,
-            1.0372297040183307,
-            1.0620193361953765
-          ]
-        },
-        "noise_sigma": 0.5541272413554157,
-        "overhead_camera_focal_scale": 1.0,
-        "overhead_camera_position_m": [
-          -0.0020733431869850304,
-          -0.002317984220480031,
-          0.0008536192110582897
-        ],
-        "overhead_camera_rotation_deg": [
-          -0.26939838640952307,
-          0.21446354172408455,
-          0.11305169877444343
-        ],
-        "seed": 2702,
-        "table_rgb": [
-          0.6279284131825218,
-          0.6230455833703439,
-          0.619243032882312
-        ],
-        "white_balance": [
-          0.9933021356285767,
-          0.9625038708868822,
-          0.9551266860321156
-        ],
-        "wrist_camera_position_m": [
-          0.00022244763631997544,
-          -0.0005484740189399289,
-          0.0017327814874275275
-        ],
-        "wrist_camera_rotation_deg": [
-          0.5654512408952839,
-          -0.5238940469675686,
-          -0.0994659817986423
-        ]
-      },
-      "group": "joint-camera-perturbation",
+      "scenario_id": "scripted_perturbation_smoke_v1-001",
+      "group": "domain_randomized",
+      "workspace_region": "near",
+      "seed": 2702,
+      "source_position_m": [
+        0.166274,
+        -0.157349,
+        0.015
+      ],
+      "source_orientation_wxyz": [
+        0.649227,
+        0.280185,
+        -0.649227,
+        0.280185
+      ],
+      "target_position_m": [
+        0.233569,
+        0.085041,
+        0.015
+      ],
       "initial_robot_state_real": [
         0.0,
         0.0,
@@ -264,37 +202,147 @@
         -90.0,
         39.3
       ],
-      "max_steps": 450,
+      "domain_randomization_preset": "act_mild_v1",
+      "domain_randomization_sample": {
+        "seed": 5870125971011954723,
+        "light_intensity": 1.091913,
+        "light_warm_cool": 1.094863,
+        "key_light_position": [
+          0.9139,
+          -0.066882,
+          1.272833
+        ],
+        "key_light_target": [
+          0.064581,
+          -0.046325,
+          0.0
+        ],
+        "key_light_bulb_radius": 0.305301,
+        "fill_light_intensity": 0.466437,
+        "material_factors": {
+          "plastic": [
+            1.037182,
+            1.087395,
+            1.057185
+          ],
+          "environment_plastic": [
+            0.829624,
+            0.876858,
+            0.841711
+          ],
+          "motor": [
+            1.111647,
+            1.146682,
+            1.090249
+          ],
+          "camera": [
+            1.094662,
+            1.08065,
+            1.095389
+          ],
+          "mdf": [
+            0.955907,
+            0.969553,
+            0.946508
+          ],
+          "groundplane": [
+            1.02096,
+            1.035857,
+            1.007433
+          ],
+          "cube": [
+            0.962909,
+            0.920235,
+            0.954378
+          ],
+          "target": [
+            0.867624,
+            0.88935,
+            0.864245
+          ]
+        },
+        "overhead_camera_position_m": [
+          0.008172,
+          -0.01308,
+          0.003526
+        ],
+        "overhead_camera_rotation_deg": [
+          0.383703,
+          2.454943,
+          0.901769
+        ],
+        "overhead_camera_focal_scale": 1.000601,
+        "wrist_camera_position_m": [
+          -0.000975,
+          -0.002931,
+          -0.002699
+        ],
+        "wrist_camera_rotation_deg": [
+          -0.612971,
+          -0.218455,
+          -0.304283
+        ],
+        "cube_orientation_index": 5,
+        "appearance_seed": 3047940521920528701,
+        "appearance_mode": "realistic",
+        "background_rgb": [
+          0.385567,
+          0.376447,
+          0.366575
+        ],
+        "table_rgb": [
+          0.65692,
+          0.654605,
+          0.647074
+        ],
+        "appearance_blur_sigma": 6.53459,
+        "appearance_blob_count": 12,
+        "exposure": 0.885258,
+        "gamma": 1.054618,
+        "white_balance": [
+          0.956521,
+          0.967177,
+          0.984512
+        ],
+        "noise_sigma": 1.792329,
+        "blur_sigma": 0.224943,
+        "enabled": true
+      },
       "miscalibration_sample": {
         "joint_offsets_deg": {
-          "elbow_flex": -0.4,
-          "shoulder_lift": 0.8,
-          "shoulder_pan": -1.4,
-          "wrist_flex": 1.3
-        }
+          "elbow_flex": 0.419366,
+          "shoulder_lift": -0.167289,
+          "shoulder_pan": 0.932349,
+          "wrist_flex": 0.587282
+        },
+        "pan_jitter": {
+          "sigma_deg": 2.2,
+          "tau_s": 10.0,
+          "seed": 6412701798437236020
+        },
+        "cube_belief_error": [
+          -0.004419,
+          -0.00807,
+          0.001494,
+          -0.034075
+        ],
+        "target_belief_error": [
+          0.004519,
+          0.008336
+        ]
       },
-      "scenario_id": "scripted-perturbed-001",
-      "seed": 2702,
-      "source_orientation_wxyz": [
-        0.942010574,
-        0.0,
-        0.0,
-        -0.335583191
-      ],
-      "source_position_m": [
-        0.143047688,
-        -0.042700817,
-        0.015
-      ],
-      "target_plate_yaw_rad": 0.0,
-      "target_position_m": [
-        0.167804672,
-        -0.180208106,
-        0.015
-      ],
-      "workspace_region": "near"
+      "physics_sample": {
+        "joint_gain_scale": {},
+        "joint_time_constant_scale": {},
+        "extra_joint_friction": {},
+        "tracking_bias_scale": 0.0,
+        "mass_scale": 1.0,
+        "friction_scale": 1.0,
+        "damping_scale": 1.0
+      },
+      "control_hz": 30.0,
+      "max_steps": 450,
+      "target_plate_yaw_rad": 0.874189
     }
-  ],
-  "schema_version": 2,
-  "suite": "scripted_perturbation_smoke_v1"
+  ]
 }

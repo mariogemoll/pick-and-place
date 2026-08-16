@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from pick_and_place.core.geometry import CubePose
+from pick_and_place.core.physics import NOMINAL
 from pick_and_place.scripted.scenario_sampling import workspace_region
 from pick_and_place.policies.policy_evaluation import EvaluationScenario
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
@@ -93,8 +95,14 @@ def recorded_episode_scenario(
         initial_robot_state_real=robot_state,
         domain_randomization_preset=None,
         domain_randomization_sample={"enabled": False},
-        miscalibration_sample={"joint_offsets_deg": {}},
+        miscalibration_sample={
+            "joint_offsets_deg": {},
+            "pan_jitter": None,
+            "cube_belief_error": [0.0, 0.0, 0.0, 0.0],
+            "target_belief_error": [0.0, 0.0],
+        },
         control_hz=control_hz,
         max_steps=max_steps if max_steps is not None else episode_steps,
         target_plate_yaw_rad=float(row["target_plate_yaw"]),
+        physics_sample=asdict(NOMINAL),
     )

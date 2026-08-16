@@ -136,7 +136,12 @@ def test_joint_miscalibration_lives_in_environment_and_is_hidden_from_observatio
     )
     scenario = replace(
         _scenario(),
-        miscalibration_sample={"joint_offsets_deg": {"shoulder_pan": 7.5}},
+        miscalibration_sample={
+            "joint_offsets_deg": {"shoulder_pan": 7.5},
+            "pan_jitter": None,
+            "cube_belief_error": [0.0, 0.0, 0.0, 0.0],
+            "target_belief_error": [0.0, 0.0],
+        },
     )
     try:
         observation, info = env.reset(options={"scenario": scenario})

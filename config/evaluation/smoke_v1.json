@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "suite": "smoke_v1",
   "scenarios": [
     {
@@ -8,19 +8,19 @@
       "workspace_region": "mid",
       "seed": 1701,
       "source_position_m": [
-        0.212880144,
-        -0.160945783,
+        0.21288,
+        -0.160946,
         0.015
       ],
       "source_orientation_wxyz": [
-        0.972655477,
+        0.972655,
         0.0,
         0.0,
-        -0.232252713
+        -0.232253
       ],
       "target_position_m": [
-        0.099963453,
-        0.127271062,
+        0.099963,
+        0.127271,
         0.015
       ],
       "initial_robot_state_real": [
@@ -36,11 +36,31 @@
         "enabled": false
       },
       "miscalibration_sample": {
-        "joint_offsets_deg": {}
+        "joint_offsets_deg": {},
+        "pan_jitter": null,
+        "cube_belief_error": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "target_belief_error": [
+          0.0,
+          0.0
+        ]
+      },
+      "physics_sample": {
+        "joint_gain_scale": {},
+        "joint_time_constant_scale": {},
+        "extra_joint_friction": {},
+        "tracking_bias_scale": 0.0,
+        "mass_scale": 1.0,
+        "friction_scale": 1.0,
+        "damping_scale": 1.0
       },
       "control_hz": 30.0,
       "max_steps": 450,
-      "target_plate_yaw_rad": 0.147960668
+      "target_plate_yaw_rad": 0.147961
     },
     {
       "scenario_id": "smoke_v1-001",
@@ -48,19 +68,19 @@
       "workspace_region": "near",
       "seed": 1702,
       "source_position_m": [
-        0.082244593,
-        -0.134992339,
+        0.082245,
+        -0.134992,
         0.015
       ],
       "source_orientation_wxyz": [
-        0.632063121,
+        0.632063,
         0.0,
         0.0,
-        -0.774916906
+        -0.774917
       ],
       "target_position_m": [
-        0.116395278,
-        0.106930015,
+        0.116395,
+        0.10693,
         0.015
       ],
       "initial_robot_state_real": [
@@ -76,11 +96,31 @@
         "enabled": false
       },
       "miscalibration_sample": {
-        "joint_offsets_deg": {}
+        "joint_offsets_deg": {},
+        "pan_jitter": null,
+        "cube_belief_error": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "target_belief_error": [
+          0.0,
+          0.0
+        ]
+      },
+      "physics_sample": {
+        "joint_gain_scale": {},
+        "joint_time_constant_scale": {},
+        "extra_joint_friction": {},
+        "tracking_bias_scale": 0.0,
+        "mass_scale": 1.0,
+        "friction_scale": 1.0,
+        "damping_scale": 1.0
       },
       "control_hz": 30.0,
       "max_steps": 450,
-      "target_plate_yaw_rad": 0.523807564
+      "target_plate_yaw_rad": 0.523808
     },
     {
       "scenario_id": "smoke_v1-002",
@@ -88,19 +128,19 @@
       "workspace_region": "far",
       "seed": 1703,
       "source_position_m": [
-        0.399998354,
-        -0.166835605,
+        0.399998,
+        -0.166836,
         0.015
       ],
       "source_orientation_wxyz": [
-        0.997180681,
+        0.997181,
         0.0,
         0.0,
-        0.075037914
+        0.075038
       ],
       "target_position_m": [
-        0.137258008,
-        -0.137177694,
+        0.137258,
+        -0.137178,
         0.015
       ],
       "initial_robot_state_real": [
@@ -116,11 +156,31 @@
         "enabled": false
       },
       "miscalibration_sample": {
-        "joint_offsets_deg": {}
+        "joint_offsets_deg": {},
+        "pan_jitter": null,
+        "cube_belief_error": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "target_belief_error": [
+          0.0,
+          0.0
+        ]
+      },
+      "physics_sample": {
+        "joint_gain_scale": {},
+        "joint_time_constant_scale": {},
+        "extra_joint_friction": {},
+        "tracking_bias_scale": 0.0,
+        "mass_scale": 1.0,
+        "friction_scale": 1.0,
+        "damping_scale": 1.0
       },
       "control_hz": 30.0,
       "max_steps": 450,
-      "target_plate_yaw_rad": 1.235868045
+      "target_plate_yaw_rad": 1.235868
     },
     {
       "scenario_id": "smoke_v1-003",
@@ -128,19 +188,19 @@
       "workspace_region": "mid",
       "seed": 1704,
       "source_position_m": [
-        0.174901053,
-        -0.190123835,
+        0.174901,
+        -0.190124,
         0.015
       ],
       "source_orientation_wxyz": [
-        0.91174665,
+        0.911747,
         0.0,
         0.0,
-        -0.410753023
+        -0.410753
       ],
       "target_position_m": [
-        0.317139001,
-        -0.097941512,
+        0.317139,
+        -0.097942,
         0.015
       ],
       "initial_robot_state_real": [
@@ -156,11 +216,31 @@
         "enabled": false
       },
       "miscalibration_sample": {
-        "joint_offsets_deg": {}
+        "joint_offsets_deg": {},
+        "pan_jitter": null,
+        "cube_belief_error": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "target_belief_error": [
+          0.0,
+          0.0
+        ]
+      },
+      "physics_sample": {
+        "joint_gain_scale": {},
+        "joint_time_constant_scale": {},
+        "extra_joint_friction": {},
+        "tracking_bias_scale": 0.0,
+        "mass_scale": 1.0,
+        "friction_scale": 1.0,
+        "damping_scale": 1.0
       },
       "control_hz": 30.0,
       "max_steps": 450,
-      "target_plate_yaw_rad": 1.55885703
+      "target_plate_yaw_rad": 1.558857
     },
     {
       "scenario_id": "smoke_v1-004",
@@ -168,19 +248,19 @@
       "workspace_region": "mid",
       "seed": 1705,
       "source_position_m": [
-        0.27796999,
-        0.096192727,
+        0.27797,
+        0.096193,
         0.015
       ],
       "source_orientation_wxyz": [
-        0.854075934,
+        0.854076,
         0.0,
         0.0,
-        0.520148343
+        0.520148
       ],
       "target_position_m": [
-        0.191914073,
-        -0.015266016,
+        0.191914,
+        -0.015266,
         0.015
       ],
       "initial_robot_state_real": [
@@ -196,11 +276,31 @@
         "enabled": false
       },
       "miscalibration_sample": {
-        "joint_offsets_deg": {}
+        "joint_offsets_deg": {},
+        "pan_jitter": null,
+        "cube_belief_error": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "target_belief_error": [
+          0.0,
+          0.0
+        ]
+      },
+      "physics_sample": {
+        "joint_gain_scale": {},
+        "joint_time_constant_scale": {},
+        "extra_joint_friction": {},
+        "tracking_bias_scale": 0.0,
+        "mass_scale": 1.0,
+        "friction_scale": 1.0,
+        "damping_scale": 1.0
       },
       "control_hz": 30.0,
       "max_steps": 450,
-      "target_plate_yaw_rad": 0.412166915
+      "target_plate_yaw_rad": 0.412167
     },
     {
       "scenario_id": "smoke_v1-005",
@@ -208,19 +308,19 @@
       "workspace_region": "mid",
       "seed": 1706,
       "source_position_m": [
-        0.276425736,
-        0.008730304,
+        0.276426,
+        0.00873,
         0.015
       ],
       "source_orientation_wxyz": [
-        0.970141161,
+        0.970141,
         0.0,
         0.0,
-        -0.242540983
+        -0.242541
       ],
       "target_position_m": [
-        0.242615622,
-        -0.158374346,
+        0.242616,
+        -0.158374,
         0.015
       ],
       "initial_robot_state_real": [
@@ -236,11 +336,31 @@
         "enabled": false
       },
       "miscalibration_sample": {
-        "joint_offsets_deg": {}
+        "joint_offsets_deg": {},
+        "pan_jitter": null,
+        "cube_belief_error": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "target_belief_error": [
+          0.0,
+          0.0
+        ]
+      },
+      "physics_sample": {
+        "joint_gain_scale": {},
+        "joint_time_constant_scale": {},
+        "extra_joint_friction": {},
+        "tracking_bias_scale": 0.0,
+        "mass_scale": 1.0,
+        "friction_scale": 1.0,
+        "damping_scale": 1.0
       },
       "control_hz": 30.0,
       "max_steps": 450,
-      "target_plate_yaw_rad": 1.058494535
+      "target_plate_yaw_rad": 1.058495
     },
     {
       "scenario_id": "smoke_v1-006",
@@ -248,19 +368,19 @@
       "workspace_region": "far",
       "seed": 1707,
       "source_position_m": [
-        0.416604319,
-        -0.063880314,
+        0.416604,
+        -0.06388,
         0.015
       ],
       "source_orientation_wxyz": [
-        0.98139935,
+        0.981399,
         0.0,
         0.0,
-        -0.191977382
+        -0.191977
       ],
       "target_position_m": [
-        0.328712625,
-        0.063071536,
+        0.328713,
+        0.063072,
         0.015
       ],
       "initial_robot_state_real": [
@@ -276,11 +396,31 @@
         "enabled": false
       },
       "miscalibration_sample": {
-        "joint_offsets_deg": {}
+        "joint_offsets_deg": {},
+        "pan_jitter": null,
+        "cube_belief_error": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "target_belief_error": [
+          0.0,
+          0.0
+        ]
+      },
+      "physics_sample": {
+        "joint_gain_scale": {},
+        "joint_time_constant_scale": {},
+        "extra_joint_friction": {},
+        "tracking_bias_scale": 0.0,
+        "mass_scale": 1.0,
+        "friction_scale": 1.0,
+        "damping_scale": 1.0
       },
       "control_hz": 30.0,
       "max_steps": 450,
-      "target_plate_yaw_rad": 1.518798609
+      "target_plate_yaw_rad": 1.518799
     },
     {
       "scenario_id": "smoke_v1-007",
@@ -288,19 +428,19 @@
       "workspace_region": "mid",
       "seed": 1708,
       "source_position_m": [
-        0.188643966,
-        0.175027522,
+        0.188644,
+        0.175028,
         0.015
       ],
       "source_orientation_wxyz": [
-        0.985847881,
+        0.985848,
         0.0,
         0.0,
-        0.167642347
+        0.167642
       ],
       "target_position_m": [
-        0.209685332,
-        0.046461143,
+        0.209685,
+        0.046461,
         0.015
       ],
       "initial_robot_state_real": [
@@ -316,11 +456,31 @@
         "enabled": false
       },
       "miscalibration_sample": {
-        "joint_offsets_deg": {}
+        "joint_offsets_deg": {},
+        "pan_jitter": null,
+        "cube_belief_error": [
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "target_belief_error": [
+          0.0,
+          0.0
+        ]
+      },
+      "physics_sample": {
+        "joint_gain_scale": {},
+        "joint_time_constant_scale": {},
+        "extra_joint_friction": {},
+        "tracking_bias_scale": 0.0,
+        "mass_scale": 1.0,
+        "friction_scale": 1.0,
+        "damping_scale": 1.0
       },
       "control_hz": 30.0,
       "max_steps": 450,
-      "target_plate_yaw_rad": 0.440274869
+      "target_plate_yaw_rad": 0.440275
     }
   ]
 }

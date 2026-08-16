@@ -1,0 +1,10 @@
+{
+  "schema_version": 3,
+  "suite": "randomized_selection_200_v1",
+  "scenario_files": [
+    "scenarios-000.json.xz",
+    "scenarios-001.json.xz",
+    "scenarios-002.json.xz",
+    "scenarios-003.json.xz"
+  ]
+}

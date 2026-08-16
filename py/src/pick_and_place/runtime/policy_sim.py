@@ -114,17 +114,17 @@ def real_action_to_sim_ctrl(action_real: np.ndarray) -> np.ndarray:
 
 def _miscalibration_from_scenario(scenario: EvaluationScenario) -> MiscalibrationDraw:
     payload = scenario.miscalibration_sample
-    allowed = {
+    expected = {
         "joint_offsets_deg",
         "pan_jitter",
         "cube_belief_error",
         "target_belief_error",
     }
-    if "joint_offsets_deg" not in payload or not set(payload) <= allowed:
+    if set(payload) != expected:
         raise ValueError(
             f"scenario {scenario.scenario_id!r} has invalid miscalibration fields; "
-            f"missing={sorted({'joint_offsets_deg'} - set(payload))}, "
-            f"unknown={sorted(set(payload) - allowed)}"
+            f"missing={sorted(expected - set(payload))}, "
+            f"unknown={sorted(set(payload) - expected)}"
         )
     raw_offsets = payload["joint_offsets_deg"]
     if not isinstance(raw_offsets, dict):
@@ -136,7 +136,7 @@ def _miscalibration_from_scenario(scenario: EvaluationScenario) -> Miscalibratio
     if not all(math.isfinite(value) for value in joint_offsets.values()):
         raise ValueError("joint_offsets_deg must contain only finite numbers")
 
-    raw_jitter = payload.get("pan_jitter")
+    raw_jitter = payload["pan_jitter"]
     pan_jitter = None
     if raw_jitter is not None:
         if not isinstance(raw_jitter, dict) or set(raw_jitter) != {
@@ -159,12 +159,10 @@ def _miscalibration_from_scenario(scenario: EvaluationScenario) -> Miscalibratio
         pan_jitter = SlowJitter(sigma_deg, tau_s, np.random.default_rng(seed))
 
     cube_belief_error = tuple(
-        _finite_sequence(payload.get("cube_belief_error", (0.0, 0.0, 0.0, 0.0)), 4,
-                         "cube_belief_error")
+        _finite_sequence(payload["cube_belief_error"], 4, "cube_belief_error")
     )
     target_belief_error = tuple(
-        _finite_sequence(payload.get("target_belief_error", (0.0, 0.0)), 2,
-                         "target_belief_error")
+        _finite_sequence(payload["target_belief_error"], 2, "target_belief_error")
     )
     return MiscalibrationDraw(
         base_offsets_deg=joint_offsets,
