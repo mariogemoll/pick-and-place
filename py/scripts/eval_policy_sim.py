@@ -15,6 +15,7 @@ from pathlib import Path
 
 import mujoco
 import numpy as np
+import torch
 
 from pick_and_place.policies.policy import (
     DEFAULT_IMAGE_HW,
@@ -22,6 +23,7 @@ from pick_and_place.policies.policy import (
     select_device,
 )
 from pick_and_place.policies.diffusion_policy_client import DiffusionPolicyController
+from pick_and_place.policies.flow_image_policy import FlowImagePolicyController
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, WRIST_FEATURE
 from pick_and_place.policies.policy_controllers import LeRobotPolicyController
 from pick_and_place.policies.policy_evaluation import (
@@ -32,7 +34,11 @@ from pick_and_place.policies.policy_evaluation import (
     package_versions,
     write_evaluation_artifacts,
 )
-from pick_and_place.runtime.policy_sim import build_policy_sim_model, evaluate_policy_episode, PolicySimEnv
+from pick_and_place.runtime.policy_sim import (
+    build_policy_sim_model,
+    evaluate_policy_episode,
+    PolicySimEnv,
+)
 from pick_and_place.perception.overhead_localization import OverheadLocalizer
 from pick_and_place.plant.wrist_localizer import AsyncWristLocalization, WristCameraLocalizer
 from pick_and_place.rollout.scripted import scripted_policy
@@ -41,6 +47,7 @@ from pick_and_place.perception.cube_detection import CubeTracker
 from pick_and_place.perception.detector_process import DetectorProcess
 from pick_and_place.cli.policy import (
     add_diffusion_policy_arguments,
+    add_flow_image_arguments,
     add_policy_arguments,
 )
 from pick_and_place.cli.scene import add_render_size_arguments, add_scene_appearance_arguments
@@ -56,11 +63,12 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     add_policy_arguments(
         parser,
-        controllers=("lerobot", "scripted", "diffusion-policy"),
+        controllers=("lerobot", "scripted", "diffusion-policy", "flow-image"),
         checkpoint_default=None,
         n_action_steps_default=None,
     )
     add_diffusion_policy_arguments(parser, recording_hw=False)
+    add_flow_image_arguments(parser)
     add_render_size_arguments(parser)
     add_scene_appearance_arguments(parser)
     parser.add_argument(
@@ -90,10 +98,7 @@ def _parse_args() -> argparse.Namespace:
         "--max-episode-seconds",
         type=float,
         default=None,
-        help=(
-            "cap each scenario's simulated duration; useful for fast approach-only "
-            "diagnostics"
-        ),
+        help=("cap each scenario's simulated duration; useful for fast approach-only diagnostics"),
     )
     parser.add_argument(
         "--save-videos",
@@ -120,7 +125,7 @@ def _parse_args() -> argparse.Namespace:
         not math.isfinite(args.max_episode_seconds) or args.max_episode_seconds <= 0.0
     ):
         parser.error("--max-episode-seconds must be a positive finite number")
-    if args.controller in ("lerobot", "diffusion-policy") and args.checkpoint is None:
+    if args.controller in ("lerobot", "diffusion-policy", "flow-image") and args.checkpoint is None:
         parser.error(f"--checkpoint is required for the {args.controller} controller")
     if args.controller == "scripted" and args.checkpoint is not None:
         parser.error("--checkpoint does not apply to the scripted controller")
@@ -143,6 +148,12 @@ def _parse_args() -> argparse.Namespace:
             path = Path(getattr(args, name))
             if not path.exists():
                 parser.error(f"--{name.replace('_', '-')} does not exist: {path}")
+    if args.controller == "flow-image":
+        if args.flow_export is None:
+            parser.error("--flow-export is required for the flow-image controller")
+        for name, path in (("checkpoint", args.checkpoint), ("flow-export", args.flow_export)):
+            if not Path(path).exists():
+                parser.error(f"--{name} does not exist: {path}")
     if args.output.exists():
         parser.error(f"--output already exists: {args.output}")
     return args
@@ -174,7 +185,9 @@ def _sha256_of_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _diffusion_policy_metadata(controller: DiffusionPolicyController, args: argparse.Namespace) -> dict:
+def _diffusion_policy_metadata(
+    controller: DiffusionPolicyController, args: argparse.Namespace
+) -> dict:
     return {
         "type": "diffusion-policy",
         "image_features": {
@@ -216,6 +229,41 @@ def _lerobot_metadata(controller: LeRobotPolicyController) -> dict:
         "action_horizon": getattr(config, "chunk_size", None),
         "executed_action_steps": getattr(config, "n_action_steps", None),
         "temporal_ensemble_coeff": getattr(config, "temporal_ensemble_coeff", None),
+    }
+
+
+def _flow_image_metadata(controller: FlowImagePolicyController, args: argparse.Namespace) -> dict:
+    checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    export = Path(args.flow_export)
+    return {
+        "type": "flow-image",
+        "model_type": checkpoint["model_type"],
+        "model_config": checkpoint["model_config"],
+        "image_features": {
+            "overhead": OVERHEAD_FEATURE,
+            "wrist": WRIST_FEATURE,
+        },
+        "observation_steps": controller.observation_steps,
+        "action_horizon": controller.prediction_steps,
+        "executed_action_steps": controller.act_steps,
+        "policy_hz": controller.policy_hz,
+        "integration": "euler",
+        "integration_steps": controller.integration_steps,
+        "sampling_seed": controller.seed,
+        "noise_correlation": controller.noise_correlation,
+        "image_augmentation_at_rollout": False,
+        "training": {
+            "update": checkpoint.get("update"),
+            "seed": checkpoint.get("seed"),
+            "random_shift": checkpoint.get("random_shift"),
+            "random_scale_pct": checkpoint.get("random_scale_pct"),
+            "photometric_augmentation": checkpoint.get("photometric_augmentation"),
+        },
+        "export": {
+            "path": str(export.resolve()),
+            "manifest_sha256": _sha256_of_file(export / "export.json"),
+            "normalization_sha256": _sha256_of_file(export / "normalization.npz"),
+        },
     }
 
 
@@ -267,9 +315,7 @@ def _make_scripted_controller(
         )
         for name in ("overhead_camera", "wrist_camera")
     }
-    overhead_id = mujoco.mj_name2id(
-        model, mujoco.mjtObj.mjOBJ_CAMERA, "overhead_camera"
-    )
+    overhead_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "overhead_camera")
     overhead_position = data.cam_xpos[overhead_id].copy()
     overhead_rotation = data.cam_xmat[overhead_id].reshape(3, 3).copy()
     workspace_corners = workspace_interior_corners_world()
@@ -355,9 +401,7 @@ def main() -> None:
         )
     selected = manifest.scenarios[args.offset :]
     scenarios = selected[: args.limit] if args.limit is not None else selected
-    override_hw = (
-        (args.image_height, args.image_width) if args.image_height is not None else None
-    )
+    override_hw = (args.image_height, args.image_width) if args.image_height is not None else None
     if args.controller == "lerobot":
         image_hw, _ = resolve_checkpoint_cameras(args.checkpoint, override_hw=override_hw)
     elif args.controller == "diffusion-policy":
@@ -388,6 +432,37 @@ def main() -> None:
                         scenario.max_steps
                         * diffusion_policy_controller.policy_hz
                         / scenario.control_hz
+                    ),
+                ),
+            )
+            for scenario in scenarios
+        )
+    elif args.controller == "flow-image":
+        flow_device = select_device(args.device)
+        print(f"Loading {args.checkpoint} on {flow_device}...")
+        flow_image_controller = FlowImagePolicyController.from_export(
+            args.checkpoint,
+            args.flow_export,
+            act_steps=args.flow_act_steps,
+            integration_steps=args.flow_integration_steps,
+            device=flow_device,
+            seed=args.flow_seed,
+            noise_correlation=args.flow_noise_correlation,
+        )
+        if override_hw is not None and override_hw != flow_image_controller.image_hw:
+            raise ValueError(
+                f"--image-height/--image-width {override_hw} do not match the "
+                f"model's trained image size {flow_image_controller.image_hw}"
+            )
+        image_hw = flow_image_controller.image_hw
+        scenarios = tuple(
+            replace(
+                scenario,
+                control_hz=flow_image_controller.policy_hz,
+                max_steps=max(
+                    1,
+                    round(
+                        scenario.max_steps * flow_image_controller.policy_hz / scenario.control_hz
                     ),
                 ),
             )
@@ -430,6 +505,10 @@ def main() -> None:
         device = diffusion_policy_controller.handshake["device"]
         controller = diffusion_policy_controller
         controller_metadata = _diffusion_policy_metadata(diffusion_policy_controller, args)
+    elif args.controller == "flow-image":
+        device = flow_device
+        controller = flow_image_controller
+        controller_metadata = _flow_image_metadata(flow_image_controller, args)
     else:
         device = None
         controller, controller_metadata = _make_scripted_controller(
@@ -523,9 +602,9 @@ def main() -> None:
             "control_hz": sorted({scenario.control_hz for scenario in scenarios}),
             "episode_step_limits": sorted({scenario.max_steps for scenario in scenarios}),
             "requested_max_episode_seconds": args.max_episode_seconds,
-            "domain_randomization_presets": sorted({
-                scenario.domain_randomization_preset or "none" for scenario in scenarios
-            }),
+            "domain_randomization_presets": sorted(
+                {scenario.domain_randomization_preset or "none" for scenario in scenarios}
+            ),
             "scene_appearance": appearance_name,
             "scene_appearance_fields": (
                 asdict(scene_appearance) if scene_appearance is not None else None
@@ -538,7 +617,13 @@ def main() -> None:
         "code": git_provenance(REPOSITORY_ROOT),
         "package_versions": package_versions(
             ["gymnasium", "mujoco", "numpy"]
-            + (["lerobot", "torch"] if args.controller == "lerobot" else [])
+            + (
+                ["lerobot", "torch"]
+                if args.controller == "lerobot"
+                else ["torch"]
+                if args.controller == "flow-image"
+                else []
+            )
         ),
         "videos_saved": args.save_videos,
     }
