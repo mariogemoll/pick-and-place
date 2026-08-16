@@ -16,18 +16,17 @@ import json
 import lzma
 import math
 import subprocess
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from statistics import median
 from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from pick_and_place.core.physics import NOMINAL
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 
-# v2 added the required target_plate_yaw_rad field to each scenario.
-SCENARIO_MANIFEST_VERSION = 2
+# v3 requires every simulator input, including physics, to be materialized.
+SCENARIO_MANIFEST_VERSION = 3
 
 
 def _number_tuple(value: object, length: int, name: str) -> tuple[float, ...]:
@@ -68,9 +67,7 @@ class EvaluationScenario:
     # Drop-plate yaw in radians. The plate is square, so all distinct
     # orientations live in [0, pi/2).
     target_plate_yaw_rad: float
-    # Added without a manifest-version bump: manifests written before physics
-    # evaluation existed deserialize as the nominal arm.
-    physics_sample: dict[str, Any] = field(default_factory=lambda: asdict(NOMINAL))
+    physics_sample: dict[str, Any]
 
     def __post_init__(self) -> None:
         if not self.scenario_id:
@@ -90,11 +87,10 @@ class EvaluationScenario:
     @classmethod
     def from_dict(cls, payload: Mapping[str, object]) -> "EvaluationScenario":
         expected = {field.name for field in fields(cls)}
-        required = expected - {"physics_sample"}
-        if not required <= set(payload) or not set(payload) <= expected:
+        if set(payload) != expected:
             raise ValueError(
                 "invalid scenario fields; "
-                f"missing={sorted(required - set(payload))}, "
+                f"missing={sorted(expected - set(payload))}, "
                 f"unknown={sorted(set(payload) - expected)}"
             )
         preset = payload["domain_randomization_preset"]
@@ -123,18 +119,11 @@ class EvaluationScenario:
             control_hz=float(payload["control_hz"]),
             max_steps=int(payload["max_steps"]),
             target_plate_yaw_rad=float(payload["target_plate_yaw_rad"]),
-            physics_sample=_json_mapping(
-                payload.get("physics_sample", asdict(NOMINAL)), "physics_sample"
-            ),
+            physics_sample=_json_mapping(payload["physics_sample"], "physics_sample"),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        payload = asdict(self)
-        # Keep the canonical representation (and therefore the published hash)
-        # of pre-physics manifests stable. A non-nominal draw is always written.
-        if self.physics_sample == asdict(NOMINAL):
-            del payload["physics_sample"]
-        return payload
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -164,13 +153,32 @@ class ScenarioManifest:
             payload = json.loads(lzma.decompress(path.read_bytes()))
         else:
             payload = json.loads(path.read_text())
-        if not isinstance(payload, dict) or set(payload) != {
-            "schema_version",
-            "suite",
-            "scenarios",
-        }:
-            raise ValueError("manifest must contain exactly schema_version, suite, and scenarios")
-        raw_scenarios = payload["scenarios"]
+        if not isinstance(payload, dict):
+            raise ValueError("manifest must be a JSON object")
+        inline_fields = {"schema_version", "suite", "scenarios"}
+        sharded_fields = {"schema_version", "suite", "scenario_files"}
+        if set(payload) == inline_fields:
+            raw_scenarios = payload["scenarios"]
+        elif set(payload) == sharded_fields:
+            raw_files = payload["scenario_files"]
+            if not isinstance(raw_files, list) or not raw_files:
+                raise ValueError("scenario_files must be a nonempty array")
+            raw_scenarios = []
+            for name in raw_files:
+                if not isinstance(name, str) or Path(name).name != name:
+                    raise ValueError("scenario_files entries must be local file names")
+                shard_path = path.parent / name
+                if shard_path.suffix != ".xz":
+                    raise ValueError("scenario shard files must use the .xz suffix")
+                shard = json.loads(lzma.decompress(shard_path.read_bytes()))
+                if not isinstance(shard, list):
+                    raise ValueError(f"scenario shard {name!r} must contain an array")
+                raw_scenarios.extend(shard)
+        else:
+            raise ValueError(
+                "manifest must contain schema_version and suite plus exactly one of "
+                "scenarios or scenario_files"
+            )
         if not isinstance(raw_scenarios, list):
             raise ValueError("scenarios must be an array")
         return cls(

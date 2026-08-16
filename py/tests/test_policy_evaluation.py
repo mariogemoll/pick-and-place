@@ -65,7 +65,7 @@ def test_smoke_manifest_is_frozen_and_hashable():
     assert len(manifest.scenarios) == 8
     assert {scenario.control_hz for scenario in manifest.scenarios} == {30.0}
     assert {scenario.max_steps / scenario.control_hz for scenario in manifest.scenarios} == {15.0}
-    assert manifest.scenarios[0].source_position_m == (0.212880144, -0.160945783, 0.015)
+    assert manifest.scenarios[0].source_position_m == (0.21288, -0.160946, 0.015)
     assert len(manifest.sha256()) == 64
     assert json.loads(manifest.canonical_json()) == json.loads(json.dumps(manifest.to_dict()))
 
@@ -94,8 +94,44 @@ def test_compressed_headline_manifests_are_frozen_and_paired():
             (REPOSITORY_ROOT / "config/evaluation/canonical_100_v1.json.xz").read_bytes()
         )
     )
-    assert "physics_sample" not in raw["scenarios"][0]
+    assert raw["schema_version"] == 3
+    assert raw["scenarios"][0]["physics_sample"] == asdict(NOMINAL)
     assert json.loads(canonical.canonical_json()) == raw
+
+
+def test_randomized_selection_suite_matches_geometry_and_randomized_dataset_axes():
+    canonical = ScenarioManifest.load(
+        REPOSITORY_ROOT / "config/evaluation/heldout_256_v1.json.xz"
+    )
+    randomized = ScenarioManifest.load(
+        REPOSITORY_ROOT / "config/evaluation/randomized_selection_200_v1/manifest.json"
+    )
+
+    assert len(randomized.scenarios) == 200
+    assert randomized.sha256() == "6654876e59b627fbdfc81bdbae9809c7a0eb83d95154b349c03ba1d39b534a3b"
+    assert [scenario.source_position_m for scenario in randomized.scenarios] == [
+        scenario.source_position_m for scenario in canonical.scenarios[:200]
+    ]
+    assert [scenario.target_position_m for scenario in randomized.scenarios] == [
+        scenario.target_position_m for scenario in canonical.scenarios[:200]
+    ]
+    assert {scenario.control_hz for scenario in randomized.scenarios} == {10.0}
+    assert {scenario.max_steps for scenario in randomized.scenarios} == {150}
+    assert len({scenario.initial_robot_state_real for scenario in randomized.scenarios}) == 200
+    assert {
+        scenario.domain_randomization_sample["cube_orientation_index"]
+        for scenario in randomized.scenarios
+    } == set(range(24))
+    assert all(
+        scenario.domain_randomization_preset == "act_mild_v1"
+        for scenario in randomized.scenarios
+    )
+    assert all(scenario.physics_sample != asdict(NOMINAL) for scenario in randomized.scenarios)
+    assert all(
+        set(scenario.miscalibration_sample)
+        == {"joint_offsets_deg", "pan_jitter", "cube_belief_error", "target_belief_error"}
+        for scenario in randomized.scenarios
+    )
 
 
 def test_scripted_perturbation_smoke_manifest_has_frozen_joint_and_camera_offsets():

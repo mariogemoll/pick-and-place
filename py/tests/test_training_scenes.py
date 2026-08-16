@@ -25,6 +25,8 @@ MANIFESTS = (
     "config/evaluation/scripted_perturbation_smoke_v1.json",
     "config/evaluation/canonical_100_v1.json.xz",
     "config/evaluation/dr_100_v1.json.xz",
+    "config/evaluation/heldout_256_v1.json.xz",
+    "config/evaluation/randomized_selection_200_v1/manifest.json",
 )
 
 
@@ -51,7 +53,12 @@ def test_training_scenarios_are_reproducible_and_canonical():
     assert first.max_steps == TRAINING_MAX_STEPS
     assert first.domain_randomization_preset is None
     assert first.domain_randomization_sample == {"enabled": False}
-    assert first.miscalibration_sample == {"joint_offsets_deg": {}}
+    assert first.miscalibration_sample == {
+        "joint_offsets_deg": {},
+        "pan_jitter": None,
+        "cube_belief_error": [0.0, 0.0, 0.0, 0.0],
+        "target_belief_error": [0.0, 0.0],
+    }
     assert first.physics_sample == asdict(NOMINAL)
     assert first.initial_robot_state_real == NEUTRAL_ROBOT_STATE_REAL
 
