@@ -564,11 +564,35 @@ def run_pool(
 
     procs = {worker_id: start(worker_id) for worker_id in range(workers)}
     killed = 0
+    crashed = 0
+    crash_budget = max(workers * 3, 12)
     abandoned: list[int] = []
     attempts: dict[int, int] = {}
     try:
         while True:
             alive = {wid: p for wid, p in procs.items() if p.is_alive()}
+            # A worker that *crashed* is not wedged -- the watchdog below only
+            # judges the living -- so nothing replaced it, and a pool that lost
+            # workers this way quietly finished its run at a fraction of its
+            # width. Measured on a thousand-episode collection: round one ended
+            # with one worker of seventeen still standing and thirty minutes of
+            # no progress at all.
+            #
+            # Exit code zero means the queue ran dry, which is how a worker is
+            # supposed to end. Anything else is a death worth replacing, up to a
+            # budget so a worker that dies instantly cannot spin here forever.
+            for worker_id, proc in list(procs.items()):
+                if proc.is_alive() or proc.exitcode in (0, None):
+                    continue
+                if crashed >= crash_budget:
+                    continue
+                crashed += 1
+                print(
+                    f"\n[watchdog] worker {worker_id} died with exit code "
+                    f"{proc.exitcode}; replacing it ({crashed}/{crash_budget})"
+                )
+                procs[worker_id] = start(worker_id)
+                alive[worker_id] = procs[worker_id]
             if not alive:
                 break
             now = time.time()
@@ -602,6 +626,8 @@ def run_pool(
     failed = [wid for wid, p in procs.items() if p.exitcode not in (0, -9)]
     if killed:
         print(f"[watchdog] replaced {killed} wedged worker(s) during the run")
+    if crashed:
+        print(f"[watchdog] replaced {crashed} crashed worker(s) during the run")
     if abandoned:
         print(f"[watchdog] abandoned episode(s) after repeated wedges: {sorted(abandoned)}")
     if failed:
