@@ -24,6 +24,7 @@ from pick_and_place.data.dataset_subset import SUCCESS_XY_TOLERANCE_M
 from pick_and_place.data.sim_dataset_staging import (
     episode_staging_root,
     find_episode_datasets,
+    episodes_within_retry_budget,
     merge_episodes,
     staged_episode_dirs,
     successful_episode_datasets,
@@ -56,6 +57,15 @@ def main() -> None:
         help=f"maximum successful placement XY error in metres (default: {SUCCESS_XY_TOLERANCE_M})",
     )
     parser.add_argument(
+        "--max-grasp-attempts",
+        type=int,
+        default=None,
+        help=(
+            "drop episodes whose arm picked the cube more than this many times; "
+            "2 keeps single recoveries and excludes the flailing tail"
+        ),
+    )
+    parser.add_argument(
         "--keep-episodes",
         action="store_true",
         help="retain selected per-episode datasets after a successful merge",
@@ -67,11 +77,20 @@ def main() -> None:
         parser.error("--episodes must be at least 1")
     if args.xy_tolerance <= 0.0:
         parser.error("--xy-tolerance must be positive")
+    if args.max_grasp_attempts is not None and args.max_grasp_attempts < 1:
+        parser.error("--max-grasp-attempts must be at least 1")
 
     episodes_root = episode_staging_root(args.dataset_root)
     staged = staged_episode_dirs(episodes_root)
     complete = find_episode_datasets(episodes_root)
     successful = successful_episode_datasets(complete, args.xy_tolerance)
+    if args.max_grasp_attempts is not None:
+        within = episodes_within_retry_budget(successful, args.max_grasp_attempts)
+        print(
+            f"Retry budget {args.max_grasp_attempts}: dropped "
+            f"{len(successful) - len(within)} successful episode(s)."
+        )
+        successful = within
     selected = successful[: args.episodes]
 
     print(f"Staging root: {episodes_root}")

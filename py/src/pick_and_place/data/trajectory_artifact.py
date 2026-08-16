@@ -410,12 +410,25 @@ def save_trajectory(path: Path, artifact: TrajectoryArtifact) -> None:
         np.savez(file, **payload)
 
 
+def _facts_from(archive) -> EpisodeFacts:
+    return EpisodeFacts.from_json(json.loads(bytes(archive[_METADATA_KEY]).decode()))
+
+
+def load_facts(path: Path) -> EpisodeFacts:
+    """Read an episode's facts without touching its frames.
+
+    An ``.npz`` member is only decompressed when it is read, so asking a whole
+    staging area which episodes qualify for a master costs one small JSON each
+    rather than every trajectory in it.
+    """
+    with np.load(path) as archive:
+        return _facts_from(archive)
+
+
 def load_trajectory(path: Path) -> TrajectoryArtifact:
     """Read back an artifact written by :func:`save_trajectory`."""
     with np.load(path) as archive:
-        facts = EpisodeFacts.from_json(
-            json.loads(bytes(archive[_METADATA_KEY]).decode())
-        )
+        facts = _facts_from(archive)
         frames = TrajectoryFrames(
             **{name: np.asarray(archive[name]) for name in FRAME_ARRAY_WIDTHS}
         )

@@ -18,6 +18,7 @@ from pick_and_place.data.dataset_subset import (
     load_all_episodes,
     successful_episode_mask,
 )
+from pick_and_place.data.trajectory_artifact import ARTIFACT_FILENAME, load_facts
 
 
 _EPISODE_DIRECTORY = re.compile(r"ep(\d+)")
@@ -117,6 +118,30 @@ def successful_episode_datasets(
         if bool(successful_episode_mask(episodes, xy_tolerance).iloc[0]):
             successful.append(root)
     return successful
+
+
+def grasp_attempts(episode_root: Path) -> int:
+    """How many separate times the jaws closed on the cube in this episode.
+
+    One is the ordinary case. More means the arm fumbled and re-picked: the
+    replanner rebuilds from ``approach``, so a retry shows up as the phase
+    sequence running again rather than as a phase of its own.
+    """
+    facts = load_facts(episode_root / ARTIFACT_FILENAME)
+    return sum(1 for span in facts.phase_spans if span.name == "grasp")
+
+
+def episodes_within_retry_budget(episode_roots: list[Path], max_attempts: int) -> list[Path]:
+    """Return the episodes whose arm picked the cube at most ``max_attempts`` times.
+
+    Recoveries are worth keeping — a policy that has never seen one treats a
+    missed grasp as terminal — but they are not worth keeping without a bound.
+    Each re-pick adds about a third again to an episode's length, and the tail
+    reaches twenty-two attempts over 2700 frames. In a sliding-window export
+    that single episode outweighs nine ordinary ones, and every window of it
+    shows an arm failing.
+    """
+    return [root for root in episode_roots if grasp_attempts(root) <= max_attempts]
 
 
 def merge_episodes(

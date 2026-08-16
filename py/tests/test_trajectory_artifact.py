@@ -196,3 +196,42 @@ def test_the_archive_is_stored_uncompressed(tmp_path):
 
     with zipfile.ZipFile(path) as archive:
         assert {entry.compress_type for entry in archive.infolist()} == {zipfile.ZIP_STORED}
+
+
+def test_facts_load_without_reading_the_frames(tmp_path):
+    """Selecting a master reads one small JSON per episode, not every trajectory."""
+    from pick_and_place.data.trajectory_artifact import load_facts
+
+    path = tmp_path / "trajectory.npz"
+    save_trajectory(path, _artifact())
+
+    assert load_facts(path) == load_trajectory(path).facts
+
+
+def test_the_retry_budget_keeps_single_recoveries_and_drops_the_flailing_tail(tmp_path):
+    """A re-pick shows up as the grasp phase running again, not as a phase of its own."""
+    from pick_and_place.data.sim_dataset_staging import (
+        episodes_within_retry_budget,
+        grasp_attempts,
+    )
+
+    def staged(name: str, phases: tuple[str, ...]):
+        root = tmp_path / name
+        root.mkdir()
+        writer = _writer(cube_xy=tuple((0.30, 0.01 * i) for i in range(len(phases))), phases=phases)
+        save_trajectory(
+            root / "trajectory.npz",
+            TrajectoryArtifact(frames=writer.frames(), facts=_facts(writer)),
+        )
+        return root
+
+    clean = staged("ep000000", ("approach", "grasp", "carry"))
+    recovered = staged("ep000001", ("approach", "grasp", "approach", "grasp", "carry"))
+    flailing = staged("ep000002", ("grasp", "approach") * 5)
+
+    assert grasp_attempts(clean) == 1
+    assert grasp_attempts(recovered) == 2
+    assert grasp_attempts(flailing) == 5
+
+    assert episodes_within_retry_budget([clean, recovered, flailing], 2) == [clean, recovered]
+    assert episodes_within_retry_budget([clean, recovered, flailing], 1) == [clean]
