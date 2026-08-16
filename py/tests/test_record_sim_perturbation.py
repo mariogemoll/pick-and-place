@@ -5,31 +5,24 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import numpy as np
 import pytest
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "scripts" / "pick_and_place"
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
-
-from record_sim import (  # noqa: E402
+from pick_and_place.core.geometry import CubePose
+from pick_and_place.core.workspace_bounds import PAN_AXIS
+from pick_and_place.rollout.episode_setup import (
     PERTURBATION_SEED_SALT,
-    _episode_rng,
-    _perturbation_rng,
-    _sample_grasp_perturbation,
+    episode_rng,
+    perturbation_rng,
+    sample_grasp_perturbation,
 )
-from pick_and_place.core.geometry import CubePose  # noqa: E402
-from pick_and_place.core.workspace_bounds import PAN_AXIS  # noqa: E402
 
 
 def _perturbed_indices(seed: int, count: int, fraction: float) -> list[int]:
     return [
         index
         for index in range(count)
-        if _perturbation_rng(seed, index).random() < fraction
+        if perturbation_rng(seed, index).random() < fraction
     ]
 
 
@@ -42,9 +35,9 @@ def test_perturbed_fraction_is_approximately_honoured(fraction):
 def test_the_stream_is_a_pure_function_of_seed_and_index():
     # A recorded episode must be reproducible from its index alone, which is what
     # lets a staging area be topped up without changing what is already there.
-    assert _perturbation_rng(7, 11).random() == _perturbation_rng(7, 11).random()
-    assert _perturbation_rng(7, 11).random() != _perturbation_rng(7, 12).random()
-    assert _perturbation_rng(8, 11).random() != _perturbation_rng(7, 11).random()
+    assert perturbation_rng(7, 11).random() == perturbation_rng(7, 11).random()
+    assert perturbation_rng(7, 11).random() != perturbation_rng(7, 12).random()
+    assert perturbation_rng(8, 11).random() != perturbation_rng(7, 11).random()
 
 
 def test_raising_the_fraction_only_adds_episodes():
@@ -61,7 +54,7 @@ def test_perturbation_stream_is_independent_of_the_pose_stream():
     # would move every other episode's cube and the two dataset arms would differ
     # in their entire pose distribution rather than only in the perturbations.
     for index in range(32):
-        assert _perturbation_rng(3, index).random() != _episode_rng(3, index).random()
+        assert perturbation_rng(3, index).random() != episode_rng(3, index).random()
 
 
 def test_zero_fraction_perturbs_nothing():
@@ -77,11 +70,11 @@ def test_salt_is_pinned():
 def test_unseeded_stream_is_nondeterministic():
     # seed=None is the "do not care about reproducibility" path the recorder
     # already allows for pose sampling; mirror it rather than silently seeding 0.
-    assert _perturbation_rng(None, 0).random() != _perturbation_rng(None, 0).random()
+    assert perturbation_rng(None, 0).random() != perturbation_rng(None, 0).random()
 
 
 def test_draws_are_uniform_enough_to_threshold():
-    values = np.array([_perturbation_rng(1234, i).random() for i in range(4000)])
+    values = np.array([perturbation_rng(1234, i).random() for i in range(4000)])
     assert 0.47 < values.mean() < 0.53
     assert values.min() < 0.01 and values.max() > 0.99
 
@@ -92,7 +85,7 @@ def test_source_radius_gate_suppresses_only_far_band_perturbations():
     near = CubePose(x=PAN_AXIS[0] + 0.329, y=PAN_AXIS[1], z=0.015)
     far = CubePose(x=PAN_AXIS[0] + 0.331, y=PAN_AXIS[1], z=0.015)
 
-    near_draw = _sample_grasp_perturbation(
+    near_draw = sample_grasp_perturbation(
         seed,
         index,
         near,
@@ -100,7 +93,7 @@ def test_source_radius_gate_suppresses_only_far_band_perturbations():
         magnitude_m=0.022,
         max_source_radius_m=0.330,
     )
-    far_draw = _sample_grasp_perturbation(
+    far_draw = sample_grasp_perturbation(
         seed,
         index,
         far,
@@ -118,7 +111,7 @@ def test_source_radius_gate_preserves_original_perturbation_draw():
     index = _perturbed_indices(seed, 100, 0.25)[0]
     source = CubePose(x=PAN_AXIS[0] + 0.2, y=PAN_AXIS[1], z=0.015)
 
-    unrestricted = _sample_grasp_perturbation(
+    unrestricted = sample_grasp_perturbation(
         seed,
         index,
         source,
@@ -126,7 +119,7 @@ def test_source_radius_gate_preserves_original_perturbation_draw():
         magnitude_m=0.022,
         max_source_radius_m=None,
     )
-    bounded = _sample_grasp_perturbation(
+    bounded = sample_grasp_perturbation(
         seed,
         index,
         source,

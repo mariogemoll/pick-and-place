@@ -60,20 +60,29 @@ def _detector_main(conn, quad_decimate: float, nthreads: int) -> None:
     while True:
         try:
             gray = conn.recv()
-        except EOFError:
+        # Both are the parent going away, which is how this child is *meant* to
+        # end: EOFError when the pipe closed cleanly, ConnectionResetError when
+        # the parent exited between the child's read of the length prefix and
+        # the payload. Letting the second escape printed a multiprocessing
+        # traceback into every long run's log, where it reads as a lost episode
+        # rather than as an orderly shutdown.
+        except (EOFError, ConnectionResetError, BrokenPipeError):
             return
         if gray is None:
             return
-        conn.send(
-            [
-                TagDetection(
-                    tag_id=int(det.tag_id),
-                    corners=np.asarray(det.corners, dtype=float),
-                    center=np.asarray(det.center, dtype=float),
-                )
-                for det in detector.detect(gray)
-            ]
-        )
+        try:
+            conn.send(
+                [
+                    TagDetection(
+                        tag_id=int(det.tag_id),
+                        corners=np.asarray(det.corners, dtype=float),
+                        center=np.asarray(det.center, dtype=float),
+                    )
+                    for det in detector.detect(gray)
+                ]
+            )
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
 
 class DetectorProcess:

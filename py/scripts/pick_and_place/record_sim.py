@@ -38,8 +38,6 @@ from __future__ import annotations
 import argparse
 import datetime
 import hashlib
-import math
-import multiprocessing
 import queue as queue_module
 import shutil
 import time
@@ -48,19 +46,32 @@ from pathlib import Path
 
 import mujoco
 import mujoco.viewer
-import numpy as np
 from tqdm import tqdm
 
 from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
 from pick_and_place.sim.domain_randomization import (
     DomainRandomizationPreset,
     WristMountRandomizer,
-    domain_seed,
     generate_procedural_appearance,
     orient_cube,
 )
 from pick_and_place.scripted.episode_sampling import sample_cube
-from pick_and_place.runtime.episodes import EpisodeSamplingError, prepare_episode
+from pick_and_place.core.physics import PhysicsModel
+from pick_and_place.core.robot_dynamics import (
+    load_robot_dynamics_config,
+    tracking_bias_rad,
+)
+from pick_and_place.plant.overhead import SimOverheadPerception
+from pick_and_place.sim.physics import PhysicsRandomizer, tracking_bias_offsets
+from pick_and_place.rollout.episode_setup import (
+    appearance_seed,
+    episode_rng,
+    overhead_rng,
+    physics_rng,
+    prepare_for_recording,
+    sample_grasp_perturbation,
+)
+from pick_and_place.runtime.episodes import EpisodeSamplingError
 from pick_and_place.sim.model import placement_error
 from pick_and_place.cli.dataset import add_dataset_arguments
 from pick_and_place.data.recording_config import (
@@ -76,43 +87,33 @@ from pick_and_place.cli.scene import (
     add_scene_texture_arguments,
 )
 from pick_and_place.spec.robot import CONTROL_HZ
-from pick_and_place.core.miscalibration import MiscalibrationModel
+from pick_and_place.core.miscalibration import MiscalibrationModel, OverheadCameraModel
 from pick_and_place.core.grasp_perturbation import (
     DEFAULT_MAGNITUDE_M,
-    GraspPerturbation,
 )
 from pick_and_place.data.recording import RecordingSession
 from pick_and_place.variants.scene import AppearanceRandomizer
 from pick_and_place.data.trajectory_artifact import render_environment_fingerprint
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
-from pick_and_place.sim.paper_target_marker import place_paper_target_marker
 from pick_and_place.core.paths import datasets_root
 from pick_and_place.rollout.records import episode_metadata, save_episode_artifact
 from pick_and_place.rollout.sim import SimCameraRig, build_recording_scene, record_episode
+from pick_and_place.rollout.worker_pool import run_pool
 from pick_and_place.data.sim_dataset_staging import (
     episode_index,
+    is_complete_episode,
     episode_staging_root,
     ensure_collection_config,
     find_episode_datasets,
     next_episode_index,
     successful_episode_datasets,
 )
-from pick_and_place.core.workspace_bounds import (
-    PAN_AXIS,
-    is_cube_drop_allowed,
-    sample_target_plate_yaw,
-)
 
 
 # ~8.5x the ~35 s nominal episode under libx264, so an episode that burns many
 # trajectory resamples (up to --max-attempts) is not mistaken for a wedge.
 DEFAULT_EPISODE_TIMEOUT = 300.0
-
-# Salt distinguishing the fumble-or-not stream from the pose and domain streams
-# keyed off the same (seed, episode) pair. Arbitrary, and must not change: it is
-# part of what makes a recorded episode a pure function of its index.
-PERTURBATION_SEED_SALT = 0x50455254
 
 
 class _MockViewer:
@@ -190,7 +191,7 @@ def run_recording(
     )
     # Appearance is re-applied per episode from that episode's own domain seed,
     # so this initial sample only seeds the textures the scene is built with.
-    initial_sample = preset.sample(_domain_seed(seed, 0)) if preset is not None else None
+    initial_sample = preset.sample(appearance_seed(seed, 0)) if preset is not None else None
     table_texture = scene.table_texture
     background_panorama = scene.background_panorama
     if preset is not None:
@@ -239,6 +240,28 @@ def run_recording(
     miscalibration_model = (
         MiscalibrationModel() if scene.miscalibration and preset is None else None
     )
+    # Rendered at detection resolution, separately from the recorded
+    # observations: the detector needs more pixels than a dataset frame carries.
+    perception = (
+        SimOverheadPerception(model, data, detector=None)
+        if scene.overhead_perception
+        else None
+    )
+    # A run is miscalibrated either because --miscalibration asked for it or
+    # because a domain-randomization preset draws one per episode; the overhead
+    # camera has to be off by the same token, or a randomized run would localize
+    # perfectly while every other axis of its calibration was wrong. Without
+    # either, the camera sits exactly where its calibration says and localizes
+    # far better than the rig -- honest, and the reason --overhead-perception is
+    # worth little on its own.
+    overhead_model = (
+        OverheadCameraModel()
+        if scene.miscalibration or preset is not None
+        else OverheadCameraModel(0.0, 0.0, 0.0)
+    )
+    physics_model = PhysicsModel(amount=scene.physics_amount)
+    physics = PhysicsRandomizer(model) if scene.physics_amount else None
+    fitted_bias = tracking_bias_rad(load_robot_dynamics_config()) if physics else {}
     viewer_cm = mujoco.viewer.launch_passive(model, data) if use_viewer else None
     viewer = viewer_cm.__enter__() if viewer_cm is not None else _MockViewer()
 
@@ -269,12 +292,22 @@ def run_recording(
             # it lazily on the first frame, once the camera shapes are known.
             episode_root = output.root / f"ep{global_episode:06d}"
             if episode_root.exists():
-                if (episode_root / "meta" / "info.json").is_file():
-                    raise FileExistsError(
-                        f"refusing to overwrite complete staged episode {episode_root}"
-                    )
+                if is_complete_episode(episode_root):
+                    # Already recorded, so there is nothing to do and nothing to
+                    # overwrite. This is the watchdog requeuing an index whose
+                    # episode had in fact finished writing -- it kills on a
+                    # deadline, without knowing that. Raising here was safe for
+                    # the data and fatal for the worker, which then went
+                    # unreplaced; skipping keeps the episode and the worker.
+                    tqdm.write(f"{label}Episode {global_episode} already recorded; skipping.")
+                    progress.set_postfix(saved=recorded, skipped=attempted - recorded)
+                    continue
                 # A killed worker may leave an incomplete directory before the
-                # watchdog retries the same deterministic global index.
+                # watchdog retries the same deterministic global index. That
+                # directory can already hold meta/info.json -- LeRobot writes it
+                # when the dataset is created, not when an episode is saved --
+                # so completeness is judged by the episode metadata parquet, or
+                # the retry would refuse a corpse and take the worker with it.
                 shutil.rmtree(episode_root, ignore_errors=True)
             recording = RecordingSession(
                 repo_id=f"{output.repo_id}-ep{global_episode:06d}",
@@ -286,8 +319,8 @@ def run_recording(
                 image_writer_threads=output.image_writer_threads,
             )
 
-            rng = _episode_rng(seed, global_episode)
-            domain_seed = _domain_seed(seed, global_episode) if preset is not None else None
+            rng = episode_rng(seed, global_episode)
+            domain_seed = appearance_seed(seed, global_episode) if preset is not None else None
             sample = preset.sample(domain_seed) if preset is not None else None
             draw = (
                 sample.miscalibration
@@ -316,7 +349,7 @@ def run_recording(
             # turning the fraction or source-radius gate up or down leaves every
             # episode's poses untouched. This keeps dataset arms paired: only the
             # deliberate perturbation changes.
-            perturbation = _sample_grasp_perturbation(
+            perturbation = sample_grasp_perturbation(
                 seed,
                 global_episode,
                 episode_source,
@@ -324,15 +357,25 @@ def run_recording(
                 magnitude_m=perturbation_magnitude_m,
                 max_source_radius_m=perturbation_max_source_radius_m,
             )
+            # Applied before the episode is planned, because planning ends in a
+            # preflight and preflight runs live physics: vetting a candidate
+            # against the nominal arm when a drawn one will fly it is checking a
+            # different world than the one that follows.
+            physics_draw = physics_model.sample(physics_rng(seed, global_episode))
+            if physics is not None:
+                physics.apply(physics_draw)
+            if perception is not None:
+                perception.set_error(
+                    overhead_model.sample(overhead_rng(seed, global_episode))
+                )
             try:
-                episode = prepare_episode(
+                episode, target_plate_yaw = prepare_for_recording(
                     rng,
-                    episode_source,
-                    target,
-                    model=model,
-                    data=data,
-                    verbose=False,
-                    include_environment=True,
+                    model,
+                    data,
+                    perception,
+                    source=episode_source,
+                    target=target,
                     miscalibration=draw,
                     grasp_perturbation=perturbation,
                     max_attempts=max_attempts,
@@ -342,23 +385,6 @@ def run_recording(
                 progress.set_postfix(saved=recorded, skipped=attempted - recorded)
                 continue
 
-            # Render the black drop-zone square at the episode's target so the
-            # frames match a real recording, where a physical paper square sits on
-            # the table marking where the cube must be placed. The yaw is drawn
-            # after `prepare_episode` so it does not perturb the pose stream: an
-            # episode index keeps the poses it had before the plate rotated.
-            ep_target = episode.target
-            target_plate_yaw = sample_target_plate_yaw(
-                rng, ep_target.x, ep_target.y, half_size=DROP_ZONE_HALF_SIZE
-            )
-            place_paper_target_marker(
-                model,
-                (ep_target.x, ep_target.y),
-                target_plate_yaw,
-                (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
-                usable=is_cube_drop_allowed(ep_target.x, ep_target.y),
-                alpha=1.0,
-            )
             if randomizer is not None:
                 randomizer.tint_episode_markers()
             # `place_paper_target_marker` writes `model.body_pos`/`body_quat`,
@@ -379,6 +405,7 @@ def run_recording(
                     if wrist_mount is not None
                     else None
                 ),
+                tracking_bias_rad=tracking_bias_offsets(fitted_bias, physics_draw),
                 detector_crash_dump_dir=detector_crash_dump_dir,
                 verbose=False,
             )
@@ -401,6 +428,7 @@ def run_recording(
                 orientation_index=orientation_index,
                 perturbation=perturbation,
                 draw=draw,
+                physics=physics_draw,
                 sample=sample,
                 preset_name=preset.name if preset is not None else None,
                 domain_seed=domain_seed,
@@ -411,6 +439,7 @@ def run_recording(
                 result,
                 target_plate_yaw=target_plate_yaw,
                 draw=draw,
+                physics=physics_draw,
                 sample=sample,
                 seed=seed,
                 episode_index=global_episode,
@@ -429,6 +458,8 @@ def run_recording(
     finally:
         if viewer_cm is not None:
             viewer_cm.__exit__(None, None, None)
+        if perception is not None:
+            perception.close()
         rig.close()
         if recording is not None and recording.dataset is not None:
             recording.finalize()
@@ -454,190 +485,6 @@ def _worker(kwargs: dict, index_queue, status, worker_id: int) -> None:
 
     report(None)
     run_recording(index_source=next_index, heartbeat=report, **kwargs)
-
-
-def _episode_rng(root_seed: int | None, global_episode: int) -> np.random.Generator:
-    """Return the deterministic RNG stream for one globally numbered episode."""
-    if root_seed is None:
-        return np.random.default_rng()
-    return np.random.default_rng(np.random.SeedSequence([root_seed, global_episode]))
-
-
-def _domain_seed(root_seed: int | None, global_episode: int) -> int:
-    """Stable per-episode seed for domain sampling, independent of pose draws."""
-    return domain_seed(root_seed, global_episode)
-
-
-def _perturbation_rng(root_seed: int | None, global_episode: int) -> np.random.Generator:
-    """Deterministic stream deciding whether episode ``global_episode`` is fumbled.
-
-    Salted so it is independent of the pose and domain streams. That independence
-    is the point: changing ``--perturbed-fraction`` must not move any other
-    episode's cube, or the perturbed and unperturbed dataset arms would differ in
-    their entire pose distribution and the comparison would stop being paired.
-    """
-    if root_seed is None:
-        return np.random.default_rng()
-    return np.random.default_rng(
-        np.random.SeedSequence([root_seed, global_episode, PERTURBATION_SEED_SALT])
-    )
-
-
-def _sample_grasp_perturbation(
-    root_seed: int | None,
-    global_episode: int,
-    source: CubePose,
-    *,
-    fraction: float,
-    magnitude_m: float,
-    max_source_radius_m: float | None,
-) -> GraspPerturbation | None:
-    """Sample the episode's fumble, optionally excluding distant cube starts.
-
-    The probability and direction retain the original salted stream and draw
-    order. The source-radius gate only suppresses a selected perturbation, so
-    every included episode gets exactly the perturbation it did before the gate
-    existed and every episode keeps its original pose stream.
-    """
-    if fraction <= 0.0:
-        return None
-    perturb_rng = _perturbation_rng(root_seed, global_episode)
-    selected = perturb_rng.random() < fraction
-    source_radius_m = math.hypot(source.x - PAN_AXIS[0], source.y - PAN_AXIS[1])
-    within_radius = (
-        max_source_radius_m is None or source_radius_m <= max_source_radius_m
-    )
-    if not selected or not within_radius:
-        return None
-    return GraspPerturbation.sample(perturb_rng, magnitude_m=magnitude_m)
-
-
-def find_wedged_workers(
-    status: dict,
-    worker_ids,
-    *,
-    now: float,
-    episode_timeout: float,
-) -> list[tuple[int, int, float]]:
-    """Return ``(worker_id, episode, age)`` for each worker past its deadline.
-
-    A worker is only judged while an episode is in flight. Between episodes it
-    reports ``None``, and an idle worker with an empty queue would otherwise
-    look indistinguishable from a wedged one and be killed forever.
-    """
-    wedged = []
-    for worker_id in worker_ids:
-        episode, since = status.get(worker_id, (None, now))
-        if episode is None:
-            continue
-        age = now - since
-        if age > episode_timeout:
-            wedged.append((worker_id, episode, age))
-    return wedged
-
-
-def claim_retry(attempts: dict[int, int], episode: int, episode_retries: int) -> bool:
-    """Record a wedge against ``episode``; return whether to requeue it.
-
-    Bounding this matters: requeuing unconditionally would spin forever on an
-    index that wedges every time it is attempted.
-    """
-    attempts[episode] = attempts.get(episode, 0) + 1
-    return attempts[episode] <= episode_retries
-
-
-def run_pool(
-    job: dict,
-    *,
-    indices: list[int],
-    workers: int,
-    episode_timeout: float,
-    episode_retries: int = 1,
-    poll_interval: float = 5.0,
-) -> None:
-    """Run ``indices`` across a pool of workers, replacing any that wedge.
-
-    Workers pull from a shared queue, so a worker that finishes early takes more
-    work rather than idling on a pre-assigned block. The parent watches each
-    worker's in-flight episode: one that exceeds ``episode_timeout`` is killed
-    and a replacement started. Workers have been observed to spin at 100% CPU
-    indefinitely, both before recording anything and partway through a run; the
-    previous ``join()`` on every worker meant one such worker hung the entire
-    run silently. The timeout has to be enforced from out here because a wedged
-    worker cannot time itself out -- it is not running Python that would notice.
-
-    A killed episode is requeued at most ``episode_retries`` times and then
-    abandoned. Unbounded requeuing would spin forever if an index wedges
-    deterministically; abandoning costs one episode, and the loop already treats
-    episodes as attempts rather than guaranteed successes.
-    """
-    # Spawn rather than fork: each worker needs its own MuJoCo GL context, which
-    # does not survive a fork. Spawn is the default on macOS and safe on Linux.
-    ctx = multiprocessing.get_context("spawn")
-    index_queue = ctx.Queue()
-    for index in indices:
-        index_queue.put(index)
-    status = ctx.Manager().dict()
-
-    def start(worker_id: int):
-        status[worker_id] = (None, time.time())
-        proc = ctx.Process(
-            target=_worker,
-            args=(
-                {**job, "label": f"[w{worker_id}] ", "show_progress": worker_id == 0},
-                index_queue,
-                status,
-                worker_id,
-            ),
-        )
-        proc.start()
-        return proc
-
-    procs = {worker_id: start(worker_id) for worker_id in range(workers)}
-    killed = 0
-    abandoned: list[int] = []
-    attempts: dict[int, int] = {}
-    try:
-        while True:
-            alive = {wid: p for wid, p in procs.items() if p.is_alive()}
-            if not alive:
-                break
-            now = time.time()
-            wedged = find_wedged_workers(
-                status, list(alive), now=now, episode_timeout=episode_timeout
-            )
-            for worker_id, episode, age in wedged:
-                # Kill it and replace it. The partial dataset dir has no
-                # info.json, so the merge skips it.
-                retry = claim_retry(attempts, episode, episode_retries)
-                print(
-                    f"\n[watchdog] worker {worker_id} stuck on episode {episode} "
-                    f"for {age:.0f}s (limit {episode_timeout:.0f}s); killing and "
-                    + ("requeuing" if retry else "abandoning it (retry limit reached)")
-                )
-                alive[worker_id].kill()
-                alive[worker_id].join(timeout=30)
-                if retry:
-                    index_queue.put(episode)
-                else:
-                    abandoned.append(episode)
-                killed += 1
-                procs[worker_id] = start(worker_id)
-            time.sleep(poll_interval)
-    finally:
-        for proc in procs.values():
-            if proc.is_alive():
-                proc.kill()
-            proc.join(timeout=30)
-
-    failed = [wid for wid, p in procs.items() if p.exitcode not in (0, -9)]
-    if killed:
-        print(f"[watchdog] replaced {killed} wedged worker(s) during the run")
-    if abandoned:
-        print(f"[watchdog] abandoned episode(s) after repeated wedges: {sorted(abandoned)}")
-    if failed:
-        # Loud, not silent: the old code could not distinguish this from success.
-        print(f"WARNING: worker(s) exited with an error: {failed}")
 
 
 def main() -> None:
@@ -746,6 +593,36 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--overhead-perception",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "localize the cube and drop plate by rendering the overhead camera and "
+            "running the detector, instead of taking the true poses and adding the "
+            "draw's noise to them. The planner's belief error becomes an outcome of "
+            "a calibration that is slightly wrong, and the arm blocking its own view "
+            "becomes a real failure mode -- so the rig's hunt behavior runs here too. "
+            "Costs one 1920x1080 render per search pose, once per episode"
+        ),
+    )
+    parser.add_argument(
+        "--physics-randomization",
+        type=float,
+        default=0.0,
+        metavar="AMOUNT",
+        help=(
+            "how far each episode's arm may differ from the nominal one: servo "
+            "gain and time constant, link mass, surface friction, joint damping, "
+            "stiction standing in for backlash, and how far a joint droops from "
+            "its command. One dial over all of them, 0 for the nominal arm every "
+            "demonstration has shared so far, 1 for the authored spread. The "
+            "spread is a judgment rather than a measurement -- there is one "
+            "fitted dynamics config, so there is no observed day-to-day variation "
+            "to draw from. Expect yield to fall as it goes up: the planner "
+            "assumes the nominal arm, which is why the dial exists"
+        ),
+    )
+    parser.add_argument(
         "--domain-randomization",
         type=Path,
         default=None,
@@ -824,6 +701,8 @@ def main() -> None:
         background_panorama=args.background_panorama,
         table_texture=args.table_texture,
         miscalibration=args.miscalibration,
+        overhead_perception=args.overhead_perception,
+        physics_amount=args.physics_randomization,
         domain_randomization=args.domain_randomization,
     )
     try:
@@ -857,6 +736,8 @@ def main() -> None:
         "render_width": args.render_width,
         "render_height": args.render_height,
         "miscalibration": args.miscalibration,
+        "overhead_perception": args.overhead_perception,
+        "physics_randomization": args.physics_randomization,
         "domain_randomization": _configured_file(args.domain_randomization),
         "max_attempts": args.max_attempts,
         "perturbed_fraction": args.perturbed_fraction,
@@ -919,6 +800,7 @@ def main() -> None:
     else:
         run_pool(
             job,
+            worker=_worker,
             indices=indices,
             workers=args.workers,
             episode_timeout=args.episode_timeout,

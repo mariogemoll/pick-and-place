@@ -120,6 +120,8 @@ def prepare_episode(
     target_sampler: Callable[[np.random.Generator], CubePose] | None = None,
     miscalibration: MiscalibrationDraw | None = None,
     grasp_perturbation: GraspPerturbation | None = None,
+    believed_source: CubePose | None = None,
+    believed_target: CubePose | None = None,
 ) -> Episode:
     """Sample poses and return the first collision-free pick-and-carry.
 
@@ -145,6 +147,13 @@ def prepare_episode(
     and holds the arm at the physically-true start joints (planned start plus
     the draw's joint-zero offsets), so running the plan open-loop misses the
     way real reaching misses.
+
+    ``believed_source``/``believed_target`` say where the planner thinks those
+    poses are, replacing the draw's injected belief error. That is what a caller
+    which actually renders and detects the overhead camera passes in: the belief
+    is then an *outcome* of a calibration error rather than a value applied to
+    the truth. Both pin the belief, so a caller supplying them must also pin the
+    true poses they were measured from.
     """
     fixed_source = source is not None
     fixed_target = target is not None
@@ -158,6 +167,13 @@ def prepare_episode(
         raise ValueError("end_joints and end_gripper must be provided together")
     if fixed_target and target_sampler is not None:
         raise ValueError("target and target_sampler are mutually exclusive")
+    if (believed_source is not None and not fixed_source) or (
+        believed_target is not None and not fixed_target
+    ):
+        raise ValueError(
+            "a measured belief only means something against the pose it was "
+            "measured from; pin source/target alongside believed_source/believed_target"
+        )
 
     if debug.trajectory_dir is not None:
         debug.trajectory_dir.mkdir(parents=True, exist_ok=True)
@@ -180,11 +196,18 @@ def prepare_episode(
 
         ep_source = source if fixed_source else sample_cube(rng)
         ep_target = target if fixed_target else (target_sampler or sample_target)(rng)
-        if miscalibration is not None:
-            believed_source = miscalibration.believe_cube(ep_source)
-            believed_target = miscalibration.believe_target(ep_target)
+        if believed_source is not None:
+            ep_believed_source = believed_source
+        elif miscalibration is not None:
+            ep_believed_source = miscalibration.believe_cube(ep_source)
         else:
-            believed_source, believed_target = ep_source, ep_target
+            ep_believed_source = ep_source
+        if believed_target is not None:
+            ep_believed_target = believed_target
+        elif miscalibration is not None:
+            ep_believed_target = miscalibration.believe_target(ep_target)
+        else:
+            ep_believed_target = ep_target
         # Layered on top of the belief rather than folded into it: the draw above
         # models error the real rig exhibits, this is a deliberate fumble, and
         # keeping them separate is what lets a dataset be split by perturbation
@@ -192,7 +215,7 @@ def prepare_episode(
         # study is the grasp, and a wrong drop target would fail the placement
         # instead, which is a different episode.
         if grasp_perturbation is not None:
-            believed_source = grasp_perturbation.apply(believed_source)
+            ep_believed_source = grasp_perturbation.apply(ep_believed_source)
         if fixed_start:
             ep_start_joints, ep_start_gripper = dict(start_joints), float(start_gripper)
         else:
@@ -247,15 +270,15 @@ def prepare_episode(
 
         trajectory = None
         grasp_iter = (
-            free_grasp_candidates(kinematics, believed_source)
+            free_grasp_candidates(kinematics, ep_believed_source)
             if free_grasp
-            else grasp_candidates(kinematics, believed_source)
+            else grasp_candidates(kinematics, ep_believed_source)
         )
         for candidate_grasp in grasp_iter:
             candidate_trajectories = trajectory_candidates_for_grasp(
                 kinematics,
-                believed_source,
-                believed_target,
+                ep_believed_source,
+                ep_believed_target,
                 ep_start_joints,
                 ep_start_gripper,
                 ep_end_joints,
@@ -355,8 +378,8 @@ def prepare_episode(
             return Episode(
                 source=ep_source,
                 target=ep_target,
-                believed_source=believed_source,
-                believed_target=believed_target,
+                believed_source=ep_believed_source,
+                believed_target=ep_believed_target,
                 start_joints=ep_start_joints,
                 start_gripper=ep_start_gripper,
                 end_joints=ep_end_joints,

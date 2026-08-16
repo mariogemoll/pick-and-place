@@ -51,13 +51,26 @@ def staged_episode_dirs(episodes_root: Path) -> list[Path]:
     )
 
 
+def is_complete_episode(path: Path) -> bool:
+    """Whether a staged episode holds an episode, not just an empty dataset.
+
+    ``meta/info.json`` is not the marker it looks like: LeRobot writes it when
+    the dataset is *created*, before a single frame is saved. A worker killed
+    between those two moments leaves a directory that passes an info.json test
+    and yet contains no episode at all, which cost this project twice over — the
+    success tally concatenating zero metadata files and raising "No objects to
+    concatenate" after a long collection, and the recorder refusing to
+    re-record such an index because it looked complete, killing its worker.
+
+    The episode metadata parquet is written when the episode is committed, so
+    that is what "complete" means.
+    """
+    return any((path / "meta" / "episodes").glob("chunk-*/file-*.parquet"))
+
+
 def find_episode_datasets(episodes_root: Path) -> list[Path]:
     """Return complete staged episode datasets in global-index order."""
-    return [
-        path
-        for path in staged_episode_dirs(episodes_root)
-        if (path / "meta" / "info.json").is_file()
-    ]
+    return [path for path in staged_episode_dirs(episodes_root) if is_complete_episode(path)]
 
 
 def next_episode_index(episodes_root: Path) -> int:

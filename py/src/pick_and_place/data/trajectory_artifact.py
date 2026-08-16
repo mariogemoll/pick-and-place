@@ -52,13 +52,14 @@ from pick_and_place.core.camera_calibration import (
 from pick_and_place.core.appearance import AppearanceDraw
 from pick_and_place.core.geometry import CubePose, PlacementError
 from pick_and_place.core.miscalibration import MiscalibrationDraw
+from pick_and_place.core.physics import NOMINAL, PhysicsDraw
 from pick_and_place.core.task_phases import PhaseSpan, phase_spans_from_json, phase_spans_json
 from pick_and_place.spec.robot import JOINT_NAMES
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 
 #: Bumped whenever the stored fields change meaning. A reader refuses anything
 #: it was not written against rather than silently misinterpreting a column.
-ARTIFACT_VERSION = 2
+ARTIFACT_VERSION = 3
 
 #: What the artifact is called inside a staged episode directory.
 ARTIFACT_FILENAME = "trajectory.npz"
@@ -239,6 +240,9 @@ class EpisodeFacts:
     miscalibration: MiscalibrationRecord | None = None
     wrist_camera_mount: WristCameraMount | None = None
     recorded_appearance: AppearanceDraw | None = None
+    #: Which arm flew it. Nothing a renderer needs — the poses already are what
+    #: they are — but the only record of why the trajectory looks as it does.
+    physics: PhysicsDraw = NOMINAL
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -259,6 +263,7 @@ class EpisodeFacts:
             "recorded_appearance": (
                 None if self.recorded_appearance is None else self.recorded_appearance.as_json()
             ),
+            "physics": dataclasses.asdict(self.physics),
         }
 
     @staticmethod
@@ -294,6 +299,7 @@ class EpisodeFacts:
             recorded_appearance=(
                 None if appearance is None else AppearanceDraw.from_json(appearance)
             ),
+            physics=PhysicsDraw(**payload["physics"]),
         )
 
 

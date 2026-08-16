@@ -40,6 +40,15 @@ class SceneDraw:
     background_panorama: Path | None = None
     table_texture: Path | None = None
     miscalibration: bool = False
+    #: Localize the cube and the plate by rendering the overhead camera and
+    #: running the detector, instead of taking the true poses and adding noise
+    #: to them. Makes the planner's belief error an *outcome* of a calibration
+    #: that is slightly wrong, and brings the rig's hunt behavior with it.
+    overhead_perception: bool = False
+    #: How far each episode's arm may differ from the nominal one — gain, time
+    #: constant, mass, friction, damping, stiction and droop, all behind one
+    #: dial. Zero is the nominal arm every demonstration has shared so far.
+    physics_amount: float = 0.0
     domain_randomization: Path | None = None
 
 
