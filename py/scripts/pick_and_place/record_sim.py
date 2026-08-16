@@ -102,6 +102,7 @@ from pick_and_place.rollout.records import episode_metadata, save_episode_artifa
 from pick_and_place.rollout.sim import SimCameraRig, build_recording_scene, record_episode
 from pick_and_place.data.sim_dataset_staging import (
     episode_index,
+    is_complete_episode,
     episode_staging_root,
     ensure_collection_config,
     find_episode_datasets,
@@ -291,12 +292,16 @@ def run_recording(
             # it lazily on the first frame, once the camera shapes are known.
             episode_root = output.root / f"ep{global_episode:06d}"
             if episode_root.exists():
-                if (episode_root / "meta" / "info.json").is_file():
+                if is_complete_episode(episode_root):
                     raise FileExistsError(
                         f"refusing to overwrite complete staged episode {episode_root}"
                     )
                 # A killed worker may leave an incomplete directory before the
-                # watchdog retries the same deterministic global index.
+                # watchdog retries the same deterministic global index. That
+                # directory can already hold meta/info.json -- LeRobot writes it
+                # when the dataset is created, not when an episode is saved --
+                # so completeness is judged by the episode metadata parquet, or
+                # the retry would refuse a corpse and take the worker with it.
                 shutil.rmtree(episode_root, ignore_errors=True)
             recording = RecordingSession(
                 repo_id=f"{output.repo_id}-ep{global_episode:06d}",

@@ -131,11 +131,10 @@ for calibration in config/camera_extrinsics/overhead_camera.json \
 done
 V="$workspace/venvs/pick-and-place/bin/python"
 
-# A worker that dies mid-episode leaves a directory with a meta/ but no
-# meta/episodes/, and the success count concatenates across every staged
-# directory without skipping incomplete ones -- so one corpse makes pandas raise
-# "No objects to concatenate" and takes the whole run down at the *next* tally,
-# after the episodes it is counting recorded fine. Sweep them first.
+# Belt and braces. `find_episode_datasets` now judges completeness by the
+# episode metadata parquet rather than by info.json, so a corpse no longer
+# poisons the tally -- but sweeping it also frees the index for a retry instead
+# of leaving a directory that every later pass has to step around.
 drop_partial_episodes() {
   local root="${staging}_episodes" removed=0
   [ -d "$root" ] || return 0

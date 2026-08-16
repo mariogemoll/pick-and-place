@@ -31,21 +31,34 @@ def _record_sim_module():
 
 
 def _episode_dir(root: Path, name: str, *, complete: bool) -> Path:
-    """Create a per-episode dataset dir; ``complete`` writes the finalize marker."""
+    """Create a per-episode dataset dir; ``complete`` writes a committed episode.
+
+    ``info.json`` goes in either way, because LeRobot writes it when the dataset
+    is *created*. What separates a finished episode from a corpse is the episode
+    metadata parquet, which is written when the episode is committed.
+    """
     path = root / name
     (path / "meta").mkdir(parents=True)
+    (path / "meta" / "info.json").write_text("{}")
     if complete:
-        (path / "meta" / "info.json").write_text("{}")
+        chunk = path / "meta" / "episodes" / "chunk-000"
+        chunk.mkdir(parents=True)
+        (chunk / "file-000.parquet").write_bytes(b"")
     return path
 
 
-def test_only_finalized_episode_dirs_are_merged(tmp_path):
-    """A killed worker leaves a dir with no ``info.json``; it must be skipped.
+def test_only_committed_episode_dirs_are_merged(tmp_path):
+    """A killed worker leaves a dir that already has ``info.json``; skip it anyway.
 
     This is the property that makes a worker kill cost one episode instead of
-    every episode that worker had banked: LeRobot only writes ``info.json``
-    when the parquet writers are closed, so its presence marks a readable
-    dataset.
+    every episode that worker had banked. It used to test for ``info.json`` on
+    the belief that LeRobot wrote it when the parquet writers closed. It does
+    not — it writes it at creation — so a worker killed mid-episode left a
+    directory that looked finished and was not. That cost a thousand-episode
+    collection twice over: the success tally concatenated zero metadata files
+    and raised "No objects to concatenate", and the recorder refused to
+    re-record the index because it looked complete, killing the worker that
+    tried.
     """
     module = _record_sim_module()
     _episode_dir(tmp_path, "ep000000", complete=True)
@@ -55,6 +68,18 @@ def test_only_finalized_episode_dirs_are_merged(tmp_path):
     found = module.find_episode_datasets(tmp_path)
 
     assert [path.name for path in found] == ["ep000000", "ep000002"]
+
+
+def test_an_empty_dataset_directory_is_not_a_complete_episode(tmp_path):
+    """The exact corpse a watchdog requeue collides with."""
+    from pick_and_place.data.sim_dataset_staging import is_complete_episode
+
+    corpse = _episode_dir(tmp_path, "ep000000", complete=False)
+    committed = _episode_dir(tmp_path, "ep000001", complete=True)
+
+    assert (corpse / "meta" / "info.json").is_file()
+    assert not is_complete_episode(corpse)
+    assert is_complete_episode(committed)
 
 
 def test_episode_dirs_merge_in_global_index_order(tmp_path):
