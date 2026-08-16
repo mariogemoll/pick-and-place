@@ -106,6 +106,13 @@ def _write_run(
                 "policy_hz": 10.0,
                 "weights": "ema",
                 "normalization": {"sha256": "def"},
+                "integration": "euler",
+                "integration_steps": 10,
+                "noise_correlation": 0.0,
+                "export": {
+                    "manifest_sha256": "export-manifest",
+                    "normalization_sha256": "export-normalization",
+                },
             },
         })
     )
@@ -153,6 +160,23 @@ def test_settings_read_every_comparable_field(tmp_path: Path) -> None:
     run = compare.EvaluationRun(_write_run(tmp_path / "run"))
 
     assert all(value is not None for value in run.settings().values())
+
+
+def test_settings_bind_flow_image_euler_contract(tmp_path: Path) -> None:
+    """Flow-image runs must agree on the sampler and export they actually use."""
+    first = _write_run(tmp_path / "first")
+    second = _write_run(tmp_path / "second")
+    second_run = json.loads((second / "run.json").read_text())
+    second_run["controller"]["integration_steps"] = 20
+    (second / "run.json").write_text(json.dumps(second_run))
+
+    first_settings = compare.EvaluationRun(first).settings()
+    second_settings = compare.EvaluationRun(second).settings()
+
+    differing = {
+        key for key, value in first_settings.items() if value != second_settings[key]
+    }
+    assert differing == {"controller/integration_steps"}
 
 
 def test_sharded_arm_reassembles_its_workers(tmp_path: Path) -> None:
