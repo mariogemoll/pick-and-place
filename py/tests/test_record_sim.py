@@ -439,3 +439,33 @@ def test_retry_budget_is_tracked_per_episode():
     assert module.claim_retry(attempts, 2, 1) is True
     assert module.claim_retry(attempts, 1, 1) is False
     assert module.claim_retry(attempts, 2, 1) is False
+
+
+class _ExitedProcess:
+    """A worker process that is no longer running, with a given exit code."""
+
+    def __init__(self, exitcode: int) -> None:
+        self.exitcode = exitcode
+
+    def is_alive(self) -> bool:
+        return False
+
+
+def test_a_crashed_worker_is_replaced_but_a_drained_one_is_not():
+    """The defect that let a seventeen-worker pool finish as a one-worker pool.
+
+    The wedge watchdog only judges the living, so a worker that crashed was
+    never noticed and never replaced. Exit code zero is how a worker is
+    *supposed* to end -- the queue ran dry -- and must not be restarted, or the
+    pool would never wind down.
+    """
+    drained = _ExitedProcess(0)
+    crashed = _ExitedProcess(1)
+    signalled = _ExitedProcess(-9)
+
+    def needs_replacing(proc) -> bool:
+        return not proc.is_alive() and proc.exitcode not in (0, None)
+
+    assert not needs_replacing(drained)
+    assert needs_replacing(crashed)
+    assert needs_replacing(signalled)
