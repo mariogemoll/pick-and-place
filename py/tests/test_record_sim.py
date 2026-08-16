@@ -8,6 +8,9 @@ import types
 from pathlib import Path
 
 import numpy as np
+
+from pick_and_place.rollout.episode_setup import appearance_seed, episode_rng
+from pick_and_place.rollout.worker_pool import claim_retry, find_wedged_workers
 import pandas as pd
 import pytest
 
@@ -29,21 +32,34 @@ def _record_sim_module():
 
 
 def _episode_dir(root: Path, name: str, *, complete: bool) -> Path:
-    """Create a per-episode dataset dir; ``complete`` writes the finalize marker."""
+    """Create a per-episode dataset dir; ``complete`` writes a committed episode.
+
+    ``info.json`` goes in either way, because LeRobot writes it when the dataset
+    is *created*. What separates a finished episode from a corpse is the episode
+    metadata parquet, which is written when the episode is committed.
+    """
     path = root / name
     (path / "meta").mkdir(parents=True)
+    (path / "meta" / "info.json").write_text("{}")
     if complete:
-        (path / "meta" / "info.json").write_text("{}")
+        chunk = path / "meta" / "episodes" / "chunk-000"
+        chunk.mkdir(parents=True)
+        (chunk / "file-000.parquet").write_bytes(b"")
     return path
 
 
-def test_only_finalized_episode_dirs_are_merged(tmp_path):
-    """A killed worker leaves a dir with no ``info.json``; it must be skipped.
+def test_only_committed_episode_dirs_are_merged(tmp_path):
+    """A killed worker leaves a dir that already has ``info.json``; skip it anyway.
 
     This is the property that makes a worker kill cost one episode instead of
-    every episode that worker had banked: LeRobot only writes ``info.json``
-    when the parquet writers are closed, so its presence marks a readable
-    dataset.
+    every episode that worker had banked. It used to test for ``info.json`` on
+    the belief that LeRobot wrote it when the parquet writers closed. It does
+    not — it writes it at creation — so a worker killed mid-episode left a
+    directory that looked finished and was not. That cost a thousand-episode
+    collection twice over: the success tally concatenated zero metadata files
+    and raised "No objects to concatenate", and the recorder refused to
+    re-record the index because it looked complete, killing the worker that
+    tried.
     """
     module = _record_sim_module()
     _episode_dir(tmp_path, "ep000000", complete=True)
@@ -53,6 +69,18 @@ def test_only_finalized_episode_dirs_are_merged(tmp_path):
     found = module.find_episode_datasets(tmp_path)
 
     assert [path.name for path in found] == ["ep000000", "ep000002"]
+
+
+def test_an_empty_dataset_directory_is_not_a_complete_episode(tmp_path):
+    """The exact corpse a watchdog requeue collides with."""
+    from pick_and_place.data.sim_dataset_staging import is_complete_episode
+
+    corpse = _episode_dir(tmp_path, "ep000000", complete=False)
+    committed = _episode_dir(tmp_path, "ep000001", complete=True)
+
+    assert (corpse / "meta" / "info.json").is_file()
+    assert not is_complete_episode(corpse)
+    assert is_complete_episode(committed)
 
 
 def test_episode_dirs_merge_in_global_index_order(tmp_path):
@@ -188,11 +216,10 @@ def test_successful_episode_selection_uses_recorded_placement(tmp_path, monkeypa
 
 
 def test_episode_rng_depends_only_on_root_seed_and_global_episode():
-    module = _record_sim_module()
 
-    first = module._episode_rng(17, 6).integers(2**31, size=4)
-    repeated = module._episode_rng(17, 6).integers(2**31, size=4)
-    neighboring = module._episode_rng(17, 7).integers(2**31, size=4)
+    first = episode_rng(17, 6).integers(2**31, size=4)
+    repeated = episode_rng(17, 6).integers(2**31, size=4)
+    neighboring = episode_rng(17, 7).integers(2**31, size=4)
 
     np.testing.assert_array_equal(first, repeated)
     assert not np.array_equal(first, neighboring)
@@ -205,18 +232,17 @@ def test_queue_order_does_not_change_what_each_episode_records():
     per-episode streams key off the global index alone, so an arbitrary
     interleaving must still reproduce the sequential streams exactly.
     """
-    module = _record_sim_module()
-    sequential = [module._episode_rng(23, index).integers(2**31) for index in range(10)]
+    sequential = [episode_rng(23, index).integers(2**31) for index in range(10)]
 
     scrambled_order = [7, 0, 3, 9, 1, 8, 2, 6, 4, 5]
     out_of_order = {
-        index: module._episode_rng(23, index).integers(2**31) for index in scrambled_order
+        index: episode_rng(23, index).integers(2**31) for index in scrambled_order
     }
 
     assert [out_of_order[index] for index in range(10)] == sequential
 
-    domain_sequential = [module._domain_seed(23, index) for index in range(10)]
-    domain_scrambled = {index: module._domain_seed(23, index) for index in scrambled_order}
+    domain_sequential = [appearance_seed(23, index) for index in range(10)]
+    domain_scrambled = {index: appearance_seed(23, index) for index in scrambled_order}
     assert [domain_scrambled[index] for index in range(10)] == domain_sequential
 
 
@@ -226,13 +252,12 @@ def test_a_requeued_episode_reproduces_the_same_draw():
     Otherwise a wedge would silently change what episode index N contains,
     breaking the index-addressability a resume depends on.
     """
-    module = _record_sim_module()
 
-    first_attempt = module._episode_rng(11, 42).integers(2**31, size=4)
-    after_requeue = module._episode_rng(11, 42).integers(2**31, size=4)
+    first_attempt = episode_rng(11, 42).integers(2**31, size=4)
+    after_requeue = episode_rng(11, 42).integers(2**31, size=4)
 
     np.testing.assert_array_equal(first_attempt, after_requeue)
-    assert module._domain_seed(11, 42) == module._domain_seed(11, 42)
+    assert appearance_seed(11, 42) == appearance_seed(11, 42)
 
 
 def test_resuming_at_an_offset_extends_the_run_instead_of_repeating_it():
@@ -243,16 +268,15 @@ def test_resuming_at_an_offset_extends_the_run_instead_of_repeating_it():
     index, so offsetting the resume past the last index the original run reached
     has to yield episodes disjoint from everything already banked.
     """
-    module = _record_sim_module()
 
-    banked = [module._episode_rng(0, index).integers(2**31) for index in range(300)]
-    resumed = [module._episode_rng(0, 300 + index).integers(2**31) for index in range(50)]
+    banked = [episode_rng(0, index).integers(2**31) for index in range(300)]
+    resumed = [episode_rng(0, 300 + index).integers(2**31) for index in range(50)]
     assert not set(banked) & set(resumed)
 
     # The domain-randomization stream is keyed the same way, so it carries the
     # same guarantee -- otherwise a resume would repeat appearances already banked.
-    banked_domain = {module._domain_seed(0, index) for index in range(300)}
-    resumed_domain = {module._domain_seed(0, 300 + index) for index in range(50)}
+    banked_domain = {appearance_seed(0, index) for index in range(300)}
+    resumed_domain = {appearance_seed(0, 300 + index) for index in range(50)}
     assert not banked_domain & resumed_domain
 
 
@@ -329,7 +353,6 @@ def test_downsample_through_recording_postprocesses_at_the_recording_size():
 
 
 def test_watchdog_flags_only_workers_past_the_deadline():
-    module = _record_sim_module()
     now = 1000.0
     status = {
         0: (5, now - 10.0),    # healthy, well inside the limit
@@ -337,7 +360,7 @@ def test_watchdog_flags_only_workers_past_the_deadline():
         2: (9, now - 300.0),   # exactly at the limit, not past it
     }
 
-    wedged = module.find_wedged_workers(status, [0, 1, 2], now=now, episode_timeout=300.0)
+    wedged = find_wedged_workers(status, [0, 1, 2], now=now, episode_timeout=300.0)
 
     assert [(wid, ep) for wid, ep, _ in wedged] == [(1, 7)]
 
@@ -348,28 +371,25 @@ def test_watchdog_never_kills_a_worker_between_episodes():
     Once the queue drains, workers sit idle before exiting. If idleness counted
     against the deadline the pool would kill and respawn workers indefinitely.
     """
-    module = _record_sim_module()
     now = 1000.0
     status = {0: (None, now - 99999.0), 1: (None, now - 5.0)}
 
-    assert module.find_wedged_workers(status, [0, 1], now=now, episode_timeout=300.0) == []
+    assert find_wedged_workers(status, [0, 1], now=now, episode_timeout=300.0) == []
 
 
 def test_watchdog_tolerates_a_worker_that_has_not_reported_yet():
     """A just-spawned worker may have no status entry; that is not a wedge."""
-    module = _record_sim_module()
     now = 1000.0
 
-    assert module.find_wedged_workers({}, [0, 1], now=now, episode_timeout=300.0) == []
+    assert find_wedged_workers({}, [0, 1], now=now, episode_timeout=300.0) == []
 
 
 def test_watchdog_reports_every_wedged_worker_not_just_the_first():
     """The doc records runs losing two workers at once."""
-    module = _record_sim_module()
     now = 1000.0
     status = {0: (1, now - 900.0), 1: (2, now - 10.0), 2: (3, now - 600.0)}
 
-    wedged = module.find_wedged_workers(status, [0, 1, 2], now=now, episode_timeout=300.0)
+    wedged = find_wedged_workers(status, [0, 1, 2], now=now, episode_timeout=300.0)
 
     assert [(wid, ep) for wid, ep, _ in wedged] == [(0, 1), (2, 3)]
 
@@ -392,27 +412,54 @@ def test_vcodec_defaults_to_software_h264():
 
 def test_wedged_episode_is_abandoned_once_retries_run_out():
     """Unbounded requeuing would spin forever on a deterministically bad index."""
-    module = _record_sim_module()
     attempts = {}
 
-    decisions = [module.claim_retry(attempts, 42, 1) for _ in range(3)]
+    decisions = [claim_retry(attempts, 42, 1) for _ in range(3)]
 
     assert decisions == [True, False, False]
 
 
 def test_zero_retries_marks_a_wedged_episode_failed_immediately():
-    module = _record_sim_module()
     attempts = {}
 
-    assert module.claim_retry(attempts, 7, 0) is False
+    assert claim_retry(attempts, 7, 0) is False
 
 
 def test_retry_budget_is_tracked_per_episode():
     """One bad index must not consume another index's retry budget."""
-    module = _record_sim_module()
     attempts = {}
 
-    assert module.claim_retry(attempts, 1, 1) is True
-    assert module.claim_retry(attempts, 2, 1) is True
-    assert module.claim_retry(attempts, 1, 1) is False
-    assert module.claim_retry(attempts, 2, 1) is False
+    assert claim_retry(attempts, 1, 1) is True
+    assert claim_retry(attempts, 2, 1) is True
+    assert claim_retry(attempts, 1, 1) is False
+    assert claim_retry(attempts, 2, 1) is False
+
+
+class _ExitedProcess:
+    """A worker process that is no longer running, with a given exit code."""
+
+    def __init__(self, exitcode: int) -> None:
+        self.exitcode = exitcode
+
+    def is_alive(self) -> bool:
+        return False
+
+
+def test_a_crashed_worker_is_replaced_but_a_drained_one_is_not():
+    """The defect that let a seventeen-worker pool finish as a one-worker pool.
+
+    The wedge watchdog only judges the living, so a worker that crashed was
+    never noticed and never replaced. Exit code zero is how a worker is
+    *supposed* to end -- the queue ran dry -- and must not be restarted, or the
+    pool would never wind down.
+    """
+    drained = _ExitedProcess(0)
+    crashed = _ExitedProcess(1)
+    signalled = _ExitedProcess(-9)
+
+    def needs_replacing(proc) -> bool:
+        return not proc.is_alive() and proc.exitcode not in (0, None)
+
+    assert not needs_replacing(drained)
+    assert needs_replacing(crashed)
+    assert needs_replacing(signalled)

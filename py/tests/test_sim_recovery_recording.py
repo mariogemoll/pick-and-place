@@ -125,3 +125,34 @@ def test_unplannable_perturbation_raises_rather_than_recording_a_bad_episode():
             max_attempts=2,
             grasp_perturbation=absurd,
         )
+
+
+def test_a_regrasp_after_a_repick_has_a_grasp_to_fall_back_on():
+    """The crash that only a thousand-episode run finds.
+
+    A fumbled pick clears the tracked grasp so the replanner searches fresh
+    candidates. If the *next* descent then ends on a pose that admits no
+    candidate on its locked face, the fallback used to be that cleared value —
+    ``None`` — and rebuilding the grasp phase from it raised ``AttributeError``
+    several minutes into an episode. The descent phase's own grasp is always
+    there to stand on.
+    """
+    from pick_and_place.scripted.descent import regrasp_after_descent
+
+    class _Unreachable:
+        """A locked face and elbow no candidate can match."""
+
+        face = "no-such-face"
+        elbow = "no-such-elbow"
+        grasp = "the grasp the jaws came down on"
+
+    _, _, episode = _play(0, None)
+    fallback = regrasp_after_descent(
+        _Unreachable(),
+        get_cube_pose(episode.model, episode.data),
+        episode.kinematics,
+        free_grasp=False,
+        current=None,
+    )
+
+    assert fallback == "the grasp the jaws came down on"
