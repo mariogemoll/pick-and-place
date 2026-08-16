@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: 0BSD
 
 import lzma
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from pick_and_place.core.physics import NOMINAL
+from pick_and_place.policies.policy_evaluation import ScenarioManifest
 from pick_and_place.runtime.training_scenes import (
     NEUTRAL_ROBOT_STATE_REAL,
     TRAINING_CONTROL_HZ,
@@ -14,7 +17,6 @@ from pick_and_place.runtime.training_scenes import (
     SceneStream,
     training_scenario,
 )
-from pick_and_place.policies.policy_evaluation import ScenarioManifest
 from pick_and_place.scripted.scenario_sampling import sample_scene
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -50,6 +52,7 @@ def test_training_scenarios_are_reproducible_and_canonical():
     assert first.domain_randomization_preset is None
     assert first.domain_randomization_sample == {"enabled": False}
     assert first.miscalibration_sample == {"joint_offsets_deg": {}}
+    assert first.physics_sample == asdict(NOMINAL)
     assert first.initial_robot_state_real == NEUTRAL_ROBOT_STATE_REAL
 
 

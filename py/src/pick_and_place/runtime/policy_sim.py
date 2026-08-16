@@ -30,7 +30,9 @@ from pick_and_place.spec.robot import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 from pick_and_place.spec.robot import ARM_JOINT_NAMES, GRIPPER_INDEX, JOINT_NAMES
 from pick_and_place.core.joint_frames import real_frame_to_sim, sim_frame_to_real
 from pick_and_place.core.geometry import JAW_CONTACT_POSITION
-from pick_and_place.core.miscalibration import MiscalibrationDraw
+from pick_and_place.core.miscalibration import MiscalibrationDraw, SlowJitter
+from pick_and_place.core.physics import PhysicsDraw
+from pick_and_place.sim.physics import PhysicsRandomizer, tracking_bias_offsets
 from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
 from pick_and_place.sim.paper_target_marker import add_paper_target_marker, place_paper_target_marker
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, PolicyController, PolicyObservation, STATE_FEATURE, WRIST_FEATURE
@@ -112,11 +114,17 @@ def real_action_to_sim_ctrl(action_real: np.ndarray) -> np.ndarray:
 
 def _miscalibration_from_scenario(scenario: EvaluationScenario) -> MiscalibrationDraw:
     payload = scenario.miscalibration_sample
-    expected = {"joint_offsets_deg"}
-    if set(payload) != expected:
+    allowed = {
+        "joint_offsets_deg",
+        "pan_jitter",
+        "cube_belief_error",
+        "target_belief_error",
+    }
+    if "joint_offsets_deg" not in payload or not set(payload) <= allowed:
         raise ValueError(
             f"scenario {scenario.scenario_id!r} has invalid miscalibration fields; "
-            f"missing={sorted(expected - set(payload))}, unknown={sorted(set(payload) - expected)}"
+            f"missing={sorted({'joint_offsets_deg'} - set(payload))}, "
+            f"unknown={sorted(set(payload) - allowed)}"
         )
     raw_offsets = payload["joint_offsets_deg"]
     if not isinstance(raw_offsets, dict):
@@ -127,12 +135,99 @@ def _miscalibration_from_scenario(scenario: EvaluationScenario) -> Miscalibratio
     joint_offsets = {str(name): float(value) for name, value in raw_offsets.items()}
     if not all(math.isfinite(value) for value in joint_offsets.values()):
         raise ValueError("joint_offsets_deg must contain only finite numbers")
+
+    raw_jitter = payload.get("pan_jitter")
+    pan_jitter = None
+    if raw_jitter is not None:
+        if not isinstance(raw_jitter, dict) or set(raw_jitter) != {
+            "sigma_deg",
+            "tau_s",
+            "seed",
+        }:
+            raise ValueError("pan_jitter must be null or contain sigma_deg, tau_s, and seed")
+        sigma_deg = float(raw_jitter["sigma_deg"])
+        tau_s = float(raw_jitter["tau_s"])
+        if not math.isfinite(sigma_deg) or sigma_deg < 0.0:
+            raise ValueError("pan_jitter sigma_deg must be a nonnegative finite number")
+        if not math.isfinite(tau_s) or tau_s <= 0.0:
+            raise ValueError("pan_jitter tau_s must be a positive finite number")
+        if isinstance(raw_jitter["seed"], bool):
+            raise ValueError("pan_jitter seed must be an integer")
+        seed = int(raw_jitter["seed"])
+        if seed != raw_jitter["seed"]:
+            raise ValueError("pan_jitter seed must be an integer")
+        pan_jitter = SlowJitter(sigma_deg, tau_s, np.random.default_rng(seed))
+
+    cube_belief_error = tuple(
+        _finite_sequence(payload.get("cube_belief_error", (0.0, 0.0, 0.0, 0.0)), 4,
+                         "cube_belief_error")
+    )
+    target_belief_error = tuple(
+        _finite_sequence(payload.get("target_belief_error", (0.0, 0.0)), 2,
+                         "target_belief_error")
+    )
     return MiscalibrationDraw(
         base_offsets_deg=joint_offsets,
-        pan_jitter=None,
-        cube_belief_error=(0.0, 0.0, 0.0, 0.0),
-        target_belief_error=(0.0, 0.0),
+        pan_jitter=pan_jitter,
+        cube_belief_error=cube_belief_error,
+        target_belief_error=target_belief_error,
     )
+
+
+def _finite_sequence(value: object, length: int, name: str) -> tuple[float, ...]:
+    if not isinstance(value, (list, tuple)) or len(value) != length:
+        raise ValueError(f"{name} must contain {length} numbers")
+    result = tuple(float(item) for item in value)
+    if not all(math.isfinite(item) for item in result):
+        raise ValueError(f"{name} must contain only finite numbers")
+    return result
+
+
+def _physics_from_scenario(scenario: EvaluationScenario) -> PhysicsDraw:
+    payload = scenario.physics_sample
+    expected = {field.name for field in fields(PhysicsDraw)}
+    if set(payload) != expected:
+        raise ValueError(
+            f"scenario {scenario.scenario_id!r} has invalid physics fields; "
+            f"missing={sorted(expected - set(payload))}, unknown={sorted(set(payload) - expected)}"
+        )
+    joint_fields = (
+        "joint_gain_scale",
+        "joint_time_constant_scale",
+        "extra_joint_friction",
+    )
+    values: dict[str, Any] = dict(payload)
+    for field_name in joint_fields:
+        raw = values[field_name]
+        if not isinstance(raw, dict):
+            raise ValueError(f"{field_name} must be a JSON object")
+        unknown_joints = set(raw) - set(JOINT_NAMES)
+        if unknown_joints:
+            raise ValueError(f"{field_name} contains unknown joints: {sorted(unknown_joints)}")
+        values[field_name] = {str(name): float(value) for name, value in raw.items()}
+    for field_name in (
+        "tracking_bias_scale",
+        "mass_scale",
+        "friction_scale",
+        "damping_scale",
+    ):
+        values[field_name] = float(values[field_name])
+    numeric_values = [
+        value
+        for field_name in joint_fields
+        for value in values[field_name].values()
+    ] + [values[name] for name in ("tracking_bias_scale", "mass_scale", "friction_scale", "damping_scale")]
+    if not all(math.isfinite(value) for value in numeric_values):
+        raise ValueError("physics sample must contain only finite numbers")
+    if any(value <= 0.0 for value in values["joint_gain_scale"].values()):
+        raise ValueError("joint_gain_scale values must be positive")
+    if any(value <= 0.0 for value in values["joint_time_constant_scale"].values()):
+        raise ValueError("joint_time_constant_scale values must be positive")
+    if any(value < 0.0 for value in values["extra_joint_friction"].values()):
+        raise ValueError("extra_joint_friction values must be nonnegative")
+    if any(values[name] <= 0.0 for name in ("mass_scale", "friction_scale", "damping_scale")):
+        raise ValueError("mass, friction, and damping scales must be positive")
+    return PhysicsDraw(**values)
 
 
 def _domain_sample_from_scenario(
@@ -186,7 +281,6 @@ class PolicySimEnv(gym.Env):
         scene_appearance: SceneAppearance | None = None,
         terminate_on_success: bool = True,
         include_images: bool = True,
-        tracking_bias_scale: float = 0.0,
     ) -> None:
         super().__init__()
         image_height, image_width = image_hw
@@ -205,6 +299,7 @@ class PolicySimEnv(gym.Env):
         # with, the rest is only pixels.
         self._wrist_mount = WristMountRandomizer(self.model)
         self._randomizer = AppearanceRandomizer(self.model)
+        self._physics_randomizer = PhysicsRandomizer(self.model)
         # A policy must be rolled out in the appearance it was trained on: the
         # blue-cube checkpoints see a recoloured cube that the compiled scene,
         # which carries the physical rig's AprilTag cube, does not have.
@@ -220,18 +315,8 @@ class PolicySimEnv(gym.Env):
             SceneAppearanceOverride(self.model) if scene_appearance is not None else None
         )
 
-        # Where a commanded joint actually settles on the real arm. Off by
-        # default: it changes what a rollout measures, so every evaluation that
-        # uses it has to say so. The readback deliberately does not correct for
-        # it -- a drooping servo reports where it really is.
-        self._tracking_bias = (
-            tracking_bias_vector(
-                tracking_bias_rad(load_robot_dynamics_config(), scale=tracking_bias_scale),
-                JOINT_NAMES,
-            )
-            if tracking_bias_scale
-            else np.zeros(len(JOINT_NAMES))
-        )
+        self._fitted_tracking_bias_rad = tracking_bias_rad(load_robot_dynamics_config())
+        self._tracking_bias = np.zeros(len(JOINT_NAMES))
 
         self._joint_qpos_adr = joint_qpos_addresses(self.model)
         actuator_ids = {
@@ -284,6 +369,7 @@ class PolicySimEnv(gym.Env):
         self._oracle = TaskSuccessOracle()
         self._scenario: EvaluationScenario | None = None
         self._miscalibration: MiscalibrationDraw | None = None
+        self._physics = PhysicsDraw()
         self._domain_sample: DomainSample | None = None
         self._target_xy = np.zeros(2)
         self._step_count = 0
@@ -347,9 +433,15 @@ class PolicySimEnv(gym.Env):
         self._scenario = scenario
         self._step_count = 0
         self._miscalibration = _miscalibration_from_scenario(scenario)
+        self._physics = _physics_from_scenario(scenario)
         self._domain_sample = _domain_sample_from_scenario(scenario, self._miscalibration)
 
         mujoco.mj_resetData(self.model, self.data)
+        self._physics_randomizer.apply(self._physics)
+        self._tracking_bias = tracking_bias_vector(
+            tracking_bias_offsets(self._fitted_tracking_bias_rad, self._physics),
+            JOINT_NAMES,
+        )
         if self._domain_sample is None:
             self._randomizer.reset()
             self._wrist_mount.reset()
@@ -492,11 +584,35 @@ class PolicySimEnv(gym.Env):
         return {
             "scenario_id": self._scenario.scenario_id,
             "task_state": asdict(task_state),
+            "believed_task_state": asdict(self._believed_task_state(task_state)),
             "milestones": asdict(self._oracle.milestones),
             "success": self._oracle.success,
             "settled_on_target": self._oracle.settled_on_target,
             "control_steps": self._step_count,
         }
+
+    def _believed_task_state(self, task_state: TaskState) -> TaskState:
+        if self._miscalibration is None:
+            return task_state
+        dx, dy, dz, dyaw = self._miscalibration.cube_belief_error
+        orientation = np.asarray(task_state.cube_orientation_wxyz, dtype=float)
+        yaw_offset = np.array([math.cos(dyaw / 2.0), 0.0, 0.0, math.sin(dyaw / 2.0)])
+        believed_orientation = np.empty(4)
+        mujoco.mju_mulQuat(believed_orientation, yaw_offset, orientation)
+        target_dx, target_dy = self._miscalibration.target_belief_error
+        return replace(
+            task_state,
+            cube_position_m=(
+                task_state.cube_position_m[0] + dx,
+                task_state.cube_position_m[1] + dy,
+                task_state.cube_position_m[2] + dz,
+            ),
+            cube_orientation_wxyz=tuple(float(value) for value in believed_orientation),
+            target_xy_m=(
+                task_state.target_xy_m[0] + target_dx,
+                task_state.target_xy_m[1] + target_dy,
+            ),
+        )
 
     def step(self, action):
         if self._scenario is None:
@@ -559,6 +675,7 @@ class PolicySimEnv(gym.Env):
         )
 
     def close(self) -> None:
+        self._physics_randomizer.reset()
         if self._renderer is not None:
             self._renderer.close()
             self._renderer = None

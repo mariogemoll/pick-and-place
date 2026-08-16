@@ -78,11 +78,11 @@ def pack_observation(observation: dict[str, np.ndarray], info: dict[str, Any]) -
 
     Six robot coordinates, the cube's position, the first two columns of its
     rotation matrix, and the target's planar position. The cube pose comes from
-    the simulator rather than from a camera, so this observation is privileged
-    and the policy that reads it is a simulation policy until something
-    estimates the same quantities on the rig.
+    the simulator's believed state rather than from a camera, so this observation
+    remains privileged plumbing until something estimates the same quantities on
+    the rig. The belief can differ from truth under an evaluation miscalibration.
     """
-    task = info["task_state"]
+    task = info.get("believed_task_state", info["task_state"])
     return np.concatenate(
         (
             np.asarray(observation[STATE_FEATURE], dtype=np.float32),
