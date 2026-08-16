@@ -35,7 +35,7 @@ if [ "${#shift_list[@]}" -ne 2 ]; then
 fi
 
 workspace="/workspace"
-repo="$workspace/pick-and-place"
+repo="${REPO:-$workspace/pick-and-place}"
 venv="$workspace/venvs/pick-and-place"
 bucket_root="s3://allyouneed/pick-and-place"
 artifact_name="${ARTIFACT_NAME:-randomized-1000-maxretry1-224}"
