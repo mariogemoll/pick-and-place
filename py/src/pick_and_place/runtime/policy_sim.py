@@ -16,9 +16,6 @@ import numpy as np
 from gymnasium import spaces
 
 from pick_and_place.sim.scene import build_scene
-from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
-from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_spec
-from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
 from pick_and_place.sim.domain_randomization import (
     DomainSample,
     WristMountRandomizer,
@@ -62,17 +59,25 @@ RendererFactory = Callable[..., Any]
 
 
 def build_policy_sim_model(render_height: int, render_width: int) -> tuple[mujoco.MjModel, mujoco.MjData]:
-    """Compile the calibrated visual-policy scene with a free pick cube."""
+    """Compile the visual-policy scene with a free pick cube.
+
+    The cameras sit at their authored poses, so a scored evaluation is
+    reproducible from a clone. Domain randomization perturbs around that origin,
+    and its envelope is wide enough to cover an ordinary rig's deviation from
+    it, which is the robustness the randomization exists to provide.
+
+    The rig's measured extrinsics are deliberately not read here. Calibration
+    solves for a camera pose that is unknown; in simulation the pose is
+    declared, so there is nothing to solve. Rendering from one rig's solved pose
+    would only pick a single arbitrary point out of the envelope that
+    randomization already samples, at the cost of making every pixel depend on
+    gitignored local files.
+    """
     if render_height < 1 or render_width < 1:
         raise ValueError("render dimensions must be positive")
     spec = build_scene(include_environment=True)
     spec.visual.global_.offwidth = max(spec.visual.global_.offwidth, render_width)
     spec.visual.global_.offheight = max(spec.visual.global_.offheight, render_height)
-    apply_camera_extrinsics_to_spec(spec, load_local_camera_extrinsics())
-    intrinsics = load_local_camera_intrinsics()
-    for camera in spec.cameras:
-        if camera.name in intrinsics and "fovy_deg" in intrinsics[camera.name]:
-            camera.fovy = float(intrinsics[camera.name]["fovy_deg"])
 
     spec.body("pick_cube").add_freejoint()
     add_paper_target_marker(spec)

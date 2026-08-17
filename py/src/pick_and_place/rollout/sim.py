@@ -13,8 +13,9 @@ the action issued at time t — the same observe-then-act ordering as a real
 recording. The two cameras are rendered offscreen from the named MuJoCo
 cameras, so no hardware is involved.
 
-Each camera's vertical field of view is set from its calibrated intrinsics. The
-source render and saved output resolutions are independently configurable.
+Each camera's vertical field of view is set from the authored optics in
+:mod:`pick_and_place.spec.camera`. The source render and saved output
+resolutions are independently configurable.
 (Undistortion is a no-op in sim: the sim camera is an ideal pinhole, so there is
 nothing to fake-then-invert — matching the field of view is all that is needed.)
 
@@ -50,7 +51,6 @@ from typing import Any, Callable
 import mujoco
 import numpy as np
 
-from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.core.image_ops import resize_and_center_crop
 from pick_and_place.core.task_phases import PhaseSpan
@@ -68,7 +68,6 @@ from pick_and_place.rollout.phase import Run, play_phase
 from pick_and_place.rollout.sim_dataset import SimTickRecorder
 from pick_and_place.runtime.sim_wrist_servo import SimWristServo
 from pick_and_place.runtime.wrist_mixed_view import blend_mixed, close_mixed, show_mixed
-from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
 from pick_and_place.sim.domain_randomization import reload_renderer_textures
 from pick_and_place.policies.policy_evaluation import TaskOracleConfig
 from pick_and_place.sim.model import build_model, get_cube_pose, placement_error
@@ -126,9 +125,10 @@ def fovy_from_intrinsics(intrinsics: dict[str, Any]) -> float:
 class SimCameraRig:
     """Offscreen renderers for the wrist and overhead cameras.
 
-    Each camera's ``cam_fovy`` is overridden from its calibrated intrinsics (when
-    available) so the sim render matches the real undistorted feed. Falls back
-    to the model's built-in fovy for any camera without local intrinsics.
+    Each camera's ``cam_fovy`` is overridden from the intrinsics it is given,
+    falling back to the model's built-in fovy for any camera absent from them.
+    Sim callers pass the authored optics; the real-rig paths pass that rig's
+    measured ones, which is where a solved calibration belongs.
     """
 
     def __init__(
@@ -235,10 +235,14 @@ def build_recording_scene(
 
     Anything that moves a pixel lives here rather than in the caller —
     the environment and drop-zone marker, the offscreen buffer size, the
-    physics rate, the render-quality settings, and the locally calibrated
-    camera extrinsics. Recording and re-rendering both build through this
-    function so a recorded frame and a re-rendered one differ only where they
-    are meant to.
+    physics rate, and the render-quality settings. Recording and re-rendering
+    both build through this function so a recorded frame and a re-rendered one
+    differ only where they are meant to.
+
+    The cameras sit at their authored poses. That is the origin domain
+    randomization perturbs around, so a recording made from a fresh clone draws
+    from the same distribution as one made here, and a published dataset is one
+    the code can regenerate.
     """
     placeholder = CubePose(x=PAN_AXIS[0] + 0.1, y=PAN_AXIS[1], z=CUBE_HALF_SIZE)
     model, data = build_model(
@@ -252,7 +256,6 @@ def build_recording_scene(
     )
     model.opt.timestep = 1.0 / HARDWARE_SIMULATION_HZ
     configure_render_quality(model)
-    apply_camera_extrinsics_to_model(model, load_local_camera_extrinsics())
     mujoco.mj_forward(model, data)
     return model, data
 

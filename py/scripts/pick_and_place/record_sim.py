@@ -12,9 +12,11 @@ tick, the measured joints as ``observation.state``, the commanded set point as
 rendered at 1920x1080 before downsampling so silhouettes and shadow edges are
 antialiased. No hardware is involved.
 
-Camera fields of view come from the calibrated intrinsics in
-``config/camera_intrinsics``, so a sim frame matches the calibrated real camera
-resolution by default.
+Camera fields of view come from the authored optics in
+:mod:`pick_and_place.spec.camera`, not from a measured rig, so a recording made
+from a fresh clone is the same recording this machine makes. Domain
+randomization perturbs the cameras around those authored poses, and its
+envelope is what covers the deviation any particular rig has from them.
 
 The episode rollout is sequential within a process (stateful physics, one
 persistent scene), so ``--workers N`` runs a pool of N processes pulling
@@ -48,7 +50,7 @@ import mujoco
 import mujoco.viewer
 from tqdm import tqdm
 
-from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
+from pick_and_place.spec.camera import CAMERA_INTRINSICS_BY_NAME
 from pick_and_place.sim.domain_randomization import (
     DomainRandomizationPreset,
     WristMountRandomizer,
@@ -223,7 +225,7 @@ def run_recording(
     randomizer = AppearanceRandomizer(model) if preset is not None else None
     rig = SimCameraRig(
         model,
-        load_local_camera_intrinsics(),
+        CAMERA_INTRINSICS_BY_NAME,
         width=frames.image_width,
         height=frames.image_height,
         render_width=frames.render_width,

@@ -115,20 +115,16 @@ export PAP_DATA_ROOT="$workspace/data"
 stage 0 "inputs"
 git rev-parse HEAD | tee "$output_root/job-metadata/repository-commit.txt"
 echo "cores=$cores vram=${vram_mb}MiB workers=$workers episodes=$episodes"
-# Machine-local inputs absent from a fresh clone: the tag textures are generated
-# by provisioning, the camera calibrations are restored from the bucket. Without
-# the calibrations the scene is built at the model's authored camera pose rather
-# than the rig's measured one, which changes every rendered pixel and every
-# localization -- silently.
-for calibration in config/camera_extrinsics/overhead_camera.json \
-                   config/camera_intrinsics/overhead_camera.json \
-                   config/camera_intrinsics/wrist_camera.json; do
-  if [ ! -f "$repo/$calibration" ]; then
-    mkdir -p "$(dirname "$repo/$calibration")"
-    aws s3 cp "$bucket_root/config-backup/${calibration#config/}" \
-      "$repo/$calibration" --only-show-errors
-  fi
-done
+# The one machine-local input a fresh clone still needs is the tag textures,
+# and provisioning generates those.
+#
+# This deliberately does not restore the rig's camera calibration. A recording
+# is built at the authored camera pose, which is the origin domain
+# randomization perturbs around, so a dataset collected from a fresh clone is
+# the dataset this script describes rather than one centred on whichever rig
+# happened to record it. Restoring a measured pose here would move every
+# rendered pixel and every localization off that origin, silently and
+# unreproducibly.
 V="$workspace/venvs/pick-and-place/bin/python"
 
 # Belt and braces. `find_episode_datasets` now judges completeness by the

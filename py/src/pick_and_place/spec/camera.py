@@ -3,11 +3,32 @@
 
 """Nominal optics of the UVC camera modules the rig is built from.
 
-What the datasheet says, not what a particular unit measured: the simulator
-authors its cameras from these, and a rig that has never been calibrated falls
-back to them. ``calibration_required`` marks that as a stopgap — every value
-here is approximate until :mod:`pick_and_place.core.camera_calibration` finds a
-measured file for that camera.
+What the datasheet says, not what a particular unit measured. The simulator
+authors its cameras from these and never reads a measured file, so a scored
+evaluation and a recorded dataset are both reproducible from a clone; domain
+randomization perturbs around them, and its envelope is what covers the
+deviation any particular rig has. ``approximate`` and ``calibration_required``
+are addressed to the *real* rig, where a datasheet is a poor stand-in for a
+measured lens — in simulation the camera simply is these numbers, so there is
+nothing they approximate.
+
+**The rectified pinhole is the standard.** The physical modules are wide-angle
+and barrel-distorted, so a real frame is undistorted before anything consumes
+it (``convert_dataset_resolution.py``), while a MuJoCo camera is an ideal
+pinhole to begin with. The two meet at the undistorted view, and the only
+quantity that has to agree there is the vertical field of view — every crop
+downstream keeps full height. ``fovy_deg`` is therefore the load-bearing value
+here, and a rig with different modules needs to match *it*, not the module.
+
+That angle is a choice, not a property of the lens: undistorting a wide-angle
+image lets you keep as much field as you are willing to stretch at the edges.
+This project rectifies to ``fy = 1240`` on 1920x1080, i.e. 47 degrees vertical,
+which gives 75.4 degrees horizontally at 16:9, 60.2 at the 4:3 recording size,
+and 47.0 at the 512x512 square a policy is fed.
+
+Only ``fovy_deg`` reaches the simulator. MuJoCo cameras put the principal point
+at the image centre and have no distortion model, so ``camera_matrix``'s offset
+centre and ``dist_coeffs`` are used solely by the real-rig undistortion path.
 """
 
 from __future__ import annotations
