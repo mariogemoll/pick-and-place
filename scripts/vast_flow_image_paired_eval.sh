@@ -28,6 +28,7 @@ run_prefix="${RUN_PREFIX:?set RUN_PREFIX to the common training output prefix}"
 shifts="${SHIFTS:-8 0}"
 manifest="${MANIFEST:-randomized_selection_200_v1/manifest.json}"
 eval_name="${EVAL_NAME:-${run_prefix}-paired-$(date -u +%Y%m%d)}"
+parallel_arms="${PARALLEL_ARMS:-1}"
 read -r -a shift_list <<< "$shifts"
 if [ "${#shift_list[@]}" -ne 2 ]; then
   echo "SHIFTS must name exactly two arms; got: $shifts" >&2
@@ -123,8 +124,8 @@ printf '%s\n' \
   "repository_commit=$(git rev-parse HEAD)" \
   > "$output_root/command-contract.txt"
 
-for shift in "${shift_list[@]}"; do
-  arm="$run_prefix-shift$shift"
+score_arm() {
+  local shift="$1" arm="$run_prefix-shift$shift"
   "$venv/bin/python" py/scripts/eval_policy_sim.py \
     --controller flow-image \
     --checkpoint "$input_root/$arm/checkpoint.pt" \
@@ -136,7 +137,24 @@ for shift in "${shift_list[@]}"; do
     --device cuda \
     --output "$output_root/$arm" \
     2>&1 | tee "$output_root/$arm.log"
-done
+}
+
+if [ "$parallel_arms" = 1 ]; then
+  pids=()
+  for shift in "${shift_list[@]}"; do
+    score_arm "$shift" &
+    pids+=("$!")
+  done
+  status=0
+  for pid in "${pids[@]}"; do
+    wait "$pid" || status=1
+  done
+  [ "$status" -eq 0 ] || exit "$status"
+else
+  for shift in "${shift_list[@]}"; do
+    score_arm "$shift"
+  done
+fi
 
 baseline="$output_root/$run_prefix-shift${shift_list[0]}"
 comparison="$output_root/paired-comparison.json"
