@@ -24,7 +24,12 @@ dependencies = [
     "mujoco",
     "numpy",
     "omegaconf",
-    "opencv-python",
+    # lerobot pulls opencv-python-headless<4.14, and both wheels install the same
+    # cv2/ directory -- whichever lands last wins. Hold this to the same range so
+    # the two are at least the same OpenCV, then install this one last to get the
+    # GUI build that cv2.imshow needs:
+    #   pip install --no-deps --force-reinstall opencv-python==<version>
+    "opencv-python>=4.9,<4.14",
     "pupil-apriltags",
     "pyarrow",
     "reportlab",

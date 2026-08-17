@@ -5,12 +5,22 @@ import cv2
 
 MAX_CAMERAS = 10
 
+# Uncompressed YUYV is the default on Linux, and two 640x480 streams do not fit
+# in one USB controller's bandwidth: the second camera opens but every read()
+# fails. MJPG compresses on the camera, so all the feeds stream together.
+MJPG = cv2.VideoWriter_fourcc(*"MJPG")
+
 cameras = []
+
+# Probing past the last camera is expected, so do not let the backend log a
+# multi-line error for every index that is not there.
+cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_SILENT)
 
 for cam_id in range(MAX_CAMERAS):
     cap = cv2.VideoCapture(cam_id)
 
     if cap.isOpened():
+        cap.set(cv2.CAP_PROP_FOURCC, MJPG)
         ret, frame = cap.read()
         if ret:
             window_name = f"Camera {cam_id}"

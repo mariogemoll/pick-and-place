@@ -30,6 +30,7 @@ import time
 import cv2
 
 from pick_and_place.calibration.cam_align_solve import parse_index_or_path
+from pick_and_place.runtime.frame_reader import capture_backend
 
 
 def parse_resolutions(text: str) -> list[tuple[int, int]]:
@@ -96,7 +97,7 @@ def main() -> None:
     if not resolutions:
         parser.error("no resolutions to test")
 
-    backend = cv2.CAP_AVFOUNDATION if hasattr(cv2, "CAP_AVFOUNDATION") else cv2.CAP_ANY
+    backend = capture_backend(cv2)
     cap = cv2.VideoCapture(parse_index_or_path(args.camera), backend)
     if not cap.isOpened():
         cap.release()

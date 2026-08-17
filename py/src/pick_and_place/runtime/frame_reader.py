@@ -22,6 +22,7 @@ snapshots are handed out without copying.
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -146,6 +147,21 @@ class FrameReader:
         self.close()
 
 
+def capture_backend(cv2: Any) -> int:
+    """Return the ``VideoCapture`` backend to open rig cameras with.
+
+    Every OpenCV build defines every backend constant, whether or not it was
+    compiled in, so ``hasattr(cv2, "CAP_AVFOUNDATION")`` is true on Linux too and
+    asking for it there opens nothing. Pick by platform instead: AVFoundation on
+    macOS, V4L2 on Linux, and let OpenCV choose anywhere else.
+    """
+    if sys.platform == "darwin":
+        return int(cv2.CAP_AVFOUNDATION)
+    if sys.platform.startswith("linux"):
+        return int(cv2.CAP_V4L2)
+    return int(cv2.CAP_ANY)
+
+
 def open_capture(source: str, width: int, height: int, label: str) -> Any:
     """Open ``source`` as a ``cv2.VideoCapture`` requesting ``width`` x ``height``.
 
@@ -157,11 +173,18 @@ def open_capture(source: str, width: int, height: int, label: str) -> Any:
 
     from pick_and_place.calibration.cam_align_solve import parse_index_or_path
 
-    backend = cv2.CAP_AVFOUNDATION if hasattr(cv2, "CAP_AVFOUNDATION") else cv2.CAP_ANY
+    backend = capture_backend(cv2)
     capture = cv2.VideoCapture(parse_index_or_path(source), backend)
     if not capture.isOpened():
         capture.release()
         raise RuntimeError(f"could not open {label} camera {source!r}")
+    if backend == int(cv2.CAP_V4L2):
+        # V4L2 defaults to uncompressed YUYV, and the rig's overhead and wrist
+        # streams together do not fit in one USB controller's bandwidth: both
+        # cameras open, but the second one's every read() fails. MJPG compresses
+        # on the camera, so the two stream side by side. Request it before the
+        # resolution -- the driver picks the frame size from the active format.
+        capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
     capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
     return capture

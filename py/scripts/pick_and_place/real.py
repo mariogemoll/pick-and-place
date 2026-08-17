@@ -13,7 +13,9 @@ replanning, exactly as it does in ``eval_policy_sim.py``.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import datetime
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -39,6 +41,7 @@ from pick_and_place.cli.rig import (
 )
 from pick_and_place.cli.scene import add_preflight_debug_arguments, preflight_debug_from_args
 from pick_and_place.runtime.frame_reader import FrameReader, open_frame_reader
+from pick_and_place.runtime.wrist_servo import draw_cube, draw_tags, project_cube
 from pick_and_place.runtime.ramp import ramp_follower
 from pick_and_place.spec.robot import GRIPPER_INDEX
 from pick_and_place.core.joint_frames import (
@@ -50,6 +53,11 @@ from pick_and_place.core.joint_frames import (
 from pick_and_place.hardware.follower import make_so101_follower
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
+from pick_and_place.perception.cube_detection import (
+    CubeTracker,
+    detect_cube_faces,
+    detect_tags,
+)
 from pick_and_place.perception.image_rectify import (
     build_undistort_map,
     rectified_camera_matrix,
@@ -122,6 +130,102 @@ def _rectified_rgb_reader(
     return read
 
 
+@dataclasses.dataclass
+class _ServoPreview:
+    """The newest annotated wrist frame, handed from the detector to the loop.
+
+    The wrist localizer runs on its own worker thread, and OpenCV's GUI is only
+    safe on the thread that owns it, so the split here is the same one
+    :mod:`pick_and_place.runtime.wrist_preview` makes for the recording pipeline:
+    the worker draws into a frame and publishes it, and the control loop is what
+    calls ``imshow``. A tick with nothing new keeps the frame it already has
+    rather than stalling the loop for one.
+    """
+
+    lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
+    bgr: np.ndarray | None = None
+    frame_id: int = 0
+    shown_id: int = -1
+
+    def publish(self, bgr: np.ndarray) -> None:
+        with self.lock:
+            self.bgr = bgr
+            self.frame_id += 1
+
+    def show(self, cv2: Any) -> None:
+        with self.lock:
+            if self.bgr is None or self.frame_id == self.shown_id:
+                return
+            bgr, self.shown_id = self.bgr, self.frame_id
+        cv2.imshow("Wrist servo: tags | solved cube", bgr)
+        if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
+            raise KeyboardInterrupt
+
+
+class _ReportingCubeTracker(CubeTracker):
+    """A wrist tracker that shows and says what it saw on every frame.
+
+    ``descent_servo_timeout`` reports only that no detection ever landed, which
+    does not separate the causes: the cube outside the wrist's view, its tags in
+    view but too small or too blurred to decode, or tags decoded and then
+    rejected downstream. The overlay and the per-frame line name which.
+
+    The drawing primitives are the recording pipeline's
+    (:mod:`pick_and_place.runtime.wrist_servo`), so the window here and the one
+    over a recorded descent show the same thing.
+    """
+
+    def __init__(self, preview: _ServoPreview, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._preview = preview
+
+    def update_frame(
+        self,
+        frame_rgb: np.ndarray,
+        camera_matrix: np.ndarray,
+        camera_position: np.ndarray,
+        camera_rotation: np.ndarray,
+        *,
+        dist: np.ndarray | None = None,
+    ) -> Any:
+        import cv2
+
+        faces = detect_cube_faces(frame_rgb, self.detector)
+        estimate = self.update(
+            faces, camera_matrix, camera_position, camera_rotation, dist=dist
+        )
+        if faces:
+            smallest = min(
+                float(np.ptp(np.asarray(det.corners, dtype=float), axis=0).max())
+                for det in faces
+            )
+            seen = f"faces={sorted(det.tag_id for det in faces)} smallest={smallest:.0f}px"
+        else:
+            others = len(detect_tags(frame_rgb, self.detector))
+            seen = f"no cube faces (other tags in view: {others})"
+
+        bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+        draw_tags(bgr, faces, cv2)
+        if estimate is None:
+            print(f"  wrist: {seen} -> no pose")
+        else:
+            x, y, z = (float(v) for v in estimate.position)
+            held = " HELD" if estimate.held else ""
+            print(
+                f"  wrist: {seen} -> x={x:.4f} y={y:.4f} z={z:.4f} "
+                f"reproj={estimate.reproj_px:.2f}px flip_rate={estimate.flip_rate:.2f}{held}"
+            )
+            rvec, tvec, points = project_cube(
+                estimate, camera_matrix, camera_position, camera_rotation, cv2
+            )
+            draw_cube(bgr, rvec, tvec, points, camera_matrix, cv2)
+        cv2.putText(
+            bgr, seen, (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1, cv2.LINE_AA
+        )
+        self._preview.publish(bgr)
+        return estimate
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     add_follower_arguments(parser)
@@ -168,6 +272,11 @@ def _parse_args() -> argparse.Namespace:
         "--show-camera-feeds",
         action="store_true",
         help="show the rectified overhead and wrist observations",
+    )
+    parser.add_argument(
+        "--debug-servo",
+        action="store_true",
+        help="open the wrist servo window and log what it saw, frame by frame",
     )
     parser.add_argument(
         "--viewer",
@@ -346,6 +455,8 @@ def main() -> None:
                 DEFAULT_IMAGE_HW[0],
             )
         )
+        servo_preview = _ServoPreview()
+
         def make_controller(*, recovery: bool) -> ScriptedPolicy:
             return scripted_policy(
                 OverheadLocalizer(
@@ -363,7 +474,16 @@ def main() -> None:
                 rng_seed=args.rng_seed,
                 control_hz=CONTROL_HZ / args.speed,
                 wrist_localizer=AsyncWristLocalization(
-                    WristCameraLocalizer(model, wrist_matrix, free_grasp=recovery)
+                    WristCameraLocalizer(
+                        model,
+                        wrist_matrix,
+                        free_grasp=recovery,
+                        tracker_factory=(
+                            (lambda: _ReportingCubeTracker(servo_preview, smooth=0.95))
+                            if args.debug_servo
+                            else None
+                        ),
+                    )
                 ),
                 target_sampler=sample_recovery_cube if recovery else None,
                 free_grasp=recovery,
@@ -512,6 +632,10 @@ def main() -> None:
             debug_viewer = mujoco_viewer.launch_passive(model, data)
 
         def show_observation(observation: dict[str, np.ndarray]) -> None:
+            if args.debug_servo:
+                servo_preview.show(cv2)
+            if not args.show_camera_feeds:
+                return
             overhead_bgr = cv2.cvtColor(
                 observation[OVERHEAD_FEATURE], cv2.COLOR_RGB2BGR
             )
@@ -787,7 +911,11 @@ def main() -> None:
                 pickup_verifier=pickup_verifier(controller),
                 placement_verifier=verify_placement,
                 recording=recording,
-                observation_callback=show_observation if args.show_camera_feeds else None,
+                observation_callback=(
+                    show_observation
+                    if args.show_camera_feeds or args.debug_servo
+                    else None
+                ),
                 tick_callback=sync_viewer if debug_viewer is not None else None,
                 reset_controller=False,
             )
@@ -819,7 +947,7 @@ def main() -> None:
     finally:
         if debug_viewer is not None:
             debug_viewer.close()
-        if args.show_camera_feeds:
+        if args.show_camera_feeds or args.debug_servo:
             cv2.destroyAllWindows()
         if recording is not None:
             recording.finalize()

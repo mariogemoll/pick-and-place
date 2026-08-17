@@ -25,6 +25,7 @@ import mujoco
 import numpy as np
 
 from pick_and_place.calibration.cam_align_solve import parse_index_or_path
+from pick_and_place.runtime.frame_reader import capture_backend
 from pick_and_place.calibration.camera_compare import load_intrinsics
 from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
 from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
@@ -81,7 +82,7 @@ def main() -> None:
         undistort_map = None
         print("Warning: no calibrated intrinsics; detecting on the raw frame")
 
-    backend = cv2.CAP_AVFOUNDATION if hasattr(cv2, "CAP_AVFOUNDATION") else cv2.CAP_ANY
+    backend = capture_backend(cv2)
     cap = cv2.VideoCapture(parse_index_or_path(args.camera), backend)
     if not cap.isOpened():
         raise SystemExit(f"could not open camera {args.camera!r} (is the viewer still running?)")

@@ -38,6 +38,7 @@ from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.sim.derive_kinematics import derive_kinematics
 from pick_and_place.calibration.cam_align_solve import parse_index_or_path
+from pick_and_place.runtime.frame_reader import capture_backend
 from pick_and_place.runtime.overhead_detection import MockViewer
 from pick_and_place.calibration.session_calibration import (
     CalibrationConfig,
@@ -51,7 +52,7 @@ DEFAULT_OUTPUT = REPO_ROOT / "config" / "joint_zeros.json"
 
 
 def _open_camera(spec: str, width: int, height: int) -> cv2.VideoCapture:
-    backend = cv2.CAP_AVFOUNDATION if hasattr(cv2, "CAP_AVFOUNDATION") else cv2.CAP_ANY
+    backend = capture_backend(cv2)
     cap = cv2.VideoCapture(parse_index_or_path(spec), backend)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
