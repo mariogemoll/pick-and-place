@@ -41,6 +41,7 @@ bucket_root="s3://allyouneed/pick-and-place"
 artifact_name="${ARTIFACT_NAME:-randomized-1000-maxretry1-224}"
 artifact_s3="$bucket_root/diffusion-policy-data/$artifact_name.tar.zst"
 artifact_root="$workspace/artifacts/$artifact_name"
+input_root="${INPUT_ROOT:-$workspace/evaluation-inputs}"
 output_root="$workspace/evaluations/$eval_name"
 output_s3="$bucket_root/evaluations/${manifest%%/manifest.json}/$eval_name"
 
@@ -50,7 +51,7 @@ if [ -e "$output_root" ]; then
   echo "Refusing to overwrite evaluation output: $output_root" >&2
   exit 2
 fi
-mkdir -p "$output_root" "$workspace/artifacts" "$workspace/outputs"
+mkdir -p "$output_root" "$workspace/artifacts" "$input_root"
 
 verify_local_manifest() {
   local root="$1"
@@ -72,7 +73,11 @@ verify_local_manifest() {
 fetch_final_arm() {
   local shift="$1" arm="$run_prefix-shift$shift"
   local source="$bucket_root/outputs/$arm"
-  local destination="$workspace/outputs/$arm"
+  # Never reuse the training pod's output directory here. Its live
+  # checkpoint.pt can be newer than the completed S3 manifest, and aws s3 sync
+  # intentionally leaves such a local file untouched. A dedicated input root
+  # makes this verification a check of the bytes that will actually be scored.
+  local destination="$input_root/$arm"
 
   echo "Fetching and verifying $arm"
   mkdir -p "$destination"
@@ -122,7 +127,7 @@ for shift in "${shift_list[@]}"; do
   arm="$run_prefix-shift$shift"
   "$venv/bin/python" py/scripts/eval_policy_sim.py \
     --controller flow-image \
-    --checkpoint "$workspace/outputs/$arm/checkpoint.pt" \
+    --checkpoint "$input_root/$arm/checkpoint.pt" \
     --flow-export "$artifact_root" \
     --flow-act-steps 8 \
     --flow-integration-steps 10 \
