@@ -16,7 +16,12 @@ import functools
 from typing import Any
 
 from pick_and_place.runtime.episodes import prepare_episode
-from pick_and_place.runtime.preflight import PreflightDebug, preflight
+from pick_and_place.runtime.preflight import (
+    PreflightDebug,
+    preflight,
+    preflight_collision_is_unexpected,
+    print_preflight_debug,
+)
 from pick_and_place.scripted.policy import ScriptedPolicy, TrajectoryPreflight
 from pick_and_place.sim.collisions import is_unexpected
 
@@ -25,15 +30,24 @@ def scene_preflight(debug: PreflightDebug = PreflightDebug()) -> TrajectoryPrefl
     """Accept a candidate only if it runs clean under the episode's own physics."""
 
     def accepts(episode: Any, trajectory: Any) -> bool:
-        events = preflight(
+        args = (
             episode.model,
             trajectory,
             episode.actuator_id,
             episode.robot_geom_ids,
             episode.env_geom_ids,
-            debug=debug,
         )
-        return not any(is_unexpected(name1, name2) for _, name1, name2 in events)
+        if not debug.detailed:
+            events = preflight(*args)
+            return not any(is_unexpected(name1, name2) for _, name1, name2 in events)
+        rejected = [
+            event
+            for event in preflight(*args, detailed=True)
+            if preflight_collision_is_unexpected(event)
+        ]
+        if rejected and debug.print_contacts:
+            print_preflight_debug(1, trajectory, rejected, limit=debug.contact_limit)
+        return not rejected
 
     return accepts
 
