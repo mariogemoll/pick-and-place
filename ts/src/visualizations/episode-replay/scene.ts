@@ -6,21 +6,36 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
 import {
   buildWebModel,
+  type BuiltWebModel,
   setJointAngle,
   type WebModel
 } from '../../web-model';
-import { createCubeBody } from '../grasp-pose-shared/body-factories';
+import { buildReplayEnvironmentModel } from '../environment-model';
+import { createCubeAprilTagBody } from '../grasp-pose-shared/body-factories';
 import { createBodyMaterials } from '../grasp-pose-shared/materials';
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from '../grasp-pose-shared/ui';
 
 const TARGET_MARKER_RADIUS = 0.006;
 const TARGET_MARKER_HEIGHT = 0.0005;
 
+export interface EpisodeReplaySceneOptions {
+  modelBasePath?: string;
+  /**
+   * When given, the workspace frame and overhead camera rig are placed around
+   * the robot. Leave it out for a bare robot-on-a-grid scene.
+   */
+  environmentModel?: WebModel;
+}
+
 export interface EpisodeReplayScene {
   scene: THREE.Scene;
   renderer: THREE.WebGLRenderer;
   camera: THREE.PerspectiveCamera;
   orbitControls: OrbitControls;
+  /** Robot body frames, by MuJoCo body name, for attaching to the arm. */
+  bodies: Map<string, THREE.Group>;
+  /** Environment body frames; empty unless an environment model was given. */
+  environmentBodies: Map<string, THREE.Group>;
   setJoint(name: string, radians: number): void;
   setCubeTransform(x: number, y: number, z: number, quat: [number, number, number, number]): void;
   setTarget(x: number, y: number): void;
@@ -31,8 +46,9 @@ export interface EpisodeReplayScene {
 export function createEpisodeReplayScene(
   viewport: HTMLElement,
   model: WebModel,
-  modelBasePath = '/so101_assets'
+  options: EpisodeReplaySceneOptions = {}
 ): EpisodeReplayScene {
+  const modelBasePath = options.modelBasePath ?? '/so101_assets';
   const initialWidth = viewport.clientWidth || CANVAS_WIDTH;
   const initialHeight = viewport.clientHeight || CANVAS_HEIGHT;
   const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -68,8 +84,17 @@ export function createEpisodeReplayScene(
   const builtModel = buildWebModel(model, modelBasePath);
   scene.add(builtModel.root);
 
+  let builtEnvironment: BuiltWebModel | undefined;
+  if (options.environmentModel !== undefined) {
+    builtEnvironment = buildReplayEnvironmentModel(options.environmentModel, modelBasePath);
+    scene.add(builtEnvironment.root);
+  }
+
+  // The manifest's own cube is filtered out of the environment because the cube
+  // moves: this one is driven from the recording instead. It carries the tags
+  // the physical cube does, which is what the overhead camera looks for.
   const materials = createBodyMaterials();
-  const cubePart = createCubeBody(materials);
+  const cubePart = createCubeAprilTagBody(materials);
   scene.add(cubePart.body);
 
   // A tiny flat disc on the floor marking the episode's drop target. MuJoCo's
@@ -101,6 +126,8 @@ export function createEpisodeReplayScene(
     renderer,
     camera,
     orbitControls,
+    bodies: builtModel.bodies,
+    environmentBodies: builtEnvironment?.bodies ?? new Map<string, THREE.Group>(),
     setJoint(name: string, radians: number): void {
       setJointAngle(model, builtModel.jointPivots, name, radians);
     },
@@ -116,8 +143,10 @@ export function createEpisodeReplayScene(
     destroy(): void {
       orbitControls.dispose();
       renderer.dispose();
-      for (const mats of builtModel.materialsByName.values()) {
-        for (const mat of mats) { mat.dispose(); }
+      for (const built of [builtModel, builtEnvironment]) {
+        for (const mats of built?.materialsByName.values() ?? []) {
+          for (const mat of mats) { mat.dispose(); }
+        }
       }
       cubePart.destroy();
       materials.destroy();

@@ -19,6 +19,23 @@ export function buildEnvironmentModel(
   return buildWebModel(environmentModel, modelBasePath);
 }
 
+/**
+ * The environment as a replay wants it: the workspace frame and the overhead
+ * camera rig, but no floor plane (a grid stands in for it, and the two would
+ * z-fight at z = 0) and no `pick_cube` (the replay animates its own cube).
+ */
+export function buildReplayEnvironmentModel(
+  environmentModel: WebModel,
+  modelBasePath = '/so101_assets'
+): BuiltWebModel {
+  return buildEnvironmentModel({
+    ...environmentModel,
+    bodies: environmentModel.bodies
+      .filter(body => body.name !== 'pick_cube')
+      .map(body => body.name === 'world' ? { ...body, geometries: [] } : body)
+  }, modelBasePath);
+}
+
 export function buildWorkspaceFrameBase(
   environmentModel: WebModel,
   modelBasePath = '/so101_assets'

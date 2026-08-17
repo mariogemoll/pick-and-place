@@ -3,6 +3,7 @@
 
 import * as THREE from 'three';
 
+import { createCubeAprilTags } from './apriltag/cube-tags';
 import { createAprilTagCellGeometry } from './apriltag/tag-mesh';
 import { loadMesh, loadMeshSet } from './mesh-loader';
 
@@ -50,11 +51,41 @@ export interface WebBody {
   geometries: WebGeometry[];
 }
 
+/**
+ * Calibrated pinhole intrinsics for a camera, as measured on the real rig.
+ * Only `fovy_deg` has an equivalent in three.js; the rest is carried so the
+ * manifest stays the single source of truth for the camera.
+ */
+export interface WebCameraIntrinsics {
+  model: string;
+  width: number;
+  height: number;
+  camera_matrix: number[][];
+  dist_coeffs: number[];
+  rms_reproj_px: number;
+  n_views: number;
+  sheet_scale: number;
+  fovy_deg: number;
+  fovx_deg: number;
+}
+
+export interface WebCamera {
+  name: string;
+  /** Body the camera is mounted on; its pose below is in that body's frame. */
+  body: string;
+  position: [number, number, number];
+  quaternion: [number, number, number, number];
+  /** Vertical field of view in degrees. */
+  fovy: number;
+  intrinsics?: WebCameraIntrinsics;
+}
+
 export interface WebModel {
   format: 'pick-and-place-web-model';
   version: 2;
   materials: Record<string, [number, number, number, number]>;
   bodies: WebBody[];
+  cameras: WebCamera[];
 }
 
 export interface BuiltWebModel {
@@ -75,11 +106,31 @@ const workspaceFrameAprilTagIds = new Map<string, number>([
   ['workspace_frame_apriltag_14_material', 14],
   ['workspace_frame_apriltag_15_material', 15]
 ]);
-// Shared, module-scoped so all frame tags reuse one black material.
+// Shared, module-scoped so all frame tags reuse one black material. Biased a
+// step further towards the camera than the face it is drawn on, so the cells
+// stay in front of it however coarse the depth buffer gets.
 const workspaceFrameTagMaterial = new THREE.MeshStandardMaterial({
   color: 0x000000,
-  roughness: 0.78
+  roughness: 0.78,
+  polygonOffset: true,
+  polygonOffsetFactor: -2,
+  polygonOffsetUnits: -2
 });
+
+// The pick cube is one box geom, textured per face in the simulator; here its
+// tags are geometry laid on the faces, the same way the frame plates work.
+const PICK_CUBE_TAG_MATERIAL = 'pick_cube_apriltags';
+const pickCubeTagMaterial = new THREE.MeshStandardMaterial({
+  color: 0x000000,
+  roughness: 0.72,
+  polygonOffset: true,
+  polygonOffsetFactor: -1,
+  polygonOffsetUnits: -1
+});
+
+function isWorkspaceFrameTagFace(geometry: WebGeometry): boolean {
+  return geometry.material !== undefined && workspaceFrameAprilTagIds.has(geometry.material);
+}
 
 export function loadWebModel(url = '/so101.json'): Promise<WebModel> {
   const cached = cache.get(url);
@@ -121,22 +172,44 @@ export function materialFor(
     roughness: 0.6,
     transparent: a < 1
   });
+  // The tag faces are modelled 10 um above the plates they sit on, which is
+  // finer than the depth buffer can resolve at the distance the scene is viewed
+  // from -- so they are biased a depth step towards the camera instead of being
+  // left to fight the plate for the same pixels.
+  if (isWorkspaceFrameTagFace(geometry)) {
+    material.polygonOffset = true;
+    material.polygonOffsetFactor = -1;
+    material.polygonOffsetUnits = -1;
+  }
   // User request: workspace borders should not be transparent.
   return material;
 }
 
-// When `mesh` is a white workspace-frame AprilTag plate, attach the tag's black
-// cells as crisp geometry centered on its (upward) +Z face. The white margin is
-// simply the plate surface showing through.
+// When `mesh` is the tag face of a workspace-frame plate, attach the tag's black
+// cells as crisp geometry just above it. The white margin is simply the face
+// showing through.
+//
+// The face is its own geom in the manifest -- a plane laid over the plate, which
+// MuJoCo textures and which is white here -- so the cells sit on the plane's own
+// origin rather than being lifted over a plate's half thickness.
 function addWorkspaceFrameTag(mesh: THREE.Mesh, geometry: WebGeometry): void {
-  if (geometry.type !== 'box' || geometry.material === undefined) { return; }
-  const tagId = workspaceFrameAprilTagIds.get(geometry.material);
-  if (tagId === undefined || geometry.size === undefined) { return; }
+  const tagId = geometry.material === undefined
+    ? undefined
+    : workspaceFrameAprilTagIds.get(geometry.material);
+  if (tagId === undefined) { return; }
   const cellGeometry = createAprilTagCellGeometry(tagId, WORKSPACE_FRAME_TAG_SIZE);
   const tag = new THREE.Mesh(cellGeometry, workspaceFrameTagMaterial);
   tag.name = `${geometry.name}_tag`;
-  tag.position.set(0, 0, geometry.size[2] + TAG_SURFACE_OFFSET);
+  tag.position.set(0, 0, TAG_SURFACE_OFFSET);
   mesh.add(tag);
+}
+
+// When `mesh` is the pick cube, lay its six tags on its faces. The cube's own
+// material is the white sticker the tags are printed on.
+function addPickCubeTags(mesh: THREE.Mesh, geometry: WebGeometry): void {
+  if (geometry.material !== PICK_CUBE_TAG_MATERIAL || geometry.size === undefined) { return; }
+  const tags = createCubeAprilTags(geometry.size[0] + TAG_SURFACE_OFFSET, pickCubeTagMaterial);
+  mesh.add(tags.group);
 }
 
 export function primitiveGeometry(geometry: WebGeometry): THREE.BufferGeometry | undefined {
@@ -183,6 +256,7 @@ function addVisual(
   mesh.position.set(...geometry.position);
   setQuaternion(mesh, geometry.quaternion);
   addWorkspaceFrameTag(mesh, geometry);
+  addPickCubeTags(mesh, geometry);
   bodyGroup.add(mesh);
 }
 
@@ -287,6 +361,37 @@ export function buildWebModel(
     materialsByName,
     ready: Promise.all(meshLoads).then(() => undefined)
   };
+}
+
+export function cameraByName(model: WebModel, name: string): WebCamera {
+  const camera = model.cameras.find(candidate => candidate.name === name);
+  if (camera === undefined) {
+    throw new Error(`Model has no camera named "${name}"`);
+  }
+  return camera;
+}
+
+/**
+ * A three.js camera holding the manifest camera's pose, expressed in its
+ * mounting body's frame: add it to that body's group and it rides along.
+ *
+ * MuJoCo and three.js agree on the camera frame — looking down local -Z with
+ * +Y up — so the pose transfers directly, only the quaternion needs its
+ * MuJoCo (w, x, y, z) order swapped for three.js's (x, y, z, w).
+ *
+ * The aspect is left at 1: the policy's square input comes from an aspect-fill
+ * resize plus a center crop, which keeps the full vertical field of view and
+ * trims the horizontal one, so a square render at `fovy` frames it the same.
+ */
+export function createWebCamera(
+  camera: WebCamera,
+  near = 0.005,
+  far = 20
+): THREE.PerspectiveCamera {
+  const perspective = new THREE.PerspectiveCamera(camera.fovy, 1, near, far);
+  perspective.position.set(...camera.position);
+  setQuaternion(perspective, camera.quaternion);
+  return perspective;
 }
 
 export function setJointAngle(

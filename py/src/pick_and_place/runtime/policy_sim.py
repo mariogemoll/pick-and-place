@@ -390,6 +390,20 @@ class PolicySimEnv(gym.Env):
     def scenario(self) -> EvaluationScenario | None:
         return self._scenario
 
+    def replay_qpos(self) -> np.ndarray:
+        """The minimal state a viewer needs to redraw this instant of the scene.
+
+        The 6 arm and gripper joint angles in radians, followed by the cube's
+        free-joint pose (position then MuJoCo's w,x,y,z quaternion) -- the same
+        13-float row the browser episode viewer is already driven from.
+        """
+        return np.concatenate(
+            (
+                self.data.qpos[self._joint_qpos_adr],
+                self.data.qpos[self._cube_qpos_adr : self._cube_qpos_adr + 7],
+            )
+        ).astype(np.float32)
+
     def _renderer_instance(self):
         if self._renderer is None:
             height, width = self.render_hw

@@ -3,7 +3,7 @@
 
 import * as THREE from 'three';
 
-import { createAprilTagCellGeometry } from '../../apriltag/tag-mesh';
+import { createCubeAprilTags } from '../../apriltag/cube-tags';
 import {
   buildWebModel,
   setJointAngle,
@@ -32,10 +32,12 @@ const TIP_BOX = FIXED_JAW_COLLISION_BOXES[5];
 export const CUBE_HALF_SIZE = 0.015;
 const MARKER_SURFACE_OFFSET = 0.00001;
 const TAG_SURFACE_OFFSET = 0.0001;
-// Face order matches THREE.BoxGeometry material groups: +x, -x, +y, -y, +z, -z.
-const CUBE_APRILTAG_IDS = [0, 1, 2, 3, 4, 5] as const;
-// The 30 mm sticker covers the whole cube face; the tag graphic is 20 mm.
-const CUBE_TAG_SIZE = 0.02;
+// The sticker is white, but pure white is not paintable under these lights: at
+// an albedo of 1 every channel saturates and all six faces come out the same
+// flat white, so the cube reads as a silhouette. A little grey keeps enough
+// headroom for the faces to shade apart, which is why the blue cube always
+// looked solid -- two of its three channels sit nowhere near clipping.
+const CUBE_FACE_COLOR = 0xc7ccd3;
 
 export type CubeFace = '+x' | '-x' | '+y' | '-y' | '+z' | '-z';
 
@@ -111,47 +113,26 @@ export function createGripperFromContactMatrix(): THREE.Matrix4 {
   );
 }
 
-// The six cube faces, in THREE.BoxGeometry material-group order, as the rotation
-// that carries the tag geometry's local +Z normal onto the outward face normal
-// and the outward position of the face center.
-const CUBE_FACE_PLACEMENTS: readonly (readonly [THREE.Euler, THREE.Vector3])[] = [
-  [new THREE.Euler(0, Math.PI / 2, 0), new THREE.Vector3(1, 0, 0)],
-  [new THREE.Euler(0, -Math.PI / 2, 0), new THREE.Vector3(-1, 0, 0)],
-  [new THREE.Euler(-Math.PI / 2, 0, 0), new THREE.Vector3(0, 1, 0)],
-  [new THREE.Euler(Math.PI / 2, 0, 0), new THREE.Vector3(0, -1, 0)],
-  [new THREE.Euler(0, 0, 0), new THREE.Vector3(0, 0, 1)],
-  [new THREE.Euler(Math.PI, 0, 0), new THREE.Vector3(0, 0, -1)]
-];
-
 // A cube whose six faces carry crisp, geometry-based AprilTags on a white
 // surface (rather than textures), so they stay sharp at any zoom level.
 export function createCubeAprilTagBody(materials: BodyMaterials): BodyPart {
-  const faceMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.72 });
+  const faceMaterial = new THREE.MeshStandardMaterial({
+    color: CUBE_FACE_COLOR,
+    roughness: 0.72
+  });
   const tagMaterial = new THREE.MeshStandardMaterial({ color: 0x000000, roughness: 0.72 });
   const cubePart = createCubeBody(
     materials, Array.from({ length: 6 }, () => faceMaterial), false
   );
 
-  const tags = new THREE.Group();
-  tags.name = 'cube_apriltags';
-  const offset = CUBE_HALF_SIZE + TAG_SURFACE_OFFSET;
-  const geometries: THREE.BufferGeometry[] = [];
-  for (const [index, [euler, direction]] of CUBE_FACE_PLACEMENTS.entries()) {
-    const geometry = createAprilTagCellGeometry(CUBE_APRILTAG_IDS[index], CUBE_TAG_SIZE);
-    geometries.push(geometry);
-    const mesh = new THREE.Mesh(geometry, tagMaterial);
-    mesh.name = `cube_apriltag_${CUBE_APRILTAG_IDS[index]}`;
-    mesh.setRotationFromEuler(euler);
-    mesh.position.copy(direction).multiplyScalar(offset);
-    tags.add(mesh);
-  }
-  cubePart.body.add(tags);
+  const tags = createCubeAprilTags(CUBE_HALF_SIZE + TAG_SURFACE_OFFSET, tagMaterial);
+  cubePart.body.add(tags.group);
 
   return {
     body: cubePart.body,
     destroy(): void {
       cubePart.destroy();
-      for (const geometry of geometries) { geometry.dispose(); }
+      tags.dispose();
       faceMaterial.dispose();
       tagMaterial.dispose();
     }
