@@ -53,7 +53,8 @@ fi
 mkdir -p "$output_root" "$workspace/artifacts" "$workspace/outputs"
 
 verify_local_manifest() {
-  local root="$1" manifest_path="$root/SHA256SUMS"
+  local root="$1"
+  local manifest_path="$root/SHA256SUMS"
   [ -s "$manifest_path" ] || { echo "missing manifest: $manifest_path" >&2; return 1; }
   (
     cd "$root"
