@@ -267,6 +267,28 @@ def _flow_image_metadata(controller: FlowImagePolicyController, args: argparse.N
     }
 
 
+def _camera_base_metadata(model: mujoco.MjModel) -> dict:
+    """The compiled scene's camera geometry, recorded with every scored run.
+
+    Domain randomization is a displacement applied to these poses, so two runs
+    that agree on a scenario manifest but disagree here are not comparable --
+    and until this was written down, nothing in a policy run's record would have
+    shown it. The manifest pins the jitter; this pins what the jitter is
+    relative to.
+    """
+    cameras = {}
+    for name in ("overhead_camera", "wrist_camera"):
+        camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, name)
+        if camera_id < 0:
+            continue
+        cameras[name] = {
+            "position_m": [float(value) for value in model.cam_pos[camera_id]],
+            "quat_wxyz": [float(value) for value in model.cam_quat[camera_id]],
+            "fovy_deg": float(model.cam_fovy[camera_id]),
+        }
+    return {"source": "authored", "cameras": cameras}
+
+
 def _camera_matrix_for_output(
     model: mujoco.MjModel,
     camera_name: str,
@@ -533,6 +555,7 @@ def main() -> None:
         render_hw=(args.render_height, args.render_width),
         scene_appearance=scene_appearance,
     )
+    camera_base = _camera_base_metadata(env.model)
     results = []
     try:
         for index, scenario in enumerate(scenarios, start=1):
@@ -609,6 +632,7 @@ def main() -> None:
             "scene_appearance_fields": (
                 asdict(scene_appearance) if scene_appearance is not None else None
             ),
+            "camera_base": camera_base,
             "oracle": asdict(TaskOracleConfig()),
             "state_frame": "hardware (arm degrees, gripper position 0-100)",
             "action_frame": "hardware (arm degrees, gripper position 0-100)",

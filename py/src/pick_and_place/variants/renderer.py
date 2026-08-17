@@ -24,7 +24,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
+from pick_and_place.spec.camera import CAMERA_INTRINSICS_BY_NAME
 from pick_and_place.core.joint_frames import real_frame_to_sim
 from pick_and_place.core.workspace_bounds import is_cube_drop_allowed
 from pick_and_place.data.trajectory_artifact import EpisodeFacts, WristCameraMount
@@ -66,7 +66,7 @@ class VariantRenderer:
         )
         self.rig = SimCameraRig(
             self.model,
-            load_local_camera_intrinsics(),
+            CAMERA_INTRINSICS_BY_NAME,
             width=image_width,
             height=image_height,
             render_width=render_width,
