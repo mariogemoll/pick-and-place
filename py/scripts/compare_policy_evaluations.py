@@ -48,6 +48,16 @@ COMPARABLE_FIELDS = (
     # Different normalization statistics would mean the two policies were
     # driving the arm through different action scales.
     ("controller", "normalization", "sha256"),
+    # Flow-image runs do not expose the Diffusion Policy sampler or its
+    # normalization object.  Bind their equivalent rollout and export
+    # contracts directly, otherwise two Euler settings could be reported as a
+    # paired comparison merely because the absent Diffusion Policy fields both
+    # resolve to None.
+    ("controller", "integration"),
+    ("controller", "integration_steps"),
+    ("controller", "noise_correlation"),
+    ("controller", "export", "manifest_sha256"),
+    ("controller", "export", "normalization_sha256"),
 )
 
 
