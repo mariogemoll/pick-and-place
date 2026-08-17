@@ -5,12 +5,17 @@
 // works: draw noise, integrate it into a horizon, then execute that horizon's
 // actions while the world moves.
 //
-// Stepped, every horizon gets the same four-second cycle: half a second
-// holding the fresh noise, a second of integration, half a second frozen on
-// the horizon it produced, a second of execution, then the horizon fading out
-// over half a second and half a second of empty grid before the next draw. The
-// rhythm is the same for every horizon, and the holds give each result a beat
-// to be looked at before the next step overwrites it.
+// Stepped, every horizon gets the same three-and-a-half-second cycle: half a
+// second holding the fresh noise, a second of integration, half a second frozen
+// on the horizon it produced, a second of execution, and half a second of rest
+// on what that left behind before the next draw. The rhythm is the same for
+// every horizon, and the holds give each result a beat to be looked at before
+// the next step overwrites it.
+//
+// Executing a horizon scrolls it off to the left, so it needs no beat to be
+// cleared away: by the end of the execute phase the panel is already showing
+// nothing but the two commands that scrolled into the past, which is exactly
+// where the next horizon's cycle begins.
 //
 // Continuous drops all of that: each horizon is shown finished and executed
 // straight away, at the rate it was recorded at, so the rollout runs as the
@@ -21,16 +26,15 @@
 // their own beats with the arm held still, and only the execute phase advances
 // the replay. Playback time is therefore its own clock, not episode time.
 
-import type { FlowTrace } from './trace';
+import { chunkSpan, type FlowTrace } from './trace';
 
 export type Phase = 'sample' | 'flow' | 'execute';
 
 /**
  * What a beat does with its phase: `run` produces the phase's result, `hold`
- * sits on it, `fade` dissolves it away, and `clear` is the empty grid left
- * behind.
+ * sits on it, and `rest` is the pause on what the phase left behind.
  */
-export type Beat = 'run' | 'hold' | 'fade' | 'clear';
+export type Beat = 'run' | 'hold' | 'rest';
 
 /**
  * `stepped` walks the cycle beat by beat; `continuous` shows each horizon
@@ -56,8 +60,6 @@ export interface Moment {
   beat: Beat;
   /** 0 to 1 within the current phase; 1 once the phase has produced its result. */
   progress: number;
-  /** How visible the horizon is: 1 until it fades out, 0 on the empty grid. */
-  opacity: number;
   /** Where the arm stands, in fractional replay ticks. */
   tickFloat: number;
 }
@@ -71,8 +73,8 @@ export interface ScheduleOptions {
   /** Beat spent walking the arm through the horizon's actions. */
   executeSeconds?: number;
   /**
-   * The half-beat: holding the noise draw, holding the finished horizon,
-   * fading that horizon out, and the empty grid before the next draw.
+   * The half-beat: holding the noise draw, holding the finished horizon, and
+   * resting on what executing it scrolled into the past.
    */
   holdSeconds?: number;
 }
@@ -98,10 +100,7 @@ export function buildSchedule(trace: FlowTrace, options: ScheduleOptions = {}): 
   };
 
   for (let chunk = 0; chunk < trace.chunks; chunk++) {
-    const startTick = trace.chunkTicks[chunk];
-    // A horizon runs until the next one is generated; the last runs to the end
-    // of what was recorded, which is where the episode terminated.
-    const endTick = chunk + 1 < trace.chunks ? trace.chunkTicks[chunk + 1] : trace.frames - 1;
+    const [startTick, endTick] = chunkSpan(trace, chunk);
 
     if ((options.mode ?? 'stepped') === 'continuous') {
       push(chunk, 'execute', 'run', Math.max(endTick - startTick, 0) / trace.fps,
@@ -113,10 +112,9 @@ export function buildSchedule(trace: FlowTrace, options: ScheduleOptions = {}): 
     push(chunk, 'flow', 'run', flowSeconds, startTick, startTick);
     push(chunk, 'flow', 'hold', holdSeconds, startTick, startTick);
     push(chunk, 'execute', 'run', executeSeconds, startTick, endTick);
-    // The horizon is spent once it has been executed, so it dissolves instead
-    // of sitting there with the last step still marked.
-    push(chunk, 'execute', 'fade', holdSeconds, endTick, endTick);
-    push(chunk, 'execute', 'clear', holdSeconds, endTick, endTick);
+    // A beat on the scrolled-out result, which is the two commands the next
+    // horizon will be predicted from.
+    push(chunk, 'execute', 'rest', holdSeconds, endTick, endTick);
   }
   return segments;
 }
@@ -130,7 +128,7 @@ export function scheduleDuration(schedule: Segment[]): number {
 /** Where playback stands at `seconds`, clamped to the ends of the schedule. */
 export function momentAt(schedule: Segment[], seconds: number): Moment {
   if (schedule.length === 0) {
-    return { chunk: -1, phase: 'sample', beat: 'clear', progress: 0, opacity: 0, tickFloat: 0 };
+    return { chunk: -1, phase: 'sample', beat: 'rest', progress: 0, tickFloat: 0 };
   }
 
   let index = 0;
@@ -144,15 +142,13 @@ export function momentAt(schedule: Segment[], seconds: number): Moment {
   const elapsed = segment.duration > 0
     ? Math.min(Math.max((seconds - segment.start) / segment.duration, 0), 1)
     : 1;
-  // Only a `run` beat is still working towards its result; the rest have it.
+  // Only a `run` beat is still working towards its result; the others have it.
   const progress = segment.beat === 'run' ? elapsed : 1;
-  const opacity = segment.beat === 'fade' ? 1 - elapsed : segment.beat === 'clear' ? 0 : 1;
   return {
     chunk: segment.chunk,
     phase: segment.phase,
     beat: segment.beat,
     progress,
-    opacity,
     tickFloat: segment.startTick + (segment.endTick - segment.startTick) * progress
   };
 }

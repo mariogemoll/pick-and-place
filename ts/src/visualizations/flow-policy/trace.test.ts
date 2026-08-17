@@ -5,7 +5,16 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-import { chunkAt, type FlowTrace, frame, parseFlowTrace, pathState } from './trace';
+import {
+  chunkAt,
+  chunkSpan,
+  executedSteps,
+  executedTail,
+  type FlowTrace,
+  frame,
+  parseFlowTrace,
+  pathState
+} from './trace';
 
 const FRAMES = 5;
 const NQ = 13;
@@ -115,6 +124,76 @@ describe('accessors', () => {
     expect(chunkAt(trace, ACT_STEPS - 1)).toBe(0);
     expect(chunkAt(trace, ACT_STEPS)).toBe(1);
     expect(chunkAt(trace, 999)).toBe(CHUNKS - 1);
+  });
+});
+
+// A small trace whose path is filled with its own indices, so a slice can be
+// checked against the offset it should have come from.
+const SMALL_STEPS = 4;
+const SMALL_JOINTS = 2;
+const SMALL_STRIDE = SMALL_STEPS * SMALL_JOINTS;
+
+function small(overrides: Partial<FlowTrace> = {}): FlowTrace {
+  const states = 2;
+  const chunks = 2;
+  return {
+    fps: 10,
+    actSteps: 2,
+    targetX: 0,
+    targetY: 0,
+    frames: 5,
+    nq: 13,
+    joints: SMALL_JOINTS,
+    steps: SMALL_STEPS,
+    eulerSteps: states - 1,
+    chunks,
+    qpos: new Float32Array(),
+    chunkTicks: new Uint32Array([0, 2]),
+    path: new Float32Array(chunks * states * SMALL_STRIDE).map((_, index) => index),
+    commands: new Float32Array(),
+    ...overrides
+  };
+}
+
+describe('the executed part of a horizon', () => {
+  it('runs a horizon until the next one replaces it', () => {
+    expect(chunkSpan(small(), 0)).toEqual([0, 2]);
+  });
+
+  it('runs the last horizon out to the end of the recording', () => {
+    expect(chunkSpan(small(), 1)).toEqual([2, 4]);
+  });
+
+  it('executes every step it hands out', () => {
+    expect(executedSteps(small(), 0)).toBe(2);
+    expect(executedSteps(small(), 1)).toBe(2);
+  });
+
+  it('never counts more steps executed than the horizon hands out', () => {
+    // A horizon that stayed in flight far longer than it had steps for.
+    expect(executedSteps(small({ chunkTicks: new Uint32Array([0, 99]) }), 0)).toBe(2);
+  });
+
+  it('counts nothing for a horizon the recording ended on', () => {
+    expect(executedSteps(small({ frames: 3, chunkTicks: new Uint32Array([0, 2]) }), 1)).toBe(0);
+  });
+
+  it('takes the tail from the finished sample, not from the noise', () => {
+    const trace = small();
+    // Chunk 0's finished sample is the second of its two states.
+    expect([...executedTail(trace, 0, 2)]).toEqual([...pathState(trace, 0, 1).slice(0, 4)]);
+    expect([...executedTail(trace, 0, 2)]).toEqual([8, 9, 10, 11]);
+  });
+
+  it('takes the tail from the end of what was executed', () => {
+    // One step executed, so the tail is that step alone however many are asked
+    // for -- and it is the first step of the horizon, not the last.
+    const trace = small({ chunkTicks: new Uint32Array([0, 1]) });
+    expect([...executedTail(trace, 0, 2)]).toEqual([8, 9]);
+  });
+
+  it('has no tail before the first horizon', () => {
+    expect(executedTail(small(), -1, 2).length).toBe(0);
   });
 });
 

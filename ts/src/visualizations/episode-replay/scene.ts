@@ -11,7 +11,7 @@ import {
   type WebModel
 } from '../../web-model';
 import { buildReplayEnvironmentModel } from '../environment-model';
-import { createCubeBody } from '../grasp-pose-shared/body-factories';
+import { createCubeAprilTagBody } from '../grasp-pose-shared/body-factories';
 import { createBodyMaterials } from '../grasp-pose-shared/materials';
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from '../grasp-pose-shared/ui';
 
@@ -90,8 +90,11 @@ export function createEpisodeReplayScene(
     scene.add(builtEnvironment.root);
   }
 
+  // The manifest's own cube is filtered out of the environment because the cube
+  // moves: this one is driven from the recording instead. It carries the tags
+  // the physical cube does, which is what the overhead camera looks for.
   const materials = createBodyMaterials();
-  const cubePart = createCubeBody(materials);
+  const cubePart = createCubeAprilTagBody(materials);
   scene.add(cubePart.body);
 
   // A tiny flat disc on the floor marking the episode's drop target. MuJoCo's

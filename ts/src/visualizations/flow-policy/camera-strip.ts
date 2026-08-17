@@ -23,13 +23,21 @@ export interface ViewRect {
   size: number;
 }
 
-// Equal columns, one per view, each holding a top-aligned square as large as
-// the column and the strip's height allow.
+/**
+ * Space between one view and the next, in CSS pixels.
+ *
+ * The frames drawn over the strip have to sit on the same squares, so they
+ * divide the host by the same rule; see `flow-policy-viz-camera-view`.
+ */
+export const VIEW_GAP = 6;
+
+// Equal columns, one per view with the gaps taken out, each holding a
+// top-aligned square as large as the column and the strip's height allow.
 export function layoutViews(count: number, width: number, height: number): ViewRect[] {
-  const column = width / count;
+  const column = (width - VIEW_GAP * (count - 1)) / count;
   const size = Math.max(1, Math.min(height, Math.floor(column)));
   return Array.from({ length: count }, (_, index) => ({
-    x: Math.round(index * column),
+    x: Math.round(index * (column + VIEW_GAP)),
     y: height - size,
     size
   }));

@@ -9,6 +9,11 @@
 // generated and moving it only while that horizon is being executed, so each
 // phase is watchable on its own. Continuous drops the beats and plays the
 // rollout at its recorded rate, showing only each finished horizon.
+//
+// Executing a horizon scrolls it off the side of the panel, which leaves the
+// last two commands the arm carried out sitting where the next horizon will be
+// predicted from -- so the cycles run into each other instead of the panel
+// being cleared between them.
 
 import * as THREE from 'three';
 
@@ -16,7 +21,7 @@ import { ARM_JOINT_NAMES } from '../../ik/kinematics';
 import { cameraByName, createWebCamera, loadWebModel, type WebModel } from '../../web-model';
 import { createEpisodeReplayScene } from '../episode-replay/scene';
 import { createCameraStrip } from './camera-strip';
-import { createFlowPanel, type FlowPanel } from './flow-panel';
+import { createFlowPanel, type FlowPanel, HISTORY_COLUMNS } from './flow-panel';
 import {
   buildSchedule,
   momentAt,
@@ -24,7 +29,14 @@ import {
   type ScheduleMode,
   type Segment
 } from './schedule';
-import { type FlowTrace, frame, parseFlowTrace, pathState } from './trace';
+import {
+  executedSteps,
+  executedTail,
+  type FlowTrace,
+  frame,
+  parseFlowTrace,
+  pathState
+} from './trace';
 import { buildUi } from './ui';
 
 const JOINT_NAMES = [...ARM_JOINT_NAMES, 'gripper'] as const;
@@ -61,6 +73,13 @@ function lerp(a: number, b: number, t: number): number {
 
 // Hangs a camera off the body it is bolted to in the manifest, so it tracks
 // that body as the arm moves instead of being re-posed every frame.
+//
+// Squared up to its mount rather than posed as the manifest has it. What the
+// manifest carries is what calibration measured on the real rig, a degree or two
+// of tilt and yaw included, and the dataset is rendered through exactly that.
+// These views are for watching, and off-axis by a degree reads as a mistake, so
+// they look straight down their mount's axis. The mount's own angle stays: that
+// is where the camera is actually bolted, not a calibration residual.
 function mountCamera(
   bodies: Map<string, THREE.Group>,
   model: WebModel,
@@ -72,6 +91,7 @@ function mountCamera(
     throw new Error(`Scene has no body "${definition.body}" to mount ${name} on`);
   }
   const camera = createWebCamera(definition);
+  camera.quaternion.identity();
   body.add(camera);
   return camera;
 }
@@ -118,10 +138,11 @@ export async function FlowPolicy(
   let mode: ScheduleMode = 'stepped';
   let previousFrameTime: number | null = null;
 
-  // Reused so the animation does not allocate a horizon per rendered frame,
-  // sized for the largest horizon in case the rollouts came from different runs.
+  // Reused so the animation does not allocate a horizon per rendered frame.
+  // Only the steps that get executed are ever drawn, and the largest of those
+  // in case the rollouts came from different runs.
   const blended = new Float32Array(
-    Math.max(...traces.map(trace => trace.steps * trace.joints))
+    Math.max(...traces.map(trace => trace.actSteps * trace.joints))
   );
 
   const cubeQuat0 = new THREE.Quaternion();
@@ -154,7 +175,7 @@ export async function FlowPolicy(
 
   const applyTime = (value: number): void => {
     const trace = traces[traceIndex];
-    const { beat, chunk, opacity, phase, progress, tickFloat } =
+    const { chunk, phase, progress, tickFloat } =
       momentAt(schedules[mode][traceIndex], value);
     if (chunk < 0) { return; }
 
@@ -168,34 +189,34 @@ export async function FlowPolicy(
     const position = integration * trace.eulerSteps;
     const state = Math.min(Math.floor(position), trace.eulerSteps - 1);
     const within = position - state;
+    // Only the steps that get executed are shown, so only those are blended.
+    const shown = trace.actSteps * trace.joints;
     const from = pathState(trace, chunk, state);
     const to = pathState(trace, chunk, state + 1);
-    for (let index = 0; index < from.length; index++) {
+    for (let index = 0; index < shown; index++) {
       blended[index] = lerp(from[index], to[index], within);
     }
 
     panel.draw({
-      values: blended.subarray(0, from.length),
-      // The trail is where the integration started; without an integration to
-      // watch there is nothing for it to say.
-      trail: mode === 'stepped' ? pathState(trace, chunk, 0) : null,
-      steps: trace.steps,
+      history: executedTail(trace, chunk - 1, HISTORY_COLUMNS),
+      values: blended.subarray(0, shown),
+      // The trail is where the integration started; once the horizon is being
+      // executed that is behind it, and a trail on a scrolling column would
+      // only smear.
+      trail: mode === 'stepped' && phase !== 'execute'
+        ? pathState(trace, chunk, 0).subarray(0, shown)
+        : null,
       joints: trace.joints,
       actSteps: trace.actSteps,
-      executingStep: phase === 'execute' && beat === 'run'
-        ? Math.min(Math.floor(tickFloat - trace.chunkTicks[chunk]), trace.actSteps - 1)
-        : -1,
-      progress: integration,
-      opacity,
-      phase
+      // Executing the horizon is what scrolls it: one column per step carried
+      // out, which leaves the last two executed sitting left of the seam.
+      slide: phase === 'execute' ? executedSteps(trace, chunk) * progress : 0,
+      progress: integration
     });
 
-    for (const [key, chip] of Object.entries(ui.phases)) {
-      chip.classList.toggle('is-active', key === phase);
-    }
     ui.status.textContent =
-      `horizon ${chunk + 1} / ${trace.chunks} · generated at tick ` +
-      `${trace.chunkTicks[chunk]} · tick ${Math.floor(tickFloat)} of ${trace.frames - 1}`;
+      `horizon ${chunk + 1}/${trace.chunks} · tick ` +
+      `${Math.floor(tickFloat)}/${trace.frames - 1}`;
   };
 
   const renderPlayback = (): void => {
@@ -203,7 +224,6 @@ export async function FlowPolicy(
     ui.playPauseButton.textContent = playing ? 'Pause' : 'Play';
     ui.playPauseButton.setAttribute('aria-label', `${playing ? 'Pause' : 'Play'} rollout`);
     ui.modeButton.textContent = mode === 'stepped' ? 'Run continuously' : 'Step through';
-    ui.phaseRow.hidden = mode === 'continuous';
   };
   const setPlaying = (next: boolean): void => {
     playing = next;

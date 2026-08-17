@@ -1583,52 +1583,55 @@ input[type="range"]:active::-moz-range-thumb {
   }
 }
 
+/* One stage: the scene fills it, and everything else is inlaid over it. */
 .flow-policy-viz-root {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: var(--viz-gap-lg);
-  max-width: 1100px;
+  max-width: 760px;
   margin: 0 auto;
-}
-
-.flow-policy-viz-scene {
-  display: flex;
-  flex-direction: column;
-  gap: var(--viz-gap-md);
-  min-width: 0;
 }
 
 .flow-policy-viz-viewport {
   position: relative;
-  height: 400px;
+  height: 420px;
   background: var(--viz-canvas);
   border: 0;
   border-radius: var(--viz-radius-md);
   overflow: hidden;
 }
 
-.flow-policy-viz-viewport canvas {
+.flow-policy-viz-viewport > canvas {
   width: 100%;
   height: 100%;
 }
 
 .flow-policy-viz-label {
   position: absolute;
-  top: 0.75rem;
-  left: 0.75rem;
-  padding: 0.25rem 0.6rem;
+  top: 0.6rem;
+  left: 0.6rem;
+  z-index: 1;
+  padding: 0.15rem 0.4rem;
   background: rgb(0 0 0 / 45%);
   color: #fff;
-  font-size: 0.8rem;
+  font-family: var(--viz-font-mono);
+  font-size: 0.7rem;
   border-radius: var(--viz-radius-sm, 4px);
   pointer-events: none;
 }
 
-/* One canvas across the row; the camera strip scissors a square view into the
-   left and right halves, so the captions are placed on the same halves. */
+/* The views the policy sees, inlaid top right. One canvas across the pair; the
+   camera strip scissors a square view into each column of it, and each view's
+   frame and caption are laid over the same column.
+
+   Sized so that a column comes out square: one 76px view per camera plus the
+   gaps. A wider strip would letterbox the views inside their columns, and the
+   frames would no longer sit on them. */
 .flow-policy-viz-cameras {
-  position: relative;
-  height: 150px;
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  z-index: 1;
+  width: 158px;
+  height: 76px;
+  pointer-events: none;
 }
 
 .flow-policy-viz-cameras-canvas {
@@ -1638,60 +1641,45 @@ input[type="range"]:active::-moz-range-thumb {
   height: 100%;
 }
 
+/* One column of the strip each, border included, so a frame lands exactly on
+   the square the renderer scissored into that column. The column width and the
+   offsets come from VIEW_GAP, the same value layoutViews divides by. */
+.flow-policy-viz-camera-view {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  box-sizing: border-box;
+  border: 1px solid rgb(15 23 42 / 45%);
+  pointer-events: none;
+}
+
 .flow-policy-viz-camera-caption {
   position: absolute;
-  z-index: 1;
-  top: 0.4rem;
-  padding: 0.15rem 0.4rem;
-  margin-left: 0.4rem;
+  top: 0.15rem;
+  left: 0.15rem;
+  padding: 0.05rem 0.25rem;
   background: rgb(0 0 0 / 45%);
   color: #fff;
   font-family: var(--viz-font-mono);
-  font-size: 0.7rem;
+  font-size: 0.6rem;
   border-radius: var(--viz-radius-sm, 4px);
   pointer-events: none;
 }
 
-.flow-policy-viz-side {
-  display: flex;
-  flex-direction: column;
-  gap: var(--viz-gap-md);
-  min-width: 0;
-}
-
-.flow-policy-viz-controls {
-  display: flex;
-  gap: var(--viz-gap-sm);
-}
-
-.flow-policy-viz-mode-button {
-  min-width: 9rem;
-  color: #fff;
-  background: rgb(15 23 42 / 55%);
-  border-color: rgb(255 255 255 / 35%);
-}
-
-.flow-policy-viz-mode-button:hover {
-  background: rgb(15 23 42 / 75%);
-  border-color: rgb(255 255 255 / 55%);
-}
-
-.flow-policy-viz-phases[hidden] {
-  display: none;
-}
-
-.flow-policy-viz-status {
-  color: var(--viz-muted);
-  font-family: var(--viz-font-mono);
-  font-size: 0.75rem;
-}
-
+/* The horizon panel, inlaid in the corner under the camera views, so the two of
+   them keep to one edge and leave the rest of the scene clear. */
 .flow-policy-viz-panel-host {
-  flex: 1;
-  min-height: 400px;
-  background: var(--viz-surface);
-  border: 1px solid var(--viz-border);
-  border-radius: var(--viz-radius-md);
+  position: absolute;
+  right: 0.6rem;
+  bottom: 0.6rem;
+  z-index: 1;
+  width: min(33%, 250px);
+  height: 152px;
+  padding: 0.25rem;
+  background: rgb(255 255 255 / 90%);
+  backdrop-filter: blur(8px);
+  pointer-events: none;
 }
 
 .flow-policy-viz-panel {
@@ -1700,34 +1688,48 @@ input[type="range"]:active::-moz-range-thumb {
   height: 100%;
 }
 
-@media (width <= 900px) {
-  .flow-policy-viz-root {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .flow-policy-viz-viewport {
-    height: 320px;
-  }
+/* Playback sits in the corner the inlays leave free, so it needs neither the
+   full-width scrim the shared overlay draws nor a row of its own. */
+.flow-policy-viz-overlay {
+  right: auto;
+  align-items: flex-start;
+  gap: 0.3rem;
+  padding: 0.6rem;
+  background: none;
 }
 
-.flow-policy-viz-phases {
+.flow-policy-viz-controls {
   display: flex;
-  flex-wrap: wrap;
   gap: var(--viz-gap-sm);
 }
 
-.flow-policy-viz-phase {
-  padding: 0.2rem 0.5rem;
-  background: var(--viz-surface-muted);
-  border: 1px solid var(--viz-border);
-  border-radius: var(--viz-radius-sm);
-  color: var(--viz-muted);
+.flow-policy-viz-status {
+  padding: 0.15rem 0.35rem;
+  background: rgb(255 255 255 / 90%);
+  backdrop-filter: blur(8px);
+  color: var(--viz-text);
   font-family: var(--viz-font-mono);
-  font-size: 0.72rem;
+  font-size: 0.65rem;
 }
 
-.flow-policy-viz-phase.is-active {
-  background: var(--viz-success-surface);
-  border-color: var(--viz-success-border);
-  color: var(--viz-success-text);
+.flow-policy-viz-mode-button {
+  min-width: 7.5rem;
+  color: #fff;
+  background: rgb(15 23 42 / 70%);
+  border-color: rgb(255 255 255 / 35%);
+}
+
+.flow-policy-viz-mode-button:hover {
+  background: rgb(15 23 42 / 85%);
+  border-color: rgb(255 255 255 / 55%);
+}
+
+@media (width <= 900px) {
+  .flow-policy-viz-viewport {
+    height: 380px;
+  }
+
+  .flow-policy-viz-panel-host {
+    width: min(48%, 250px);
+  }
 }

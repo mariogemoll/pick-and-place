@@ -185,3 +185,91 @@ describe('createWebCamera', () => {
     expect(position.z).toBeCloseTo(0.48);
   });
 });
+
+// The tag graphic is a material in the manifest, textured for MuJoCo's renderer
+// and drawn as geometry here, so it hangs off whichever geom carries that
+// material -- a plane laid over the plate, in the manifest the exporter writes.
+describe('workspace frame AprilTag plates', () => {
+  function buildTagFace(): { face: THREE.Mesh; cells: THREE.Mesh } {
+    const model = makeModel([makeBody({
+      name: 'workspace_frame_frame',
+      geometries: [makeGeometry({
+        name: 'workspace_frame_tag_ne_top',
+        type: 'plane',
+        size: [0.03, 0.03, 0.03],
+        position: [0.23, 0.23, 0.00501],
+        material: 'workspace_frame_apriltag_12_material'
+      })]
+    })]);
+    const built = buildWebModel(model);
+    const face = built.bodies
+      .get('workspace_frame_frame')
+      ?.getObjectByName('workspace_frame_tag_ne_top') as THREE.Mesh;
+    const cells = face.getObjectByName('workspace_frame_tag_ne_top_tag') as THREE.Mesh;
+    return { face, cells };
+  }
+
+  it('draws the tag pattern on the face that carries the tag material', () => {
+    const { cells } = buildTagFace();
+    expect(cells).toBeDefined();
+    expect(cells.geometry.getAttribute('position').count).toBeGreaterThan(0);
+  });
+
+  it('lifts the cells clear of the face they are drawn on', () => {
+    const { cells } = buildTagFace();
+    expect(cells.position.z).toBeGreaterThan(0);
+  });
+
+  // The face is modelled 10 um above its plate, which no depth buffer resolves
+  // at the distance the scene is viewed from.
+  it('biases the face and its cells out of a depth fight, cells in front', () => {
+    const { face, cells } = buildTagFace();
+    const faceMaterial = face.material as THREE.MeshStandardMaterial;
+    const cellMaterial = cells.material as THREE.MeshStandardMaterial;
+    expect(faceMaterial.polygonOffset).toBe(true);
+    expect(faceMaterial.polygonOffsetFactor).toBeLessThan(0);
+    expect(cellMaterial.polygonOffset).toBe(true);
+    expect(cellMaterial.polygonOffsetFactor).toBeLessThan(faceMaterial.polygonOffsetFactor);
+  });
+
+  it('lays a tag on each face of the pick cube', () => {
+    const halfSize = 0.015;
+    const model = makeModel([makeBody({
+      name: 'pick_cube',
+      geometries: [makeGeometry({
+        name: 'pick_cube',
+        type: 'box',
+        size: [halfSize, halfSize, halfSize],
+        material: 'pick_cube_apriltags'
+      })]
+    })]);
+    const cube = buildWebModel(model).bodies
+      .get('pick_cube')
+      ?.getObjectByName('pick_cube') as THREE.Mesh;
+    const tags = cube.getObjectByName('cube_apriltags');
+
+    expect(tags?.children).toHaveLength(6);
+    // One per face, each just clear of the surface it is printed on.
+    const distances = tags?.children.map(tag => tag.position.length()) ?? [];
+    expect(distances.every(distance => distance > halfSize)).toBe(true);
+    expect(Math.max(...distances)).toBeLessThan(halfSize * 1.05);
+  });
+
+  it('leaves the plates and the rest of the frame to draw normally', () => {
+    const model = makeModel([makeBody({
+      name: 'workspace_frame_frame',
+      geometries: [makeGeometry({
+        name: 'workspace_frame_tag_ne',
+        type: 'box',
+        size: [0.03, 0.03, 0.0025],
+        position: [0.23, 0.23, 0.0025]
+      })]
+    })]);
+    const plate = buildWebModel(model).bodies
+      .get('workspace_frame_frame')
+      ?.getObjectByName('workspace_frame_tag_ne') as THREE.Mesh;
+
+    expect(plate.children).toHaveLength(0);
+    expect((plate.material as THREE.MeshStandardMaterial).polygonOffset).toBe(false);
+  });
+});

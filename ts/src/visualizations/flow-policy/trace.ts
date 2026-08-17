@@ -135,6 +135,46 @@ export function pathState(trace: FlowTrace, chunk: number, state: number): Float
   return trace.path.subarray(start, start + stride);
 }
 
+/**
+ * The ticks a horizon is in flight for: the tick it was generated on, and the
+ * tick the next horizon replaced it on. The last horizon runs to the end of
+ * what was recorded, which is where the episode terminated.
+ */
+export function chunkSpan(trace: FlowTrace, chunk: number): [number, number] {
+  return [
+    trace.chunkTicks[chunk],
+    chunk + 1 < trace.chunks ? trace.chunkTicks[chunk + 1] : trace.frames - 1
+  ];
+}
+
+/**
+ * How many of a horizon's steps the arm actually carried out.
+ *
+ * Normally every one of `actSteps`, since that is what the controller hands out
+ * before generating again; fewer for a horizon cut short by the episode ending.
+ */
+export function executedSteps(trace: FlowTrace, chunk: number): number {
+  const [startTick, endTick] = chunkSpan(trace, chunk);
+  return Math.min(Math.max(endTick - startTick, 0), trace.actSteps);
+}
+
+/**
+ * The last `count` commands a horizon actually executed, as a view into its
+ * finished sample. Shorter than `count` for a horizon that ran fewer steps than
+ * that, and empty for `chunk < 0`, where there is no horizon behind this one.
+ */
+export function executedTail(
+  trace: FlowTrace,
+  chunk: number,
+  count: number
+): Float32Array {
+  if (chunk < 0) { return new Float32Array(0); }
+  const executed = executedSteps(trace, chunk);
+  const taken = Math.min(count, executed);
+  const finished = pathState(trace, chunk, trace.eulerSteps);
+  return finished.subarray((executed - taken) * trace.joints, executed * trace.joints);
+}
+
 /** The index of the horizon in flight at `tick`, or -1 before the first. */
 export function chunkAt(trace: FlowTrace, tick: number): number {
   let found = -1;

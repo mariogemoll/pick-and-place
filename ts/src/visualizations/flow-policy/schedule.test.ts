@@ -11,7 +11,7 @@ const FLOW = 1;
 // Eight ticks per horizon in the test trace, so this beat runs them at 10 Hz.
 const EXECUTE = 0.8;
 const HOLD = 0.25;
-const CYCLE = SAMPLE + FLOW + HOLD + EXECUTE + HOLD + HOLD;
+const CYCLE = SAMPLE + FLOW + HOLD + EXECUTE + HOLD;
 
 // Only the fields the schedule reads; the arrays are irrelevant to timing.
 function trace(overrides: Partial<FlowTrace> = {}): FlowTrace {
@@ -41,15 +41,15 @@ const options = {
 describe('buildSchedule', () => {
   it('runs the same beats for every horizon, in order', () => {
     const schedule = buildSchedule(trace(), options);
-    const phases = ['sample', 'flow', 'flow', 'execute', 'execute', 'execute'];
-    const beats = ['hold', 'run', 'hold', 'run', 'fade', 'clear'];
+    const phases = ['sample', 'flow', 'flow', 'execute', 'execute'];
+    const beats = ['hold', 'run', 'hold', 'run', 'rest'];
 
     expect(schedule.map(segment => segment.phase))
       .toEqual([...phases, ...phases, ...phases]);
     expect(schedule.map(segment => segment.beat))
       .toEqual([...beats, ...beats, ...beats]);
     expect(schedule.map(segment => segment.chunk))
-      .toEqual([0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2]);
+      .toEqual([0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2]);
   });
 
   it('advances the replay only while executing, never on a hold', () => {
@@ -72,14 +72,14 @@ describe('buildSchedule', () => {
   });
 
   it('spends a second on each of the flow and execute beats by default', () => {
-    expect(buildSchedule(trace()).slice(0, 6).map(segment => segment.duration))
-      .toEqual([0.5, 1, 0.5, 1, 0.5, 0.5]);
+    expect(buildSchedule(trace()).slice(0, 5).map(segment => segment.duration))
+      .toEqual([0.5, 1, 0.5, 1, 0.5]);
   });
 
   it('keeps the same cycle whatever the control rate', () => {
     for (const fps of [5, 10, 20]) {
-      // Three horizons of 0.5 + 1 + 0.5 + 1 + 0.5 + 0.5 seconds.
-      expect(scheduleDuration(buildSchedule(trace({ fps })))).toBeCloseTo(3 * 4);
+      // Three horizons of 0.5 + 1 + 0.5 + 1 + 0.5 seconds.
+      expect(scheduleDuration(buildSchedule(trace({ fps })))).toBeCloseTo(3 * 3.5);
     }
   });
 
@@ -119,7 +119,7 @@ describe('buildSchedule, continuous', () => {
   it('shows every horizon finished, with the arm moving throughout', () => {
     const schedule = buildSchedule(trace(), continuous);
     const moment = momentAt(schedule, 0.4);
-    expect(moment).toMatchObject({ chunk: 0, phase: 'execute', opacity: 1 });
+    expect(moment).toMatchObject({ chunk: 0, phase: 'execute', beat: 'run' });
     expect(moment.tickFloat).toBeCloseTo(4);
   });
 });
@@ -139,27 +139,19 @@ describe('momentAt', () => {
 
   it('sits on the finished horizon through the hold after the flow', () => {
     expect(momentAt(schedule, SAMPLE + FLOW + HOLD / 2)).toMatchObject({
-      chunk: 0, phase: 'flow', beat: 'hold', progress: 1, opacity: 1, tickFloat: 0
+      chunk: 0, phase: 'flow', beat: 'hold', progress: 1, tickFloat: 0
     });
   });
 
-  it('fades the executed horizon out instead of dwelling on it', () => {
-    const fadeStart = SAMPLE + FLOW + HOLD + EXECUTE;
-    // The arm stays where the horizon left it while the horizon dissolves.
-    expect(momentAt(schedule, fadeStart)).toMatchObject({
-      chunk: 0, phase: 'execute', beat: 'fade', progress: 1, tickFloat: 8
+  it('rests on the scrolled-out horizon before drawing the next one', () => {
+    const restStart = SAMPLE + FLOW + HOLD + EXECUTE;
+    // The arm stays where the horizon left it, and the horizon stays fully
+    // executed, which is what puts the strip where the next cycle begins.
+    expect(momentAt(schedule, restStart + HOLD / 2)).toMatchObject({
+      chunk: 0, phase: 'execute', beat: 'rest', progress: 1, tickFloat: 8
     });
-    expect(momentAt(schedule, fadeStart + HOLD / 2).opacity).toBeCloseTo(0.5);
-    expect(momentAt(schedule, fadeStart + HOLD).opacity).toBe(0);
-  });
-
-  it('leaves the grid empty until the next horizon is drawn', () => {
-    const clearStart = SAMPLE + FLOW + HOLD + EXECUTE + HOLD;
-    expect(momentAt(schedule, clearStart + HOLD / 2)).toMatchObject({
-      chunk: 0, beat: 'clear', opacity: 0, tickFloat: 8
-    });
-    expect(momentAt(schedule, clearStart + HOLD + 0.01)).toMatchObject({
-      chunk: 1, phase: 'sample', opacity: 1
+    expect(momentAt(schedule, restStart + HOLD + 0.01)).toMatchObject({
+      chunk: 1, phase: 'sample', tickFloat: 8
     });
   });
 
@@ -186,7 +178,7 @@ describe('momentAt', () => {
     const moment = momentAt(schedule, 999);
     expect(moment.chunk).toBe(2);
     expect(moment.phase).toBe('execute');
-    expect(moment.beat).toBe('clear');
+    expect(moment.beat).toBe('rest');
     expect(moment.tickFloat).toBe(24);
   });
 });
