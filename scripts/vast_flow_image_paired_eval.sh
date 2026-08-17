@@ -40,6 +40,7 @@ repo="${REPO:-$workspace/pick-and-place}"
 venv="$workspace/venvs/pick-and-place"
 bucket_root="s3://allyouneed/pick-and-place"
 artifact_name="${ARTIFACT_NAME:-randomized-1000-maxretry1-224}"
+final_checkpoint="${FINAL_CHECKPOINT:-checkpoint-300000.pt}"
 artifact_s3="$bucket_root/diffusion-policy-data/$artifact_name.tar.zst"
 artifact_root="$workspace/artifacts/$artifact_name"
 input_root="${INPUT_ROOT:-$workspace/evaluation-inputs}"
@@ -54,23 +55,6 @@ if [ -e "$output_root" ]; then
 fi
 mkdir -p "$output_root" "$workspace/artifacts" "$input_root"
 
-verify_local_manifest() {
-  local root="$1"
-  local manifest_path="$root/SHA256SUMS"
-  [ -s "$manifest_path" ] || { echo "missing manifest: $manifest_path" >&2; return 1; }
-  (
-    cd "$root"
-    while read -r expected relative; do
-      local_path="${relative#./}"
-      actual=$(sha256sum "$local_path" | awk '{print $1}')
-      [ "$actual" = "$expected" ] || {
-        echo "checksum mismatch: $local_path" >&2
-        return 1
-      }
-    done < SHA256SUMS
-  )
-}
-
 fetch_final_arm() {
   local shift="$1" arm="$run_prefix-shift$shift"
   local source="$bucket_root/outputs/$arm"
@@ -80,13 +64,18 @@ fetch_final_arm() {
   # makes this verification a check of the bytes that will actually be scored.
   local destination="$input_root/$arm"
 
-  echo "Fetching and verifying $arm"
+  echo "Fetching and verifying $arm/$final_checkpoint"
   mkdir -p "$destination"
   aws s3 cp "$source/SHA256SUMS" "$destination/SHA256SUMS" --only-show-errors
-  aws s3 sync "$source" "$destination" --only-show-errors
-  verify_local_manifest "$destination"
-  [ -f "$destination/checkpoint.pt" ] || {
-    echo "$arm has no final checkpoint.pt" >&2
+  # Evaluation only needs the immutable final checkpoint. Downloading every
+  # intermediate checkpoint turns a 31 MB input into a ~500 MB transfer and
+  # delays the result without adding evidence: the training completion watcher
+  # has already verified the full remote manifest before this script runs.
+  aws s3 cp "$source/$final_checkpoint" "$destination/$final_checkpoint" --only-show-errors
+  expected=$(awk -v file="./$final_checkpoint" '$2 == file {print $1}' "$destination/SHA256SUMS")
+  actual=$(sha256sum "$destination/$final_checkpoint" | awk '{print $1}')
+  [ -n "$expected" ] && [ "$actual" = "$expected" ] || {
+    echo "$arm/$final_checkpoint does not match SHA256SUMS" >&2
     return 1
   }
 }
@@ -128,7 +117,7 @@ score_arm() {
   local shift="$1" arm="$run_prefix-shift$shift"
   "$venv/bin/python" py/scripts/eval_policy_sim.py \
     --controller flow-image \
-    --checkpoint "$input_root/$arm/checkpoint.pt" \
+    --checkpoint "$input_root/$arm/$final_checkpoint" \
     --flow-export "$artifact_root" \
     --flow-act-steps 8 \
     --flow-integration-steps 10 \
