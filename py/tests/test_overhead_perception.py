@@ -157,6 +157,41 @@ def test_a_quarter_turn_of_the_cube_is_not_an_error():
     assert fold_cube_symmetry(math.radians(3.0)) == pytest.approx(math.radians(3.0))
 
 
+def test_ground_truth_drop_target_plans_the_drop_against_the_true_plate(scene):
+    """The drop is pinned to truth while the cube belief stays measured."""
+    model, data = scene
+    perception = SimOverheadPerception(model, data)
+    rng = np.random.default_rng(3)
+    draw = MiscalibrationModel().sample(rng)
+    perception.set_error(OverheadCameraModel().sample(rng))
+    try:
+        localized = prepare_localized_episode(
+            rng,
+            model,
+            data,
+            perception,
+            max_attempts=8,
+            include_environment=True,
+            miscalibration=draw,
+            ground_truth_drop_target=True,
+        )
+    finally:
+        perception.close()
+
+    episode = localized.episode
+    assert episode.trajectory.phases
+    # Nothing corrects the drop, so the drop is planned against truth exactly.
+    assert episode.believed_target.x == pytest.approx(episode.target.x)
+    assert episode.believed_target.y == pytest.approx(episode.target.y)
+    # The cube belief is still measured -- the descent servo corrects the pickup,
+    # so honest perception there is what makes the demonstration realistic.
+    cube_miss = math.hypot(
+        episode.believed_source.x - episode.source.x,
+        episode.believed_source.y - episode.source.y,
+    )
+    assert 0.0 < cube_miss < 0.030
+
+
 def test_a_localized_episode_plans_against_what_it_saw(scene):
     """End to end: the belief is measured, and it is not the truth."""
     model, data = scene

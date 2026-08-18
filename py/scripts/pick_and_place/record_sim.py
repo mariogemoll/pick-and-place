@@ -160,6 +160,7 @@ def run_recording(
     perturbed_fraction: float = 0.0,
     perturbation_magnitude_m: float = DEFAULT_MAGNITUDE_M,
     perturbation_max_source_radius_m: float | None = None,
+    ground_truth_drop_target: bool = False,
 ) -> int:
     """Record episodes pulled from ``index_source``; return the count saved.
 
@@ -381,6 +382,7 @@ def run_recording(
                     miscalibration=draw,
                     grasp_perturbation=perturbation,
                     max_attempts=max_attempts,
+                    ground_truth_drop_target=ground_truth_drop_target,
                 )
             except EpisodeSamplingError as exc:
                 tqdm.write(f"{label}Skipping episode {global_episode}: {exc}")
@@ -546,6 +548,21 @@ def main() -> None:
         help="playback speed multiplier of the nominal trajectory pace (1.0 = nominal)",
     )
     parser.add_argument("--viewer", action="store_true", help="open the 3D MuJoCo viewer")
+    parser.add_argument(
+        "--ground-truth-drop-target",
+        action="store_true",
+        help=(
+            "plan the drop against the plate's true pose instead of the overhead "
+            "estimate. The plate is still localized, so a scene that cannot be seen "
+            "is still rejected and the cube belief stays honest -- the descent servo "
+            "corrects the pickup, but nothing corrects the drop, so the overhead "
+            "estimate's error lands directly in placement error and caps how "
+            "accurately a cloned policy can ever place. Measured on "
+            "randomized_selection_200_v1: pinning the plate moves the scripted "
+            "expert from 80/200 to 121/200 settled placements and its median "
+            "placement error among successes from 23.2 mm to 13.1 mm"
+        ),
+    )
     parser.add_argument(
         "--perturbed-fraction",
         type=float,
@@ -745,6 +762,10 @@ def main() -> None:
         "perturbed_fraction": args.perturbed_fraction,
         "perturbation_magnitude_m": args.perturbation_magnitude,
         "perturbation_max_source_radius_m": args.perturbation_max_source_radius,
+        # Content-affecting: episodes planned against the true plate are a
+        # different demonstration distribution, so a top-up across this flag is
+        # rejected rather than silently mixed.
+        "ground_truth_drop_target": args.ground_truth_drop_target,
     }
     first_episode = (
         next_episode_index(episodes_root)
@@ -783,6 +804,7 @@ def main() -> None:
         perturbed_fraction=args.perturbed_fraction,
         perturbation_magnitude_m=args.perturbation_magnitude,
         perturbation_max_source_radius_m=args.perturbation_max_source_radius,
+        ground_truth_drop_target=args.ground_truth_drop_target,
     )
 
     print(
