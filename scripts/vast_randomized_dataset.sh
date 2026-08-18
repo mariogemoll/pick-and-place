@@ -56,6 +56,18 @@ physics_amount="${PHYSICS_RANDOMIZATION:-0.5}"
 domain_preset="${DOMAIN_RANDOMIZATION:-config/domain_randomization/act_mild_v1.json}"
 run_name="${RUN_NAME:-randomized-$(date +%Y%m%d_%H%M%S)}"
 seed="${SEED:-20260816}"
+# Plan the drop against the plate's true pose rather than the overhead estimate.
+# Nothing corrects the drop -- the descent servo corrects only the pickup -- so
+# that estimate's error lands directly in placement error and caps how
+# accurately a cloned policy can ever place. Measured on
+# randomized_selection_200_v1: 80/200 -> 121/200 settled placements for the
+# scripted expert, and 23.2 mm -> 13.1 mm median error among successes.
+# See pick-and-place-docs/EXPERT_DROP_TARGET.md.
+ground_truth_drop_target="${GROUND_TRUTH_DROP_TARGET:-}"
+record_extra_args=()
+if [ -n "$ground_truth_drop_target" ]; then
+  record_extra_args+=(--ground-truth-drop-target)
+fi
 stop_after="${STOP_AFTER:-}"
 # Attempts per top-up round. Randomization costs yield -- a drawn arm misses
 # placements a nominal one makes, and a scene the overhead camera cannot see is
@@ -115,6 +127,7 @@ export PAP_DATA_ROOT="$workspace/data"
 stage 0 "inputs"
 git rev-parse HEAD | tee "$output_root/job-metadata/repository-commit.txt"
 echo "cores=$cores vram=${vram_mb}MiB workers=$workers episodes=$episodes"
+echo "ground_truth_drop_target=${ground_truth_drop_target:-off}"
 # The one machine-local input a fresh clone still needs is the tag textures,
 # and provisioning generates those.
 #
@@ -209,6 +222,7 @@ for attempt in 1 2 3 4 5 6; do
     --perturbation-max-source-radius "$perturbation_max_source_radius" \
     --episode-timeout 900 \
     --dataset-root "$staging" \
+    "${record_extra_args[@]}" \
     --repo-id "local/$run_name" || echo "recorder returned $?; will re-count"
 done
 drop_partial_episodes
