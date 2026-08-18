@@ -502,24 +502,57 @@ Python harness over the frozen manifests in `config/evaluation/`.
 
 ### Building its assets
 
-The first two land in `ts/public/`; the third goes to `ts/test-fixtures/`,
-because everything under `public/` is copied into the build and served to every
-visitor and the recorded rollout is an input to a test. All are gitignored:
+The page needs five files, none of them committed. Two are the ordinary web
+manifests the other visualizations already use; three are new.
+
+Prerequisites, if this is a fresh clone: the submodules
+(`git submodule update --init`), the AprilTag textures
+(`MUJOCO_GL=egl python py/scripts/render_apriltag_textures.py --all-defaults`),
+and a Python environment with `mujoco`, `torch`, `onnx` and `onnxruntime`.
+
+The checkpoint and its export are the ones named in
+[Current state flow policy](#current-state-flow-policy), and they live in S3
+rather than on disk:
 
 ```sh
-cd py
+export PAP_FLOW=$PAP_DATA_ROOT/flow-policy
+aws s3 cp s3://allyouneed/pick-and-place/outputs/\
+flow-policy-unet1d-rot6-cubeaug-30k-seed0/checkpoint.pt "$PAP_FLOW"/
+aws s3 sync s3://allyouneed/pick-and-place/flow-policy-data/\
+flow-policy-state-recovery-far-clean-993ep-rot6-cubeaug-val10/ "$PAP_FLOW"/export/
+```
+
+Then, from `py/`:
+
+```sh
+# The robot and the environment, as the other visualizations use them.
+MUJOCO_GL=egl python -m pick_and_place.sim.export -o ../ts/public/so101.xml
+MUJOCO_GL=egl python -m pick_and_place.sim.export --environment-only \
+    -o ../ts/public/environment.xml
+
+# The scene the browser steps, and the policy it runs.
 MUJOCO_GL=egl python scripts/export_web_policy_scene.py -o ../ts/public/policy-scene
 MUJOCO_GL=egl python scripts/export_flow_policy_onnx.py \
-    --checkpoint <checkpoint.pt> --export <flow-policy-state-.../> \
+    --checkpoint "$PAP_FLOW"/checkpoint.pt --export "$PAP_FLOW"/export \
     -o ../ts/public/flow-policy
+
+# Only needed to run the parity test.
 MUJOCO_GL=egl python scripts/export_policy_parity_fixture.py \
-    --checkpoint <checkpoint.pt> --export <flow-policy-state-.../> \
+    --checkpoint "$PAP_FLOW"/checkpoint.pt --export "$PAP_FLOW"/export \
     -o ../ts/test-fixtures/policy-parity.json
 ```
 
-The checkpoint and export are the ones named in
-[Current state flow policy](#current-state-flow-policy); the ONNX exporter
-prints the checkpoint's SHA-256 so a mismatched pair is visible.
+Both `sim.export` invocations write an `.xml` beside the `.json`. Only the
+`.json` is read, by the page and by the tests; the `.xml` is a by-product.
+
+The parity fixture goes to `ts/test-fixtures/` rather than `ts/public/` because
+everything under `public/` is copied into the build and served to every visitor,
+and that file is an input to one test.
+
+The ONNX exporter prints the checkpoint's SHA-256, which should read
+`9ce2818a…5601247`. `export.json` and `normalization.npz` are part of the model
+contract, so a checkpoint paired with a different export is a silent error the
+digest is there to catch.
 
 ### Three things that are easy to get wrong
 
