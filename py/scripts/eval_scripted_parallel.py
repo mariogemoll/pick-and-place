@@ -54,7 +54,7 @@ DEFAULT_BACKEND = DEFAULT_BACKEND_BY_SYSTEM.get(SYSTEM, "glfw")
 
 
 def _evaluate_shard(payload: tuple) -> list[tuple[int, object]]:
-    manifest_path, indices, image_hw, render_hw, control_hz, backend, progress = payload
+    manifest_path, indices, image_hw, render_hw, control_hz, backend, drop_target, progress = payload
     os.environ["MUJOCO_GL"] = backend
     if backend == "osmesa":
         # Keep each llvmpipe render single-threaded so N workers map to N cores
@@ -74,7 +74,18 @@ def _evaluate_shard(payload: tuple) -> list[tuple[int, object]]:
     results: list[tuple[int, object]] = []
     try:
         for index in indices:
-            results.append((index, evaluate_policy_episode(env, controller, scenarios[index])))
+            scenario = scenarios[index]
+            if drop_target == "ground-truth":
+                # Pinning drop_target_xy ablates plate perception and nothing
+                # else: no overhead search runs, while planning stays on the
+                # same fixed-target path a detection would have produced, so the
+                # two arms differ only in where the plate xy came from. Cube
+                # localization and the descent servo are untouched, and reset()
+                # keeps the pin, so setting it per episode survives
+                # evaluate_policy_episode's reset.
+                x, y, _ = scenario.target_position_m
+                controller.drop_target_xy = (float(x), float(y))
+            results.append((index, evaluate_policy_episode(env, controller, scenario)))
             progress.put(1)  # one tick per finished episode, drained by the parent's bar
     finally:
         env.close()
@@ -84,10 +95,10 @@ def _evaluate_shard(payload: tuple) -> list[tuple[int, object]]:
     return results
 
 
-def _shards(count: int, jobs: int) -> list[list[int]]:
+def _shards(indices: list[int], jobs: int) -> list[list[int]]:
     buckets: list[list[int]] = [[] for _ in range(jobs)]
-    for index in range(count):
-        buckets[index % jobs].append(index)  # round-robin balances slow/fast episodes
+    for position, index in enumerate(indices):
+        buckets[position % jobs].append(index)  # round-robin balances slow/fast episodes
     return [bucket for bucket in buckets if bucket]
 
 
@@ -99,9 +110,40 @@ def main() -> None:
     parser.add_argument("--backend", choices=BACKENDS, default=DEFAULT_BACKEND)
     parser.add_argument("--render-height", type=int, default=1080)
     parser.add_argument("--render-width", type=int, default=1920)
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="evaluate at most N scenarios",
+    )
+    parser.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help=(
+            "skip the first N scenarios, applied before --limit. Together the two shard one "
+            "suite across runs that compare_policy_evaluations.py can reassemble, which also "
+            "means a crashed shard costs only its own slice."
+        ),
+    )
+    parser.add_argument(
+        "--drop-target",
+        choices=("detected", "ground-truth"),
+        default="detected",
+        help=(
+            "where the expert's drop target comes from. 'detected' localizes the "
+            "plate from the overhead image, as on hardware; 'ground-truth' pins it "
+            "to the scene's true plate position, which measures what plate "
+            "localization costs the demonstrator."
+        ),
+    )
     args = parser.parse_args()
     if args.output.exists():
         parser.error(f"--output already exists: {args.output}")
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit must be at least 1")
+    if args.offset < 0:
+        parser.error("--offset must not be negative")
 
     os.environ["MUJOCO_GL"] = args.backend
     if args.backend == "osmesa":
@@ -117,7 +159,14 @@ def main() -> None:
 
     started_at = dt.datetime.now(dt.UTC)
     manifest = ScenarioManifest.load(args.manifest)
-    scenarios = manifest.scenarios
+    if args.offset >= len(manifest.scenarios):
+        raise SystemExit(
+            f"--offset {args.offset} skips the whole {len(manifest.scenarios)}-scenario suite"
+        )
+    stop = len(manifest.scenarios) if args.limit is None else args.offset + args.limit
+    # Indices stay manifest-absolute so a worker can index the manifest it loads.
+    selected_indices = list(range(args.offset, min(stop, len(manifest.scenarios))))
+    scenarios = [manifest.scenarios[index] for index in selected_indices]
     control_hz_values = {scenario.control_hz for scenario in scenarios}
     if len(control_hz_values) != 1:
         raise ValueError("scripted evaluation requires one control frequency per run")
@@ -126,11 +175,17 @@ def main() -> None:
     render_hw = (args.render_height, args.render_width)
 
     jobs = max(1, min(args.jobs, len(scenarios)))
-    shards = _shards(len(scenarios), jobs)
+    shards = _shards(selected_indices, jobs)
     _, controller_metadata = eps._make_scripted_controller(
         image_hw=image_hw, render_hw=render_hw, control_hz=control_hz
     )
-    print(f"Evaluating {len(scenarios)} {manifest.suite!r} scenarios (scripted) across {jobs} workers.")
+    # Recorded so the two arms of a drop-target ablation are distinguishable
+    # from their run directories alone.
+    controller_metadata["drop_target_source"] = args.drop_target
+    print(
+        f"Evaluating {len(scenarios)} {manifest.suite!r} scenarios (scripted, "
+        f"drop target {args.drop_target}) across {jobs} workers."
+    )
 
     indexed: list[tuple[int, object]] = []
     import multiprocessing
@@ -143,7 +198,16 @@ def main() -> None:
         futures = [
             pool.submit(
                 _evaluate_shard,
-                (str(args.manifest), shard, image_hw, render_hw, control_hz, args.backend, progress),
+                (
+                    str(args.manifest),
+                    shard,
+                    image_hw,
+                    render_hw,
+                    control_hz,
+                    args.backend,
+                    args.drop_target,
+                    progress,
+                ),
             )
             for shard in shards
         ]

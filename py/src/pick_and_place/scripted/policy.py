@@ -143,6 +143,7 @@ class ScriptedPolicy:
         wrist_localizer: WristLocalization | None = None,
         replan_candidates: ReplanCandidates = replan_remaining_candidates,
         target_sampler: TargetSampler | None = None,
+        drop_target_xy: tuple[float, float] | None = None,
         free_grasp: bool = False,
     ) -> None:
         if target_color not in {"black", "white"}:
@@ -173,6 +174,11 @@ class ScriptedPolicy:
         self._replan_candidates = replan_candidates
         self._trajectory_preflight = trajectory_preflight
         self.target_sampler = target_sampler
+        # Pinning the drop target says "this run does not localize the plate":
+        # the pose is known, so no overhead search runs and planning takes the
+        # same fixed-target path a detection would have produced. Survives
+        # reset() so one controller can be re-pinned per episode.
+        self.drop_target_xy = drop_target_xy
         self.free_grasp = free_grasp
         self.reset()
 
@@ -261,9 +267,12 @@ class ScriptedPolicy:
         assert self.cube_pose is not None
         start_joints, start_gripper = real_frame_to_sim(reported_joints)
         target = None
-        if self.target_sampler is None:
-            assert self.drop_target is not None
-            target_xy = np.asarray(self.drop_target.xy, dtype=float).reshape(-1)
+        if self.drop_target_xy is not None or self.target_sampler is None:
+            if self.drop_target_xy is not None:
+                target_xy = np.asarray(self.drop_target_xy, dtype=float).reshape(-1)
+            else:
+                assert self.drop_target is not None
+                target_xy = np.asarray(self.drop_target.xy, dtype=float).reshape(-1)
             if target_xy.shape != (2,) or not np.all(np.isfinite(target_xy)):
                 raise ValueError(
                     "localized drop target xy must have finite shape (2,), "
@@ -538,7 +547,11 @@ class ScriptedPolicy:
                     self.cube_pose = self.localizer.localize_cube(overhead, free_grasp=True)
                 else:
                     self.cube_pose = self.localizer.localize_cube(overhead)
-            if self.target_sampler is None and self.drop_target is None:
+            if (
+                self.target_sampler is None
+                and self.drop_target_xy is None
+                and self.drop_target is None
+            ):
                 self.drop_target = self.localizer.localize_drop_target(
                     overhead,
                     target_color=self.target_color,
@@ -549,7 +562,11 @@ class ScriptedPolicy:
             return hold
 
         self._localization_steps += 1
-        target_ready = self.drop_target is not None or self.target_sampler is not None
+        target_ready = (
+            self.drop_target is not None
+            or self.drop_target_xy is not None
+            or self.target_sampler is not None
+        )
         if self.cube_pose is not None and target_ready:
             try:
                 self._plan(hold)
@@ -563,7 +580,7 @@ class ScriptedPolicy:
             missing = []
             if self.cube_pose is None:
                 missing.append("cube")
-            if self.target_sampler is None and self.drop_target is None:
+            if not target_ready:
                 missing.append("drop target")
             self._fail(
                 "localization_timeout",
