@@ -112,7 +112,7 @@ hard error and scaffolds a stray `ts/pnpm-workspace.yaml` on every run;
 pin and `pnpm-lock.yaml` is gitignored, so dependency resolution is not
 currently reproducible.
 
-### The TypeScript tests need a generated fixture
+### The TypeScript tests need generated fixtures
 
 Five test files read `ts/public/so101.json`, which is **not** in the
 repository. Generate it before running them:
@@ -124,6 +124,13 @@ cd py && MUJOCO_GL=egl python -m pick_and_place.sim.export -o ../ts/public/so101
 That command writes both `so101.xml` and `so101.json`; only the `.json` is
 needed for tests. CI gets this by accident — its step reads as a smoke test of
 the exporter and deletes the `.xml` afterwards, leaving the `.json` behind.
+
+The live policy page's parity test
+(`ts/src/visualizations/live-policy/parity.test.ts`) needs more than that: a
+compiled scene, an exported policy, and a recorded rollout. It **skips itself**
+when they are absent rather than failing, so a clone still runs green — which
+also means a green run does not prove that check ran. See
+[The live policy page](#the-live-policy-page).
 
 ### The simulator needs generated AprilTag textures
 
@@ -242,6 +249,8 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   `workspace_overlays`, `paper_target_marker`, `frame_tags`,
   `derive_kinematics`, `camera_pose_envelope`, `camera_extrinsics`, `export`,
   `physics` (apply an arm draw to a compiled scene, and take it back),
+  `physics_export` (the policy scene with everything that is only pixels taken
+  out, for the browser to step),
   and `domain_randomization` — the randomization envelope plus the half of a
   draw that shapes behavior (the wrist camera's mount error, the cube's resting
   orientation, the miscalibration). Loads the stock MJCF
@@ -261,7 +270,8 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   manifests in `config/evaluation/` and a success oracle),
   `diffusion_policy_pretrain`, `diffusion_policy_client`, and the state-only
   flow-matching policy (`flow_matching`, `flow_policy`,
-  `diffusion_policy_unet`). ACT and SmolVLA are *evaluated* here but trained
+  `diffusion_policy_unet`, `flow_onnx` — the sampler as one traceable graph, for
+  the browser). ACT and SmolVLA are *evaluated* here but trained
   externally via the `lerobot` CLI.
 - **`runtime/`** — what an episode needs around the loop that runs it, and the
   policy runners that do not use that loop. `episodes` samples an episode that
@@ -430,7 +440,9 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   `probe_camera_pose_envelope.py`, `check_overhead_localization.py` (does
   simulated overhead perception miss by as much as the rig does?)
 - **Web assets** — `export_generic_robot.py`, `export_episode_rolls.py`,
-  `distill_grasp_policy.py`, `render_apriltag_textures.py`
+  `distill_grasp_policy.py`, `render_apriltag_textures.py`,
+  `export_web_policy_scene.py`, `export_flow_policy_onnx.py`,
+  `export_policy_parity_fixture.py`
 - **Viewers and diagnostics** — `view_*.py`, `replay_*.py`, `showcamfeed*.py`,
   `diagnose_cube_tracking.py`
 - **Figures** — `generate_architecture_figure.py`, `plot_*.py`,
@@ -475,6 +487,84 @@ default is 100. Full provenance and episode records are at:
 s3://allyouneed/pick-and-place/outputs/flow-policy-unet1d-rot6-cubeaug-30k-seed0/evaluation-selection-seed6m-20260810/
 ```
 
+## The live policy page
+
+`ts/policy.html` runs the task in the reader's browser: MuJoCo's WebAssembly
+build steps the scene, the state flow policy runs through `onnxruntime-web`, and
+the cube and target plate are dragged wherever the reader wants them. It is a
+separate page from the index on purpose — the simulator and the inference
+runtime together are an order of magnitude heavier than everything the index
+loads.
+
+**It is not a benchmark, and the page says so.** A different engine build rounds
+differently and one episode is one episode; the scored numbers come from the
+Python harness over the frozen manifests in `config/evaluation/`.
+
+### Building its assets
+
+All three land in `ts/public/`, all three are gitignored:
+
+```sh
+cd py
+MUJOCO_GL=egl python scripts/export_web_policy_scene.py -o ../ts/public/policy-scene
+MUJOCO_GL=egl python scripts/export_flow_policy_onnx.py \
+    --checkpoint <checkpoint.pt> --export <flow-policy-state-.../> \
+    -o ../ts/public/flow-policy
+MUJOCO_GL=egl python scripts/export_policy_parity_fixture.py \
+    --checkpoint <checkpoint.pt> --export <flow-policy-state-.../> \
+    -o ../ts/public/policy-parity.json
+```
+
+The checkpoint and export are the ones named in
+[Current state flow policy](#current-state-flow-policy); the ONNX exporter
+prints the checkpoint's SHA-256 so a mismatched pair is visible.
+
+### Three things that are easy to get wrong
+
+- **The scene is a compiled binary (`.mjb`), not MJCF.** MuJoCo's XML writer
+  rounds to six significant figures. The binary carries the compiled model
+  verbatim, so the browser steps the same numbers Python does. The cost is that
+  a binary is tied to the engine that wrote it: the manifest records the MuJoCo
+  version and the page refuses to load against a different one. **Keep the
+  `@mujoco/mujoco` npm version and the Python `mujoco` version equal.**
+- **Deleting visual geometry moves the arm unless the inertials are frozen
+  first.** Three bodies — `wrist_camera_mount`, `overhead_camera_mount`,
+  `workspace_frame_frame` — infer their mass from geometry rather than declaring
+  it, so stripping the meshes took two thirds of the wrist mount's mass off the
+  arm. `physics_export.freeze_inertials` compiles the intact scene and writes
+  what MuJoCo computed back into the spec before anything is removed;
+  `py/tests/test_physics_export.py` pins it.
+- **The tracking bias is scaled to zero at the nominal operating point.**
+  `tracking_bias_rad` returns the fitted droop, but `PolicySimEnv` applies it
+  through `tracking_bias_offsets`, and a scenario with no physics randomization
+  has `tracking_bias_scale = 0.0`. Exporting the fitted value directly pushed
+  every browser command a couple of degrees past its target. The export goes
+  through the same scaling.
+
+### What checks it
+
+`ts/src/visualizations/live-policy/parity.test.ts` replays a rollout Python
+actually ran — same scene, same noise draws — through the whole browser stack in
+Node, and compares. It asserts two different things:
+
+- **The first tick, tightly.** Both sides start from the same state and the same
+  noise, so the only difference left is arithmetic: the observation matches
+  exactly, the action to a few times 1e-5 degrees, the resulting state to 2e-7.
+  This is what catches defects — the tracking-bias bug above sat at 2.8e-3 here.
+- **The whole rollout, loosely.** Forty ticks of contact-rich closed-loop
+  physics amplify a last-place difference into about 0.04 degrees of drift. That
+  bound says the browser stayed in the same episode; nothing tighter is
+  available and no tolerance would make it so.
+
+### Precision
+
+The exported graph is full precision by default: 17.4 MB, and it agrees with
+PyTorch to 5e-7 in the normalized action space. `--precision fp16` halves it to
+9.7 MB and moves the sampled endpoint by about 1.4e-3, which is a change in what
+the policy *does*, not in how it is stored. **Score it on the development scenes
+before promoting it** — the same way the 10-versus-100 integration-step question
+was settled.
+
 ## Mesh pipeline
 
 Two mandatory steps turn raw hardware STL into web-ready assets:
@@ -496,7 +586,7 @@ Gitignored, machine-local, and sometimes very large:
 
 | Path | Contents |
 | --- | --- |
-| `ts/public/` | All generated web assets. |
+| `ts/public/` | All generated web assets, including the live policy page's scene, weights and parity fixture. |
 | `datasets/` | Recorded and simulated LeRobot datasets. Tens of GB. |
 | `outputs/`, `output/` | Training runs, checkpoints, diagnostics. |
 | `intermediary-glb/`, `dist_assets/` | Mesh pipeline intermediates. |
