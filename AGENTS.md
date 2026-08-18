@@ -502,7 +502,9 @@ Python harness over the frozen manifests in `config/evaluation/`.
 
 ### Building its assets
 
-All three land in `ts/public/`, all three are gitignored:
+The first two land in `ts/public/`; the third goes to `ts/test-fixtures/`,
+because everything under `public/` is copied into the build and served to every
+visitor and the recorded rollout is an input to a test. All are gitignored:
 
 ```sh
 cd py
@@ -512,7 +514,7 @@ MUJOCO_GL=egl python scripts/export_flow_policy_onnx.py \
     -o ../ts/public/flow-policy
 MUJOCO_GL=egl python scripts/export_policy_parity_fixture.py \
     --checkpoint <checkpoint.pt> --export <flow-policy-state-.../> \
-    -o ../ts/public/policy-parity.json
+    -o ../ts/test-fixtures/policy-parity.json
 ```
 
 The checkpoint and export are the ones named in

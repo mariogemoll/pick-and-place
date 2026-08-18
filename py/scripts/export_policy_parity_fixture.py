@@ -22,14 +22,16 @@ explicitly, rather than left to ``generate``'s internal ``torch.randn``. That is
 the only way the two languages can be on the same draws, and it is the same
 sampler either way -- ``FlowSampler`` is what the ONNX export traces.
 
-The fixture lands in ``ts/public/`` because it needs a checkpoint and a compiled
-scene to produce, which is exactly why it is generated rather than committed.
+The fixture is generated rather than committed because it needs a checkpoint and
+a compiled scene to produce. It lands outside ``ts/public/``: everything in
+there is copied into the build and served to every visitor, and this is an input
+to a test.
 
 Usage::
 
     python scripts/export_policy_parity_fixture.py \\
         --checkpoint .../checkpoint.pt --export .../flow-policy-state-.../ \\
-        -o ../ts/public/policy-parity.json
+        -o ../ts/test-fixtures/policy-parity.json
 """
 
 from __future__ import annotations

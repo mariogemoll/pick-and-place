@@ -40,8 +40,10 @@ package-lock.json
 # rollout the parity test checks the browser against.
 /public/policy-scene.mjb
 /public/policy-scene.json
-/public/policy-parity.json
 /public/flow-policy.onnx
 /public/flow-policy.json
 /public/environment.xml
 /public/so101.xml
+
+# Recorded rollout the live policy page's parity test is checked against.
+/test-fixtures

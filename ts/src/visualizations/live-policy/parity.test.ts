@@ -39,6 +39,13 @@ function publicFile(name: string): string {
   return fileURLToPath(new URL(`../../../public/${name}`, import.meta.url));
 }
 
+// The recorded rollout is an input to this test and nothing else, so it lives
+// outside `public/` -- everything in there is copied into the build and served
+// to every visitor.
+function fixtureFile(name: string): string {
+  return fileURLToPath(new URL(`../../../test-fixtures/${name}`, import.meta.url));
+}
+
 interface ParityTick {
   packedObservation: number[];
   drewNoise: boolean;
@@ -58,13 +65,10 @@ interface ParityFixture {
   ticks: ParityTick[];
 }
 
-const required = [
-  'policy-parity.json',
-  'policy-scene.json',
-  'policy-scene.mjb',
-  'flow-policy.json'
-];
-const available = required.every(name => existsSync(publicFile(name)));
+const available =
+  ['policy-scene.json', 'policy-scene.mjb', 'flow-policy.json'].every(name =>
+    existsSync(publicFile(name))
+  ) && existsSync(fixtureFile('policy-parity.json'));
 
 // The check has two halves, because a closed loop cannot be held to one bound.
 //
@@ -92,7 +96,7 @@ const ROLLOUT_QPOS_TOLERANCE = 0.1;
 describe.skipIf(!available)('browser policy stack against a Python rollout', () => {
   it('reproduces the recorded trajectory tick for tick', async() => {
     const fixture = JSON.parse(
-      readFileSync(publicFile('policy-parity.json'), 'utf8')
+      readFileSync(fixtureFile('policy-parity.json'), 'utf8')
     ) as ParityFixture;
     const sceneManifest = JSON.parse(
       readFileSync(publicFile('policy-scene.json'), 'utf8')
