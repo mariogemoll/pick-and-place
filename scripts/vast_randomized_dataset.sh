@@ -104,6 +104,7 @@ workspace="/workspace"
 repo="$workspace/pick-and-place"
 staging="$workspace/data/$run_name"
 master_root="$staging"
+attempts_root="$workspace/data/$run_name-attempts"
 flow_export="$workspace/artifacts/flow-policy-state-$run_name"
 output_root="$workspace/outputs/$run_name"
 output_prefix="$bucket_root/outputs/$run_name"
@@ -240,10 +241,15 @@ if [ ! -d "$master_root" ]; then
   # --keep-episodes: the staged episodes carry the trajectory artifacts, and
   # they are the only form a later re-render can read. Deleting them would make
   # every future appearance variant a fresh collection run.
+  # --attempts-root banks the failures as a loadable dataset beside the master.
+  # The success filter drops roughly two attempts in five here, and those are
+  # exactly the negatives an offline critic needs -- a value function fitted only
+  # to successes regresses a near-constant and cannot rank anything.
   "$V" py/scripts/pick_and_place/finalize_sim_dataset.py \
     --dataset-root "$master_root" \
     --episodes "$merge_count" \
     --repo-id "local/$run_name" \
+    --attempts-root "$attempts_root" \
     --keep-episodes \
     --write
 else
@@ -283,6 +289,17 @@ master_tarball="$workspace/data/$run_name-lerobot.tar.zst"
   -cf "$master_tarball" -C "$(dirname "$master_root")" "$(basename "$master_root")"
 publish "$master_tarball" "$bucket_root/datasets/$run_name-lerobot.tar.zst"
 halt_if_stopping master
+
+stage 4b "publish the attempt dataset -- every episode, failures included"
+if [ -d "$attempts_root" ]; then
+  attempts_tarball="$workspace/data/$run_name-attempts-lerobot.tar.zst"
+  [ -f "$attempts_tarball" ] || tar --use-compress-program='zstd -3 -T0' \
+    -cf "$attempts_tarball" -C "$(dirname "$attempts_root")" "$(basename "$attempts_root")"
+  publish "$attempts_tarball" "$bucket_root/datasets/$run_name-attempts-lerobot.tar.zst"
+else
+  echo "no attempt dataset to publish; skipping."
+fi
+halt_if_stopping attempts
 
 stage 5 "export the state-only flow-policy arrays"
 if [ ! -f "$flow_export/train.npz" ]; then
