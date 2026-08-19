@@ -1733,3 +1733,35 @@ input[type="range"]:active::-moz-range-thumb {
     width: min(48%, 250px);
   }
 }
+
+.live-policy-viz-root {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.live-policy-viz-viewport {
+  position: relative;
+  min-height: 480px;
+}
+
+.live-policy-viz-hint {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  background: rgb(255 255 255 / 78%);
+  font-size: 0.85rem;
+}
+
+.live-policy-viz-controls {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.live-policy-viz-status {
+  font-variant-numeric: tabular-nums;
+  min-height: 1.25rem;
+}

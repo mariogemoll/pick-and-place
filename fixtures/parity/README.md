@@ -38,6 +38,7 @@ explained.
 | `forward_kinematics.json` | Joints to gripper-target position. Python solves the planar chain in closed form, TypeScript walks the model's body tree, so these agree to well under a millimetre rather than exactly. |
 | `grasp.json` | The canonical grasp search: the grasp it picks, and the head of the candidate stream it picks from. Order matters — the planner takes the first survivor. |
 | `easing.json` | `smoothstep` and the timed arc fraction, sampled past both ends so the clamping is pinned too. |
+| `joint_frames.json` | The sim-frame/real-frame joint conversion, including the calibrated gripper map and its clamped ends. Every action the browser policy page issues and every observation it packs crosses this boundary. |
 
 Numbers carry twelve significant digits and the consumers compare at `1e-9`, so
 only last-place arithmetic differences pass. One case per line: the files stay

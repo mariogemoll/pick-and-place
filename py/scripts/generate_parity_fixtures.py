@@ -33,6 +33,11 @@ from typing import Any
 import numpy as np
 
 from pick_and_place.core import transforms as tf
+from pick_and_place.core.joint_frames import (
+    gripper_angle_to_position,
+    gripper_position_to_angle,
+    sim_frame_to_real,
+)
 from pick_and_place.core.geometry import (
     CANONICAL_PREGRASP_DISTANCE,
     CubeFace,
@@ -49,7 +54,7 @@ from pick_and_place.scripted.grasp import GraspChoice, grasp_candidates
 from pick_and_place.scripted.motion import _timed_arc_fraction, smoothstep
 from pick_and_place.sim.derive_kinematics import derive_kinematics
 from pick_and_place.sim.model import build_model
-from pick_and_place.spec.robot import ARM_JOINT_NAMES
+from pick_and_place.spec.robot import ARM_JOINT_NAMES, GRIPPER_OPEN
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 
 
@@ -431,6 +436,48 @@ def build_easing_fixture() -> dict[str, Any]:
     )
 
 
+def build_joint_frames_fixture() -> dict[str, Any]:
+    """The sim-frame/real-frame conversion, which the browser policy page runs on.
+
+    A learned policy emits real-frame joints and is shown real-frame joints, so
+    every action crossing into a simulator goes through this and every
+    observation comes back out of it. The arm half is a unit conversion; the
+    gripper half is a calibrated map with clamped ends, which is the part worth
+    pinning. Sampled past both endpoints so the clamping is covered.
+    """
+    angles_rad = [math.radians(d) for d in range(-30, 141, 5)]
+    positions = [p / 4.0 for p in range(-40, 441, 5)]
+    arm_cases = [
+        (0.0, 0.0, 0.0, 0.0, -math.pi / 2),
+        (0.1, -0.6, 0.9, 0.4, 0.0),
+        (-1.9, 1.2, -1.4, 0.75, 2.6),
+    ]
+    return _document(
+        "Sim-frame/real-frame joint conversion, including the calibrated gripper map.",
+        gripperAngleToPosition=[
+            {"angleRad": _round(a), "position": _round(gripper_angle_to_position(a))}
+            for a in angles_rad
+        ],
+        gripperPositionToAngle=[
+            {"position": _round(p), "angleRad": _round(gripper_position_to_angle(p))}
+            for p in positions
+        ],
+        simFrameToReal=[
+            {
+                "simJoints": [_round(v) for v in (*arm, gripper)],
+                "realJoints": [
+                    _round(v)
+                    for v in sim_frame_to_real(
+                        dict(zip(ARM_JOINT_NAMES, arm, strict=True)), gripper
+                    )
+                ],
+            }
+            for arm in arm_cases
+            for gripper in (0.0, 0.1, GRIPPER_OPEN, 2.0)
+        ],
+    )
+
+
 def build_fixtures(k: So101Kinematics) -> dict[str, dict[str, Any]]:
     return {
         "kinematics.json": build_kinematics_fixture(k),
@@ -439,6 +486,7 @@ def build_fixtures(k: So101Kinematics) -> dict[str, dict[str, Any]]:
         "forward_kinematics.json": build_forward_kinematics_fixture(k),
         "grasp.json": build_grasp_fixture(k),
         "easing.json": build_easing_fixture(),
+        "joint_frames.json": build_joint_frames_fixture(),
     }
 
 
