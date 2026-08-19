@@ -508,7 +508,12 @@ manifests the other visualizations already use; three are new.
 Prerequisites, if this is a fresh clone: the submodules
 (`git submodule update --init`), the AprilTag textures
 (`MUJOCO_GL=egl python py/scripts/render_apriltag_textures.py --all-defaults`),
-and a Python environment with `mujoco`, `torch`, `onnx` and `onnxruntime`.
+and `onnx` and `onnxruntime`, which the ONNX exporter needs and the default
+install does not bring:
+
+```sh
+VIRTUAL_ENV=~/venvs/pick-and-place uv pip install -e py --group web-export
+```
 
 The checkpoint and its export are the ones named in
 [Current state flow policy](#current-state-flow-policy), and they live in S3

@@ -23,6 +23,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import * as ort from 'onnxruntime-web/wasm';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -64,6 +65,11 @@ interface ParityFixture {
   noiseDraws: number[][];
   ticks: ParityTick[];
 }
+
+// The multi-threaded runtime starts its workers from a fetched URL, which the
+// page gets from the dev server and Node has no origin for. One thread keeps
+// the same kernels on the same WebAssembly build, only without the pool.
+ort.env.wasm.numThreads = 1;
 
 const available =
   ['policy-scene.json', 'policy-scene.mjb', 'flow-policy.json'].every(name =>
