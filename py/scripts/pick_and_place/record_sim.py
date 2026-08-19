@@ -158,6 +158,7 @@ def run_recording(
     max_attempts: int = 50,
     show_progress: bool = True,
     detector_crash_dump_dir: str | None = None,
+    wrist_servo_mode: str = "geometric",
     perturbed_fraction: float = 0.0,
     perturbation_magnitude_m: float = DEFAULT_MAGNITUDE_M,
     perturbation_max_source_radius_m: float | None = None,
@@ -431,6 +432,7 @@ def run_recording(
                 ),
                 tracking_bias_rad=tracking_bias_offsets(fitted_bias, physics_draw),
                 detector_crash_dump_dir=detector_crash_dump_dir,
+                wrist_servo_mode=wrist_servo_mode,
                 overhead_observer=(
                     geometric_perception
                     if geometric_perception is not None
@@ -691,6 +693,16 @@ def main() -> None:
             "for diagnosing the crash; the run itself continues either way"
         ),
     )
+    parser.add_argument(
+        "--wrist-servo",
+        choices=("geometric", "detector"),
+        default="geometric",
+        help=(
+            "simulated descent localization: geometric maps the true cube through the "
+            "true and believed wrist-camera frames without another render; detector runs "
+            "the AprilTag pipeline for validation (default: geometric)"
+        ),
+    )
     add_scene_texture_arguments(parser)
     add_dataset_arguments(
         parser,
@@ -785,6 +797,7 @@ def main() -> None:
         "render_height": args.render_height,
         "miscalibration": args.miscalibration,
         "sim_perception": args.sim_perception,
+        "wrist_servo": args.wrist_servo,
         "physics_randomization": args.physics_randomization,
         "domain_randomization": _configured_file(args.domain_randomization),
         "max_attempts": args.max_attempts,
@@ -832,6 +845,7 @@ def main() -> None:
         speed=args.speed,
         max_attempts=args.max_attempts,
         detector_crash_dump_dir=args.detector_crash_dump_dir,
+        wrist_servo_mode=args.wrist_servo,
         perturbed_fraction=args.perturbed_fraction,
         perturbation_magnitude_m=args.perturbation_magnitude,
         perturbation_max_source_radius_m=args.perturbation_max_source_radius,

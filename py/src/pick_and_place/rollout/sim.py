@@ -293,6 +293,7 @@ def record_episode(
     believed_wrist_camera_pose: tuple[np.ndarray, np.ndarray] | None = None,
     tracking_bias_rad: dict[str, float] | None = None,
     detector_crash_dump_dir: str | None = None,
+    wrist_servo_mode: str = "geometric",
     overhead_observer: Any = None,
     search_rng: np.random.Generator | None = None,
     ground_truth_drop_target: bool = True,
@@ -343,6 +344,8 @@ def record_episode(
         raise ValueError("recording and rig must be provided together")
     if show_wrist_mixed and episode.miscalibration is None:
         raise ValueError("show_wrist_mixed requires a miscalibration draw (closed-loop playback)")
+    if show_wrist_mixed and wrist_servo_mode != "detector":
+        raise ValueError("show_wrist_mixed requires wrist_servo_mode='detector'")
 
     model = episode.model
     data = episode.data
@@ -363,6 +366,7 @@ def record_episode(
             data,
             belief,
             WRIST_CAMERA,
+            mode=wrist_servo_mode,
             believed_camera_pose=believed_wrist_camera_pose,
             detector_crash_dump_dir=detector_crash_dump_dir,
         )
@@ -409,7 +413,7 @@ def record_episode(
             )
 
     def on_look(plant, sighting, tracked, is_descent) -> None:
-        if not show_wrist_mixed:
+        if not show_wrist_mixed or plant.servo.mode != "detector":
             return
         true_rgb, camera_position, camera_rotation = plant.last_look
         show_mixed(

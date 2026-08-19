@@ -20,12 +20,12 @@
 #   --domain-randomization   lighting, materials, background, camera response,
 #                            the wrist camera's physical mount, and a
 #                            miscalibration draw per episode
-#   --overhead-perception    the cube and drop plate are localized by rendering
-#                            the overhead camera and running the detector, so
-#                            the planner's belief error is an outcome of a
-#                            calibration that is slightly wrong rather than a
-#                            number added to the truth -- and the arm blocking
-#                            its own view becomes a real failure mode
+#   --sim-perception         low-resolution segmentation gates whether the cube
+#                            and plate are visible; controlled geometric beliefs
+#                            provide their poses without optical detection
+#   --wrist-servo geometric  descent feedback maps true camera-relative cube
+#                            geometry through the believed wrist camera, keeping
+#                            hand-eye error without another render or detector
 #   --physics-randomization  servo gain and time constant, link mass, surface
 #                            friction, joint damping, stiction, droop
 #   --perturbed-fraction     a deliberate fumble on a minority of episodes, so
@@ -75,11 +75,11 @@ stop_after="${STOP_AFTER:-}"
 attempt_batch="${ATTEMPT_BATCH:-}"
 
 # Generation is the parallel stage and the binding resource is GPU memory, not
-# cores. Each worker holds three EGL contexts now, not one: the recording rig at
-# 1920x1080 with an 8192-square shadow map, the wrist servo's, and the overhead
-# perception renderer's, which is ~1.15 GB apiece measured on a 24 GB card. 20
-# workers reached 23.0 of 24.4 GB, which is close enough to the framebuffer
-# cliff to be a bad bet on an unattended run; 16 leaves real headroom.
+# cores. The geometric wrist servo no longer owns an EGL context. Each worker
+# holds the recording rig at 1920x1080 with an 8192-square shadow map and the
+# overhead visibility renderer. Keep the older, conservative measured
+# per-worker budget until the next rented-GPU run measures the new high-water
+# mark.
 #
 # `nproc --all` reports the *host's* cores, not the container's allotment, so
 # the cgroup is what bounds it. Plain `nproc` honours OMP_NUM_THREADS, pinned to
@@ -216,7 +216,8 @@ for attempt in 1 2 3 4 5 6; do
     --workers "$workers" \
     --seed "$seed" \
     --domain-randomization "$domain_preset" \
-    --overhead-perception \
+    --sim-perception geometric \
+    --wrist-servo geometric \
     --physics-randomization "$physics_amount" \
     --perturbed-fraction "$perturbed_fraction" \
     --perturbation-magnitude "$perturbation_magnitude" \
