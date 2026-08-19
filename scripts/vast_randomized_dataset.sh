@@ -53,6 +53,8 @@ perturbed_fraction="${PERTURBED_FRACTION:-0.25}"
 perturbation_magnitude="${PERTURBATION_MAGNITUDE:-0.022}"
 perturbation_max_source_radius="${PERTURBATION_MAX_SOURCE_RADIUS:-0.330}"
 physics_amount="${PHYSICS_RANDOMIZATION:-0.5}"
+episode_timeout="${EPISODE_TIMEOUT:-900}"
+episode_retries="${EPISODE_RETRIES:-1}"
 domain_preset="${DOMAIN_RANDOMIZATION:-config/domain_randomization/act_mild_v1.json}"
 run_name="${RUN_NAME:-randomized-$(date +%Y%m%d_%H%M%S)}"
 seed="${SEED:-20260816}"
@@ -129,6 +131,7 @@ stage 0 "inputs"
 git rev-parse HEAD | tee "$output_root/job-metadata/repository-commit.txt"
 echo "cores=$cores vram=${vram_mb}MiB workers=$workers episodes=$episodes"
 echo "ground_truth_drop_target=${ground_truth_drop_target:-off}"
+echo "episode_timeout=$episode_timeout episode_retries=$episode_retries"
 # The one machine-local input a fresh clone still needs is the tag textures,
 # and provisioning generates those.
 #
@@ -222,7 +225,8 @@ for attempt in 1 2 3 4 5 6; do
     --perturbed-fraction "$perturbed_fraction" \
     --perturbation-magnitude "$perturbation_magnitude" \
     --perturbation-max-source-radius "$perturbation_max_source_radius" \
-    --episode-timeout 900 \
+    --episode-timeout "$episode_timeout" \
+    --episode-retries "$episode_retries" \
     --dataset-root "$staging" \
     "${record_extra_args[@]}" \
     --repo-id "local/$run_name" || echo "recorder returned $?; will re-count"
