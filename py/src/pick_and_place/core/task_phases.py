@@ -80,6 +80,18 @@ def coarse_phase_labels(spans: tuple[PhaseSpan, ...], length: int) -> np.ndarray
         labels[span.start_frame : end] = coarse
     return labels
 
+
+def trajectory_phase_labels(spans: tuple[PhaseSpan, ...], length: int) -> np.ndarray:
+    """One exact scripted-trajectory phase name per recorded frame."""
+    _validate_spans(spans)
+    if length < spans[-1].start_frame + 1:
+        raise ValueError(f"episode length {length} is shorter than the last span start")
+    labels = np.empty(length, dtype=object)
+    for index, span in enumerate(spans):
+        end = spans[index + 1].start_frame if index + 1 < len(spans) else length
+        labels[span.start_frame : end] = span.name
+    return labels
+
 # The gripper command must span at least this fraction of typical hardware
 # travel; a flatter trace means the episode never closed the gripper.
 _MINIMUM_COMMAND_SPAN = 5.0
