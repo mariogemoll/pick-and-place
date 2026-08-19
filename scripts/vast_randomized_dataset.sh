@@ -266,14 +266,23 @@ publish() {  # local-path s3-key
   sha256sum "$path" | awk -v n="$(basename "$key")" '{print $1"  "n}' > "$path.sha256"
   aws s3 cp "$path" "$key" --only-show-errors
   aws s3 cp "$path.sha256" "$key.sha256" --only-show-errors
-  local local_sha published_sha
-  local_sha="$(awk '{print $1}' "$path.sha256")"
-  published_sha="$(aws s3 cp "$key" - --only-show-errors | sha256sum | awk '{print $1}')"
-  if [ "$local_sha" != "$published_sha" ]; then
-    echo "checksum mismatch publishing $key" >&2
+  # Verify by size rather than by reading the object back. The round-trip hash
+  # is the stronger check, but it costs a full download, and S3 egress is not
+  # symmetric with ingress on a rented pod: one host uploaded 2.8 GB in seven
+  # minutes and then read it back at ~0.4 MB/s, which would have spent six hours
+  # verifying four tarballs. What is left still catches the realistic failure --
+  # `aws s3 cp` checksums every multipart chunk in transit and S3 rejects a bad
+  # part, so truncation is what survives that, and a size check catches
+  # truncation. The .sha256 sidecar is published either way, so any consumer can
+  # still verify the bytes it actually downloads.
+  local local_bytes published_bytes
+  local_bytes="$(stat -c %s "$path")"
+  published_bytes="$(aws s3 ls "$key" | awk '{print $3}' | tail -1)"
+  if [ "$local_bytes" != "$published_bytes" ]; then
+    echo "size mismatch publishing $key: local $local_bytes, published $published_bytes" >&2
     exit 1
   fi
-  echo "published and verified $key"
+  echo "published and verified (size $local_bytes) $key"
 }
 
 stage 3 "publish the staged episodes -- the form every other format derives from"
