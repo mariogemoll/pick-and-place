@@ -8,9 +8,10 @@ so a controller sees exactly what it would see on a rig whose servo zeros are
 off. Without a miscalibration draw the two frames coincide and the whole thing
 degenerates to feedforward playback, which is what a plain recording wants.
 
-The detector runs **inline**, once per tick, rather than on a thread. Frames do
-not arrive on their own here — they cost what they cost — and running them in
-the loop is what keeps a recorded episode a pure function of its seed.
+Wrist localization runs **inline**, once per tick, rather than on a thread.
+Running it in the loop is what keeps a recorded episode a pure function of its
+seed; the selected localizer may use geometric camera-relative feedback or the
+rendered AprilTag path.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from pick_and_place.plant.interface import NOTHING_SEEN, Observation, Sighting
 from pick_and_place.runtime.believed_frame import BelievedFrame
 from pick_and_place.runtime.sim_wrist_servo import SimWristServo
 from pick_and_place.sim.collisions import unexpected_contact_pairs
-from pick_and_place.sim.model import get_cube_qpos, get_joint
+from pick_and_place.sim.model import get_cube_pose, get_cube_qpos, get_joint
 from pick_and_place.spec.robot import CONTROL_HZ
 
 
@@ -139,15 +140,20 @@ class SimPlant:
         return self.belief.arm_joints(), get_joint(self.model, self.data, "gripper")
 
     def sighting(self, believed_cube: CubePose) -> Sighting:
-        """Render the wrist camera and solve the cube out of it, inline.
+        """Locate the cube for wrist-servo feedback, inline.
 
-        The image comes from the true world — including a perturbed physical
-        camera mount, if one was drawn — while the solve is projected through the
-        believed shadow's camera pose, so the estimate carries the hand-eye error
-        exactly as on hardware.
+        Both modes express the cube relative to the true camera and map the
+        result through the believed shadow's camera pose, so a perturbed mount
+        remains a hand-eye error. Detector mode obtains that relation from a
+        rendered tag; geometric mode obtains it directly from simulation.
         """
         if self.servo is None:
             return NOTHING_SEEN
+        if self.servo.mode == "geometric":
+            seen = self.servo.geometric_sighting(
+                get_cube_pose(self.model, self.data), believed_cube
+            )
+            return Sighting(pose=seen.pose, fresh=True)
         rgb, camera_position, camera_rotation = self.servo.look(believed_cube)
         self.last_look = (rgb, camera_position, camera_rotation)
         seen = self.servo.solve(rgb, camera_position, camera_rotation)

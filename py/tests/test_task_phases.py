@@ -11,6 +11,7 @@ from pick_and_place.core.task_phases import (
     phase_spans_from_json,
     phase_spans_json,
     segment_phases,
+    trajectory_phase_labels,
 )
 
 
@@ -147,3 +148,13 @@ def test_coarse_phase_labels_reject_unknown_phase() -> None:
 def test_coarse_phase_labels_reject_short_length() -> None:
     with pytest.raises(ValueError, match="shorter"):
         coarse_phase_labels(_recorded_spans(), length=250)
+
+
+def test_trajectory_phase_labels_preserve_exact_spans() -> None:
+    labels = trajectory_phase_labels(_recorded_spans(), length=280)
+    assert labels[0] == "approach"
+    assert labels[39] == "approach"
+    assert labels[40] == "descent"
+    assert labels[199] == "carry"
+    assert labels[200] == "drop_descent"
+    assert labels[279] == "retreat"

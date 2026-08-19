@@ -479,7 +479,12 @@ def test_a_descent_that_never_sees_the_cube_retries_then_asks_for_a_restart(
     from pick_and_place.runtime import sim_wrist_servo
 
     monkeypatch.setattr(sim_wrist_servo, "detect_cube_faces", lambda rgb, detector: [])
-    result, recording, _ = _run(_episode(closed_loop=True), speed=4.0, verbose=True)
+    result, recording, _ = _run(
+        _episode(closed_loop=True),
+        speed=4.0,
+        verbose=True,
+        wrist_servo_mode="detector",
+    )
     assert result.status == "restart"
     out = capsys.readouterr().out
     assert "backing up to pregrasp" in out
@@ -513,6 +518,7 @@ def test_the_mixed_wrist_view_blends_the_believed_world_under_the_true_one(
         _episode(closed_loop=True),
         speed=8.0,
         show_wrist_mixed=True,
+        wrist_servo_mode="detector",
         should_stop=_stop_after(12),
         verbose=False,
     )

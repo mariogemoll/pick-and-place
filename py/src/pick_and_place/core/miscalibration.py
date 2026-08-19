@@ -54,14 +54,15 @@ DEFAULT_JOINT_OFFSET_SIGMA_DEG = {
 DEFAULT_PAN_JITTER_SIGMA_DEG = 2.2
 DEFAULT_PAN_JITTER_TAU_S = 10.0
 
-# Believed-cube-pose error vs true (overhead localization + physical frame
-# placement class of error): ~6-9 mm planar magnitude, ~3-5 mm vertical.
+# Believed-cube-pose error vs true. Honest overhead localization in the
+# randomized demonstrations measured a 26.6 mm median planar miss; a 2-D
+# Gaussian reaches that radial median at approximately 23 mm per-axis sigma.
 #
 # This is an *outcome*, not a cause. Injecting it directly is what a run does
 # when nothing simulates the overhead camera; when something does, the causes
 # below are perturbed instead and this becomes the target the emergent error is
 # checked against.
-DEFAULT_CUBE_BELIEF_SIGMA_XY_M = 0.006
+DEFAULT_CUBE_BELIEF_SIGMA_XY_M = 0.023
 DEFAULT_CUBE_BELIEF_SIGMA_Z_M = 0.004
 DEFAULT_CUBE_BELIEF_SIGMA_YAW_RAD = math.radians(2.0)
 # The drop target is localized through the same overhead chain.

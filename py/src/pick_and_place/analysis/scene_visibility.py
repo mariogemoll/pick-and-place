@@ -21,7 +21,9 @@ import cv2
 import mujoco
 import numpy as np
 
+from pick_and_place.core.camera_projection import project_to_pixel
 from pick_and_place.data.trajectory_artifact import ARTIFACT_FILENAME, load_trajectory
+from pick_and_place.plant.overhead import camera_matrix_for
 from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
 from pick_and_place.sim.paper_target_marker import PAPER_TARGET_MARKER_NAME, place_paper_target_marker
 from pick_and_place.runtime.policy_sim import (
@@ -30,7 +32,7 @@ from pick_and_place.runtime.policy_sim import (
     real_action_to_sim_ctrl,
 )
 from pick_and_place.core.image_ops import resize_and_center_crop
-from pick_and_place.core.task_phases import coarse_phase_labels
+from pick_and_place.core.task_phases import coarse_phase_labels, trajectory_phase_labels
 from pick_and_place.core.workspace_bounds import is_cube_drop_allowed
 
 # Thresholds on the fractional pixel coverage after the exact 96x96 transform:
@@ -51,6 +53,7 @@ class EpisodeTruth:
     target_xy: tuple[float, float]
     target_plate_yaw: float
     coarse_phases: np.ndarray  # (N,) coarse phase name per 30 Hz frame
+    trajectory_phases: np.ndarray  # (N,) exact scripted phase name per frame
 
 
 def load_episode_truth(root: Path) -> EpisodeTruth:
@@ -69,6 +72,9 @@ def load_episode_truth(root: Path) -> EpisodeTruth:
         target_xy=artifact.facts.target_xy,
         target_plate_yaw=artifact.facts.target_plate_yaw,
         coarse_phases=coarse_phase_labels(artifact.facts.phase_spans, len(artifact.frames)),
+        trajectory_phases=trajectory_phase_labels(
+            artifact.facts.phase_spans, len(artifact.frames)
+        ),
     )
 
 
@@ -191,6 +197,45 @@ class SceneMeasurer:
         self.rgb_renderer.update_scene(self.data, camera=camera)
         rgb = resize_and_center_crop(self.rgb_renderer.render(), self.image_size, self.image_size)
         return rgb, self.coverage_maps(camera)
+
+    def center_ray_visible(self, camera: str, object_name: str) -> bool:
+        """Whether an object's projected centre is in frame and unobstructed.
+
+        This is the cheap visibility gate proposed for episode search.  It uses
+        no renderer: the centre must project inside the camera image, and a
+        MuJoCo ray from the camera to that centre must first hit the requested
+        geom.  Comparing this deliberately coarse test with rendered masks and
+        the detector says whether it is honest enough to drive search.
+        """
+        geom_id = {"cube": self.cube_geom_id, "plate": self.plate_geom_id}[object_name]
+        camera_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_CAMERA, camera)
+        if camera_id < 0:
+            raise ValueError(f"scene is missing camera {camera!r}")
+        height, width = self.rgb_renderer.height, self.rgb_renderer.width
+        camera_position = self.data.cam_xpos[camera_id]
+        camera_rotation = self.data.cam_xmat[camera_id].reshape(3, 3)
+        pixel = project_to_pixel(
+            self.data.geom_xpos[geom_id],
+            camera_matrix_for(self.model, camera_id, width, height),
+            camera_position,
+            camera_rotation,
+        )[0]
+        if not (0.0 <= pixel[0] < width and 0.0 <= pixel[1] < height):
+            return False
+        direction = self.data.geom_xpos[geom_id] - camera_position
+        direction /= np.linalg.norm(direction)
+        hit_geom = np.array([-1], dtype=np.int32)
+        distance = mujoco.mj_ray(
+            self.model,
+            self.data,
+            camera_position,
+            direction,
+            None,
+            True,
+            int(self.model.cam_bodyid[camera_id]),
+            hit_geom,
+        )
+        return distance >= 0.0 and int(hit_geom[0]) == geom_id
 
     def close(self) -> None:
         self.rgb_renderer.close()

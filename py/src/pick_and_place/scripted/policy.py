@@ -27,9 +27,13 @@ import numpy as np
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.core.joint_frames import real_frame_to_sim, sim_frame_to_real
 from pick_and_place.core.kinematics import So101Kinematics
-from pick_and_place.scripted.episode_sampling import sample_hunt_pose
+from pick_and_place.scripted.episode_sampling import (
+    CARRY_HUNT_PAN_SCALE,
+    sample_hunt_pose,
+    sample_target,
+)
 from pick_and_place.scripted.grasp import fold_cube_yaw, grasp_candidates
-from pick_and_place.scripted.motion import shortest_delta
+from pick_and_place.scripted.motion import shortest_delta, smoothstep
 from pick_and_place.scripted.replan import replan_remaining_candidates
 from pick_and_place.scripted.trajectory import (
     DescentPhase,
@@ -51,7 +55,7 @@ from pick_and_place.spec.controller import (
     PolicyObservation,
 )
 from pick_and_place.spec.drop_zone import PaperTarget
-from pick_and_place.spec.robot import GRIPPER_OPEN, JOINT_NAMES
+from pick_and_place.spec.robot import GRIPPER_GRASP, GRIPPER_OPEN, JOINT_NAMES, NEUTRAL_ARM_JOINTS
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 
 
@@ -113,6 +117,8 @@ class ScriptedPolicyState(str, Enum):
     LOCALIZING = "localizing"
     READY = "ready"
     EXECUTING = "executing"
+    FINDING_PLATE = "finding_plate"
+    REVEALING_PLACEMENT = "revealing_placement"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
 
@@ -136,6 +142,8 @@ class ScriptedPolicy:
         target_color: str = "black",
         max_localization_steps: int = 60,
         localization_steps_per_search: int = 15,
+        max_search_poses: int = 8,
+        max_grasp_retries: int = 1,
         planning_max_attempts: int = 40,
         planning_verbose: bool = False,
         rng_seed: int = 0,
@@ -144,6 +152,7 @@ class ScriptedPolicy:
         replan_candidates: ReplanCandidates = replan_remaining_candidates,
         target_sampler: TargetSampler | None = None,
         drop_target_xy: tuple[float, float] | None = None,
+        cache_drop_target_early: bool = False,
         free_grasp: bool = False,
     ) -> None:
         if target_color not in {"black", "white"}:
@@ -152,6 +161,10 @@ class ScriptedPolicy:
             raise ValueError("max_localization_steps must be at least 1")
         if localization_steps_per_search < 1:
             raise ValueError("localization_steps_per_search must be at least 1")
+        if max_search_poses < 1:
+            raise ValueError("max_search_poses must be at least 1")
+        if max_grasp_retries < 0:
+            raise ValueError("max_grasp_retries must be nonnegative")
         if planning_max_attempts < 1:
             raise ValueError("planning_max_attempts must be at least 1")
         if not np.isfinite(control_hz) or control_hz <= 0.0:
@@ -165,6 +178,8 @@ class ScriptedPolicy:
         self.target_color = target_color
         self.max_localization_steps = max_localization_steps
         self.localization_steps_per_search = localization_steps_per_search
+        self.max_search_poses = max_search_poses
+        self.max_grasp_retries = max_grasp_retries
         self.planning_max_attempts = planning_max_attempts
         self.planning_verbose = planning_verbose
         self.rng_seed = rng_seed
@@ -179,6 +194,7 @@ class ScriptedPolicy:
         # same fixed-target path a detection would have produced. Survives
         # reset() so one controller can be re-pinned per episode.
         self.drop_target_xy = drop_target_xy
+        self.cache_drop_target_early = cache_drop_target_early
         self.free_grasp = free_grasp
         self.reset()
 
@@ -195,6 +211,10 @@ class ScriptedPolicy:
         self.failure: ControllerFailure | None = None
         self._localization_steps = 0
         self._search_target: np.ndarray | None = None
+        self._search_start: np.ndarray | None = None
+        self._search_progress = 0
+        self._search_poses = 0
+        self._grasp_retries = 0
         self._rng = np.random.default_rng(self.rng_seed)
         self._trajectory: Trajectory | None = None
         self._phase_elapsed = 0.0
@@ -207,6 +227,9 @@ class ScriptedPolicy:
 
     def close(self) -> None:
         """Release controller-owned background workers, if any."""
+        close_localizer = getattr(self.localizer, "close", None)
+        if close_localizer is not None:
+            close_localizer()
         close_wrist = getattr(self.wrist_localizer, "close", None)
         if close_wrist is not None:
             close_wrist()
@@ -222,6 +245,12 @@ class ScriptedPolicy:
     @property
     def phase_name(self) -> str | None:
         """Current trajectory phase, for physical verification and diagnostics."""
+        if self.state is ScriptedPolicyState.LOCALIZING:
+            return "find_cube"
+        if self.state is ScriptedPolicyState.FINDING_PLATE:
+            return "find_plate"
+        if self.state is ScriptedPolicyState.REVEALING_PLACEMENT:
+            return "reveal_placement"
         if self._trajectory is None or not self._trajectory.phases:
             return None
         return self._trajectory.phases[0].name
@@ -231,6 +260,36 @@ class ScriptedPolicy:
         if self.state is not ScriptedPolicyState.READY:
             raise RuntimeError(f"policy is not ready for execution: {self.state.value}")
         self._begin_execution()
+
+    def report_pickup_result(self, succeeded: bool) -> None:
+        """Continue after a verified lift or locally retry a missed grasp."""
+        if succeeded:
+            return
+        if self.state is not ScriptedPolicyState.FINDING_PLATE:
+            raise RuntimeError(
+                f"pickup result is only valid after lift, not while {self.state.value}"
+            )
+        if self._grasp_retries >= self.max_grasp_retries:
+            self._fail(
+                "grasp_retry_exhausted",
+                f"grasp still missed after {self.max_grasp_retries} retries",
+            )
+            return
+        self._grasp_retries += 1
+        self.localizer.reset()
+        self.state = ScriptedPolicyState.LOCALIZING
+        self.cube_pose = None
+        if not self.cache_drop_target_early:
+            self.drop_target = None
+        self.episode = None
+        self._trajectory = None
+        self._dynamic_source = None
+        self._dynamic_grasp = None
+        self._localization_steps = 0
+        self._search_start = None
+        self._search_target = None
+        self._search_progress = 0
+        self._search_poses = 0
 
     @staticmethod
     def _hold_action(observation: PolicyObservation) -> np.ndarray:
@@ -259,15 +318,49 @@ class ScriptedPolicy:
         self.state = ScriptedPolicyState.FAILED
         self.failure = ControllerFailure(code=code, message=message)
 
-    def _search_action(self) -> np.ndarray:
-        arm_joints, gripper = sample_hunt_pose(self._rng)
-        return sim_frame_to_real(arm_joints, gripper).astype(np.float32)
+    def _begin_search_motion(self, hold: np.ndarray, *, carrying: bool) -> None:
+        if self._search_poses >= self.max_search_poses:
+            self._fail(
+                "search_budget_exhausted",
+                f"could not make the object visible in {self.max_search_poses} search poses",
+            )
+            return
+        if carrying:
+            arm_joints, gripper = real_frame_to_sim(hold)
+            arm_joints["shoulder_pan"] = NEUTRAL_ARM_JOINTS["shoulder_pan"] + self._rng.uniform(
+                -CARRY_HUNT_PAN_SCALE, CARRY_HUNT_PAN_SCALE
+            )
+            gripper = GRIPPER_GRASP
+        else:
+            arm_joints, gripper = sample_hunt_pose(self._rng)
+        self._search_start = hold.astype(np.float32, copy=True)
+        self._search_target = sim_frame_to_real(arm_joints, gripper).astype(np.float32)
+        self._search_progress = 0
+        self._search_poses += 1
+
+    def _search_action(self, hold: np.ndarray, *, carrying: bool) -> np.ndarray:
+        if self._search_target is None:
+            self._begin_search_motion(hold, carrying=carrying)
+            if self.terminal:
+                return hold
+        assert self._search_start is not None and self._search_target is not None
+        self._search_progress += 1
+        alpha = smoothstep(
+            min(1.0, self._search_progress / self.localization_steps_per_search)
+        )
+        action = self._search_start + (self._search_target - self._search_start) * alpha
+        if self._search_progress >= self.localization_steps_per_search:
+            self._search_start = None
+            self._search_target = None
+            self._search_progress = 0
+        return action.astype(np.float32)
 
     def _plan(self, reported_joints: np.ndarray) -> None:
         assert self.cube_pose is not None
         start_joints, start_gripper = real_frame_to_sim(reported_joints)
         target = None
-        if self.drop_target_xy is not None or self.target_sampler is None:
+        planning_target_sampler = self.target_sampler
+        if self.drop_target_xy is not None or self.drop_target is not None:
             if self.drop_target_xy is not None:
                 target_xy = np.asarray(self.drop_target_xy, dtype=float).reshape(-1)
             else:
@@ -283,6 +376,11 @@ class ScriptedPolicy:
                 y=float(target_xy[1]),
                 z=CUBE_HALF_SIZE,
             )
+        elif self.target_sampler is None:
+            # Pickup geometry does not depend on the eventual drop target. Use a
+            # disposable valid target to obtain a vetted approach/grasp/lift;
+            # carry is rebuilt from a fresh post-lift plate sighting.
+            planning_target_sampler = sample_target
         self.episode = self._plan_episode(
             self._rng,
             self.cube_pose,
@@ -293,7 +391,7 @@ class ScriptedPolicy:
             verbose=self.planning_verbose,
             include_environment=True,
             free_grasp=self.free_grasp,
-            target_sampler=self.target_sampler,
+            target_sampler=planning_target_sampler,
         )
 
     def _begin_execution(self) -> None:
@@ -446,8 +544,28 @@ class ScriptedPolicy:
             return
         if self._advance_locked_section(completed):
             return
+        if (
+            completed in ("lift", "recovery_lift")
+            and self.drop_target_xy is None
+            and self.target_sampler is None
+        ):
+            self.state = ScriptedPolicyState.FINDING_PLATE
+            if not self.cache_drop_target_early:
+                self.drop_target = None
+            self._search_start = None
+            self._search_target = None
+            self._search_progress = 0
+            self._search_poses = 0
+            return
         if len(self._trajectory.phases) <= 1:
-            self.state = ScriptedPolicyState.SUCCEEDED
+            if completed == "retreat":
+                self.state = ScriptedPolicyState.REVEALING_PLACEMENT
+                self._search_start = None
+                self._search_target = None
+                self._search_progress = 0
+                self._search_poses = 0
+            else:
+                self.state = ScriptedPolicyState.SUCCEEDED
             return
 
         measured_joints, measured_gripper = real_frame_to_sim(reported_joints)
@@ -482,6 +600,8 @@ class ScriptedPolicy:
                 self._fail("replanning_error", str(exc))
                 return hold
             if self.terminal:
+                return hold
+            if self.state is not ScriptedPolicyState.EXECUTING:
                 return hold
 
         assert self._trajectory is not None and self._trajectory.phases
@@ -529,6 +649,22 @@ class ScriptedPolicy:
             self._fail(code, str(exc))
             return hold
 
+        if (
+            self.cache_drop_target_early
+            and self.drop_target is None
+            and self.drop_target_xy is None
+        ):
+            try:
+                overhead = self._image(observation, OVERHEAD_FEATURE)
+                self.drop_target = self.localizer.localize_drop_target(
+                    overhead,
+                    target_color=self.target_color,
+                    workspace_corners_world=self.workspace_corners_world,
+                )
+            except Exception as exc:
+                self._fail("localization_error", str(exc))
+                return hold
+
         if self.state is ScriptedPolicyState.READY:
             try:
                 self._begin_execution()
@@ -540,6 +676,57 @@ class ScriptedPolicy:
         if self.state is ScriptedPolicyState.EXECUTING:
             return self._execute(hold, wrist)
 
+        if self.state is ScriptedPolicyState.FINDING_PLATE:
+            try:
+                if self.drop_target is None:
+                    overhead = self._image(observation, OVERHEAD_FEATURE)
+                    self.drop_target = self.localizer.localize_drop_target(
+                        overhead,
+                        target_color=self.target_color,
+                        workspace_corners_world=self.workspace_corners_world,
+                    )
+            except Exception as exc:
+                self._fail("localization_error", str(exc))
+                return hold
+            if self.drop_target is None:
+                return self._search_action(hold, carrying=True)
+            target = CubePose(*self.drop_target.xy, CUBE_HALF_SIZE)
+            assert self.episode is not None
+            self.episode.target = target
+            measured_joints, measured_gripper = real_frame_to_sim(hold)
+            assert self._dynamic_source is not None
+            for candidate in self._replan_candidates(
+                self.episode.kinematics,
+                measured_joints,
+                measured_gripper,
+                "lift",
+                self._dynamic_source,
+                target,
+                self._dynamic_grasp,
+                self.episode.end_joints,
+                self.episode.end_gripper,
+                free_grasp=False,
+            ):
+                if self._trajectory_preflight(self.episode, candidate):
+                    self._trajectory = candidate
+                    self._start_phase()
+                    self.state = ScriptedPolicyState.EXECUTING
+                    return hold
+            self._fail("replanning_error", "no collision-free carry after finding plate")
+            return hold
+
+        if self.state is ScriptedPolicyState.REVEALING_PLACEMENT:
+            try:
+                overhead = self._image(observation, OVERHEAD_FEATURE)
+                visible_cube = self.localizer.localize_cube(overhead) is not None
+            except Exception as exc:
+                self._fail("localization_error", str(exc))
+                return hold
+            if visible_cube:
+                self.state = ScriptedPolicyState.SUCCEEDED
+                return hold
+            return self._search_action(hold, carrying=False)
+
         try:
             overhead = self._image(observation, OVERHEAD_FEATURE)
             if self.cube_pose is None:
@@ -547,27 +734,12 @@ class ScriptedPolicy:
                     self.cube_pose = self.localizer.localize_cube(overhead, free_grasp=True)
                 else:
                     self.cube_pose = self.localizer.localize_cube(overhead)
-            if (
-                self.target_sampler is None
-                and self.drop_target_xy is None
-                and self.drop_target is None
-            ):
-                self.drop_target = self.localizer.localize_drop_target(
-                    overhead,
-                    target_color=self.target_color,
-                    workspace_corners_world=self.workspace_corners_world,
-                )
         except Exception as exc:
             self._fail("localization_error", str(exc))
             return hold
 
         self._localization_steps += 1
-        target_ready = (
-            self.drop_target is not None
-            or self.drop_target_xy is not None
-            or self.target_sampler is not None
-        )
-        if self.cube_pose is not None and target_ready:
+        if self.cube_pose is not None:
             try:
                 self._plan(hold)
             except Exception as exc:
@@ -580,8 +752,6 @@ class ScriptedPolicy:
             missing = []
             if self.cube_pose is None:
                 missing.append("cube")
-            if not target_ready:
-                missing.append("drop target")
             self._fail(
                 "localization_timeout",
                 f"could not localize {' and '.join(missing)} in "
@@ -589,8 +759,8 @@ class ScriptedPolicy:
             )
             return hold
 
-        if self._localization_steps % self.localization_steps_per_search == 0:
-            self._search_target = self._search_action()
-        if self._search_target is not None:
-            return self._search_target.copy()
+        if self._search_target is not None or (
+            self._localization_steps % self.localization_steps_per_search == 0
+        ):
+            return self._search_action(hold, carrying=False)
         return hold

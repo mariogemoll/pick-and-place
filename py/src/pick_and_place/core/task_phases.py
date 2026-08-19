@@ -20,15 +20,18 @@ PHASES = ("acquisition", "grasp", "transport", "placement")
 
 # Scripted-trajectory phase names, mapped onto the four coarse task phases.
 COARSE_PHASE_BY_TRAJECTORY_PHASE = {
+    "find_cube": "acquisition",
     "approach": "acquisition",
     "descent": "acquisition",
     "grasp": "grasp",
     "lift": "transport",
+    "find_plate": "transport",
     "recovery_lift": "transport",
     "carry": "transport",
     "drop_descent": "placement",
     "release": "placement",
     "retreat": "placement",
+    "reveal_placement": "placement",
 }
 
 
@@ -78,6 +81,18 @@ def coarse_phase_labels(spans: tuple[PhaseSpan, ...], length: int) -> np.ndarray
             raise ValueError(f"unknown trajectory phase name: {span.name!r}")
         end = spans[index + 1].start_frame if index + 1 < len(spans) else length
         labels[span.start_frame : end] = coarse
+    return labels
+
+
+def trajectory_phase_labels(spans: tuple[PhaseSpan, ...], length: int) -> np.ndarray:
+    """One exact scripted-trajectory phase name per recorded frame."""
+    _validate_spans(spans)
+    if length < spans[-1].start_frame + 1:
+        raise ValueError(f"episode length {length} is shorter than the last span start")
+    labels = np.empty(length, dtype=object)
+    for index, span in enumerate(spans):
+        end = spans[index + 1].start_frame if index + 1 < len(spans) else length
+        labels[span.start_frame : end] = span.name
     return labels
 
 # The gripper command must span at least this fraction of typical hardware

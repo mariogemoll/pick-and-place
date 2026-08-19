@@ -22,6 +22,7 @@ before the plate started rotating.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from typing import Any
 
@@ -138,6 +139,11 @@ def prepare_for_recording(
         )
         return localized.episode, localized.target_plate_yaw
 
+    planning_miscalibration = (
+        dataclasses.replace(miscalibration, target_belief_error=(0.0, 0.0))
+        if ground_truth_drop_target and miscalibration is not None
+        else miscalibration
+    )
     episode = prepare_episode(
         rng,
         source,
@@ -146,10 +152,13 @@ def prepare_for_recording(
         data=data,
         verbose=False,
         include_environment=True,
-        miscalibration=miscalibration,
+        miscalibration=planning_miscalibration,
         grasp_perturbation=grasp_perturbation,
         max_attempts=max_attempts,
     )
+    if ground_truth_drop_target:
+        episode.believed_target = episode.target
+        episode.miscalibration = miscalibration
     plate_yaw = sample_target_plate_yaw(
         rng, episode.target.x, episode.target.y, half_size=DROP_ZONE_HALF_SIZE
     )

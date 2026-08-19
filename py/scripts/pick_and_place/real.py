@@ -466,6 +466,7 @@ def main() -> None:
                 ),
                 workspace_interior_corners_world(),
                 target_color=args.drop_zone_color,
+                cache_drop_target_early=True,
                 max_localization_steps=args.max_localization_steps,
                 localization_steps_per_search=args.localization_steps_per_search,
                 planning_max_attempts=args.planning_attempts,

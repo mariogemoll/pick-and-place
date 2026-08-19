@@ -344,6 +344,34 @@ class RetreatPhase:
 
 
 @dataclass(frozen=True)
+class SearchPhase:
+    """A recorded, smooth move whose only purpose is to reveal an object."""
+
+    k: So101Kinematics
+    start_joints: dict[str, float]
+    end_joints: dict[str, float]
+    start_gripper: float
+    end_gripper: float
+    object_name: str
+
+    @property
+    def name(self) -> str:
+        return f"find_{self.object_name}" if self.object_name != "placement" else "reveal_placement"
+
+    @cached_property
+    def duration(self) -> float:
+        return _joint_move_duration(self.k, self.start_joints, self.end_joints)
+
+    def evaluate(self, t: float) -> Frame:
+        alpha = _timed_arc_fraction(t / self.duration) if self.duration > 0 else 1.0
+        return Frame(
+            joints=_lerp_joints(self.start_joints, self.end_joints, alpha),
+            gripper=self.start_gripper
+            + (self.end_gripper - self.start_gripper) * smoothstep(alpha),
+        )
+
+
+@dataclass(frozen=True)
 class Trajectory:
     phases: tuple[TrajectoryPhase, ...]
     source: CubePose | None = None

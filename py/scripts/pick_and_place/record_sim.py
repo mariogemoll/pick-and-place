@@ -64,6 +64,7 @@ from pick_and_place.core.robot_dynamics import (
     tracking_bias_rad,
 )
 from pick_and_place.plant.overhead import SimOverheadPerception
+from pick_and_place.plant.geometric_overhead import SimGeometricOverheadLocalizer
 from pick_and_place.sim.physics import PhysicsRandomizer, tracking_bias_offsets
 from pick_and_place.rollout.episode_setup import (
     appearance_seed,
@@ -157,6 +158,7 @@ def run_recording(
     max_attempts: int = 50,
     show_progress: bool = True,
     detector_crash_dump_dir: str | None = None,
+    wrist_servo_mode: str = "geometric",
     perturbed_fraction: float = 0.0,
     perturbation_magnitude_m: float = DEFAULT_MAGNITUDE_M,
     perturbation_max_source_radius_m: float | None = None,
@@ -245,9 +247,19 @@ def run_recording(
     )
     # Rendered at detection resolution, separately from the recorded
     # observations: the detector needs more pixels than a dataset frame carries.
-    perception = (
+    detector_perception = (
         SimOverheadPerception(model, data, detector=None)
-        if scene.overhead_perception
+        if scene.overhead_perception == "detector"
+        else None
+    )
+    geometric_perception = (
+        SimGeometricOverheadLocalizer(
+            model,
+            data,
+            width=min(320, frames.render_width),
+            height=min(240, frames.render_height),
+        )
+        if scene.overhead_perception == "geometric"
         else None
     )
     # A run is miscalibrated either because --miscalibration asked for it or
@@ -255,7 +267,7 @@ def run_recording(
     # camera has to be off by the same token, or a randomized run would localize
     # perfectly while every other axis of its calibration was wrong. Without
     # either, the camera sits exactly where its calibration says and localizes
-    # far better than the rig -- honest, and the reason --overhead-perception is
+    # far better than the rig -- honest, and the reason --sim-perception is
     # worth little on its own.
     overhead_model = (
         OverheadCameraModel()
@@ -367,22 +379,31 @@ def run_recording(
             physics_draw = physics_model.sample(physics_rng(seed, global_episode))
             if physics is not None:
                 physics.apply(physics_draw)
-            if perception is not None:
-                perception.set_error(
+            if detector_perception is not None:
+                detector_perception.set_error(
                     overhead_model.sample(overhead_rng(seed, global_episode))
+                )
+            if geometric_perception is not None:
+                geometric_perception.set_cube_belief_error(
+                    (0.0, 0.0, 0.0, 0.0)
+                    if draw is None
+                    else draw.cube_belief_error
                 )
             try:
                 episode, target_plate_yaw = prepare_for_recording(
                     rng,
                     model,
                     data,
-                    perception,
+                    None,
                     source=episode_source,
                     target=target,
                     miscalibration=draw,
                     grasp_perturbation=perturbation,
                     max_attempts=max_attempts,
-                    ground_truth_drop_target=ground_truth_drop_target,
+                    ground_truth_drop_target=(
+                        ground_truth_drop_target
+                        or scene.overhead_perception == "geometric"
+                    ),
                 )
             except EpisodeSamplingError as exc:
                 tqdm.write(f"{label}Skipping episode {global_episode}: {exc}")
@@ -411,6 +432,17 @@ def run_recording(
                 ),
                 tracking_bias_rad=tracking_bias_offsets(fitted_bias, physics_draw),
                 detector_crash_dump_dir=detector_crash_dump_dir,
+                wrist_servo_mode=wrist_servo_mode,
+                overhead_observer=(
+                    geometric_perception
+                    if geometric_perception is not None
+                    else detector_perception
+                ),
+                search_rng=rng,
+                ground_truth_drop_target=(
+                    ground_truth_drop_target
+                    or scene.overhead_perception == "geometric"
+                ),
                 verbose=False,
             )
             if result.status != "success":
@@ -462,8 +494,10 @@ def run_recording(
     finally:
         if viewer_cm is not None:
             viewer_cm.__exit__(None, None, None)
-        if perception is not None:
-            perception.close()
+        if detector_perception is not None:
+            detector_perception.close()
+        if geometric_perception is not None:
+            geometric_perception.close()
         rig.close()
         if recording is not None and recording.dataset is not None:
             recording.finalize()
@@ -612,16 +646,13 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--overhead-perception",
-        action=argparse.BooleanOptionalAction,
-        default=False,
+        "--sim-perception",
+        choices=("geometric", "detector"),
+        default="geometric",
         help=(
-            "localize the cube and drop plate by rendering the overhead camera and "
-            "running the detector, instead of taking the true poses and adding the "
-            "draw's noise to them. The planner's belief error becomes an outcome of "
-            "a calibration that is slightly wrong, and the arm blocking its own view "
-            "becomes a real failure mode -- so the rig's hunt behavior runs here too. "
-            "Costs one 1920x1080 render per search pose, once per episode"
+            "overhead mode: geometric uses an 80%% segmentation visibility gate, "
+            "truth-plus-error cube poses and exact plate poses; detector runs the "
+            "real optical pipeline for robustness testing (default: geometric)"
         ),
     )
     parser.add_argument(
@@ -660,6 +691,16 @@ def main() -> None:
         help=(
             "save the wrist frame that crashes the AprilTag helper process here, "
             "for diagnosing the crash; the run itself continues either way"
+        ),
+    )
+    parser.add_argument(
+        "--wrist-servo",
+        choices=("geometric", "detector"),
+        default="geometric",
+        help=(
+            "simulated descent localization: geometric maps the true cube through the "
+            "true and believed wrist-camera frames without another render; detector runs "
+            "the AprilTag pipeline for validation (default: geometric)"
         ),
     )
     add_scene_texture_arguments(parser)
@@ -720,7 +761,7 @@ def main() -> None:
         background_panorama=args.background_panorama,
         table_texture=args.table_texture,
         miscalibration=args.miscalibration,
-        overhead_perception=args.overhead_perception,
+        overhead_perception=args.sim_perception,
         physics_amount=args.physics_randomization,
         domain_randomization=args.domain_randomization,
     )
@@ -755,7 +796,8 @@ def main() -> None:
         "render_width": args.render_width,
         "render_height": args.render_height,
         "miscalibration": args.miscalibration,
-        "overhead_perception": args.overhead_perception,
+        "sim_perception": args.sim_perception,
+        "wrist_servo": args.wrist_servo,
         "physics_randomization": args.physics_randomization,
         "domain_randomization": _configured_file(args.domain_randomization),
         "max_attempts": args.max_attempts,
@@ -765,7 +807,9 @@ def main() -> None:
         # Content-affecting: episodes planned against the true plate are a
         # different demonstration distribution, so a top-up across this flag is
         # rejected rather than silently mixed.
-        "ground_truth_drop_target": args.ground_truth_drop_target,
+        "ground_truth_drop_target": (
+            args.ground_truth_drop_target or args.sim_perception == "geometric"
+        ),
     }
     first_episode = (
         next_episode_index(episodes_root)
@@ -801,6 +845,7 @@ def main() -> None:
         speed=args.speed,
         max_attempts=args.max_attempts,
         detector_crash_dump_dir=args.detector_crash_dump_dir,
+        wrist_servo_mode=args.wrist_servo,
         perturbed_fraction=args.perturbed_fraction,
         perturbation_magnitude_m=args.perturbation_magnitude,
         perturbation_max_source_radius_m=args.perturbation_max_source_radius,

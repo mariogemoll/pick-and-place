@@ -264,10 +264,14 @@ def run_physical_policy_episode(
             if pickup_verifier is not None and pickup_verified is None:
                 pickup_verified = pickup_verifier(tick)
                 if pickup_verified is False:
-                    result = PhysicalPolicyEpisodeResult(
-                        step, PhysicalEpisodeOutcome.PICKUP_FAILURE
-                    )
-                    break
+                    report = getattr(controller, "report_pickup_result", None)
+                    if report is None:
+                        result = PhysicalPolicyEpisodeResult(
+                            step, PhysicalEpisodeOutcome.PICKUP_FAILURE
+                        )
+                        break
+                    report(False)
+                    pickup_verified = None
 
             if bool(getattr(controller, "terminal", False)):
                 failure = getattr(controller, "failure", None)

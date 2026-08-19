@@ -390,6 +390,13 @@ class PolicySimEnv(gym.Env):
     def scenario(self) -> EvaluationScenario | None:
         return self._scenario
 
+    @property
+    def cube_belief_error(self) -> tuple[float, float, float, float]:
+        """Current simulated overhead localization error for geometric observers."""
+        if self._miscalibration is None:
+            return (0.0, 0.0, 0.0, 0.0)
+        return self._miscalibration.cube_belief_error
+
     def replay_qpos(self) -> np.ndarray:
         """The minimal state a viewer needs to redraw this instant of the scene.
 
@@ -717,7 +724,13 @@ def evaluate_policy_episode(
         if observation_callback is not None:
             observation_callback(step, observation)
         action = controller.act(observation)
-        observation, _, terminated, truncated, _ = env.step(action)
+        observation, _, terminated, truncated, info = env.step(action)
+        report_pickup = getattr(controller, "report_pickup_result", None)
+        controller_state = getattr(getattr(controller, "state", None), "value", None)
+        if report_pickup is not None and controller_state == "finding_plate":
+            cube_height = float(info["task_state"]["cube_position_m"][2])
+            held_height = env.oracle.config.resting_height_m + env.oracle.config.lift_clearance_m
+            report_pickup(cube_height >= held_height)
         step += 1
         if getattr(controller, "failure", None) is not None:
             break
