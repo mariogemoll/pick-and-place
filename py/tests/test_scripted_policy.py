@@ -97,12 +97,9 @@ def test_scripted_policy_localizes_from_images_and_holds_reported_state():
     np.testing.assert_array_equal(action, np.arange(6, dtype=np.float32))
     assert policy.state is ScriptedPolicyState.READY
     assert policy.cube_pose is cube
-    assert policy.drop_target is target
+    assert policy.drop_target is None
     assert policy.episode.trajectory == "planned"
-    assert localizer.target_kwargs["target_color"] == "black"
-    np.testing.assert_array_equal(
-        localizer.target_kwargs["workspace_corners_world"], np.ones((4, 3))
-    )
+    assert not hasattr(localizer, "target_kwargs")
 
 
 def test_scripted_policy_times_out_explicitly_and_keeps_holding():
@@ -117,7 +114,7 @@ def test_scripted_policy_times_out_explicitly_and_keeps_holding():
     assert policy.terminal
     assert policy.failure is not None
     assert policy.failure.code == "localization_timeout"
-    assert "cube and drop target" in policy.failure.message
+    assert "cube" in policy.failure.message
 
 
 def test_scripted_policy_reset_clears_episode_state_and_resets_localizer():
@@ -170,7 +167,7 @@ def test_scripted_policy_searches_from_fixed_rng_and_reset_replays_search():
     np.testing.assert_array_equal(reset_search, first_search)
 
 
-def test_scripted_policy_holds_search_target_until_the_next_search_draw():
+def test_scripted_policy_moves_smoothly_toward_each_search_pose():
     policy = scripted_policy(
         StubLocalizer(),
         np.ones((4, 3)),
@@ -184,8 +181,9 @@ def test_scripted_policy_holds_search_target_until_the_next_search_draw():
     second_search = policy.act(_observation())
 
     np.testing.assert_array_equal(initial_hold, _observation()[STATE_FEATURE])
-    np.testing.assert_array_equal(retained_search, first_search)
-    assert not np.array_equal(second_search, first_search)
+    assert not np.array_equal(retained_search, first_search)
+    np.testing.assert_allclose(retained_search, 2.0 * first_search - initial_hold)
+    assert not np.array_equal(second_search, retained_search)
 
 
 def test_scripted_policy_plans_from_localized_poses_and_latest_reported_joints():
@@ -209,7 +207,8 @@ def test_scripted_policy_plans_from_localized_poses_and_latest_reported_joints()
     assert len(calls) == 1
     args, kwargs = calls[0]
     assert args[1] is cube
-    assert args[2] == CubePose(0.25, -0.15, CUBE_HALF_SIZE)
+    assert args[2] is None
+    assert kwargs["target_sampler"] is not None
     np.testing.assert_allclose(
         list(kwargs["start_joints"].values()),
         np.radians(reported[:5]),
@@ -293,7 +292,7 @@ def test_scripted_policy_forwards_planning_diagnostics():
     calls = []
 
     policy = scripted_policy(
-        StubLocalizer(cubes=[cube], targets=[target]),
+        StubLocalizer(cubes=[cube, cube], targets=[target]),
         np.ones((4, 3)),
         planning_max_attempts=7,
         planning_verbose=True,
@@ -370,7 +369,7 @@ def test_scripted_policy_executes_one_trajectory_sample_per_control_tick():
     phase = StubPhase("retreat", duration=1.0, value=0.25)
     trajectory = Trajectory((phase,))
     policy = scripted_policy(
-        StubLocalizer(cubes=[cube], targets=[target]),
+        StubLocalizer(cubes=[cube, cube], targets=[target]),
         np.ones((4, 3)),
         control_hz=2.0,
         plan_episode=lambda *args, **kwargs: _planned_episode(trajectory),
@@ -381,6 +380,7 @@ def test_scripted_policy_executes_one_trajectory_sample_per_control_tick():
     second = policy.act(_observation())
     final = policy.act(_observation())
     held = policy.act(_observation(state=np.full(6, 7.0, dtype=np.float32)))
+    revealed = policy.act(_observation(state=np.full(6, 7.0, dtype=np.float32)))
 
     np.testing.assert_array_equal(planning_action, _observation()[STATE_FEATURE])
     np.testing.assert_allclose(
@@ -396,6 +396,7 @@ def test_scripted_policy_executes_one_trajectory_sample_per_control_tick():
         sim_frame_to_real(phase.evaluate(1.0).joints, phase.evaluate(1.0).gripper),
     )
     np.testing.assert_array_equal(held, np.full(6, 7.0, dtype=np.float32))
+    np.testing.assert_array_equal(revealed, np.full(6, 7.0, dtype=np.float32))
     assert policy.succeeded
 
 
@@ -424,6 +425,7 @@ def test_scripted_policy_replans_at_checkpoint_from_latest_reported_joints():
     policy.act(_observation())
     reported = np.array([12.0, -23.0, 34.0, -45.0, 56.0, 67.0], dtype=np.float32)
 
+    finding_action = policy.act(_observation(state=reported))
     action = policy.act(_observation(state=reported))
 
     assert len(calls) == 1
@@ -431,13 +433,49 @@ def test_scripted_policy_replans_at_checkpoint_from_latest_reported_joints():
     assert calls[0][0][1] == expected_joints
     assert calls[0][0][2] == expected_gripper
     assert calls[0][0][3] == "lift"
+    np.testing.assert_array_equal(finding_action, reported)
+    np.testing.assert_array_equal(action, reported)
+    executing_action = policy.act(_observation(state=reported))
     np.testing.assert_allclose(
-        action,
+        executing_action,
         sim_frame_to_real(
             replanned_phase.evaluate(0.0).joints,
             replanned_phase.evaluate(0.0).gripper,
         ),
     )
+
+
+def test_scripted_policy_missed_grasp_retries_from_current_pose():
+    cube = CubePose(0.1, 0.2, CUBE_HALF_SIZE)
+    calls = []
+
+    def plan_episode(*args, **kwargs):
+        calls.append((args, kwargs))
+        return SimpleNamespace(trajectory="planned")
+
+    policy = scripted_policy(
+        StubLocalizer(cubes=[cube, cube]),
+        np.ones((4, 3)),
+        plan_episode=plan_episode,
+        max_grasp_retries=1,
+    )
+    policy.act(_observation())
+    policy.state = ScriptedPolicyState.FINDING_PLATE
+
+    policy.report_pickup_result(False)
+    reported = np.array([12.0, -23.0, 34.0, -45.0, 56.0, 67.0], dtype=np.float32)
+    action = policy.act(_observation(state=reported))
+
+    assert policy.state is ScriptedPolicyState.READY
+    np.testing.assert_array_equal(action, reported)
+    expected_joints, expected_gripper = real_frame_to_sim(reported)
+    assert calls[-1][1]["start_joints"] == expected_joints
+    assert calls[-1][1]["start_gripper"] == expected_gripper
+
+    policy.state = ScriptedPolicyState.FINDING_PLATE
+    policy.report_pickup_result(False)
+    assert policy.failure is not None
+    assert policy.failure.code == "grasp_retry_exhausted"
 
 
 def test_scripted_policy_wrist_servo_uses_only_image_and_reported_state():

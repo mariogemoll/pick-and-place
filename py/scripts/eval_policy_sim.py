@@ -40,6 +40,7 @@ from pick_and_place.runtime.policy_sim import (
 )
 from pick_and_place.perception.overhead_localization import OverheadLocalizer
 from pick_and_place.plant.wrist_localizer import AsyncWristLocalization, WristCameraLocalizer
+from pick_and_place.plant.geometric_overhead import SimGeometricOverheadLocalizer
 from pick_and_place.rollout.scripted import scripted_policy
 from pick_and_place.scripted.policy import ScriptedPolicy
 from pick_and_place.perception.cube_detection import CubeTracker
@@ -101,6 +102,16 @@ def _parse_args() -> argparse.Namespace:
         "--save-videos",
         action="store_true",
         help="save the exact overhead and wrist policy frames for every scenario",
+    )
+    parser.add_argument(
+        "--scripted-perception",
+        choices=("geometric", "detector"),
+        default="geometric",
+        help=(
+            "simulated overhead perception for the scripted controller: geometric "
+            "uses the 80%% segmentation visibility gate and controlled pose beliefs; "
+            "detector runs the real optical pipeline (default: geometric)"
+        ),
     )
     args = parser.parse_args()
     if (args.image_height is None) != (args.image_width is None):
@@ -270,6 +281,8 @@ def _make_scripted_controller(
     image_hw: tuple[int, int],
     render_hw: tuple[int, int],
     control_hz: float,
+    env: PolicySimEnv,
+    perception: str,
 ) -> tuple[ScriptedPolicy, dict]:
     """Build the controller-owned nominal camera and kinematic models."""
     model, data = build_policy_sim_model(*render_hw)
@@ -294,19 +307,30 @@ def _make_scripted_controller(
     # is the same containment sim_recorder.py uses; detection is bit-identical
     # across the process boundary, so the controller behaves exactly as it does on
     # real hardware -- only the detector's address space changes.
-    overhead_detector = DetectorProcess(nthreads=1)
+    overhead_detector = DetectorProcess(nthreads=1) if perception == "detector" else None
     wrist_detector = DetectorProcess(nthreads=1)
     # Both localizers rebuild their detector every episode via reset(). Hand each
     # one the single persistent handle so no child process leaks per episode --
     # a DetectorProcess holds no per-frame state and is built for reuse across a
     # long run.
-    controller = scripted_policy(
-        OverheadLocalizer(
+    overhead_localizer = (
+        SimGeometricOverheadLocalizer(
+            env.model,
+            env.data,
+            width=min(320, render_hw[1]),
+            height=min(240, render_hw[0]),
+            cube_belief_error=lambda: env.cube_belief_error,
+        )
+        if perception == "geometric"
+        else OverheadLocalizer(
             camera_matrices["overhead_camera"],
             overhead_position,
             overhead_rotation,
             detector_factory=lambda: overhead_detector,
-        ),
+        )
+    )
+    controller = scripted_policy(
+        overhead_localizer,
         workspace_corners,
         control_hz=control_hz,
         wrist_localizer=AsyncWristLocalization(
@@ -325,7 +349,8 @@ def _make_scripted_controller(
         try:
             _controller_close()
         finally:
-            overhead_detector.close()
+            if overhead_detector is not None:
+                overhead_detector.close()
             wrist_detector.close()
 
     controller.close = _close_with_detectors  # type: ignore[method-assign]
@@ -340,6 +365,7 @@ def _make_scripted_controller(
         "wrist_localization": "asynchronous_latest_completed",
         "apriltag_detection": "out-of-process (DetectorProcess, nthreads=1)",
         "target_color": controller.target_color,
+        "overhead_perception": perception,
         "max_localization_steps": controller.max_localization_steps,
         "localization_steps_per_search": controller.localization_steps_per_search,
         "rng_seed": controller.rng_seed,
@@ -370,6 +396,11 @@ def main() -> None:
     selected = manifest.scenarios[args.offset :]
     scenarios = selected[: args.limit] if args.limit is not None else selected
     override_hw = (args.image_height, args.image_width) if args.image_height is not None else None
+    appearance_name, scene_appearance = (
+        parse_appearance(args.scene_appearance)
+        if args.scene_appearance is not None
+        else (None, None)
+    )
     if args.controller == "lerobot":
         image_hw, _ = resolve_checkpoint_cameras(args.checkpoint, override_hw=override_hw)
     elif args.controller == "flow-image":
@@ -420,6 +451,12 @@ def main() -> None:
             for scenario in scenarios
         )
 
+    env = PolicySimEnv(
+        image_hw=image_hw,
+        render_hw=(args.render_height, args.render_width),
+        scene_appearance=scene_appearance,
+    )
+
     control_hz_values = {scenario.control_hz for scenario in scenarios}
     if args.controller == "scripted" and len(control_hz_values) != 1:
         raise ValueError("scripted evaluation requires one control frequency per run")
@@ -446,6 +483,8 @@ def main() -> None:
             image_hw=image_hw,
             render_hw=(args.render_height, args.render_width),
             control_hz=next(iter(control_hz_values)),
+            env=env,
+            perception=args.scripted_perception,
         )
     print(
         f"Evaluating {len(scenarios)}/{len(manifest.scenarios)} {manifest.suite!r} scenarios "
@@ -454,16 +493,6 @@ def main() -> None:
         f"scene appearance {args.scene_appearance or 'as-compiled'}."
     )
 
-    appearance_name, scene_appearance = (
-        parse_appearance(args.scene_appearance)
-        if args.scene_appearance is not None
-        else (None, None)
-    )
-    env = PolicySimEnv(
-        image_hw=image_hw,
-        render_hw=(args.render_height, args.render_width),
-        scene_appearance=scene_appearance,
-    )
     camera_base = _camera_base_metadata(env.model)
     results = []
     try:

@@ -20,15 +20,18 @@ PHASES = ("acquisition", "grasp", "transport", "placement")
 
 # Scripted-trajectory phase names, mapped onto the four coarse task phases.
 COARSE_PHASE_BY_TRAJECTORY_PHASE = {
+    "find_cube": "acquisition",
     "approach": "acquisition",
     "descent": "acquisition",
     "grasp": "grasp",
     "lift": "transport",
+    "find_plate": "transport",
     "recovery_lift": "transport",
     "carry": "transport",
     "drop_descent": "placement",
     "release": "placement",
     "retreat": "placement",
+    "reveal_placement": "placement",
 }
 
 

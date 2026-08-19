@@ -62,6 +62,8 @@ from pick_and_place.runtime.believed_frame import BelievedFrame
 from pick_and_place.rollout.checkpoint import replan_from_checkpoint
 from pick_and_place.scripted.checkpoint import fuses_into_next
 from pick_and_place.scripted.descent import regrasp_after_descent
+from pick_and_place.scripted.episode_sampling import sample_hunt_pose
+from pick_and_place.scripted.trajectory import SearchPhase
 from pick_and_place.runtime.episodes import Episode
 from pick_and_place.plant.sim import SimPlant
 from pick_and_place.rollout.phase import Run, play_phase
@@ -291,6 +293,10 @@ def record_episode(
     believed_wrist_camera_pose: tuple[np.ndarray, np.ndarray] | None = None,
     tracking_bias_rad: dict[str, float] | None = None,
     detector_crash_dump_dir: str | None = None,
+    overhead_observer: Any = None,
+    search_rng: np.random.Generator | None = None,
+    ground_truth_drop_target: bool = True,
+    max_search_poses: int = 8,
     verbose: bool = True,
 ) -> RecordEpisodeResult:
     """Play ``episode``'s trajectory under physics and record every control tick.
@@ -375,7 +381,11 @@ def record_episode(
     # are not the same capability, and this task wants replanning *without* a
     # servo: the servo follows a fresh sighting every tick and would steer the
     # jaws back onto the true cube, correcting away the very fumble being staged.
-    run_checkpoints = belief.closed_loop or episode.grasp_perturbation is not None
+    run_checkpoints = (
+        belief.closed_loop
+        or episode.grasp_perturbation is not None
+        or overhead_observer is not None
+    )
     plant = SimPlant(
         model,
         data,
@@ -430,8 +440,100 @@ def record_episode(
     tracked_grasp = current_traj.grasp
     contacts: set[tuple[str, str]] = set()
     status = "incomplete"
+    search_rng = np.random.default_rng(0) if search_rng is None else search_rng
+
+    def overhead_reading(object_name: str):
+        if overhead_observer is None:
+            return None
+        look = getattr(overhead_observer, "look", None)
+        if look is not None:
+            reading = look()
+            return reading.cube if object_name in ("cube", "placement") else reading.target
+        placeholder = np.empty((0, 0, 3), dtype=np.uint8)
+        if object_name in ("cube", "placement"):
+            return overhead_observer.localize_cube(placeholder)
+        return overhead_observer.localize_drop_target(
+            placeholder,
+            target_color="black",
+            workspace_corners_world=np.empty((4, 3)),
+        )
+
+    def search_for(
+        object_name: str,
+        *,
+        carrying: bool,
+        tracked: CubePose,
+        current_contacts: set[tuple[str, str]],
+    ) -> tuple[str, CubePose, Any, set[tuple[str, str]]]:
+        found = overhead_reading(object_name)
+        if found is not None:
+            return "completed", tracked, found, current_contacts
+        for _ in range(max_search_poses):
+            measured_joints, measured_gripper = plant.measured()
+            if carrying:
+                target_joints = dict(measured_joints)
+                target_joints["shoulder_pan"] = search_rng.uniform(-0.35, 0.35)
+                target_gripper = measured_gripper
+            else:
+                target_joints, target_gripper = sample_hunt_pose(search_rng)
+            phase = SearchPhase(
+                kinematics,
+                measured_joints,
+                target_joints,
+                measured_gripper,
+                target_gripper,
+                object_name,
+            )
+            played = play_phase(
+                plant,
+                phase,
+                run=run,
+                artifact=artifact,
+                tracked_source=tracked,
+                contacts=current_contacts,
+                watch=False,
+            )
+            tracked = played.tracked_source
+            current_contacts = played.contacts
+            if played.outcome != "completed":
+                return played.outcome, tracked, None, current_contacts
+            found = overhead_reading(object_name)
+            if found is not None:
+                return "completed", tracked, found, current_contacts
+        return "restart", tracked, None, current_contacts
 
     try:
+        if overhead_observer is not None:
+            search_status, tracked_source, cube_reading, contacts = search_for(
+                "cube",
+                carrying=False,
+                tracked=tracked_source,
+                current_contacts=contacts,
+            )
+            if search_status != "completed":
+                return outcome(search_status)
+            tracked_source = cube_reading
+            measured_joints, measured_gripper = plant.measured()
+            current_traj = replan_from_checkpoint(
+                model,
+                kinematics=kinematics,
+                actuator_id=episode.actuator_id,
+                robot_geom_ids=episode.robot_geom_ids,
+                env_geom_ids=episode.env_geom_ids,
+                measured_joints=measured_joints,
+                measured_gripper=measured_gripper,
+                completed_phase_name=None,
+                source=tracked_source,
+                target=episode.believed_target,
+                grasp=None,
+                end_joints=episode.end_joints,
+                end_gripper=episode.end_gripper,
+                free_grasp=False,
+                verbose=verbose,
+            )
+            if current_traj is None:
+                return outcome("restart")
+            tracked_grasp = current_traj.grasp
         while current_traj is not None and current_traj.phases:
             played = play_phase(
                 plant,
@@ -486,6 +588,15 @@ def record_episode(
                 continue
 
             if not remaining_phases:
+                if completed == "retreat" and overhead_observer is not None:
+                    search_status, tracked_source, _, contacts = search_for(
+                        "placement",
+                        carrying=False,
+                        tracked=tracked_source,
+                        current_contacts=contacts,
+                    )
+                    if search_status != "completed":
+                        return outcome(search_status)
                 status = "success"
                 break
 
@@ -526,6 +637,34 @@ def record_episode(
                     # candidates regenerated from the pose above and every
                     # candidate preflighted. No new planning code is needed.
                     completed = None
+                    if overhead_observer is not None:
+                        search_status, tracked_source, cube_reading, contacts = search_for(
+                            "cube",
+                            carrying=False,
+                            tracked=tracked_source,
+                            current_contacts=contacts,
+                        )
+                        if search_status != "completed":
+                            return outcome(search_status)
+                        tracked_source = cube_reading
+            if (
+                overhead_observer is not None
+                and completed in ("lift", "recovery_lift")
+            ):
+                search_status, tracked_source, plate_reading, contacts = search_for(
+                    "plate",
+                    carrying=True,
+                    tracked=tracked_source,
+                    current_contacts=contacts,
+                )
+                if search_status != "completed":
+                    return outcome(search_status)
+                target_xy = (
+                    (episode.target.x, episode.target.y)
+                    if ground_truth_drop_target
+                    else plate_reading.xy
+                )
+                episode.believed_target = CubePose(*target_xy, CUBE_HALF_SIZE)
             if verbose:
                 print(f"Replanning remaining trajectory after {completed}...")
             measured_joints, measured_gripper = plant.measured()

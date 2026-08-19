@@ -18,7 +18,7 @@ import numpy as np
 
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
-from pick_and_place.spec.robot import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
+from pick_and_place.spec.robot import GRIPPER_GRASP, GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
 from pick_and_place.core.workspace_bounds import (
     AZIMUTH_MAX,
     AZIMUTH_MIN,
@@ -44,10 +44,14 @@ _JOINT_SCALE_OVERRIDES: dict[str, float] = {
     "elbow_flex": 0.2,
     "wrist_flex": 0.2,
 }
-# Shoulder-pan half-range for look-around search poses. Near the ±1.92 rad pan
-# limit (with a small margin) so the search sweeps the arm across nearly its full
-# lateral travel to clear the overhead view, rather than the tight start jitter.
-_HUNT_PAN_SCALE = 1.7
+# Shoulder-pan half-range for empty-gripper search poses. The end effector stays
+# inside the workspace at neutral out to about ±0.83 rad; 0.75 leaves margin for
+# the simultaneous near-neutral perturbations of the other joints.
+HUNT_PAN_SCALE = 0.75
+
+# A held cube gets a much gentler search. It only needs to clear the overhead
+# line of sight to the plate, not sweep the whole workspace.
+CARRY_HUNT_PAN_SCALE = 0.35
 
 PICKUP_YAW_DEVIATION = math.pi / 4.0
 
@@ -116,7 +120,9 @@ def sample_near_neutral(rng: np.random.Generator) -> tuple[dict[str, float], flo
     return joints, gripper
 
 
-def sample_hunt_pose(rng: np.random.Generator) -> tuple[dict[str, float], float]:
+def sample_hunt_pose(
+    rng: np.random.Generator, *, carrying: bool = False
+) -> tuple[dict[str, float], float]:
     """Return a search pose: a wide shoulder-pan swing, the rest near neutral.
 
     The arm itself can sit between the fixed overhead camera and the cube or
@@ -124,7 +130,10 @@ def sample_hunt_pose(rng: np.random.Generator) -> tuple[dict[str, float], float]
     near-neutral start jitter to clear the view from a range of angles. The tilt
     joints stay near neutral, keeping the gripper well above the floor."""
     joints, gripper = sample_near_neutral(rng)
+    scale = CARRY_HUNT_PAN_SCALE if carrying else HUNT_PAN_SCALE
     joints["shoulder_pan"] = NEUTRAL_ARM_JOINTS["shoulder_pan"] + rng.uniform(
-        -_HUNT_PAN_SCALE, _HUNT_PAN_SCALE
+        -scale, scale
     )
+    if carrying:
+        gripper = GRIPPER_GRASP
     return joints, gripper
