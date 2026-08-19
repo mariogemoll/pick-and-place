@@ -26,7 +26,8 @@ from pick_and_place.spec.drop_zone import PaperTarget
 from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
 from pick_and_place.sim.model import get_cube_pose
 
-DEFAULT_VISIBILITY_FRACTION = 0.80
+DEFAULT_CUBE_VISIBILITY_FRACTION = 0.80
+DEFAULT_PLATE_VISIBILITY_FRACTION = 0.20
 
 
 class SimGeometricOverheadLocalizer:
@@ -39,16 +40,24 @@ class SimGeometricOverheadLocalizer:
         *,
         width: int,
         height: int,
-        visibility_fraction: float = DEFAULT_VISIBILITY_FRACTION,
+        cube_visibility_fraction: float = DEFAULT_CUBE_VISIBILITY_FRACTION,
+        plate_visibility_fraction: float = DEFAULT_PLATE_VISIBILITY_FRACTION,
         cube_belief_error: Callable[[], tuple[float, float, float, float]] | None = None,
     ) -> None:
-        if not 0.0 < visibility_fraction <= 1.0:
-            raise ValueError("visibility_fraction must be in (0, 1]")
+        for name, value in (
+            ("cube_visibility_fraction", cube_visibility_fraction),
+            ("plate_visibility_fraction", plate_visibility_fraction),
+        ):
+            if not 0.0 < value <= 1.0:
+                raise ValueError(f"{name} must be in (0, 1]")
         self.model = model
         self.data = data
         self.width = int(width)
         self.height = int(height)
-        self.visibility_fraction_threshold = float(visibility_fraction)
+        self.visibility_fraction_thresholds = {
+            "cube": float(cube_visibility_fraction),
+            "plate": float(plate_visibility_fraction),
+        }
         self.camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, OVERHEAD_CAMERA)
         self.cube_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "pick_cube")
         self.plate_geom_id = mujoco.mj_name2id(
@@ -119,7 +128,10 @@ class SimGeometricOverheadLocalizer:
         return 0.0 if reference <= 0.0 else min(1.0, visible / reference)
 
     def _visible(self, object_name: str) -> bool:
-        return self.visibility_fraction(object_name) >= self.visibility_fraction_threshold
+        return (
+            self.visibility_fraction(object_name)
+            >= self.visibility_fraction_thresholds[object_name]
+        )
 
     def localize_cube(self, frame_rgb: np.ndarray, *, free_grasp: bool = False) -> CubePose | None:
         del frame_rgb, free_grasp

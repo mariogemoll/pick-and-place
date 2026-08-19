@@ -27,6 +27,7 @@ class StubLocalizer:
         self.cubes = iter(cubes)
         self.targets = iter(targets)
         self.reset_count = 0
+        self.target_calls = 0
 
     def reset(self):
         self.reset_count += 1
@@ -38,6 +39,7 @@ class StubLocalizer:
 
     def localize_drop_target(self, image, **kwargs):
         del image
+        self.target_calls += 1
         self.target_kwargs = kwargs
         return next(self.targets, None)
 
@@ -476,6 +478,28 @@ def test_scripted_policy_missed_grasp_retries_from_current_pose():
     policy.report_pickup_result(False)
     assert policy.failure is not None
     assert policy.failure.code == "grasp_retry_exhausted"
+
+
+def test_real_mode_caches_first_plate_sighting_for_the_whole_episode():
+    cube = CubePose(0.1, 0.2, CUBE_HALF_SIZE)
+    target = SimpleNamespace(xy=(0.2, -0.1))
+    localizer = StubLocalizer(cubes=[cube], targets=[target])
+    policy = scripted_policy(
+        localizer,
+        np.ones((4, 3)),
+        cache_drop_target_early=True,
+        plan_episode=lambda *args, **kwargs: SimpleNamespace(trajectory="planned"),
+    )
+
+    policy.act(_observation())
+    policy.act(_observation())
+    policy.act(_observation())
+
+    assert policy.drop_target is target
+    assert localizer.target_calls == 1
+
+    policy.reset()
+    assert policy.drop_target is None
 
 
 def test_scripted_policy_wrist_servo_uses_only_image_and_reported_state():

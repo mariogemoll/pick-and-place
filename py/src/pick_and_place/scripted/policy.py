@@ -152,6 +152,7 @@ class ScriptedPolicy:
         replan_candidates: ReplanCandidates = replan_remaining_candidates,
         target_sampler: TargetSampler | None = None,
         drop_target_xy: tuple[float, float] | None = None,
+        cache_drop_target_early: bool = False,
         free_grasp: bool = False,
     ) -> None:
         if target_color not in {"black", "white"}:
@@ -193,6 +194,7 @@ class ScriptedPolicy:
         # same fixed-target path a detection would have produced. Survives
         # reset() so one controller can be re-pinned per episode.
         self.drop_target_xy = drop_target_xy
+        self.cache_drop_target_early = cache_drop_target_early
         self.free_grasp = free_grasp
         self.reset()
 
@@ -277,7 +279,8 @@ class ScriptedPolicy:
         self.localizer.reset()
         self.state = ScriptedPolicyState.LOCALIZING
         self.cube_pose = None
-        self.drop_target = None
+        if not self.cache_drop_target_early:
+            self.drop_target = None
         self.episode = None
         self._trajectory = None
         self._dynamic_source = None
@@ -547,7 +550,8 @@ class ScriptedPolicy:
             and self.target_sampler is None
         ):
             self.state = ScriptedPolicyState.FINDING_PLATE
-            self.drop_target = None
+            if not self.cache_drop_target_early:
+                self.drop_target = None
             self._search_start = None
             self._search_target = None
             self._search_progress = 0
@@ -645,6 +649,22 @@ class ScriptedPolicy:
             self._fail(code, str(exc))
             return hold
 
+        if (
+            self.cache_drop_target_early
+            and self.drop_target is None
+            and self.drop_target_xy is None
+        ):
+            try:
+                overhead = self._image(observation, OVERHEAD_FEATURE)
+                self.drop_target = self.localizer.localize_drop_target(
+                    overhead,
+                    target_color=self.target_color,
+                    workspace_corners_world=self.workspace_corners_world,
+                )
+            except Exception as exc:
+                self._fail("localization_error", str(exc))
+                return hold
+
         if self.state is ScriptedPolicyState.READY:
             try:
                 self._begin_execution()
@@ -658,12 +678,13 @@ class ScriptedPolicy:
 
         if self.state is ScriptedPolicyState.FINDING_PLATE:
             try:
-                overhead = self._image(observation, OVERHEAD_FEATURE)
-                self.drop_target = self.localizer.localize_drop_target(
-                    overhead,
-                    target_color=self.target_color,
-                    workspace_corners_world=self.workspace_corners_world,
-                )
+                if self.drop_target is None:
+                    overhead = self._image(observation, OVERHEAD_FEATURE)
+                    self.drop_target = self.localizer.localize_drop_target(
+                        overhead,
+                        target_color=self.target_color,
+                        workspace_corners_world=self.workspace_corners_world,
+                    )
             except Exception as exc:
                 self._fail("localization_error", str(exc))
                 return hold
