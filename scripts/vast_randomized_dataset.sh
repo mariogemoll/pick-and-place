@@ -56,6 +56,18 @@ physics_amount="${PHYSICS_RANDOMIZATION:-0.5}"
 domain_preset="${DOMAIN_RANDOMIZATION:-config/domain_randomization/act_mild_v1.json}"
 run_name="${RUN_NAME:-randomized-$(date +%Y%m%d_%H%M%S)}"
 seed="${SEED:-20260816}"
+# Plan the drop against the plate's true pose rather than the overhead estimate.
+# Nothing corrects the drop -- the descent servo corrects only the pickup -- so
+# that estimate's error lands directly in placement error and caps how
+# accurately a cloned policy can ever place. Measured on
+# randomized_selection_200_v1: 80/200 -> 121/200 settled placements for the
+# scripted expert, and 23.2 mm -> 13.1 mm median error among successes.
+# See pick-and-place-docs/EXPERT_DROP_TARGET.md.
+ground_truth_drop_target="${GROUND_TRUTH_DROP_TARGET:-}"
+record_extra_args=()
+if [ -n "$ground_truth_drop_target" ]; then
+  record_extra_args+=(--ground-truth-drop-target)
+fi
 stop_after="${STOP_AFTER:-}"
 # Attempts per top-up round. Randomization costs yield -- a drawn arm misses
 # placements a nominal one makes, and a scene the overhead camera cannot see is
@@ -92,6 +104,7 @@ workspace="/workspace"
 repo="$workspace/pick-and-place"
 staging="$workspace/data/$run_name"
 master_root="$staging"
+attempts_root="$workspace/data/$run_name-attempts"
 flow_export="$workspace/artifacts/flow-policy-state-$run_name"
 output_root="$workspace/outputs/$run_name"
 output_prefix="$bucket_root/outputs/$run_name"
@@ -115,6 +128,7 @@ export PAP_DATA_ROOT="$workspace/data"
 stage 0 "inputs"
 git rev-parse HEAD | tee "$output_root/job-metadata/repository-commit.txt"
 echo "cores=$cores vram=${vram_mb}MiB workers=$workers episodes=$episodes"
+echo "ground_truth_drop_target=${ground_truth_drop_target:-off}"
 # The one machine-local input a fresh clone still needs is the tag textures,
 # and provisioning generates those.
 #
@@ -209,6 +223,7 @@ for attempt in 1 2 3 4 5 6; do
     --perturbation-max-source-radius "$perturbation_max_source_radius" \
     --episode-timeout 900 \
     --dataset-root "$staging" \
+    "${record_extra_args[@]}" \
     --repo-id "local/$run_name" || echo "recorder returned $?; will re-count"
 done
 drop_partial_episodes
@@ -226,10 +241,15 @@ if [ ! -d "$master_root" ]; then
   # --keep-episodes: the staged episodes carry the trajectory artifacts, and
   # they are the only form a later re-render can read. Deleting them would make
   # every future appearance variant a fresh collection run.
+  # --attempts-root banks the failures as a loadable dataset beside the master.
+  # The success filter drops roughly two attempts in five here, and those are
+  # exactly the negatives an offline critic needs -- a value function fitted only
+  # to successes regresses a near-constant and cannot rank anything.
   "$V" py/scripts/pick_and_place/finalize_sim_dataset.py \
     --dataset-root "$master_root" \
     --episodes "$merge_count" \
     --repo-id "local/$run_name" \
+    --attempts-root "$attempts_root" \
     --keep-episodes \
     --write
 else
@@ -246,14 +266,29 @@ publish() {  # local-path s3-key
   sha256sum "$path" | awk -v n="$(basename "$key")" '{print $1"  "n}' > "$path.sha256"
   aws s3 cp "$path" "$key" --only-show-errors
   aws s3 cp "$path.sha256" "$key.sha256" --only-show-errors
-  local local_sha published_sha
-  local_sha="$(awk '{print $1}' "$path.sha256")"
-  published_sha="$(aws s3 cp "$key" - --only-show-errors | sha256sum | awk '{print $1}')"
-  if [ "$local_sha" != "$published_sha" ]; then
-    echo "checksum mismatch publishing $key" >&2
+  # Verify by size rather than by reading the object back. The round-trip hash
+  # is the stronger check, but it costs a full download, and S3 egress is not
+  # symmetric with ingress on a rented pod: one host uploaded 2.8 GB in seven
+  # minutes and then read it back at ~0.4 MB/s, which would have spent six hours
+  # verifying four tarballs. What is left still catches the realistic failure --
+  # `aws s3 cp` checksums every multipart chunk in transit and S3 rejects a bad
+  # part, so truncation is what survives that, and a size check catches
+  # truncation. The .sha256 sidecar is published either way, so any consumer can
+  # still verify the bytes it actually downloads.
+  # head-object, not `s3 ls`: ls matches by prefix, so it also returns the
+  # .sha256 sidecar published beside the object and a naive read picks up the
+  # sidecar's size instead of the tarball's.
+  local local_bytes published_bytes bucket object
+  local_bytes="$(stat -c %s "$path")"
+  bucket="${key#s3://}"; bucket="${bucket%%/*}"
+  object="${key#s3://$bucket/}"
+  published_bytes="$(aws s3api head-object --bucket "$bucket" --key "$object" \
+    --query ContentLength --output text 2>/dev/null)"
+  if [ "$local_bytes" != "$published_bytes" ]; then
+    echo "size mismatch publishing $key: local $local_bytes, published $published_bytes" >&2
     exit 1
   fi
-  echo "published and verified $key"
+  echo "published and verified (size $local_bytes) $key"
 }
 
 stage 3 "publish the staged episodes -- the form every other format derives from"
@@ -269,6 +304,17 @@ master_tarball="$workspace/data/$run_name-lerobot.tar.zst"
   -cf "$master_tarball" -C "$(dirname "$master_root")" "$(basename "$master_root")"
 publish "$master_tarball" "$bucket_root/datasets/$run_name-lerobot.tar.zst"
 halt_if_stopping master
+
+stage 4b "publish the attempt dataset -- every episode, failures included"
+if [ -d "$attempts_root" ]; then
+  attempts_tarball="$workspace/data/$run_name-attempts-lerobot.tar.zst"
+  [ -f "$attempts_tarball" ] || tar --use-compress-program='zstd -3 -T0' \
+    -cf "$attempts_tarball" -C "$(dirname "$attempts_root")" "$(basename "$attempts_root")"
+  publish "$attempts_tarball" "$bucket_root/datasets/$run_name-attempts-lerobot.tar.zst"
+else
+  echo "no attempt dataset to publish; skipping."
+fi
+halt_if_stopping attempts
 
 stage 5 "export the state-only flow-policy arrays"
 if [ ! -f "$flow_export/train.npz" ]; then

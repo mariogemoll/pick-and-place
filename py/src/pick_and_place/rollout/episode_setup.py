@@ -119,6 +119,7 @@ def prepare_for_recording(
     miscalibration: Any,
     grasp_perturbation: GraspPerturbation | None,
     max_attempts: int,
+    ground_truth_drop_target: bool = False,
 ) -> tuple[Episode, float]:
     """Prepare one episode, and place the drop plate it will be recorded against."""
     if perception is not None:
@@ -132,6 +133,7 @@ def prepare_for_recording(
             include_environment=True,
             miscalibration=miscalibration,
             grasp_perturbation=grasp_perturbation,
+            ground_truth_drop_target=ground_truth_drop_target,
             max_attempts=max_attempts,
         )
         return localized.episode, localized.target_plate_yaw

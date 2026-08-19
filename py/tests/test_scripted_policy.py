@@ -248,6 +248,45 @@ def test_scripted_policy_recovery_samples_target_without_a_source_override():
     assert not hasattr(localizer, "target_kwargs")
 
 
+def test_scripted_policy_pins_a_known_drop_target_without_localizing_the_plate():
+    cube = CubePose(0.1, 0.2, CUBE_HALF_SIZE)
+    localizer = StubLocalizer(cubes=[cube])
+    calls = []
+
+    policy = scripted_policy(
+        localizer,
+        np.ones((4, 3)),
+        drop_target_xy=(0.25, -0.15),
+        plan_episode=lambda *args, **kwargs: calls.append((args, kwargs))
+        or SimpleNamespace(trajectory="planned"),
+    )
+
+    policy.act(_observation())
+
+    args, kwargs = calls[0]
+    assert args[1] is cube
+    # Pinned, not sampled: planning takes the same fixed-target path a detection
+    # would have produced, so the only difference is where the xy came from.
+    assert args[2] == CubePose(0.25, -0.15, CUBE_HALF_SIZE)
+    assert kwargs["target_sampler"] is None
+    assert not hasattr(localizer, "target_kwargs")
+
+
+def test_scripted_policy_keeps_a_pinned_drop_target_across_reset():
+    policy = scripted_policy(
+        StubLocalizer(),
+        np.ones((4, 3)),
+        drop_target_xy=(0.25, -0.15),
+        plan_episode=lambda *args, **kwargs: SimpleNamespace(trajectory="planned"),
+    )
+
+    policy.reset()
+
+    # One controller is re-pinned per episode, so the pin has to outlive the
+    # reset that every episode begins with.
+    assert policy.drop_target_xy == (0.25, -0.15)
+
+
 def test_scripted_policy_forwards_planning_diagnostics():
     cube = CubePose(0.1, 0.2, CUBE_HALF_SIZE)
     target = SimpleNamespace(xy=(0.2, -0.1))

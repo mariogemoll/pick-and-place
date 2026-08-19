@@ -98,6 +98,7 @@ def prepare_localized_episode(
     source: CubePose | None = None,
     target: CubePose | None = None,
     target_sampler: Callable[[np.random.Generator], CubePose] | None = None,
+    ground_truth_drop_target: bool = False,
     max_attempts: int = 20,
     plan_attempts: int = PLAN_ATTEMPTS_PER_SCENE,
     max_hunts: int = MAX_HUNT_POSES,
@@ -148,8 +149,17 @@ def prepare_localized_episode(
                 model=model,
                 data=data,
                 believed_source=reading.cube,
-                believed_target=CubePose(
-                    x=reading.target.xy[0], y=reading.target.xy[1], z=CUBE_HALF_SIZE
+                # The plate is still localized -- a scene neither camera can see
+                # is still rejected, and the cube belief stays honest because the
+                # descent servo is what corrects the pickup. Only the *drop* is
+                # planned against truth, because nothing corrects the drop: the
+                # overhead estimate's error lands directly in placement error.
+                believed_target=(
+                    ep_target
+                    if ground_truth_drop_target
+                    else CubePose(
+                        x=reading.target.xy[0], y=reading.target.xy[1], z=CUBE_HALF_SIZE
+                    )
                 ),
                 max_attempts=plan_attempts,
                 verbose=verbose,

@@ -138,4 +138,5 @@ fi
 # it reads the dataset -- so this only surfaces the first time a pod evaluates a
 # policy, which is exactly when a long job is already underway.
 MUJOCO_GL=egl "$venv/bin/python" "$repo/py/scripts/render_apriltag_textures.py" --all-defaults
+
 echo "PROVISION COMPLETE"
