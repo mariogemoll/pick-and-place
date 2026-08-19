@@ -5,12 +5,11 @@
 """Run a learned policy on the physical SO-101, closed-loop.
 
 ``--controller lerobot`` (the default) runs ACT, SmolVLA, or another LeRobot
-checkpoint. ``--controller diffusion-policy`` runs the same out-of-process
-Diffusion Policy controller as ``run_policy_sim.py``. ``--controller flow-image``
-runs an image-conditioned flow policy in this process, from a checkpoint and the
-dataset export it was trained on (``--flow-export``).
+checkpoint. ``--controller flow-image`` runs an image-conditioned flow policy in
+this process, from a checkpoint and the dataset export it was trained on
+(``--flow-export``).
 
-Both of the latter two are queried at the policy's trained rate, and their live
+The flow-image controller is queried at the policy's trained rate, and its live
 camera frames are reduced through the dataset export's recorded video resolution
 before reaching the model's input resolution.
 
@@ -40,7 +39,7 @@ the joint zeros additionally shift the state the policy is shown.
 The cameras do need conversion: each raw, lens-distorted frame is undistorted
 with its calibrated intrinsics, center-cropped to the policy's aspect ratio, and
 resized to its input resolution every tick, via the same geometry
-``convert_dataset_resolution.py`` applies to recorded datasets — so the live
+the dataset conversion applies to recorded datasets — so the live
 frames fed to the policy match the ones it was fine-tuned on, pixel-geometry for
 pixel-geometry. The resolution defaults to whatever the checkpoint was trained on.
 
@@ -94,11 +93,9 @@ from pick_and_place.core.camera_calibration import (
     load_local_camera_intrinsics,
 )
 from pick_and_place.policies.dataset_export import resolve_recording_hw
-from pick_and_place.policies.diffusion_policy_client import DiffusionPolicyController
 from pick_and_place.policies.flow_image_policy import FlowImagePolicyController
 from pick_and_place.scripted.episode_sampling import sample_hunt_pose, sample_near_neutral
 from pick_and_place.cli.policy import (
-    add_diffusion_policy_arguments,
     add_flow_image_arguments,
     add_policy_arguments,
 )
@@ -210,8 +207,7 @@ def _drain_stdin_lines() -> bool:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    add_policy_arguments(parser, controllers=("lerobot", "diffusion-policy", "flow-image"))
-    add_diffusion_policy_arguments(parser)
+    add_policy_arguments(parser, controllers=("lerobot", "flow-image"))
     add_flow_image_arguments(parser)
     add_follower_arguments(parser)
     add_rig_camera_arguments(parser, workspace_camera=True)
@@ -406,18 +402,11 @@ def main() -> None:
         parser.error("pass both --image-height and --image-width, or neither")
     override_hw = (args.image_height, args.image_width) if all(override) else None
 
-    # Both in-repo controllers predict an action horizon and hand it out over the
-    # following ticks; the LeRobot path is queried one action at a time.
+    # The flow-image controller predicts an action horizon and hands it out over
+    # the following ticks; the LeRobot path is queried one action at a time.
     chunked_controller = None
     recording_hw = None
-    if args.controller == "diffusion-policy":
-        chunked_controller, recording_hw = DiffusionPolicyController.launch_from_args(
-            parser,
-            args,
-            override_hw=override_hw,
-            default_checkpoint=DEFAULT_CHECKPOINT,
-        )
-    elif args.controller == "flow-image":
+    if args.controller == "flow-image":
         chunked_controller, recording_hw = launch_flow_image_controller(
             parser, args, override_hw=override_hw, default_checkpoint=DEFAULT_CHECKPOINT
         )
@@ -428,7 +417,7 @@ def main() -> None:
     else:
         if args.recording_hw is not None:
             parser.error(
-                "--recording-hw only applies to the diffusion-policy and flow-image controllers"
+                "--recording-hw only applies to the flow-image controller"
             )
         (img_h, img_w), (overhead_key, wrist_key) = resolve_checkpoint_cameras(
             args.checkpoint, override_hw=override_hw
@@ -547,15 +536,7 @@ def main() -> None:
         policy = chunked_controller
         preprocessor = postprocessor = None
     policy.reset()
-    if args.controller == "diffusion-policy":
-        print(
-            f"Policy chunks: predicts {policy.horizon_steps}, "
-            f"executes {policy.act_steps} before re-query "
-            f"with {policy.cond_steps} observation steps "
-            f"({policy.handshake['denoising_steps']} denoising steps, "
-            f"epoch {policy.handshake['epoch']} checkpoint)."
-        )
-    elif chunked_controller is not None:
+    if chunked_controller is not None:
         print(
             f"Policy chunks: predicts {policy.prediction_steps}, "
             f"executes {policy.act_steps} before re-query "
@@ -588,7 +569,7 @@ def main() -> None:
         action_log = ActionLog(log_dir)
         print(f"Logging per-attempt actions and raw chunks to {log_dir}")
         if chunked_controller is not None:
-            print("Diffusion Policy action logs include every raw predicted horizon.")
+            print("Chunked-controller action logs include every raw predicted horizon.")
         elif hasattr(policy, "predict_action_chunk"):
             _predict_action_chunk = policy.predict_action_chunk
 

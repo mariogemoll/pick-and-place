@@ -93,7 +93,7 @@ def add_scene_texture_arguments(parser: argparse.ArgumentParser) -> None:
         "--table-texture",
         type=Path,
         default=None,
-        help="top-down table texture (from reconstruct_table_texture.py) for the floor",
+        help="top-down table texture reconstructed from overhead footage, for the floor",
     )
 
 

@@ -4,7 +4,7 @@
 """Wrap the scene in a skybox textured with a panorama of the real surroundings.
 
 The panorama is an equirectangular image of the room, recovered from the wrist
-camera's own footage (see ``scripts/accumulate_wrist_panorama.py``). Rendering it
+camera's own footage, accumulated offline. Rendering it
 as a MuJoCo skybox gives every camera — the outward-pointing wrist camera in
 particular — a plausible, blurry backdrop beyond the tabletop, closing the part of
 the sim-to-real gap that lies outside the physical setup.

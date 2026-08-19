@@ -11,21 +11,15 @@ be compared.
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 
-from pick_and_place.core.paths import REPO_ROOT
 from pick_and_place.policies.policy import DEFAULT_CHECKPOINT, DEFAULT_INSTRUCTION
-
-DEFAULT_DIFFUSION_POLICY_CONFIG = (
-    REPO_ROOT / "config" / "diffusion_policy" / "pretrain_so101_unet_img.yaml"
-)
 
 
 def add_policy_arguments(
     parser: argparse.ArgumentParser,
     *,
-    controllers: tuple[str, ...] = ("lerobot", "diffusion-policy"),
+    controllers: tuple[str, ...] = ("lerobot",),
     checkpoint_default: str | None = DEFAULT_CHECKPOINT,
     n_action_steps_default: int | None = 100,
 ) -> None:
@@ -45,8 +39,8 @@ def add_policy_arguments(
     parser.add_argument(
         "--checkpoint",
         default=checkpoint_default,
-        help="HF policy checkpoint or local LeRobot directory, or a Diffusion "
-        "Policy state_*.pt file",
+        help="HF policy checkpoint or local LeRobot directory, or a flow-policy "
+        "checkpoint-*.pt file",
     )
     parser.add_argument("--instruction", default=DEFAULT_INSTRUCTION, help="language task string")
     parser.add_argument(
@@ -91,33 +85,20 @@ def add_policy_arguments(
     )
 
 
-def add_diffusion_policy_arguments(
+def add_flow_image_arguments(
     parser: argparse.ArgumentParser, *, recording_hw: bool = True
 ) -> None:
-    """Add the flags that configure the out-of-process Diffusion Policy server.
+    """Add the flags that configure the image-conditioned flow policy.
+
+    The checkpoint holds only weights, so ``--flow-export`` names the dataset
+    export it was trained against: the normalization bounds, the control rate and
+    the input resolution all come from there.
 
     ``recording_hw`` adds ``--recording-hw``, which only the live runners need:
     they reduce camera frames through the training videos' resolution on the way
     to the model, while the evaluation harness renders at that resolution
     directly.
     """
-    parser.add_argument(
-        "--diffusion-policy-python",
-        type=Path,
-        default=os.environ.get("DIFFUSION_POLICY_PYTHON"),
-        help="interpreter of the DPPO virtual environment (default: $DIFFUSION_POLICY_PYTHON)",
-    )
-    parser.add_argument(
-        "--diffusion-policy-config",
-        type=Path,
-        default=DEFAULT_DIFFUSION_POLICY_CONFIG,
-        help=f"training configuration YAML (default: {DEFAULT_DIFFUSION_POLICY_CONFIG})",
-    )
-    parser.add_argument(
-        "--diffusion-policy-normalization",
-        type=Path,
-        help="normalization.npz written by the Diffusion Policy dataset export",
-    )
     if recording_hw:
         parser.add_argument(
             "--recording-hw",
@@ -128,36 +109,8 @@ def add_diffusion_policy_arguments(
             help="resolution the training videos were recorded at, which observations "
             "are downsampled through on the way to the policy's input size. Defaults "
             "to the source_video_hw recorded by the dataset export, read from "
-            "export.json beside --diffusion-policy-normalization",
+            "export.json beside the checkpoint's --flow-export",
         )
-    parser.add_argument(
-        "--diffusion-policy-act-steps",
-        type=int,
-        default=None,
-        help="executed actions per policy query (default: the training configuration)",
-    )
-    parser.add_argument(
-        "--diffusion-policy-seed",
-        type=int,
-        default=0,
-        help="Torch seed for DDPM action sampling (default: 0)",
-    )
-    parser.add_argument(
-        "--diffusion-policy-ddim-steps",
-        type=int,
-        default=None,
-        help="sample with DDIM using this many steps instead of the trained DDPM "
-        "schedule; much faster, but not the training sampler, so not for headline runs",
-    )
-
-
-def add_flow_image_arguments(parser: argparse.ArgumentParser) -> None:
-    """Add the flags that configure the image-conditioned flow policy.
-
-    The checkpoint holds only weights, so ``--flow-export`` names the dataset
-    export it was trained against: the normalization bounds, the control rate and
-    the input resolution all come from there.
-    """
     parser.add_argument(
         "--flow-export",
         type=Path,

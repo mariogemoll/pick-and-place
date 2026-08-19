@@ -29,8 +29,7 @@ import pandas as pd
 # Episode-metadata columns that are LeRobot bookkeeping (file layout, video
 # spans, per-feature stats) rather than project data. Every other column is
 # treated as project metadata (success, cube pose, pickup/placement checks,
-# ...) and carried through to the subset dataset unchanged, mirroring
-# convert_dataset_resolution.py's approach.
+# ...) and carried through to the subset dataset unchanged.
 BOOKKEEPING_COLUMNS = {"episode_index", "tasks", "length", "dataset_from_index", "dataset_to_index"}
 BOOKKEEPING_PREFIXES = ("data/", "videos/", "stats/", "meta/episodes/")
 
@@ -39,6 +38,12 @@ BOOKKEEPING_PREFIXES = ("data/", "videos/", "stats/", "meta/episodes/")
 # stored ``success`` column of the pre-cleanup datasets (verified: zero
 # mismatches on every episode of 20260701/20260702).
 SUCCESS_XY_TOLERANCE_M = 0.04
+
+# Vertical distance (m) the placed cube may sit above its resting height before
+# it counts as still held, dropped on top of something, or tipped. Only the
+# checks that score a simulated episode's own ground truth use it; a detected
+# placement on the rig has no reliable height to compare against.
+SUCCESS_Z_TOLERANCE_M = 0.01
 
 
 def successful_episode_mask(
@@ -210,9 +215,9 @@ def write_subset_dataset(
     metadata_columns = project_metadata_columns(episodes)
     episodes = episodes.copy()
     # A batch of buffered episode rows that mixes real strings with pandas'
-    # float NaN infers a pyarrow type that conflicts across batches (see the
-    # same fix in convert_dataset_resolution.py); filling with "" keeps every
-    # value a real str so the column always infers consistently.
+    # float NaN infers a pyarrow type that conflicts across batches; filling
+    # with "" keeps every value a real str so the column always infers
+    # consistently.
     for col in metadata_columns:
         if pd.api.types.is_string_dtype(episodes[col]):
             episodes[col] = episodes[col].astype(object).where(episodes[col].notna(), "")

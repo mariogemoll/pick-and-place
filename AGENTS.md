@@ -20,7 +20,8 @@ These are non-negotiable and override convenience.
 
 - **`SO-ARM100/` is vendored upstream truth.** It is a git submodule. Never
   modify anything inside it. Compose on top of it instead.
-- **`third_party/dppo` is vendored upstream too.** Same rule.
+- **`third_party/diffusion_policy` is vendored upstream too.** Same rule. It
+  supplies the `ConditionalUnet1D` both flow policies subclass.
 - **The collision box values are a hand-tuned asset, not generated output.**
   `py/src/pick_and_place/core/collision_boxes.py` and
   `wrist_camera_mount_collision_boxes.py` hold numbers that were tuned by hand
@@ -183,7 +184,7 @@ left out.
 | Directory | Contents |
 | --- | --- |
 | `SO-ARM100/` | Vendored hardware submodule: CAD, STL, URDF, MJCF, BOM. |
-| `py/` | The `pick_and_place` package (155 modules in 17 subpackages), 110 CLI scripts, 82 test files. Simulation, real-robot control, calibration, datasets, policies. |
+| `py/` | The `pick_and_place` package (151 modules in 15 subpackages), 54 CLI scripts, 68 test files. Simulation, real-robot control, calibration, datasets, policies. |
 | `ts/` | Vite + Three.js browser app: the visualizations embedded in the web page. |
 | `mesh_optimization/` | Standalone Python subproject that decimates high-poly STL into web-ready GLB. |
 | `scripts/` | Repository-level shell/TS tooling: license headers, file-size check, mesh pipeline, remote-GPU job scripts. |
@@ -191,7 +192,6 @@ left out.
 | `stl/` | Committed printable geometry for the physical workspace frame. |
 | `fixtures/` | Committed cross-language test fixtures. `parity/` holds the shared Python/TypeScript oracle; see its `README.md`. |
 | `assets/` | Generated AprilTag textures. Gitignored. |
-| `third_party/dppo` | Vendored DPPO submodule, used for its diffusion pre-training agent. |
 
 ### How the Python package is laid out
 
@@ -209,7 +209,6 @@ above, where work genuinely combines capabilities.
 `scripts/check_package_layering.py` enforces this in CI. When a module needs
 two capabilities it belongs in the convergence tier by construction; when it
 reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
-`dppo_rl/` and `dsrl/`, the two RL strands, sit above everything and are exempt.
 
 - **`spec/`** — the physical facts and the contracts every branch agrees on:
   the cube's size and face tag ids, the drop-zone and corner plate sizes, the
@@ -262,17 +261,21 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
 - **`data/`** — recording and datasets: `recording`, `recorder`,
   `recording_config` (what one recording run is: the scene it draws, its frame
   sizes, where it lands), `dataset_metadata`, `dataset_subset`,
-  `sim_dataset_staging`, `diffusion_policy_dataset`, and `trajectory_artifact`
-  (one episode's behavior with no pixels in it — the true world and the believed
-  one side by side, which is what a scene can be re-rendered from).
+  `sim_dataset_staging`, `lerobot_dataset` (reading a dataset's info, episode
+  rows and per-episode states), `diffusion_policy_dataset` and
+  `flow_image_dataset` (the video export the image flow policy trains on, and
+  the windowing over it), `flow_policy_dataset`, `stored_npz`, and
+  `trajectory_artifact` (one episode's behavior with no pixels in it — the true
+  world and the believed one side by side, which is what a scene can be
+  re-rendered from).
 - **`policies/`** — controller implementations and the contract they are scored
   against: `policy_controllers`, `policy`, `policy_evaluation` (frozen scenario
   manifests in `config/evaluation/` and a success oracle),
-  `diffusion_policy_pretrain`, `diffusion_policy_client`, and the state-only
-  flow-matching policy (`flow_matching`, `flow_policy`,
-  `diffusion_policy_unet`, `flow_onnx` — the sampler as one traceable graph, for
-  the browser). ACT and SmolVLA are *evaluated* here but trained
-  externally via the `lerobot` CLI.
+  and the two flow-matching policies: the state-only one (`flow_matching`,
+  `flow_policy`, `diffusion_policy_unet`, `flow_onnx` — the sampler as one
+  traceable graph, for the browser) and the image-conditioned one
+  (`flow_image_policy`, `flow_image_encoder`, `image_augmentation`). ACT and
+  SmolVLA are *evaluated* here but trained externally via the `lerobot` CLI.
 - **`runtime/`** — what an episode needs around the loop that runs it, and the
   policy runners that do not use that loop. `episodes` samples an episode that
   runs clean and `preflight` vets a trajectory under live physics — the two the
@@ -291,8 +294,7 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
 
   Around those: `policy_sim` and `policy_real` (running a *learned* policy,
   which needs no trajectory and so no phase loop), `overhead_detection`,
-  `episode_loop`, `training_scenes`, `recorded_scenes`, `action_log`,
-  `move_to_random_pose`.
+  `episode_loop`, `training_scenes`, `recorded_scenes`, `action_log`.
 - **`plant/`** — the two things you command and observe: hardware, and sim. Both
   are the same shape — **a true world plus a believed shadow**. On the rig the
   true world is the physical arm and the shadow is a MuJoCo model stepped at the
@@ -343,110 +345,58 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   different world than the one that follows. `checkpoint` carries out a
   replan, and `scripted` hands the expert the scene and physics it is not
   allowed to reach for itself.
-- **`variants/`** — one recorded trajectory, rendered many ways. Everything here
+- **`variants/`** — the appearance half of domain randomization. Everything here
   answers "no" to the question that organizes the sim/real split: *if I change
   this, does the correct action change?* Lighting, materials, colours,
-  backgrounds, viewpoint, exposure and noise move pixels and nothing else, so
-  they are drawn against an episode that already succeeded and its action labels
-  stay correct. `appearance` (the named palettes), `draw` (the envelopes a
-  variant samples from), `scene` (applying a draw to a compiled model),
-  `renderer` (replaying an artifact through the recording camera pipeline),
-  `render` (one artifact into N variants — variant outer, frame inner, so the
-  scene is restyled once instead of per frame), `video` (encoding a variant the
-  way the recording was encoded).
+  backgrounds, exposure and noise move pixels and nothing else, so an episode's
+  action labels stay correct however it is drawn. `appearance` (the named
+  palettes), `draw` (the envelopes a variant samples from) and `scene` (applying
+  a draw to a compiled model, which the sim recorder and the sim policy runner
+  both do per episode).
 
-  The input is a trajectory artifact, which is why none of this needs the
-  planner, the detectors or physics — and why a domain-randomization experiment
-  costs a render pass rather than a fresh collection run.
+  **The name predates its contents.** This is not a side strand: `record_sim.py`
+  and `runtime/policy_sim.py` import it directly, so deleting it would delete
+  domain randomization.
 - **`calibration/`** — solving the rig by rendering the scene and comparing it
   to a real image: `cam_align_solve`, `camera_compare`,
   `camera_calibration_export`, `session_calibration`.
 - **`analysis/`** — reports about recorded runs and about the scene:
-  `episode_video`, `policy_recording`, `scene_visibility`.
+  `episode_video`, `policy_recording`, `scene_visibility`,
+  `flow_trace_recording`.
 - **`cli/`** — the argument groups the scripts compose their parsers from, one
-  per subsystem: `policy` (controller choice and the Diffusion Policy server),
+  per subsystem: `policy` (controller choice and how a checkpoint is queried),
   `rig` (follower, cameras, recalibration, operator alerts), `scene` (cube
   pinning, render size, appearance, preflight diagnostics), `dataset`. A flag
   two commands share is declared once, here, not agreed by hand in each.
-- **`dppo_rl/`** — fine-tuning a pretrained policy with PPO. Two families run
-  through one episode loop, reward and scene stream; `observations.py` holds
-  what each is shown and what its normalized action means. The **state flow
-  policy** substitutes only the transition kernel (`flow_ppo.py`, over the actor
-  adapter in `flow_actor.py`): integrating a flow ODE has no per-step likelihood
-  for PPO to differentiate, while the SDE with the same marginals does, and its
-  noise schedule vanishes as the chain ends so exploration never lands
-  undiminished on the emitted action. It reads privileged task state, so nothing
-  renders and a rollout costs about a second. Its objective is **speed, not
-  success**: the base places at a median 81 ticks with 0.94 success, so the
-  dense return has range to move in where the success rate has almost none.
-  Gate and score it with `check_flow_rl_env.py`. **It does not work yet**: PPO
-  degrades the policy at every step size tried (0.92 to 0.66 over 121 iterations
-  at lr 3e-6; 0.92 to 0.14 over 301 at 3e-7, so a smaller step only postpones
-  it), and it does so with the trust region engaging, the critic explaining 70%
-  of return variance, and no log-probability clamping — none of which the visual
-  strand ever achieved. The leading untested suspect is that the likelihood
-  floor is three to six times wider than the SDE's own per-step standard
-  deviation. No fine-tuned checkpoint is worth scoring. The **visual Diffusion
-  Policy** uses DPPO's own diffusion model, and
-  **works as a train-and-select procedure on the recovery base, not as a reliable
-  optimizer**: across six seeds (2026-08-08) there is no average effect at any
-  fixed iteration, but four of six produced a significantly-better checkpoint at
-  seed-specific times, and the oracle-selected winner (seed 42, itr 60) validated
-  at **0.746 vs 0.684/0.674 for the recovery/absolute bases** on 512 scenes
-  untouched by training, selection, or prior scoring (McNemar p = 0.0032/0.0039)
-  — the strongest policy in the project. Two preconditions, both load-bearing:
-  the braked launcher defaults (zero collapses in six runs; the pre-brake
-  configuration collapsed twelve times), and a base policy whose failures are
-  recoverable — on the no-retry absolute base the same configuration is provably
-  flat. **The gain is a fixed increment, not a fraction of the remaining gap**:
-  the same procedure from an undertrained base (epoch 150, 0.492) gained the same
-  ~7 points and validated at 0.561, so a weaker start ends weaker roughly one for
-  one and headroom is not the constraint (2026-08-09, 24 cells, none
-  significant). The procedure **replicates**: two independent six-seed matrices,
-  each selecting and validating on its own draws, landed at 0.746 and 0.740, so
-  ~0.74 is a property of the setup rather than a lucky seed. `reward_horizon`
-  was found defaulting to 4 against `act_steps` 8 — half of every executed chunk
-  was excluded from the gradient — and is now bound to `act_steps`; the fix is
-  correct and made no measurable difference.
-- **`dsrl/`** — the second RL strand: freeze the Diffusion Policy entirely and
-  learn which input noise it denoises from
-  ([arXiv:2506.15799](https://arxiv.org/abs/2506.15799)). `noise_policy`
-  presents the checkpoint as the deterministic `a = pi_dp(s, w)` and exposes the
-  frozen visual features its own U-Net conditions on; `sac` is soft actor-critic
-  over that latent-noise space; `replay` caches those features rather than
-  pixels, which is what makes an off-policy buffer affordable; `trainer` joins
-  them to the unchanged `dppo_rl` environment; `steerability` measures the
-  precondition the method rests on — that the noise moves the action at all.
-  The base weights are loaded read-only, so
-  unlike DPPO a bad run cannot degrade the policy.
 
 ### Script categories
 
-`py/scripts/` holds about as much code as the package does. Broadly:
+The 54 scripts are the commands the project is driven by. Broadly:
 
-- **Run the task** — `pick_and_place/{sim,real,record_sim,record_teleop,finalize_sim_dataset}.py`
+- **Run the task** — `pick_and_place/{sim,real,record_sim,finalize_sim_dataset}.py`
 - **Run a policy** — `run_policy_{sim,real}.py`, `eval_policy_sim.py`,
-  `run_flow_policy_sim.py`, `eval_scripted_parallel.py`,
-  `compare_policy_evaluations.py`, `generate_scenario_manifest.py`
+  `run_flow_{policy,image_policy}_sim.py`, `eval_scripted_parallel.py`,
+  `compare_policy_evaluations.py`, `merge_evaluation_shards.py`,
+  `generate_scenario_manifest.py`
+- **Train** — `train_flow_{policy,image_policy}.py`,
+  `export_{flow_policy,diffusion_policy}_dataset.py`,
+  `diagnose_flow_image_policy.py`
 - **Datasets** — `combine_datasets.py`, `consolidate_datasets.py`,
   `split_train_val_episodes.py`, `convert_dataset_resolution.py`,
-  `keep_successful_episodes.py`, `select_episodes.py`,
-  `export_diffusion_policy_dataset.py`, `rerender_episodes.py`
-- **Calibration** — `calibrate_camera_intrinsics.py`, `calibrate_joint_zeros.py`,
-  `calibrate_robot_dynamics.py`, `wrist_cam_align_solve.py`,
-  `generate_charuco_board.py`, `export_camera_calibrations.py`
-- **Sim-to-real measurement** — `export_sim_real_pairs.py`,
-  `measure_hand_eye_offset.py`, `fit_{pan_zero,joint_zeros,sag}.py`,
-  `probe_camera_pose_envelope.py`, `check_overhead_localization.py` (does
-  simulated overhead perception miss by as much as the rig does?)
+  `keep_successful_episodes.py`, `select_episodes.py`
+- **Calibration** — `calibrate_{camera_intrinsics,joint_zeros,robot_dynamics}.py`,
+  `wrist_cam_align_solve.py`, `generate_charuco_board.py`,
+  `export_camera_calibrations.py`, `measure_hand_eye_offset.py`,
+  `fit_{pan_zero,joint_zeros,sag}.py`, `check_calibration.py`
+- **What the policy can see** — `measure_cube_visibility.py`,
+  `check_overhead_localization.py` (does simulated overhead perception miss by
+  as much as the rig does?)
 - **Web assets** — `export_generic_robot.py`, `export_episode_rolls.py`,
-  `distill_grasp_policy.py`, `render_apriltag_textures.py`,
-  `export_web_policy_scene.py`, `export_flow_policy_onnx.py`,
-  `export_policy_parity_fixture.py`
-- **Viewers and diagnostics** — `view_*.py`, `replay_*.py`, `showcamfeed*.py`,
-  `diagnose_cube_tracking.py`
-- **Figures** — `generate_architecture_figure.py`, `plot_*.py`,
-  `make_*_grid.py`, `render_scene_thumbnails.py`
+  `render_apriltag_textures.py`, `export_web_policy_scene.py`,
+  `export_flow_policy_onnx.py`, `export_policy_parity_fixture.py`,
+  `render_scene_thumbnails.py`
+- **Viewers and diagnostics** — `view_{robot,scene}.py`, `replay_episode.py`,
+  `showcamfeed*.py`, `camera_fps_probe.py`, `park_follower.py`
 
 Scripts should parse arguments and delegate. Stable algorithms, file formats,
 and calibration logic belong in the package even when a CLI is the only caller.
@@ -657,24 +607,22 @@ surface in `git status`, not because they are still a valid place to write.
   `scripts/check_package_layering.py`. A module that needs two capability
   branches moves up to the convergence tier; a fact two branches share moves
   down to `spec`.
-- **Spell policy prefixes out — never `dp_`.** `diffusion_policy_*` is the
-  behavior-cloned policy every RL strand starts from. `dppo_*` is the PPO
-  fine-tuning strand, and `DPPO` in prose means that or upstream
-  `third_party/dppo`, nothing else. `dsrl_*` is the latent-noise steering
-  strand, and `DSRL` in prose means that or the paper it implements. The two RL
-  strands share the environment and the scoring harness and change different
-  things, so a name that does not say which one is a name that will be misread.
+- **`diffusion_policy_*` names the vendored upstream, not a strand of ours.**
+  `data/diffusion_policy_dataset.py` writes the video export the image flow
+  policy trains on, and `policies/diffusion_policy_unet.py` adapts the
+  `ConditionalUnet1D` both flow policies subclass. Both are load-bearing for
+  flow matching despite the name; neither is a Diffusion Policy of ours.
 
 ## Known rough edges
 
 Recorded here so they are not mistaken for intentional design:
 
 - `scripts/run_policy_real.py` is oversized and combines too many
-  responsibilities: one 1,068-line `main` holding thirteen nested closures that
-  share state through `nonlocal`.
-- Scripts hold about as much code as the package (~32k lines each). They used to
-  hold considerably more; the balance moved as stable logic was pulled out of
-  the recording scripts into `rollout/`.
+  responsibilities: one 1,052-line `main` holding fourteen nested closures that
+  share state through `nonlocal`. It is the last file in the tree over the
+  40 KB ceiling.
+- Scripts hold 14.5k lines against the package's 27.5k. The balance moved as
+  stable logic was pulled out of the recording scripts into `rollout/`.
 - **`execute_episode`'s recording branch has no caller.** Its one production
   caller is `calibrate_joint_zeros.py`, which passes only the episode, follower,
   viewer and wrist camera. `recording`, `overhead_camera_cap`,

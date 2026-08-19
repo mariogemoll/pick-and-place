@@ -11,12 +11,7 @@ SmolVLA, ...); pass ``--checkpoint`` to evaluate a fine-tune, else the base
 actions are not meaningful (the arm moves but does not solve the task). A policy
 fine-tuned on the project's dataset is the real use case.
 
-``--controller diffusion-policy`` runs a Diffusion Policy checkpoint (``state_*.pt``)
-instead. Its incompatible dependency stack lives in its own virtual
-environment, so inference happens in a policy-server subprocess
-(``diffusion_policy_server.py``) reached through ``DiffusionPolicyController``.
-
-Either way the loop is the same: render the sim cameras, build the observation
+The loop is: render the sim cameras, build the observation
 (two images + proprio state), ask the controller for the next hardware-frame
 action, and feed the result back into the sim as position targets.
 
@@ -83,7 +78,6 @@ from pick_and_place.rollout.sim import OVERHEAD_CAMERA, downsample_through_recor
 from pick_and_place.sim.paper_target_marker import add_paper_target_marker, place_paper_target_marker
 from pick_and_place.spec.robot import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
 from pick_and_place.core.workspace_bounds import is_cube_drop_allowed, sample_target_plate_yaw
-from pick_and_place.policies.diffusion_policy_client import DiffusionPolicyController
 from pick_and_place.policies.policy import (
     DEFAULT_CHECKPOINT,
     resolve_checkpoint_cameras,
@@ -100,7 +94,7 @@ from pick_and_place.runtime.policy_sim import (
 # One policy query and one camera render happen per control tick; the sim steps
 # at the model timestep in between. The rate matches the real rig's control loop
 # (and the dataset fps), so a chunked policy's action spacing plays back true.
-from pick_and_place.cli.policy import add_diffusion_policy_arguments, add_policy_arguments
+from pick_and_place.cli.policy import add_policy_arguments
 from pick_and_place.cli.scene import (
     add_cube_pose_arguments,
     add_render_size_arguments,
@@ -113,32 +107,11 @@ from pick_and_place.spec.robot import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 def _resolve_recording_hw(
     parser: argparse.ArgumentParser, args: argparse.Namespace
 ) -> tuple[int, int]:
-    """Resolve the resolution observations are downsampled through.
-
-    Taking it from the export that produced the checkpoint's training images
-    keeps the rollout tied to its own dataset rather than to a constant that
-    can drift; exports predating that field have to say so on the command line.
-    """
-    if args.recording_hw is not None:
-        height, width = args.recording_hw
-        if height < 1 or width < 1:
-            parser.error("--recording-hw must be positive")
-        return (height, width)
-    if args.diffusion_policy_normalization is None:
-        parser.error("--recording-hw is required without --diffusion-policy-normalization to read it from")
-    export_path = args.diffusion_policy_normalization.parent / "export.json"
-    if not export_path.exists():
-        parser.error(f"no export.json beside {args.diffusion_policy_normalization}; pass --recording-hw")
-    with export_path.open() as file:
-        export = json.load(file)
-    if "source_video_hw" not in export:
-        parser.error(
-            f"{export_path} predates source_video_hw; pass --recording-hw with the "
-            "resolution its source dataset's videos were recorded at"
-        )
-    height, width = export["source_video_hw"]
-    return (int(height), int(width))
-
+    """Validate the recording resolution rendered frames are reduced through."""
+    height, width = args.recording_hw
+    if height < 1 or width < 1:
+        parser.error("--recording-hw must be positive")
+    return (height, width)
 
 def _build_model(
     source: CubePose,
@@ -233,7 +206,15 @@ def main() -> None:
     # ACT's chunk and is larger than pi0.5's 50, so it turned every pi0.5
     # rollout into an argument error unless the flag was passed by hand.
     add_policy_arguments(parser, n_action_steps_default=None)
-    add_diffusion_policy_arguments(parser)
+    parser.add_argument(
+        "--recording-hw",
+        type=int,
+        nargs=2,
+        required=True,
+        metavar=("HEIGHT", "WIDTH"),
+        help="resolution the training videos were recorded at, which rendered frames "
+        "are downsampled through on the way to the policy's input size",
+    )
     add_render_size_arguments(parser)
     add_cube_pose_arguments(parser, source_default=(0.22, 0.0))
     parser.add_argument("--seed", type=int, default=None, help="RNG seed for random target sampling")
@@ -263,7 +244,7 @@ def main() -> None:
         default=None,
         help=(
             "domain-randomization preset whose overhead_camera_* scalars draw a fresh "
-            "per-episode overhead camera pose+focal jitter, as rerender_episodes.py does; "
+            "per-episode overhead camera pose+focal jitter; "
             "nothing else from the preset is applied"
         ),
     )
@@ -367,41 +348,7 @@ def main() -> None:
     override_hw = (args.image_height, args.image_width) if all(override) else None
 
     controller = None
-    if args.controller == "diffusion-policy":
-        if args.checkpoint == DEFAULT_CHECKPOINT:
-            parser.error(
-                "--checkpoint (a state_*.pt file) is required for the "
-                "diffusion-policy controller"
-            )
-        if args.diffusion_policy_python is None:
-            parser.error(
-                "--diffusion-policy-python (or $DIFFUSION_POLICY_PYTHON) is required "
-                "for the diffusion-policy controller"
-            )
-        if args.diffusion_policy_normalization is None:
-            parser.error(
-                "--diffusion-policy-normalization is required for the "
-                "diffusion-policy controller"
-            )
-        print(f"Starting the Diffusion Policy server for {args.checkpoint}...")
-        controller = DiffusionPolicyController.launch(
-            python=args.diffusion_policy_python,
-            checkpoint=args.checkpoint,
-            config=args.diffusion_policy_config,
-            normalization=args.diffusion_policy_normalization,
-            device=args.device,
-            seed=args.diffusion_policy_seed,
-            act_steps=args.diffusion_policy_act_steps,
-            ddim_steps=args.diffusion_policy_ddim_steps,
-        )
-        if override_hw is not None and override_hw != controller.image_hw:
-            parser.error(
-                f"--image-height/--image-width {override_hw} do not match the "
-                f"model's trained image size {controller.image_hw}"
-            )
-        image_hw = controller.image_hw
-    else:
-        image_hw, _ = resolve_checkpoint_cameras(args.checkpoint, override_hw=override_hw)
+    image_hw, _ = resolve_checkpoint_cameras(args.checkpoint, override_hw=override_hw)
     if args.render_width < image_hw[1] or args.render_height < image_hw[0]:
         parser.error("--render-width and --render-height must be at least the policy image size")
 
@@ -573,15 +520,7 @@ def main() -> None:
             )
         if getattr(config, "temporal_ensemble_coeff", None) is not None:
             print(f"Temporal ensembling coeff: {config.temporal_ensemble_coeff}")
-    else:
-        print(
-            f"Policy chunks: predicts {controller.horizon_steps}, "
-            f"executes {controller.act_steps} before re-query "
-            f"with {controller.cond_steps} time steps x 2 cameras "
-            f"({controller.handshake['denoising_steps']} denoising steps, "
-            f"epoch {controller.handshake['epoch']} checkpoint)."
-        )
-    control_hz = controller.policy_hz if args.controller == "diffusion-policy" else CONTROL_HZ
+    control_hz = CONTROL_HZ
     print(f"Policy control rate: {control_hz:g} Hz.")
     controller.reset()
 
@@ -803,8 +742,7 @@ def main() -> None:
                 {
                     "checkpoint": str(args.checkpoint),
                     "seed": args.seed,
-                    "act_steps": args.diffusion_policy_act_steps,
-                    "ddim_steps": args.diffusion_policy_ddim_steps,
+                    "n_action_steps": args.n_action_steps,
                     "scene_appearance": args.scene_appearance,
                     "resample_every": args.resample_every,
                     "segments": segment + 1,

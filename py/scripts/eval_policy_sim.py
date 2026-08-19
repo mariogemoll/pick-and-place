@@ -22,7 +22,6 @@ from pick_and_place.policies.policy import (
     resolve_checkpoint_cameras,
     select_device,
 )
-from pick_and_place.policies.diffusion_policy_client import DiffusionPolicyController
 from pick_and_place.policies.flow_image_policy import FlowImagePolicyController
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, WRIST_FEATURE
 from pick_and_place.policies.policy_controllers import LeRobotPolicyController
@@ -46,7 +45,6 @@ from pick_and_place.scripted.policy import ScriptedPolicy
 from pick_and_place.perception.cube_detection import CubeTracker
 from pick_and_place.perception.detector_process import DetectorProcess
 from pick_and_place.cli.policy import (
-    add_diffusion_policy_arguments,
     add_flow_image_arguments,
     add_policy_arguments,
 )
@@ -63,11 +61,10 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     add_policy_arguments(
         parser,
-        controllers=("lerobot", "scripted", "diffusion-policy", "flow-image"),
+        controllers=("lerobot", "scripted", "flow-image"),
         checkpoint_default=None,
         n_action_steps_default=None,
     )
-    add_diffusion_policy_arguments(parser, recording_hw=False)
     add_flow_image_arguments(parser)
     add_render_size_arguments(parser)
     add_scene_appearance_arguments(parser)
@@ -125,29 +122,10 @@ def _parse_args() -> argparse.Namespace:
         not math.isfinite(args.max_episode_seconds) or args.max_episode_seconds <= 0.0
     ):
         parser.error("--max-episode-seconds must be a positive finite number")
-    if args.controller in ("lerobot", "diffusion-policy", "flow-image") and args.checkpoint is None:
+    if args.controller in ("lerobot", "flow-image") and args.checkpoint is None:
         parser.error(f"--checkpoint is required for the {args.controller} controller")
     if args.controller == "scripted" and args.checkpoint is not None:
         parser.error("--checkpoint does not apply to the scripted controller")
-    if args.controller == "diffusion-policy":
-        if args.diffusion_policy_python is None:
-            parser.error(
-                "--diffusion-policy-python (or $DIFFUSION_POLICY_PYTHON) is required for "
-                "the diffusion-policy controller"
-            )
-        if args.diffusion_policy_normalization is None:
-            parser.error(
-                "--diffusion-policy-normalization is required for the diffusion-policy controller"
-            )
-        for name in (
-            "checkpoint",
-            "diffusion_policy_config",
-            "diffusion_policy_normalization",
-            "diffusion_policy_python",
-        ):
-            path = Path(getattr(args, name))
-            if not path.exists():
-                parser.error(f"--{name.replace('_', '-')} does not exist: {path}")
     if args.controller == "flow-image":
         if args.flow_export is None:
             parser.error("--flow-export is required for the flow-image controller")
@@ -183,38 +161,6 @@ def _sha256_of_file(path: Path) -> str:
         for block in iter(lambda: file.read(1 << 20), b""):
             digest.update(block)
     return digest.hexdigest()
-
-
-def _diffusion_policy_metadata(
-    controller: DiffusionPolicyController, args: argparse.Namespace
-) -> dict:
-    return {
-        "type": "diffusion-policy",
-        "image_features": {
-            "overhead": OVERHEAD_FEATURE,
-            "wrist": WRIST_FEATURE,
-        },
-        "action_horizon": controller.horizon_steps,
-        "executed_action_steps": controller.act_steps,
-        "policy_hz": controller.policy_hz,
-        "denoising_steps": controller.handshake["denoising_steps"],
-        "sampler": controller.handshake["sampler"],
-        "action_encoding": controller.action_encoding.value,
-        "checkpoint_epoch": controller.handshake["epoch"],
-        "weights": "ema",
-        "image_augmentation": False,
-        "sampling_seed": controller.handshake["seed"],
-        "server_device": controller.handshake["device"],
-        "server_torch_version": controller.handshake["torch_version"],
-        "config": {
-            "path": str(args.diffusion_policy_config.resolve()),
-            "sha256": _sha256_of_file(args.diffusion_policy_config),
-        },
-        "normalization": {
-            "path": str(args.diffusion_policy_normalization.resolve()),
-            "sha256": _sha256_of_file(args.diffusion_policy_normalization),
-        },
-    }
 
 
 def _lerobot_metadata(controller: LeRobotPolicyController) -> dict:
@@ -426,39 +372,6 @@ def main() -> None:
     override_hw = (args.image_height, args.image_width) if args.image_height is not None else None
     if args.controller == "lerobot":
         image_hw, _ = resolve_checkpoint_cameras(args.checkpoint, override_hw=override_hw)
-    elif args.controller == "diffusion-policy":
-        print(f"Starting the Diffusion Policy server for {args.checkpoint}...")
-        diffusion_policy_controller = DiffusionPolicyController.launch(
-            python=args.diffusion_policy_python,
-            checkpoint=args.checkpoint,
-            config=args.diffusion_policy_config,
-            normalization=args.diffusion_policy_normalization,
-            device=args.device,
-            seed=args.diffusion_policy_seed,
-            act_steps=args.diffusion_policy_act_steps,
-            ddim_steps=args.diffusion_policy_ddim_steps,
-        )
-        if override_hw is not None and override_hw != diffusion_policy_controller.image_hw:
-            raise ValueError(
-                f"--image-height/--image-width {override_hw} do not match the "
-                f"model's trained image size {diffusion_policy_controller.image_hw}"
-            )
-        image_hw = diffusion_policy_controller.image_hw
-        scenarios = tuple(
-            replace(
-                scenario,
-                control_hz=diffusion_policy_controller.policy_hz,
-                max_steps=max(
-                    1,
-                    round(
-                        scenario.max_steps
-                        * diffusion_policy_controller.policy_hz
-                        / scenario.control_hz
-                    ),
-                ),
-            )
-            for scenario in scenarios
-        )
     elif args.controller == "flow-image":
         flow_device = select_device(args.device)
         print(f"Loading {args.checkpoint} on {flow_device}...")
@@ -523,10 +436,6 @@ def main() -> None:
             base_checkpoint=args.base_checkpoint,
         )
         controller_metadata = _lerobot_metadata(controller)
-    elif args.controller == "diffusion-policy":
-        device = diffusion_policy_controller.handshake["device"]
-        controller = diffusion_policy_controller
-        controller_metadata = _diffusion_policy_metadata(diffusion_policy_controller, args)
     elif args.controller == "flow-image":
         device = flow_device
         controller = flow_image_controller
