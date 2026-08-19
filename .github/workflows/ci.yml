@@ -32,7 +32,19 @@ jobs:
         working-directory: scripts
         run: pnpm i
       - name: "Install mesh generation system dependencies"
-        run: sudo apt-get update && sudo apt-get install -y libopengl0 libegl1-mesa-dev
+        timeout-minutes: 12
+        run: |
+          apt_opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=30"
+          for attempt in 1 2 3; do
+            if timeout 180 sudo apt-get $apt_opts update \
+              && timeout 180 sudo apt-get $apt_opts install -y libopengl0 libegl1-mesa-dev; then
+              exit 0
+            fi
+            echo "apt-get attempt $attempt failed or stalled, retrying in 15s"
+            sleep 15
+          done
+          echo "apt-get failed after 3 attempts"
+          exit 1
       - name: "Install simulation package dependencies"
         working-directory: py
         run: uv pip install --system -e . --group dev
