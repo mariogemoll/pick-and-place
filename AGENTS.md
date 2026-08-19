@@ -621,7 +621,8 @@ Gitignored, machine-local, and sometimes very large:
 
 | Path | Contents |
 | --- | --- |
-| `ts/public/` | All generated web assets, including the live policy page's scene, weights and parity fixture. |
+| `ts/public/` | All generated web assets, including the live policy page's compiled scene and policy weights. |
+| `ts/test-fixtures/` | Generated test inputs that must not be served, currently the live policy parity rollout. |
 | `datasets/` | Recorded and simulated LeRobot datasets. Tens of GB. |
 | `outputs/`, `output/` | Training runs, checkpoints, diagnostics. |
 | `intermediary-glb/`, `dist_assets/` | Mesh pipeline intermediates. |
