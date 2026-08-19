@@ -13,19 +13,13 @@
 // rounds differently, and one episode is one episode. The scored numbers come
 // from the Python harness over frozen scenario manifests, and this is a way to
 // watch the policy work, not a way to measure it.
-//
-// The scripted option is the *browser's* planner -- the one the pick-and-place
-// visualization animates -- not the analytic expert that generated the training
-// data. The two have diverged (see AGENTS.md), so it stands here as something
-// to watch beside the policy rather than as the baseline it is scored against.
 
 import * as THREE from 'three';
 
-import { ARM_JOINT_NAMES, deriveSo101Kinematics } from '../../ik/kinematics';
+import { ARM_JOINT_NAMES } from '../../ik/kinematics';
 import { simFrameToReal } from '../../joint-frames';
 import { loadWebModel } from '../../web-model';
 import { createEpisodeReplayScene, type EpisodeReplayScene } from '../episode-replay/scene';
-import { computeTrajectory, type Trajectory } from '../pick-and-place/trajectory';
 import { createXyMultiDragControls, type XyDragControls } from '../xy-drag-controls';
 import { type CubePose, loadPolicyEnvironment } from './environment';
 import { type FlowPolicy, loadFlowPolicy } from './flow-policy-runner';
@@ -49,8 +43,6 @@ export interface LivePolicyOptions {
 export interface LivePolicyVisualization {
   destroy(): void;
 }
-
-type ControllerKind = 'flow' | 'scripted';
 
 interface Placement {
   cube: { x: number; y: number; yaw: number };
@@ -105,7 +97,6 @@ export async function initLivePolicyVisualization(
     modelBasePath: options.modelBasePath,
     environmentModel
   });
-  const kinematics = deriveSo101Kinematics(model);
 
   const plate = createTargetPlate(environment.manifest.dropZoneHalfSize);
   scene.scene.add(plate);
@@ -120,8 +111,6 @@ export async function initLivePolicyVisualization(
   let running = false;
   let tick = 0;
   let disposed = false;
-  let controller: ControllerKind = 'flow';
-  let trajectory: Trajectory | null = null;
   let outcome = '';
 
   function draw(): void {
@@ -162,43 +151,10 @@ export async function initLivePolicyVisualization(
       targetXy: [placement.target.x, placement.target.y],
       initialJointsReal: [...simFrameToReal(environment.manifest.neutralJointsRad)]
     });
-    // Planned once, from where the cube and the target actually are, the same
-    // way the analytic planner is given a scene rather than a feedback signal.
-    trajectory = computeTrajectory(
-      kinematics,
-      {
-        x: placement.cube.x,
-        y: placement.cube.y,
-        z: CUBE_HALF_SIZE,
-        roll: 0,
-        pitch: 0,
-        yaw: placement.cube.yaw
-      },
-      { x: placement.target.x, y: placement.target.y, z: CUBE_HALF_SIZE, roll: 0, pitch: 0, yaw: 0 }
-    );
     dom.run.textContent = 'Run';
-    dom.run.disabled = controller === 'scripted' && trajectory === null;
-    dom.hint.textContent = dom.run.disabled
-      ? 'The planner cannot reach that pairing. Move the cube or the plate.'
-      : 'Drag the cube and the target plate, then run.';
+    dom.hint.textContent = 'Drag the cube and the target plate, then run.';
     draw();
     updateStatus();
-  }
-
-  async function nextAction(): Promise<ArrayLike<number>> {
-    if (controller === 'flow') {
-      return flowPolicy.act(environment.observe(), environment.cubePose(), environment.targetXy());
-    }
-    // The planner is a function of time, so a tick reads it where the clock is.
-    // Past the end it holds the final frame, which parks the arm.
-    const plan = trajectory;
-    if (plan === null) {
-      return environment.observe();
-    }
-    const seconds = Math.min(tick / environment.manifest.policyHz, plan.duration);
-    const frame = plan.evaluate(seconds);
-    const sim = [...ARM_JOINT_NAMES.map(name => frame.joints[name]), frame.gripper];
-    return simFrameToReal(sim);
   }
 
   function finish(message: string): void {
@@ -209,7 +165,13 @@ export async function initLivePolicyVisualization(
   }
 
   async function stepOnce(): Promise<void> {
-    environment.step(await nextAction());
+    environment.step(
+      await flowPolicy.act(
+        environment.observe(),
+        environment.cubePose(),
+        environment.targetXy()
+      )
+    );
     tick += 1;
     draw();
     updateStatus();
@@ -275,10 +237,6 @@ export async function initLivePolicyVisualization(
   });
 
   dom.reset.addEventListener('click', () => { resetEpisode(); });
-  dom.controller.addEventListener('change', () => {
-    controller = dom.controller.value as ControllerKind;
-    resetEpisode();
-  });
 
   const onResize = (): void => { scene.resize(); };
   window.addEventListener('resize', onResize);

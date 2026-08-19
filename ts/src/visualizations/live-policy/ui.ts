@@ -9,7 +9,6 @@ export const CANVAS_HEIGHT = 480;
 export interface LivePolicyDom {
   root: HTMLDivElement;
   viewport: HTMLDivElement;
-  controller: HTMLSelectElement;
   run: HTMLButtonElement;
   reset: HTMLButtonElement;
   status: HTMLDivElement;
@@ -39,19 +38,6 @@ export function buildUi(parent: HTMLElement): LivePolicyDom {
   const controls = document.createElement('div');
   controls.className = 'live-policy-viz-controls';
 
-  const controller = document.createElement('select');
-  controller.className = 'live-policy-viz-select';
-  for (const [value, label] of [
-    ['flow', 'State flow policy'],
-    ['scripted', 'Scripted planner']
-  ]) {
-    const option = document.createElement('option');
-    option.value = value;
-    option.textContent = label;
-    controller.appendChild(option);
-  }
-  controls.appendChild(controller);
-
   const run = button('Run');
   const reset = button('Reset');
   controls.append(run, reset);
@@ -62,5 +48,5 @@ export function buildUi(parent: HTMLElement): LivePolicyDom {
   root.appendChild(status);
 
   replacePlaceholder(parent, root);
-  return { root, viewport, controller, run, reset, status, hint };
+  return { root, viewport, run, reset, status, hint };
 }
