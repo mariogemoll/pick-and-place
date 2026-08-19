@@ -7,8 +7,7 @@ The scene's appearance is the one axis of a recording that can be changed after
 the fact: object segmentation, physics and kinematics do not depend on it, so
 the same recorded ground truth can be rendered under any of these palettes and
 the results differ in pixels only. That is what
-``py/scripts/sweep_scene_appearance.py`` measures over and what
-``py/scripts/rerender_episodes.py`` writes out as new datasets.
+the sim recorder draws per episode under a domain-randomization preset.
 
 Every field of :class:`SceneAppearance` may be ``None``, meaning "leave whatever
 the compiled model carries". :data:`AS_RECORDED` — all fields ``None`` — is

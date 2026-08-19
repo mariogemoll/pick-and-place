@@ -4,8 +4,8 @@
 
 """Reconstruct a recorded episode from its logged ``qpos`` — no frames are stored.
 
-``record_episodes.py`` logs the full per-frame ``qpos`` instead of camera images,
-so the run can be replayed exactly afterwards. This rebuilds the identical scene
+Recorders that log the full per-frame ``qpos`` instead of camera images leave
+enough behind to replay a run exactly. This rebuilds the identical scene
 (the cube placed at the episode's recorded start pose), then plays the logged
 ``qpos`` back: either rendering a camera to an mp4 (``--video out.mp4``) or
 stepping through it live in the MuJoCo viewer (the default).

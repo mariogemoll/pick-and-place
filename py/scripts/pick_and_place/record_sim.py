@@ -212,7 +212,7 @@ def run_recording(
 
     # One persistent scene reused across episodes. The environment is required for
     # the overhead camera; calibrated extrinsics place it where the real one sits.
-    # `rerender_episodes.py` replays recordings through this same builder.
+    # Recordings are replayed through this same builder.
     model, data = build_recording_scene(
         render_width=frames.render_width,
         render_height=frames.render_height,

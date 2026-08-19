@@ -32,15 +32,16 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import sys
 from pathlib import Path
 
 import mujoco
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from export_sim_real_pairs import _load_episode, _read_episode_rows, _read_info
+from pick_and_place.data.lerobot_dataset import (
+    read_episode_rows,
+    read_episode_states,
+    read_info,
+)
 from pick_and_place.sim.scene import build_scene
 from pick_and_place.spec.robot import JOINT_NAMES
 from pick_and_place.core.joint_frames import real_frame_to_sim
@@ -102,13 +103,13 @@ def load_samples(measurement_paths: list[Path]) -> list[JointZeroSample]:
             episode_index = int(index["episode_index"])
             key = (str(dataset_root), episode_index)
             if key not in dataset_cache:
-                info = _read_info(dataset_root)
+                info = read_info(dataset_root)
                 row = next(
                     r
-                    for r in _read_episode_rows(dataset_root)
+                    for r in read_episode_rows(dataset_root)
                     if int(r["episode_index"]) == episode_index
                 )
-                dataset_cache[key] = _load_episode(dataset_root, info, row).states
+                dataset_cache[key] = read_episode_states(dataset_root, info, row)
             states = dataset_cache[key]
             cube_by_frame = {fr["frame"]: fr for fr in index["frames"]}
 

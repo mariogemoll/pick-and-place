@@ -14,7 +14,7 @@ nothing they approximate.
 
 **The rectified pinhole is the standard.** The physical modules are wide-angle
 and barrel-distorted, so a real frame is undistorted before anything consumes
-it (``convert_dataset_resolution.py``), while a MuJoCo camera is an ideal
+it during dataset conversion, while a MuJoCo camera is an ideal
 pinhole to begin with. The two meet at the undistorted view, and the only
 quantity that has to agree there is the vertical field of view — every crop
 downstream keeps full height. ``fovy_deg`` is therefore the load-bearing value

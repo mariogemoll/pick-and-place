@@ -203,7 +203,7 @@ def _add_workspace_floor(
     the floor must not extend past the frame. The top face sits at world Z=0 and
     is collidable, so the pick cube rests on it exactly as it does on the infinite
     ground plane. When *texture* is given (an equirect-free top-down PNG from
-    ``reconstruct_table_texture.py``), the floor carries the real table surface,
+    reconstructed from overhead footage), the floor carries the real table surface,
     registered so the texel at world (x, y) sits over that point.
     """
     if texture is not None:

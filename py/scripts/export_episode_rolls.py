@@ -14,7 +14,7 @@ already do for a single static or procedural pose — no additional forward
 kinematics format or geometry table is needed.
 
 Only episodes where the cube actually lands on target (no unexpected contacts,
-same definition as ``record_episodes.py``) are kept; failures are silently
+same tolerances the dataset tooling uses) are kept; failures are silently
 retried with the next seed. The default 5 grip positions are hand-picked to
 span the pickup sector's radius (from near the base to its outer edge) at
 alternating azimuths, with the last one deliberately the hardest combination
@@ -76,7 +76,10 @@ from pick_and_place.core.workspace_bounds import (
     is_target_plate_position_allowed,
 )
 
-from scripts.record_episodes import SUCCESS_XY_TOLERANCE, SUCCESS_Z_TOLERANCE
+from pick_and_place.data.dataset_subset import (
+    SUCCESS_XY_TOLERANCE_M,
+    SUCCESS_Z_TOLERANCE_M,
+)
 
 MAGIC = b"PPRL"
 VERSION = 1
@@ -185,7 +188,7 @@ def run_and_sample(
 
     Returns the sampled frames, the episode's drop target (x, y), and whether
     the cube actually landed on target with no unexpected contacts (the same
-    success definition ``record_episodes.py`` uses).
+    success definition the dataset tooling uses).
     """
     episode = prepare_episode(
         rng,
@@ -246,7 +249,7 @@ def run_and_sample(
     cube_end = data.qpos[cube_qpos_adr : cube_qpos_adr + 3]
     xy_err = math.hypot(cube_end[0] - episode.target.x, cube_end[1] - episode.target.y)
     z_err = abs(cube_end[2] - CUBE_HALF_SIZE)
-    success = xy_err <= SUCCESS_XY_TOLERANCE and z_err <= SUCCESS_Z_TOLERANCE and collisions == 0
+    success = xy_err <= SUCCESS_XY_TOLERANCE_M and z_err <= SUCCESS_Z_TOLERANCE_M and collisions == 0
     cube_final_pose = pose_from_qpos(qpos[-1], cube_qpos_adr)
     robot_final_joints, robot_final_gripper = robot_pose_from_qpos(model, qpos[-1])
 

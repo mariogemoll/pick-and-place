@@ -109,7 +109,7 @@ fi
 # pins conflict with this package and uv declares the requirements unsatisfiable.
 uv pip install --python "$venv/bin/python" \
   --overrides config/diffusion_policy/torch-rtx5090.txt \
-  -e py -e third_party/dppo
+  -e py
 
 # CUDA forward compatibility is a data-center-GPU feature; on a GeForce card the
 # image's compat libcuda fails every call with error 804 and ldconfig resolves to
