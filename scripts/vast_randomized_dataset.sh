@@ -275,9 +275,15 @@ publish() {  # local-path s3-key
   # part, so truncation is what survives that, and a size check catches
   # truncation. The .sha256 sidecar is published either way, so any consumer can
   # still verify the bytes it actually downloads.
-  local local_bytes published_bytes
+  # head-object, not `s3 ls`: ls matches by prefix, so it also returns the
+  # .sha256 sidecar published beside the object and a naive read picks up the
+  # sidecar's size instead of the tarball's.
+  local local_bytes published_bytes bucket object
   local_bytes="$(stat -c %s "$path")"
-  published_bytes="$(aws s3 ls "$key" | awk '{print $3}' | tail -1)"
+  bucket="${key#s3://}"; bucket="${bucket%%/*}"
+  object="${key#s3://$bucket/}"
+  published_bytes="$(aws s3api head-object --bucket "$bucket" --key "$object" \
+    --query ContentLength --output text 2>/dev/null)"
   if [ "$local_bytes" != "$published_bytes" ]; then
     echo "size mismatch publishing $key: local $local_bytes, published $published_bytes" >&2
     exit 1
