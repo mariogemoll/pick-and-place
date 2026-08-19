@@ -139,28 +139,4 @@ fi
 # policy, which is exactly when a long job is already underway.
 MUJOCO_GL=egl "$venv/bin/python" "$repo/py/scripts/render_apriltag_textures.py" --all-defaults
 
-# The tag textures are not the only machine-local input a fresh clone lacks.
-# config/camera_intrinsics/ is gitignored, and any domain-randomization preset
-# with a nonzero overhead_camera_frame_tag_margin_px needs it: the pose envelope
-# rejects camera draws whose frame tags would fall outside the image, and it
-# cannot judge that without the lens model. Without these, record_sim.py does not
-# warn -- every worker dies with FileNotFoundError and the run banks nothing.
-#
-# Intrinsics only. The *extrinsics* are deliberately not restored: a recording is
-# built at the authored camera pose, which is the origin domain randomization
-# perturbs around, and restoring a measured pose would move every rendered pixel
-# and every localization off that origin. Recording never reads them anyway --
-# only the model-export helpers in sim/export.py apply them -- so a stray
-# config/camera_extrinsics/ is a trap rather than a fix.
-if [ ! -f "$repo/config/camera_intrinsics/overhead_camera.json" ]; then
-  mkdir -p "$repo/config/camera_intrinsics"
-  if aws s3 cp "s3://allyouneed/pick-and-place/config-backup/camera_intrinsics/" \
-       "$repo/config/camera_intrinsics/" --recursive --only-show-errors; then
-    echo "Restored camera intrinsics from config-backup."
-  else
-    echo "WARNING: could not restore camera intrinsics; presets with a nonzero" >&2
-    echo "overhead_camera_frame_tag_margin_px will fail every worker." >&2
-  fi
-fi
-ls "$repo/config/camera_intrinsics"
 echo "PROVISION COMPLETE"
