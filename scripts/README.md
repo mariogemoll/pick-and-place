@@ -40,6 +40,18 @@ Each arm is scored across `SHARDS` concurrent workers (default: one per
 container core, less one) and merged, because scoring is MuJoCo rendering at a
 few percent of the GPU and a serial arm leaves an evaluation pod idle.
 
+`FLOW_SEED` moves the flow sampler's noise draw, and lands in the bundle name so
+repeated passes do not collide. Holding it at 0 is what makes two arms
+comparable; sweeping it asks one arm the same scenario several times, which is
+how a scene the policy *cannot* do is told apart from one it does not *always*
+do:
+
+```sh
+for seed in 0 1 2 3 4 5 6 7; do
+  RUN_PREFIX=... SHIFTS=8 FLOW_SEED=$seed scripts/vast_flow_image_eval.sh
+done
+```
+
 Run it only after `vast_pap_provision.sh` on a verified evaluation pod. Every
 training output prefix must already contain a final `SHA256SUMS` file; the
 script deliberately refuses partial uploads. Results land under

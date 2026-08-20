@@ -38,15 +38,22 @@ export NUMEXPR_NUM_THREADS=1
 run_prefix="${RUN_PREFIX:?set RUN_PREFIX to the common training output prefix}"
 shifts="${SHIFTS:-8 0}"
 manifest="${MANIFEST:-randomized_selection_200_v1/manifest.json}"
+# The flow sampler's noise draw. Holding it fixed is what makes two arms
+# comparable; varying it is how the same arm is asked the same scenario more
+# than once, which is the only way to tell a scene it cannot do from a scene it
+# does not always do.
+flow_seed="${FLOW_SEED:-0}"
 read -r -a shift_list <<< "$shifts"
 if [ "${#shift_list[@]}" -lt 1 ]; then
   echo "SHIFTS must name at least one arm; got: $shifts" >&2
   exit 2
 fi
+seed_suffix=""
+[ "$flow_seed" = 0 ] || seed_suffix="-seed$flow_seed"
 if [ "${#shift_list[@]}" -eq 2 ]; then
-  default_eval_name="$run_prefix-paired-$(date -u +%Y%m%d)"
+  default_eval_name="$run_prefix-paired-$(date -u +%Y%m%d)$seed_suffix"
 else
-  default_eval_name="$run_prefix-shift${shift_list[0]}-$(date -u +%Y%m%d)"
+  default_eval_name="$run_prefix-shift${shift_list[0]}-$(date -u +%Y%m%d)$seed_suffix"
 fi
 eval_name="${EVAL_NAME:-$default_eval_name}"
 
@@ -165,7 +172,7 @@ printf '%s\n' \
   "export=$artifact_name" \
   "flow_act_steps=8" \
   "flow_integration_steps=10" \
-  "flow_seed=0" \
+  "flow_seed=$flow_seed" \
   "shards=$shards" \
   "repository_commit=$(git rev-parse HEAD)" \
   > "$output_root/command-contract.txt"
@@ -194,7 +201,7 @@ score_arm() {
         --flow-export "$artifact_root" \
         --flow-act-steps 8 \
         --flow-integration-steps 10 \
-        --flow-seed 0 \
+        --flow-seed "$flow_seed" \
         --manifest "config/evaluation/$manifest" \
         --offset "$lo" --limit "$(( hi - lo ))" \
         --device cuda \
