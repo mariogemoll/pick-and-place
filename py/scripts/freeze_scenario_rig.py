@@ -77,14 +77,25 @@ VARY_GROUPS = {
 DEFAULT_VARY = ("lighting", "camera-response", "sensor-noise", "cube-orientation")
 
 
-def resolve_vary(names: list[str]) -> set[str]:
-    """Expand group names and bare field names into the fields that stay varied."""
+def resolve_vary(names: list[str]) -> tuple[set[str], set[str]]:
+    """Expand groups and bare field names into the fields that stay varied.
+
+    Returns the fields and, separately, the ones named individually. Only those
+    are checked against the suite: a group is a curated list that may name a
+    field an older or simpler suite does not carry, and skipping it silently is
+    right, whereas a bare name that matches nothing is a typo.
+    """
     fields: set[str] = set()
+    explicit: set[str] = set()
     for name in names:
         if name == "none":
             continue
-        fields.update(VARY_GROUPS.get(name, (name,)))
-    return fields
+        if name in VARY_GROUPS:
+            fields.update(VARY_GROUPS[name])
+        else:
+            fields.add(name)
+            explicit.add(name)
+    return fields, explicit
 
 
 def _read_payload(path: Path) -> Any:
@@ -171,12 +182,12 @@ def main() -> None:
     rig = {field: copy.deepcopy(source[field]) for field in RIG_FIELDS}
     label = args.label or f"scenario{args.from_scenario:03d}"
 
-    varied = resolve_vary([name.strip() for name in args.vary.split(",") if name.strip()])
+    varied, explicit = resolve_vary([name.strip() for name in args.vary.split(",") if name.strip()])
     randomization = rig["domain_randomization_sample"]
     # A nominal rig carries no randomization block, so there is nothing to vary
     # within it and naming fields is not an error there.
     randomized = randomization.get("enabled") is not False
-    unknown = varied - set(randomization)
+    unknown = explicit - set(randomization)
     if randomized and unknown:
         raise SystemExit(f"--vary names fields the randomization block does not have: {sorted(unknown)}")
 
