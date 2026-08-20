@@ -53,6 +53,39 @@ from typing import Any
 #: task, and is left exactly as it was so suites stay paired scene by scene.
 RIG_FIELDS = ("domain_randomization_sample", "miscalibration_sample", "physics_sample")
 
+#: Not everything inside those blocks is rig *identity*. A deployment pins the
+#: robot, the camera mounts and the room; it does not pin the light, which moves
+#: with the hour and with whoever walks past the lamp. Freezing those too would
+#: score the policy on a single frozen image condition no real installation
+#: offers, so they are named here and keep their own per-scenario draw.
+VARY_GROUPS = {
+    "lighting": (
+        "light_intensity", "light_warm_cool", "key_light_position",
+        "key_light_target", "key_light_bulb_radius", "fill_light_intensity",
+    ),
+    # The rig's capture path sets only FOURCC and frame size, so the cameras run
+    # in the driver's auto modes and their response follows the light.
+    "camera-response": ("exposure", "gamma", "white_balance"),
+    "sensor-noise": ("noise_sigma", "blur_sigma"),
+    # How the cube happens to be lying is the task's business, not the rig's --
+    # it rides in this block only because it had to be drawn with the episode.
+    "cube-orientation": ("cube_orientation_index",),
+}
+
+#: What "same robot, same room, different day" means, and the sensible default
+#: for asking how a policy does on one installation.
+DEFAULT_VARY = ("lighting", "camera-response", "sensor-noise", "cube-orientation")
+
+
+def resolve_vary(names: list[str]) -> set[str]:
+    """Expand group names and bare field names into the fields that stay varied."""
+    fields: set[str] = set()
+    for name in names:
+        if name == "none":
+            continue
+        fields.update(VARY_GROUPS.get(name, (name,)))
+    return fields
+
 
 def _read_payload(path: Path) -> Any:
     if path.suffix == ".xz":
@@ -102,6 +135,15 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="name for the rig in the suite name and header (default: its scenario index)",
     )
+    parser.add_argument(
+        "--vary",
+        default=",".join(DEFAULT_VARY),
+        help=(
+            "comma-separated groups or field names inside the randomization block that keep "
+            f"their own per-scenario draw. Groups: {', '.join(VARY_GROUPS)}. "
+            f"Pass 'none' to freeze the block whole (default: {','.join(DEFAULT_VARY)})"
+        ),
+    )
     parser.add_argument("--output", type=Path, required=True, help="output manifest path")
     parser.add_argument("--suite", default=None, help="suite name (default: derived from the source)")
     parser.add_argument("--scenarios-per-file", type=int, default=None)
@@ -129,18 +171,32 @@ def main() -> None:
     rig = {field: copy.deepcopy(source[field]) for field in RIG_FIELDS}
     label = args.label or f"scenario{args.from_scenario:03d}"
 
+    varied = resolve_vary([name.strip() for name in args.vary.split(",") if name.strip()])
+    randomization = rig["domain_randomization_sample"]
+    # A nominal rig carries no randomization block, so there is nothing to vary
+    # within it and naming fields is not an error there.
+    randomized = randomization.get("enabled") is not False
+    unknown = varied - set(randomization)
+    if randomized and unknown:
+        raise SystemExit(f"--vary names fields the randomization block does not have: {sorted(unknown)}")
+
     frozen = []
     for scenario in scenarios:
         scene = copy.deepcopy(scenario)
         for field in RIG_FIELDS:
             scene[field] = copy.deepcopy(rig[field])
+        own = scenario.get("domain_randomization_sample") or {}
+        if randomized:
+            for name in varied:
+                if name in own:
+                    scene["domain_randomization_sample"][name] = copy.deepcopy(own[name])
         frozen.append(scene)
 
     suite = args.suite or f"{header.get('suite', args.manifest.parent.name)}-rig-{label}"
     header["suite"] = suite
     # The rig is the whole point of this suite, so record it where a reader
     # looks rather than making them diff two scenario files to find it.
-    header["frozen_rig"] = {"source": label, **rig}
+    header["frozen_rig"] = {"source": label, "varied_fields": sorted(varied), **rig}
     header["scenarios"] = frozen
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -160,7 +216,10 @@ def main() -> None:
             shard_names.append(name)
         header["scenario_files"] = shard_names
         _write_payload(args.output, header)
-    print(f"{suite}: {len(frozen)} scenarios on one rig from {label} -> {args.output}")
+    print(
+        f"{suite}: {len(frozen)} scenarios on one rig from {label}, "
+        f"varying {len(varied)} field(s) -> {args.output}"
+    )
 
 
 if __name__ == "__main__":

@@ -103,3 +103,44 @@ def test_an_out_of_range_rig_is_refused(tmp_path):
     _write_suite(source, 2)
     with pytest.raises(SystemExit, match="outside"):
         _run([str(source), "--from-scenario", "9", "--output", str(tmp_path / "o.json")])
+
+
+def test_the_light_keeps_moving_while_the_rig_holds_still(tmp_path):
+    """A deployment pins the robot and the room, not the hour of the day."""
+    source = tmp_path / "in.json"
+    payload = {"schema_version": 3, "suite": "suite_v1", "scenarios": []}
+    for index in range(4):
+        scene = _scenario(index, index * 0.5)
+        scene["domain_randomization_sample"] = {
+            "enabled": True,
+            "light_intensity": 0.5 + index,
+            "exposure": 1.0 + index,
+            "overhead_camera_position_m": [index * 0.01, 0.0, 0.0],
+            "table_rgb": [index / 10, 0.2, 0.3],
+        }
+        payload["scenarios"].append(scene)
+    source.write_text(json.dumps(payload))
+
+    out = tmp_path / "out.json"
+    _run([str(source), "--from-scenario", "0", "--output", str(out),
+          "--vary", "lighting,camera-response"])
+    header, scenarios = load_suite(out)
+
+    assert [s["domain_randomization_sample"]["light_intensity"] for s in scenarios] == [0.5, 1.5, 2.5, 3.5]
+    assert [s["domain_randomization_sample"]["exposure"] for s in scenarios] == [1.0, 2.0, 3.0, 4.0]
+    assert {tuple(s["domain_randomization_sample"]["overhead_camera_position_m"]) for s in scenarios} == {(0.0, 0.0, 0.0)}
+    assert {tuple(s["domain_randomization_sample"]["table_rgb"]) for s in scenarios} == {(0.0, 0.2, 0.3)}
+    assert "light_intensity" in header["frozen_rig"]["varied_fields"]
+
+    frozen = tmp_path / "frozen.json"
+    _run([str(source), "--from-scenario", "0", "--output", str(frozen), "--vary", "none"])
+    _, whole = load_suite(frozen)
+    assert {s["domain_randomization_sample"]["light_intensity"] for s in whole} == {0.5}
+
+
+def test_a_misspelled_vary_field_is_refused(tmp_path):
+    source = tmp_path / "in.json"
+    _write_suite(source, 2)
+    with pytest.raises(SystemExit, match="does not have"):
+        _run([str(source), "--from-scenario", "0", "--output", str(tmp_path / "o.json"),
+              "--vary", "lighting,not_a_field"])
