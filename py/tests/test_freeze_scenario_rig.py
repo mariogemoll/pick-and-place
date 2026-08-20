@@ -96,9 +96,11 @@ def test_a_sharded_suite_round_trips(tmp_path):
     _run([str(source), "--from-scenario", "0", "--output", str(out),
           "--scenarios-per-file", "2", "--vary", "none"])
 
-    header, scenarios = load_suite(out)
-    assert len(header["scenario_files"]) == 3
+    # load_suite consumes scenario_files, so check the shards on disk.
+    assert len(list(out.parent.glob("scenarios-*.json.xz"))) == 3
+    _, scenarios = load_suite(out)
     assert len(scenarios) == 5
+    assert [s["scenario_id"] for s in scenarios] == [f"suite-{i:03d}" for i in range(5)]
 
 
 def test_an_out_of_range_rig_is_refused(tmp_path):
