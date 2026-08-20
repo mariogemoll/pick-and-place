@@ -12,22 +12,37 @@ textures, which are not in the repository — see "The simulator needs generated
 AprilTag textures" in `AGENTS.md`. `vast_pap_provision.sh` renders them, so
 rented pods are covered; a fresh local clone is not.
 
-## Paired randomized image-flow evaluation
+## Randomized image-flow evaluation
 
-`vast_flow_image_paired_eval.sh` fetches two completed image-flow arms,
-verifies each training `SHA256SUMS` manifest, scores both on the frozen
-`randomized_selection_200_v1` suite, compares every paired scenario, and
-publishes a checksummed evaluation bundle. It fixes the operating point at
-Euler-10, 8 executed actions, and flow seed 0:
+`vast_flow_image_eval.sh` fetches the completed image-flow arms named in
+`SHIFTS`, verifies each training `SHA256SUMS` manifest, scores them on the
+frozen `randomized_selection_200_v1` suite, and publishes a checksummed
+evaluation bundle. It fixes the operating point at Euler-10, 8 executed
+actions, and flow seed 0:
 
 ```sh
 RUN_PREFIX=flow-image-randomized-maxretry1-224-300k-seed0 \
-  scripts/vast_flow_image_paired_eval.sh
+  scripts/vast_flow_image_eval.sh
 ```
 
-Run it only after `vast_pap_provision.sh` on a verified evaluation pod. The
-two training output prefixes must already contain final `SHA256SUMS` files;
-the script deliberately refuses partial uploads. Results land under
+Naming exactly two arms also compares every paired scenario. A single arm is
+scored on its own, to be read against a bundle another run already published —
+which is the only option when an experiment varies the training data rather
+than a training knob, and so has one arm per dataset:
+
+```sh
+RUN_PREFIX=flow-image-new-scripted-standardcam-dr-224-300k-seed0 \
+  SHIFTS=8 ARTIFACT_NAME=new-scripted-standardcam-dr-1000-224 \
+  scripts/vast_flow_image_eval.sh
+```
+
+Each arm is scored across `SHARDS` concurrent workers (default: one per
+container core, less one) and merged, because scoring is MuJoCo rendering at a
+few percent of the GPU and a serial arm leaves an evaluation pod idle.
+
+Run it only after `vast_pap_provision.sh` on a verified evaluation pod. Every
+training output prefix must already contain a final `SHA256SUMS` file; the
+script deliberately refuses partial uploads. Results land under
 `s3://allyouneed/pick-and-place/evaluations/randomized_selection_200_v1/`.
 
 ## Does the cube's appearance decide whether the policy learns?

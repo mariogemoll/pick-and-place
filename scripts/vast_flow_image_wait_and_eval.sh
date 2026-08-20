@@ -3,15 +3,15 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-# Wait for both final image-flow manifests, then run the paired evaluator on
-# this pod. This is for reusing a completed training pod instead of paying for
-# an idle third machine while its counterpart finishes.
+# Wait for every final image-flow manifest named in SHIFTS, then run the
+# evaluator on this pod. This is for reusing a completed training pod instead of
+# paying for an idle third machine while its counterpart finishes.
 #
 # The controller must replace this pod's training-prefix completion tracker
 # entry with its evaluation-prefix entry before the first training manifest
-# appears. The paired evaluator publishes that latter prefix only after every
-# result file has been hashed, so the controller's normal completion watcher
-# can safely destroy the pod when this script exits successfully.
+# appears. The evaluator publishes that latter prefix only after every result
+# file has been hashed, so the controller's normal completion watcher can safely
+# destroy the pod when this script exits successfully.
 
 set -euo pipefail
 
@@ -24,8 +24,8 @@ eval_ref="${EVAL_REF:-origin/train-randomized-image-flow}"
 bucket_root="s3://allyouneed/pick-and-place"
 
 read -r -a shift_list <<< "$shifts"
-if [ "${#shift_list[@]}" -ne 2 ]; then
-  echo "SHIFTS must name exactly two arms; got: $shifts" >&2
+if [ "${#shift_list[@]}" -lt 1 ]; then
+  echo "SHIFTS must name at least one arm; got: $shifts" >&2
   exit 2
 fi
 
@@ -40,7 +40,7 @@ while :; do
   if [ "$ready" -eq 1 ]; then
     break
   fi
-  echo "$(date -u +%FT%TZ) waiting for both final training manifests"
+  echo "$(date -u +%FT%TZ) waiting for every final training manifest"
   sleep "$poll_seconds"
 done
 
@@ -52,4 +52,4 @@ git -C "$source_repo" fetch origin train-randomized-image-flow
 git -C "$source_repo" worktree add --detach "$eval_repo" "$eval_ref"
 
 REPO="$eval_repo" RUN_PREFIX="$run_prefix" SHIFTS="$shifts" \
-  bash "$eval_repo/scripts/vast_flow_image_paired_eval.sh"
+  bash "$eval_repo/scripts/vast_flow_image_eval.sh"
