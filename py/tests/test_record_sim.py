@@ -463,3 +463,41 @@ def test_a_crashed_worker_is_replaced_but_a_drained_one_is_not():
     assert not needs_replacing(drained)
     assert needs_replacing(crashed)
     assert needs_replacing(signalled)
+
+
+def test_recorded_scenes_never_land_on_a_scored_benchmark_scene():
+    """A demonstration must never be a scene some checkpoint is scored on.
+
+    Fine-tuning on a rig and then scoring on that rig's frozen 200 is only
+    honest if the two draw disjoint scenes, and the guarantee is structural
+    rather than a choice of seed: a manifest seeds each scene with the scalar
+    ``seed_base + index``, the recorder with the entropy sequence ``[seed,
+    index]``, and no ``SeedSequence`` maps the two onto one stream. Checked at
+    the manifests' own seed bases, which is the case a coincidence would need.
+    """
+    from pick_and_place.policies.policy_evaluation import ScenarioManifest
+    from pick_and_place.scripted.scenario_sampling import sample_scene
+
+    repository_root = Path(__file__).resolve().parents[2]
+    manifest = ScenarioManifest.load(
+        repository_root / "config/evaluation/randomized_selection_200_v1/manifest.json"
+    )
+
+    def place(source, target) -> tuple[float, ...]:
+        return tuple(round(value, 9) for value in (*source[:2], *target[:2]))
+
+    scored = {
+        place(scenario.source_position_m, scenario.target_position_m)
+        for scenario in manifest.scenarios
+    }
+    assert len(scored) == 200
+
+    for seed in (1701, 2701, 20260821):
+        recorded = {
+            place(
+                (scene.source.x, scene.source.y),
+                (scene.target.x, scene.target.y),
+            )
+            for scene in (sample_scene(episode_rng(seed, index)) for index in range(2000))
+        }
+        assert not (recorded & scored), seed

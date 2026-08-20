@@ -26,7 +26,11 @@ the entire reason the knob exists.
 
 from __future__ import annotations
 
+import dataclasses
+import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
@@ -83,6 +87,51 @@ class PhysicsDraw:
             and all(value == 1.0 for value in self.joint_time_constant_scale.values())
             and all(value == 0.0 for value in self.extra_joint_friction.values())
         )
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, object], *, context: str) -> "PhysicsDraw":
+        """Rebuild a draw from a serialized ``physics_sample`` block.
+
+        The block is this dataclass flattened, so the round trip has to stay
+        exact: a field the payload omits would silently become nominal, which
+        reads as "this arm is the model's arm" rather than as the corrupt file
+        it is. The bounds are checked here too, because a scale that has gone
+        negative or zero compiles into a model that is quietly unphysical rather
+        than one that fails.
+        """
+        expected = {field.name for field in dataclasses.fields(cls)}
+        if set(payload) != expected:
+            raise ValueError(
+                f"{context} has invalid physics fields; "
+                f"missing={sorted(expected - set(payload))}, "
+                f"unknown={sorted(set(payload) - expected)}"
+            )
+        joint_fields = ("joint_gain_scale", "joint_time_constant_scale", "extra_joint_friction")
+        values: dict[str, Any] = dict(payload)
+        for name in joint_fields:
+            raw = values[name]
+            if not isinstance(raw, Mapping):
+                raise ValueError(f"{name} must be a JSON object")
+            unknown_joints = set(raw) - set(JOINT_NAMES)
+            if unknown_joints:
+                raise ValueError(f"{name} contains unknown joints: {sorted(unknown_joints)}")
+            values[name] = {str(joint): float(value) for joint, value in raw.items()}
+        scalars = ("tracking_bias_scale", "mass_scale", "friction_scale", "damping_scale")
+        for name in scalars:
+            values[name] = float(values[name])
+        numeric = [value for name in joint_fields for value in values[name].values()]
+        numeric += [values[name] for name in scalars]
+        if not all(math.isfinite(value) for value in numeric):
+            raise ValueError("physics sample must contain only finite numbers")
+        if any(value <= 0.0 for value in values["joint_gain_scale"].values()):
+            raise ValueError("joint_gain_scale values must be positive")
+        if any(value <= 0.0 for value in values["joint_time_constant_scale"].values()):
+            raise ValueError("joint_time_constant_scale values must be positive")
+        if any(value < 0.0 for value in values["extra_joint_friction"].values()):
+            raise ValueError("extra_joint_friction values must be nonnegative")
+        if any(values[name] <= 0.0 for name in ("mass_scale", "friction_scale", "damping_scale")):
+            raise ValueError("mass, friction, and damping scales must be positive")
+        return cls(**values)
 
     def as_metadata(self) -> dict[str, float]:
         """Flatten for an episode row, so a dataset can be split by what it ran under."""

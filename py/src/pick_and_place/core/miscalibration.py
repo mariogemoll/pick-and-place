@@ -29,11 +29,13 @@ against raw, uncalibrated servos.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 
 import numpy as np
 
 from pick_and_place.core.geometry import CubePose
+from pick_and_place.spec.robot import ARM_JOINT_NAMES
 
 # Fitted arm joints. wrist_roll is not observable by the hand-eye fit (it spins
 # the camera about its own axis), so it carries no measured spread.
@@ -278,3 +280,79 @@ class MiscalibrationModel:
                 float(rng.normal(0.0, self.target_belief_sigma_xy_m)),
             ),
         )
+
+
+def _finite_sequence(value: object, length: int, name: str) -> tuple[float, ...]:
+    if not isinstance(value, (list, tuple)) or len(value) != length:
+        raise ValueError(f"{name} must contain {length} numbers")
+    result = tuple(float(item) for item in value)
+    if not all(math.isfinite(item) for item in result):
+        raise ValueError(f"{name} must contain only finite numbers")
+    return result
+
+
+def miscalibration_from_payload(
+    payload: Mapping[str, object],
+    *,
+    context: str,
+    jitter_rng: np.random.Generator | None = None,
+) -> MiscalibrationDraw:
+    """Rebuild a draw from the ``miscalibration_sample`` block of a scenario or rig.
+
+    ``jitter_rng`` replaces the stream the payload names. The recorded seed is
+    the realization one session happened to wander through, which is what a
+    frozen scenario wants -- every policy scored on it meets the same wander. A
+    *recording* wants the opposite: reusing one realization across a dataset
+    puts the same curve under every episode, and a policy can learn the curve
+    instead of learning to correct for wander. So a caller producing many
+    episodes from one rig passes its own stream and keeps only the shape,
+    ``sigma_deg`` and ``tau_s``, which is what belongs to the arm.
+    """
+    expected = {"joint_offsets_deg", "pan_jitter", "cube_belief_error", "target_belief_error"}
+    if set(payload) != expected:
+        raise ValueError(
+            f"{context} has invalid miscalibration fields; "
+            f"missing={sorted(expected - set(payload))}, "
+            f"unknown={sorted(set(payload) - expected)}"
+        )
+    raw_offsets = payload["joint_offsets_deg"]
+    if not isinstance(raw_offsets, dict):
+        raise ValueError("joint_offsets_deg must be a JSON object")
+    unknown_joints = set(raw_offsets) - set(ARM_JOINT_NAMES)
+    if unknown_joints:
+        raise ValueError(f"joint_offsets_deg contains unknown joints: {sorted(unknown_joints)}")
+    joint_offsets = {str(name): float(value) for name, value in raw_offsets.items()}
+    if not all(math.isfinite(value) for value in joint_offsets.values()):
+        raise ValueError("joint_offsets_deg must contain only finite numbers")
+
+    raw_jitter = payload["pan_jitter"]
+    pan_jitter = None
+    if raw_jitter is not None:
+        if not isinstance(raw_jitter, dict) or set(raw_jitter) != {
+            "sigma_deg",
+            "tau_s",
+            "seed",
+        }:
+            raise ValueError("pan_jitter must be null or contain sigma_deg, tau_s, and seed")
+        sigma_deg = float(raw_jitter["sigma_deg"])
+        tau_s = float(raw_jitter["tau_s"])
+        if not math.isfinite(sigma_deg) or sigma_deg < 0.0:
+            raise ValueError("pan_jitter sigma_deg must be a nonnegative finite number")
+        if not math.isfinite(tau_s) or tau_s <= 0.0:
+            raise ValueError("pan_jitter tau_s must be a positive finite number")
+        if isinstance(raw_jitter["seed"], bool):
+            raise ValueError("pan_jitter seed must be an integer")
+        seed = int(raw_jitter["seed"])
+        if seed != raw_jitter["seed"]:
+            raise ValueError("pan_jitter seed must be an integer")
+        rng = jitter_rng if jitter_rng is not None else np.random.default_rng(seed)
+        pan_jitter = SlowJitter(sigma_deg, tau_s, rng)
+
+    return MiscalibrationDraw(
+        base_offsets_deg=joint_offsets,
+        pan_jitter=pan_jitter,
+        cube_belief_error=_finite_sequence(payload["cube_belief_error"], 4, "cube_belief_error"),
+        target_belief_error=_finite_sequence(
+            payload["target_belief_error"], 2, "target_belief_error"
+        ),
+    )
