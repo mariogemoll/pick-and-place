@@ -186,3 +186,57 @@ def test_export_rejects_policy_rate_that_does_not_divide_source_fps(tmp_path):
 
     with pytest.raises(ValueError, match="not an integer multiple"):
         export_diffusion_policy_dataset(source, tmp_path / "output", policy_hz=11)
+
+
+def test_supplied_bounds_are_used_instead_of_refitting():
+    """Continuing training on a fresh export must not rescale the weights' world.
+
+    A checkpoint learned what a normalized unit means under the bounds its own
+    export fitted. Re-fitting on the fine-tune data moves the input and action
+    scales, so what should measure adaptation partly measures recovery from a
+    rescaling.
+    """
+    from pick_and_place.data.diffusion_policy_dataset import normalize_min_max
+
+    values = np.array([[0.0, -1.0], [1.0, 1.0]], dtype=np.float32)
+    fitted, low, high = normalize_min_max(values)
+    np.testing.assert_allclose(low, [0.0, -1.0])
+    np.testing.assert_allclose(high, [1.0, 1.0])
+    np.testing.assert_allclose(fitted, [[-1.0, -1.0], [1.0, 1.0]], atol=1e-5)
+
+    wider = (np.array([-1.0, -2.0], np.float32), np.array([3.0, 2.0], np.float32))
+    reused, low, high = normalize_min_max(values, wider)
+    np.testing.assert_allclose(low, wider[0])
+    np.testing.assert_allclose(high, wider[1])
+    # Same data, someone else's scale: no longer spanning [-1, 1].
+    np.testing.assert_allclose(reused, [[-0.5, -0.5], [0.0, 0.5]], atol=1e-5)
+
+
+def test_supplied_bounds_must_match_the_column_count():
+    from pick_and_place.data.diffusion_policy_dataset import normalize_min_max
+
+    values = np.zeros((4, 6), dtype=np.float32)
+    with pytest.raises(ValueError, match="supplied bounds have shape"):
+        normalize_min_max(values, (np.zeros(3, np.float32), np.ones(3, np.float32)))
+
+
+def test_reusing_bounds_across_action_encodings_is_refused(tmp_path):
+    """Absolute and delta bounds describe different quantities."""
+    from pick_and_place.data.diffusion_policy_dataset import (
+        ACTION_ENCODING_KEY,
+        ActionEncoding,
+        _supplied_bounds,
+    )
+
+    path = tmp_path / "normalization.npz"
+    np.savez(
+        path,
+        obs_min=np.zeros(6, np.float32),
+        obs_max=np.ones(6, np.float32),
+        action_min=np.zeros(6, np.float32),
+        action_max=np.ones(6, np.float32),
+        **{ACTION_ENCODING_KEY: ActionEncoding.DELTA.value},
+    )
+    with pytest.raises(ValueError, match="different quantity"):
+        _supplied_bounds(path, ActionEncoding.ABSOLUTE)
+    assert _supplied_bounds(path, ActionEncoding.DELTA) is not None
