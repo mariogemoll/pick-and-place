@@ -52,3 +52,21 @@ def test_creates_the_directory_it_is_handed(tmp_path):
 def test_refuses_frames_that_are_not_a_matrix(tmp_path):
     with pytest.raises(ValueError, match="nframes, nq"):
         write_rollout(tmp_path / "e.bin", np.zeros(13, dtype=np.float32), 10.0, (0.0, 0.0))
+
+
+def test_recorder_directories_do_not_look_like_a_previous_run(tmp_path):
+    """A run writes its videos and rollouts before its results, not after."""
+    from pick_and_place.policies.policy_evaluation import write_evaluation_artifacts
+
+    output = tmp_path / "run"
+    (output / "videos").mkdir(parents=True)
+    (output / "rollouts").mkdir(parents=True)
+    run = {"schema_version": 1}
+
+    summary = write_evaluation_artifacts(output, run, [])
+    assert (output / "run.json").exists()
+    assert summary is not None
+
+    (output / "leftover.json").write_text("{}\n")
+    with pytest.raises(FileExistsError, match="leftover.json"):
+        write_evaluation_artifacts(output, run, [])
