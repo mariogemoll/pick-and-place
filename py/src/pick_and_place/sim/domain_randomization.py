@@ -29,7 +29,7 @@ import dataclasses
 import json
 import math
 import warnings
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -48,7 +48,12 @@ from pick_and_place.sim.camera_pose_envelope import (
 )
 from pick_and_place.core.appearance import MATERIAL_FAMILIES, AppearanceDraw
 from pick_and_place.core.geometry import CubePose
-from pick_and_place.core.miscalibration import MiscalibrationDraw, MiscalibrationModel
+from pick_and_place.core.miscalibration import (
+    DEFAULT_JOINT_OFFSET_SIGMA_DEG,
+    FITTED_JOINT_NAMES,
+    MiscalibrationDraw,
+    MiscalibrationModel,
+)
 
 WRIST_CAMERA = "wrist_camera"
 
@@ -90,6 +95,12 @@ _SCALAR_FIELDS = {
     "colorful_appearance_probability",
 }
 _REQUIRED = {"name", "cube_orientations", "appearance_blob_count"} | _RANGE_FIELDS | _SCALAR_FIELDS
+
+#: Presets may override the spread of the per-episode joint-zero offsets. The
+#: default is the measured day-to-day drift of the session calibration, which is
+#: what a deployment actually meets; widening it deliberately trains against
+#: worse rigs than the residual produces, to buy robustness on its tails.
+_OPTIONAL = {"joint_offset_sigma_deg"}
 
 
 def domain_seed(root_seed: int | None, episode_index: int) -> int:
@@ -135,18 +146,44 @@ def _int_range(value: Any, name: str) -> tuple[int, int]:
     return int(low), int(high)
 
 
+def _joint_offset_sigma(value: Any) -> dict[str, float]:
+    """Per-joint standard deviation of the episode's joint-zero offsets.
+
+    Omitted means the measured day-to-day drift. Naming a joint overrides only
+    that joint, and the joints are the ones the hand-eye fit can resolve --
+    wrist_roll spins the camera about its own axis and carries no measured
+    spread, so it is not among them.
+    """
+    sigma = dict(DEFAULT_JOINT_OFFSET_SIGMA_DEG)
+    if value is None:
+        return sigma
+    if not isinstance(value, dict):
+        raise ValueError("joint_offset_sigma_deg must be a JSON object")
+    unknown = set(value) - set(FITTED_JOINT_NAMES)
+    if unknown:
+        raise ValueError(f"joint_offset_sigma_deg names unfitted joints: {sorted(unknown)}")
+    for name, entry in value.items():
+        if not isinstance(entry, (int, float)) or isinstance(entry, bool) or entry < 0.0:
+            raise ValueError(f"joint_offset_sigma_deg[{name}] must be a nonnegative number")
+        sigma[name] = float(entry)
+    return sigma
+
+
 @dataclass(frozen=True)
 class DomainRandomizationPreset:
     name: str
     ranges: dict[str, tuple[float, float]]
     scalars: dict[str, float]
     appearance_blob_count: tuple[int, int]
+    joint_offset_sigma_deg: dict[str, float] = field(
+        default_factory=lambda: dict(DEFAULT_JOINT_OFFSET_SIGMA_DEG)
+    )
 
     @classmethod
     def load(cls, path: Path) -> "DomainRandomizationPreset":
         payload = json.loads(path.read_text())
-        if not isinstance(payload, dict) or set(payload) != _REQUIRED:
-            unknown = set(payload) - _REQUIRED if isinstance(payload, dict) else set()
+        if not isinstance(payload, dict) or set(payload) - _OPTIONAL != _REQUIRED:
+            unknown = set(payload) - _REQUIRED - _OPTIONAL if isinstance(payload, dict) else set()
             missing = _REQUIRED - set(payload) if isinstance(payload, dict) else _REQUIRED
             raise ValueError(
                 f"invalid domain-randomization preset; missing={sorted(missing)}, "
@@ -169,6 +206,7 @@ class DomainRandomizationPreset:
             appearance_blob_count=_int_range(
                 payload["appearance_blob_count"], "appearance_blob_count"
             ),
+            joint_offset_sigma_deg=_joint_offset_sigma(payload.get("joint_offset_sigma_deg")),
         )
 
     def sample(self, episode_seed: int) -> "DomainSample":
@@ -258,7 +296,9 @@ class DomainRandomizationPreset:
             ),
             noise_sigma=draw("noise_sigma"),
             blur_sigma=draw("blur_sigma"),
-            miscalibration=MiscalibrationModel().sample(rng),
+            miscalibration=MiscalibrationModel(
+                joint_offset_sigma_deg=self.joint_offset_sigma_deg
+            ).sample(rng),
         )
 
 
