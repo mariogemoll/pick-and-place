@@ -533,7 +533,10 @@ def write_evaluation_artifacts(
     """Create a new self-contained evaluation result directory."""
     output_path = Path(output_dir)
     if output_path.exists():
-        unexpected = {path.name for path in output_path.iterdir()} - {"videos"}
+        # The recorders write into the run directory while the run is still
+        # going, so their directories are the one thing that may already be
+        # there; anything else means a previous run's results.
+        unexpected = {path.name for path in output_path.iterdir()} - {"videos", "rollouts"}
         if unexpected:
             raise FileExistsError(f"evaluation output already contains {sorted(unexpected)}")
     else:

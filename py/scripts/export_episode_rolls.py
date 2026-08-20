@@ -25,16 +25,8 @@ from the previous episode's final robot pose while still sampling a fresh cube
 source and target. Add ``--closed-loop`` to make the last episode's robot end
 pose return to the first sampled robot start.
 
-Binary layout ("PPRL" format, little-endian)::
-
-    magic    4 bytes   b"PPRL"
-    version  u32       1
-    fps      u32       sampling rate the frames were recorded at
-    nframes  u32       number of frames
-    nq       u32       floats per frame (6 joints + 7 cube pose = 13)
-    target_x f32       drop target position on the floor (meters)
-    target_y f32
-    qpos     f32[nframes * nq]
+The format is ``PPRL``, written by
+``pick_and_place.runtime.replay_rollout`` and documented there.
 
 Usage::
 
@@ -50,7 +42,6 @@ from __future__ import annotations
 import argparse
 import math
 import os
-import struct
 import tempfile
 from pathlib import Path
 
@@ -64,6 +55,7 @@ from pick_and_place.scripted.episode_sampling import (
     sample_target,
 )
 from pick_and_place.runtime.episodes import EpisodeSamplingError, prepare_episode
+from pick_and_place.runtime.replay_rollout import write_rollout
 from pick_and_place.sim.collisions import is_unexpected, scan_contacts
 from pick_and_place.spec.robot import ARM_JOINT_NAMES
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
@@ -81,8 +73,6 @@ from pick_and_place.data.dataset_subset import (
     SUCCESS_Z_TOLERANCE_M,
 )
 
-MAGIC = b"PPRL"
-VERSION = 1
 DEFAULT_FPS = 60.0
 DEFAULT_END_SETTLE_SECONDS = 1.0
 
@@ -265,13 +255,7 @@ def run_and_sample(
 
 
 def write_episode(qpos: np.ndarray, fps: float, target: CubePose, out_path: Path) -> None:
-    nframes, nq = qpos.shape
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("wb") as file:
-        file.write(MAGIC)
-        file.write(struct.pack("<IIII", VERSION, round(fps), nframes, nq))
-        file.write(struct.pack("<ff", target.x, target.y))
-        file.write(qpos.tobytes())
+    write_rollout(out_path, qpos, fps, (target.x, target.y))
 
 
 def _allowed_mask(predicate, resolution: int = 320) -> tuple[np.ndarray, list[float]]:

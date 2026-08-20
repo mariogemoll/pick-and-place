@@ -40,6 +40,7 @@ from pick_and_place.runtime.policy_sim import (
 )
 from pick_and_place.perception.overhead_localization import OverheadLocalizer
 from pick_and_place.plant.wrist_localizer import AsyncWristLocalization, WristCameraLocalizer
+from pick_and_place.runtime.replay_rollout import write_rollout
 from pick_and_place.plant.geometric_overhead import SimGeometricOverheadLocalizer
 from pick_and_place.rollout.scripted import scripted_policy
 from pick_and_place.scripted.policy import ScriptedPolicy
@@ -104,6 +105,14 @@ def _parse_args() -> argparse.Namespace:
         help="save the exact overhead and wrist policy frames for every scenario",
     )
     parser.add_argument(
+        "--save-rollouts",
+        action="store_true",
+        help=(
+            "save every scenario's per-frame qpos as a PPRL file the browser episode "
+            "viewer replays; a few kilobytes an episode against megabytes of video"
+        ),
+    )
+    parser.add_argument(
         "--scripted-perception",
         choices=("geometric", "detector"),
         default="geometric",
@@ -164,6 +173,32 @@ class _EpisodeVideoWriters:
     def close(self) -> None:
         self._overhead.close()
         self._wrist.close()
+
+
+class _EpisodeRolloutWriter:
+    """Collect one episode's replay state, then write it as a PPRL file.
+
+    The frames come from the environment rather than the observation the
+    callback carries: an image is what the policy saw, and this is where the
+    scene actually was.
+    """
+
+    def __init__(self, directory: Path, scenario_id: str, env, target_xy, fps: float) -> None:
+        self._path = directory / f"{scenario_id}.bin"
+        self._env = env
+        self._target_xy = target_xy
+        self._fps = fps
+        self._frames: list[np.ndarray] = []
+
+    def append(self, step: int, observation) -> None:
+        del step, observation
+        self._frames.append(self._env.replay_qpos())
+
+    def close(self) -> None:
+        if not self._frames:
+            return
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        write_rollout(self._path, np.stack(self._frames), self._fps, self._target_xy)
 
 
 def _sha256_of_file(path: Path) -> str:
@@ -497,23 +532,36 @@ def main() -> None:
     results = []
     try:
         for index, scenario in enumerate(scenarios, start=1):
-            writers = None
+            writers = []
             if args.save_videos:
-                writers = _EpisodeVideoWriters(
+                writers.append(_EpisodeVideoWriters(
                     args.output / "videos",
                     scenario.scenario_id,
                     scenario.control_hz,
-                )
+                ))
+            if args.save_rollouts:
+                writers.append(_EpisodeRolloutWriter(
+                    args.output / "rollouts",
+                    scenario.scenario_id,
+                    env,
+                    scenario.target_position_m[:2],
+                    scenario.control_hz,
+                ))
+
+            def record(step: int, observation, _writers=writers) -> None:
+                for writer in _writers:
+                    writer.append(step, observation)
+
             try:
                 result = evaluate_policy_episode(
                     env,
                     controller,
                     scenario,
-                    observation_callback=writers.append if writers is not None else None,
+                    observation_callback=record if writers else None,
                 )
             finally:
-                if writers is not None:
-                    writers.close()
+                for writer in writers:
+                    writer.close()
             results.append(result)
             status = "SUCCESS" if result.success else "failure"
             failure_detail = (
@@ -588,6 +636,7 @@ def main() -> None:
             )
         ),
         "videos_saved": args.save_videos,
+        "rollouts_saved": args.save_rollouts,
     }
     summary = write_evaluation_artifacts(args.output, run, results)
     print(
