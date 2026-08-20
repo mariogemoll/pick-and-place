@@ -121,13 +121,35 @@ def _load_low_dimensional_arrays(
     return states, actions
 
 
-def normalize_min_max(values: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Normalize columns to the policy's ``[-1, 1]`` convention."""
+def normalize_min_max(
+    values: np.ndarray,
+    bounds: tuple[np.ndarray, np.ndarray] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Normalize columns to the policy's ``[-1, 1]`` convention.
+
+    ``bounds`` squashes into a scale someone else already fixed instead of the
+    one this data implies. Fitting fresh bounds is right for a dataset a policy
+    will be trained on from scratch, and wrong for one that continues training a
+    checkpoint: the weights learned what a normalized unit means under the
+    original bounds, so re-fitting moves the input and action scales out from
+    under them, and what should measure adaptation partly measures recovery from
+    a rescaling.
+    """
     values = np.asarray(values, dtype=np.float32)
     if values.ndim != 2 or values.shape[0] == 0:
         raise ValueError(f"expected a non-empty rank-2 array, got {values.shape}")
-    minimum = values.min(axis=0)
-    maximum = values.max(axis=0)
+    if bounds is None:
+        minimum = values.min(axis=0)
+        maximum = values.max(axis=0)
+    else:
+        minimum, maximum = (np.asarray(bound, dtype=np.float32) for bound in bounds)
+        if minimum.shape != values.shape[1:] or maximum.shape != values.shape[1:]:
+            raise ValueError(
+                f"supplied bounds have shape {minimum.shape}/{maximum.shape}, "
+                f"but the data has {values.shape[1]} columns"
+            )
+        if np.any(maximum < minimum):
+            raise ValueError("supplied bounds are inverted")
     normalized = 2.0 * (values - minimum) / (maximum - minimum + 1e-6) - 1.0
     return normalized.astype(np.float32), minimum, maximum
 
@@ -449,6 +471,36 @@ def _source_fingerprint(dataset_root: Path, paths: set[Path]) -> tuple[str, dict
     return digest.hexdigest(), file_hashes
 
 
+def _supplied_bounds(
+    bounds_from: Path | None,
+    action_encoding: ActionEncoding,
+) -> dict[str, np.ndarray] | None:
+    """Read the normalization bounds of an earlier export, to reuse them here.
+
+    Refuses an export whose action encoding differs: absolute and delta bounds
+    describe different quantities, so reusing one for the other would squash
+    joint commands into a scale fitted to one tick's motion.
+    """
+    if bounds_from is None:
+        return None
+    path = Path(bounds_from)
+    if path.is_dir():
+        path = path / "normalization.npz"
+    with np.load(path, allow_pickle=False) as archive:
+        names = ("obs_min", "obs_max", "action_min", "action_max")
+        missing = [name for name in names if name not in archive]
+        if missing:
+            raise ValueError(f"{path} is missing normalization bounds: {missing}")
+        earlier = archive[ACTION_ENCODING_KEY] if ACTION_ENCODING_KEY in archive else None
+        if earlier is not None and str(earlier) != action_encoding.value:
+            raise ValueError(
+                f"{path} was exported with action encoding {str(earlier)!r}, "
+                f"but this export uses {action_encoding.value!r}; its action bounds "
+                "describe a different quantity"
+            )
+        return {name: np.asarray(archive[name], dtype=np.float32) for name in names}
+
+
 def export_diffusion_policy_dataset(
     dataset_root: Path,
     output_dir: Path,
@@ -458,6 +510,7 @@ def export_diffusion_policy_dataset(
     max_episodes: int | None = None,
     workers: int = 1,
     action_encoding: ActionEncoding = ActionEncoding.ABSOLUTE,
+    bounds_from: Path | None = None,
 ) -> dict[str, Any]:
     """Export Diffusion Policy arrays without modifying the LeRobot source.
 
@@ -532,9 +585,13 @@ def export_diffusion_policy_dataset(
         raise ValueError("decimated index count does not match trajectory lengths")
     states_raw = states_raw[keep]
     actions_raw = actions_raw[keep]
-    states, obs_min, obs_max = normalize_min_max(states_raw)
+    supplied = _supplied_bounds(bounds_from, action_encoding)
+    states, obs_min, obs_max = normalize_min_max(
+        states_raw, None if supplied is None else (supplied["obs_min"], supplied["obs_max"])
+    )
     actions, action_min, action_max = normalize_min_max(
-        encode_actions(action_encoding, actions_raw, states_raw)
+        encode_actions(action_encoding, actions_raw, states_raw),
+        None if supplied is None else (supplied["action_min"], supplied["action_max"]),
     )
 
     building_dir.mkdir(parents=True)
