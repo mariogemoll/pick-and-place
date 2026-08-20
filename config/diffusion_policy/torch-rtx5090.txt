@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Mario Gemoll
+# SPDX-License-Identifier: 0BSD
+
+# Keep the compiled PyTorch ecosystem aligned on RTX 5090 hosts. Resolution can
+# otherwise combine torchvision or torchcodec wheels built against a different
+# torch ABI, which only fails once recording imports lerobot's video helpers.
+torch==2.13.0
+torchvision==0.28.0
+torchcodec==0.15.0
+av==15.1.0
+matplotlib==3.10.5
+wandb==0.24.1
