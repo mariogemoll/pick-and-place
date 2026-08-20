@@ -59,6 +59,20 @@ def main() -> None:
             "from the joints measured on the same control tick (default: absolute)"
         ),
     )
+    parser.add_argument(
+        "--bounds-from",
+        type=Path,
+        default=None,
+        help=(
+            "reuse the state and action min-max bounds of an earlier export "
+            "(a directory, or a normalization.npz) instead of fitting them to this "
+            "data. Required when the export will continue training an existing "
+            "checkpoint: the weights learned what a normalized unit means under "
+            "the original bounds, so refitting rescales the inputs and actions out "
+            "from under them and a fine-tune partly measures recovery from that "
+            "rescaling rather than what it set out to measure"
+        ),
+    )
     args = parser.parse_args()
 
     manifest = export_diffusion_policy_dataset(
@@ -69,6 +83,7 @@ def main() -> None:
         max_episodes=args.max_episodes,
         workers=args.workers,
         action_encoding=parse_action_encoding(args.action_encoding),
+        bounds_from=args.bounds_from,
     )
     print(json.dumps(manifest, indent=2, sort_keys=True))
 
