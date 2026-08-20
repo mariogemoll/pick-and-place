@@ -64,8 +64,10 @@ def test_every_scene_gets_one_rig_and_keeps_its_geometry(tmp_path):
         assert before["source_position_m"] == after["source_position_m"]
         assert before["target_position_m"] == after["target_position_m"]
         assert before["scenario_id"] == after["scenario_id"]
-    assert header["frozen_rig"]["source"] == "scenario002"
     assert header["suite"].endswith("-rig-scenario002")
+    rig = json.loads((out.with_name(f"{out.stem}.frozen_rig.json")).read_text())
+    assert rig["source"] == "scenario002"
+    assert rig["miscalibration_sample"]["joint_offsets_deg"]["shoulder_pan"] == 1.0
 
 
 def test_the_rig_may_come_from_another_suite(tmp_path):
@@ -129,13 +131,14 @@ def test_the_light_keeps_moving_while_the_rig_holds_still(tmp_path):
     out = tmp_path / "out.json"
     _run([str(source), "--from-scenario", "0", "--output", str(out),
           "--vary", "lighting,camera-response"])
-    header, scenarios = load_suite(out)
+    _, scenarios = load_suite(out)
 
     assert [s["domain_randomization_sample"]["light_intensity"] for s in scenarios] == [0.5, 1.5, 2.5, 3.5]
     assert [s["domain_randomization_sample"]["exposure"] for s in scenarios] == [1.0, 2.0, 3.0, 4.0]
     assert {tuple(s["domain_randomization_sample"]["overhead_camera_position_m"]) for s in scenarios} == {(0.0, 0.0, 0.0)}
     assert {tuple(s["domain_randomization_sample"]["table_rgb"]) for s in scenarios} == {(0.0, 0.2, 0.3)}
-    assert "light_intensity" in header["frozen_rig"]["varied_fields"]
+    rig = json.loads((out.with_name(f"{out.stem}.frozen_rig.json")).read_text())
+    assert "light_intensity" in rig["varied_fields"]
 
     frozen = tmp_path / "frozen.json"
     _run([str(source), "--from-scenario", "0", "--output", str(frozen), "--vary", "none"])

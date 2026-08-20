@@ -205,12 +205,18 @@ def main() -> None:
 
     suite = args.suite or f"{header.get('suite', args.manifest.parent.name)}-rig-{label}"
     header["suite"] = suite
-    # The rig is the whole point of this suite, so record it where a reader
-    # looks rather than making them diff two scenario files to find it.
-    header["frozen_rig"] = {"source": label, "varied_fields": sorted(varied), **rig}
     header["scenarios"] = frozen
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    # The rig is the whole point of this suite, so record it beside the manifest
+    # rather than making a reader diff two scenario files to find it. It goes in
+    # a sidecar because ScenarioManifest.load accepts an exact set of header
+    # keys, and loosening that to carry documentation would weaken a check that
+    # exists to catch malformed manifests.
+    _write_payload(
+        args.output.with_name(f"{args.output.stem}.frozen_rig.json"),
+        {"suite": suite, "source": label, "varied_fields": sorted(varied), **rig},
+    )
     if args.scenarios_per_file is None:
         _write_payload(args.output, header)
     else:
