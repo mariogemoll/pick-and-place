@@ -334,6 +334,55 @@ class DomainSample:
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
+#: Fields of a serialized ``DomainSample`` that are JSON arrays and have to come
+#: back as tuples, since the dataclass is compared and copied by value.
+_SAMPLE_TUPLE_FIELDS = (
+    "key_light_position",
+    "key_light_target",
+    "overhead_camera_position_m",
+    "overhead_camera_rotation_deg",
+    "wrist_camera_position_m",
+    "wrist_camera_rotation_deg",
+    "background_rgb",
+    "table_rgb",
+    "white_balance",
+)
+
+
+def domain_sample_fields() -> set[str]:
+    """The names a serialized ``DomainSample`` carries, ``miscalibration`` aside."""
+    return {field.name for field in dataclasses.fields(DomainSample)} - {"miscalibration"}
+
+
+def domain_sample_from_payload(
+    payload: dict[str, Any],
+    miscalibration: MiscalibrationDraw,
+    *,
+    context: str,
+) -> DomainSample:
+    """Rebuild a draw from a serialized ``domain_randomization_sample`` block.
+
+    The block is every ``DomainSample`` field but ``miscalibration``, which is
+    serialized separately because it is the half that had to be applied while
+    the trajectory was generated. ``enabled`` has already been consumed by the
+    caller, which is the only one that can say what a disabled block means.
+    """
+    expected = domain_sample_fields()
+    if set(payload) != expected:
+        raise ValueError(
+            f"{context} has invalid domain sample fields; "
+            f"missing={sorted(expected - set(payload))}, unknown={sorted(set(payload) - expected)}"
+        )
+    payload = dict(payload)
+    payload["material_factors"] = {
+        name: tuple(float(value) for value in factors)
+        for name, factors in payload["material_factors"].items()
+    }
+    for name in _SAMPLE_TUPLE_FIELDS:
+        payload[name] = tuple(float(value) for value in payload[name])
+    return DomainSample(**payload, miscalibration=miscalibration)
+
+
 @dataclass(frozen=True)
 class ProceduralAppearance:
     background_rgb: np.ndarray

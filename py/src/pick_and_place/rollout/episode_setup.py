@@ -47,6 +47,7 @@ from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
 PERTURBATION_SEED_SALT = 0x50455254
 PHYSICS_SEED_SALT = 0x50485953
 OVERHEAD_SEED_SALT = 0x4F565244
+PAN_JITTER_SEED_SALT = 0x50414E4A
 
 
 def episode_rng(root_seed: int | None, global_episode: int) -> np.random.Generator:
@@ -80,6 +81,16 @@ def overhead_rng(root_seed: int | None, global_episode: int) -> np.random.Genera
 def physics_rng(root_seed: int | None, global_episode: int) -> np.random.Generator:
     """The stream deciding which arm episode ``global_episode`` is flown by."""
     return _salted_rng(root_seed, global_episode, PHYSICS_SEED_SALT)
+
+
+def pan_jitter_rng(root_seed: int | None, global_episode: int) -> np.random.Generator:
+    """The stream episode ``global_episode``'s shoulder-pan wander is drawn from.
+
+    Only a frozen rig needs it: a drawn miscalibration already carries a jitter
+    stream of its own, and it is a rig's *recorded* realization that must not be
+    replayed under every episode of a dataset.
+    """
+    return _salted_rng(root_seed, global_episode, PAN_JITTER_SEED_SALT)
 
 
 def sample_grasp_perturbation(

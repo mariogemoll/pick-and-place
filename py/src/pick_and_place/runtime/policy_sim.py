@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
-from dataclasses import asdict, fields, replace
+from dataclasses import asdict, replace
 from typing import Any
 
 import gymnasium as gym
@@ -19,6 +19,7 @@ from pick_and_place.sim.scene import build_scene
 from pick_and_place.sim.domain_randomization import (
     DomainSample,
     WristMountRandomizer,
+    domain_sample_from_payload,
     reload_renderer_textures,
 )
 from pick_and_place.variants.scene import AppearanceRandomizer
@@ -27,7 +28,7 @@ from pick_and_place.spec.robot import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 from pick_and_place.spec.robot import ARM_JOINT_NAMES, GRIPPER_INDEX, JOINT_NAMES
 from pick_and_place.core.joint_frames import real_frame_to_sim, sim_frame_to_real
 from pick_and_place.core.geometry import JAW_CONTACT_POSITION
-from pick_and_place.core.miscalibration import MiscalibrationDraw, SlowJitter
+from pick_and_place.core.miscalibration import MiscalibrationDraw, miscalibration_from_payload
 from pick_and_place.core.physics import PhysicsDraw
 from pick_and_place.sim.physics import PhysicsRandomizer, tracking_bias_offsets
 from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
@@ -118,119 +119,15 @@ def real_action_to_sim_ctrl(action_real: np.ndarray) -> np.ndarray:
 
 
 def _miscalibration_from_scenario(scenario: EvaluationScenario) -> MiscalibrationDraw:
-    payload = scenario.miscalibration_sample
-    expected = {
-        "joint_offsets_deg",
-        "pan_jitter",
-        "cube_belief_error",
-        "target_belief_error",
-    }
-    if set(payload) != expected:
-        raise ValueError(
-            f"scenario {scenario.scenario_id!r} has invalid miscalibration fields; "
-            f"missing={sorted(expected - set(payload))}, "
-            f"unknown={sorted(set(payload) - expected)}"
-        )
-    raw_offsets = payload["joint_offsets_deg"]
-    if not isinstance(raw_offsets, dict):
-        raise ValueError("joint_offsets_deg must be a JSON object")
-    unknown_joints = set(raw_offsets) - set(ARM_JOINT_NAMES)
-    if unknown_joints:
-        raise ValueError(f"joint_offsets_deg contains unknown joints: {sorted(unknown_joints)}")
-    joint_offsets = {str(name): float(value) for name, value in raw_offsets.items()}
-    if not all(math.isfinite(value) for value in joint_offsets.values()):
-        raise ValueError("joint_offsets_deg must contain only finite numbers")
-
-    raw_jitter = payload["pan_jitter"]
-    pan_jitter = None
-    if raw_jitter is not None:
-        if not isinstance(raw_jitter, dict) or set(raw_jitter) != {
-            "sigma_deg",
-            "tau_s",
-            "seed",
-        }:
-            raise ValueError("pan_jitter must be null or contain sigma_deg, tau_s, and seed")
-        sigma_deg = float(raw_jitter["sigma_deg"])
-        tau_s = float(raw_jitter["tau_s"])
-        if not math.isfinite(sigma_deg) or sigma_deg < 0.0:
-            raise ValueError("pan_jitter sigma_deg must be a nonnegative finite number")
-        if not math.isfinite(tau_s) or tau_s <= 0.0:
-            raise ValueError("pan_jitter tau_s must be a positive finite number")
-        if isinstance(raw_jitter["seed"], bool):
-            raise ValueError("pan_jitter seed must be an integer")
-        seed = int(raw_jitter["seed"])
-        if seed != raw_jitter["seed"]:
-            raise ValueError("pan_jitter seed must be an integer")
-        pan_jitter = SlowJitter(sigma_deg, tau_s, np.random.default_rng(seed))
-
-    cube_belief_error = tuple(
-        _finite_sequence(payload["cube_belief_error"], 4, "cube_belief_error")
+    return miscalibration_from_payload(
+        scenario.miscalibration_sample, context=f"scenario {scenario.scenario_id!r}"
     )
-    target_belief_error = tuple(
-        _finite_sequence(payload["target_belief_error"], 2, "target_belief_error")
-    )
-    return MiscalibrationDraw(
-        base_offsets_deg=joint_offsets,
-        pan_jitter=pan_jitter,
-        cube_belief_error=cube_belief_error,
-        target_belief_error=target_belief_error,
-    )
-
-
-def _finite_sequence(value: object, length: int, name: str) -> tuple[float, ...]:
-    if not isinstance(value, (list, tuple)) or len(value) != length:
-        raise ValueError(f"{name} must contain {length} numbers")
-    result = tuple(float(item) for item in value)
-    if not all(math.isfinite(item) for item in result):
-        raise ValueError(f"{name} must contain only finite numbers")
-    return result
 
 
 def _physics_from_scenario(scenario: EvaluationScenario) -> PhysicsDraw:
-    payload = scenario.physics_sample
-    expected = {field.name for field in fields(PhysicsDraw)}
-    if set(payload) != expected:
-        raise ValueError(
-            f"scenario {scenario.scenario_id!r} has invalid physics fields; "
-            f"missing={sorted(expected - set(payload))}, unknown={sorted(set(payload) - expected)}"
-        )
-    joint_fields = (
-        "joint_gain_scale",
-        "joint_time_constant_scale",
-        "extra_joint_friction",
+    return PhysicsDraw.from_payload(
+        scenario.physics_sample, context=f"scenario {scenario.scenario_id!r}"
     )
-    values: dict[str, Any] = dict(payload)
-    for field_name in joint_fields:
-        raw = values[field_name]
-        if not isinstance(raw, dict):
-            raise ValueError(f"{field_name} must be a JSON object")
-        unknown_joints = set(raw) - set(JOINT_NAMES)
-        if unknown_joints:
-            raise ValueError(f"{field_name} contains unknown joints: {sorted(unknown_joints)}")
-        values[field_name] = {str(name): float(value) for name, value in raw.items()}
-    for field_name in (
-        "tracking_bias_scale",
-        "mass_scale",
-        "friction_scale",
-        "damping_scale",
-    ):
-        values[field_name] = float(values[field_name])
-    numeric_values = [
-        value
-        for field_name in joint_fields
-        for value in values[field_name].values()
-    ] + [values[name] for name in ("tracking_bias_scale", "mass_scale", "friction_scale", "damping_scale")]
-    if not all(math.isfinite(value) for value in numeric_values):
-        raise ValueError("physics sample must contain only finite numbers")
-    if any(value <= 0.0 for value in values["joint_gain_scale"].values()):
-        raise ValueError("joint_gain_scale values must be positive")
-    if any(value <= 0.0 for value in values["joint_time_constant_scale"].values()):
-        raise ValueError("joint_time_constant_scale values must be positive")
-    if any(value < 0.0 for value in values["extra_joint_friction"].values()):
-        raise ValueError("extra_joint_friction values must be nonnegative")
-    if any(values[name] <= 0.0 for name in ("mass_scale", "friction_scale", "damping_scale")):
-        raise ValueError("mass, friction, and damping scales must be positive")
-    return PhysicsDraw(**values)
 
 
 def _domain_sample_from_scenario(
@@ -245,29 +142,9 @@ def _domain_sample_from_scenario(
                 f"disabled domain sample for {scenario.scenario_id!r} contains sampled values"
             )
         return None
-    expected = {field.name for field in fields(DomainSample)} - {"miscalibration"}
-    if set(payload) != expected:
-        raise ValueError(
-            f"scenario {scenario.scenario_id!r} has invalid domain sample fields; "
-            f"missing={sorted(expected - set(payload))}, unknown={sorted(set(payload) - expected)}"
-        )
-    payload["material_factors"] = {
-        name: tuple(float(value) for value in factors)
-        for name, factors in payload["material_factors"].items()
-    }
-    for name in (
-        "key_light_position",
-        "key_light_target",
-        "overhead_camera_position_m",
-        "overhead_camera_rotation_deg",
-        "wrist_camera_position_m",
-        "wrist_camera_rotation_deg",
-        "background_rgb",
-        "table_rgb",
-        "white_balance",
-    ):
-        payload[name] = tuple(float(value) for value in payload[name])
-    return DomainSample(**payload, miscalibration=miscalibration)
+    return domain_sample_from_payload(
+        payload, miscalibration, context=f"scenario {scenario.scenario_id!r}"
+    )
 
 
 class PolicySimEnv(gym.Env):

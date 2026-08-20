@@ -57,6 +57,7 @@ from pick_and_place.sim.domain_randomization import (
     generate_procedural_appearance,
     orient_cube,
 )
+from pick_and_place.sim.frozen_rig import FrozenRig
 from pick_and_place.scripted.episode_sampling import sample_cube
 from pick_and_place.core.physics import PhysicsModel
 from pick_and_place.core.robot_dynamics import (
@@ -70,6 +71,7 @@ from pick_and_place.rollout.episode_setup import (
     appearance_seed,
     episode_rng,
     overhead_rng,
+    pan_jitter_rng,
     physics_rng,
     prepare_for_recording,
     sample_grasp_perturbation,
@@ -194,9 +196,17 @@ def run_recording(
         if scene.domain_randomization
         else None
     )
+    frozen_rig = FrozenRig.load(scene.frozen_rig) if scene.frozen_rig is not None else None
+    if frozen_rig is not None and preset is None:
+        raise ValueError(
+            "a frozen rig still needs a domain-randomization preset: it names the "
+            "fields that keep varying rather than carrying an envelope to draw them from"
+        )
     # Appearance is re-applied per episode from that episode's own domain seed,
     # so this initial sample only seeds the textures the scene is built with.
     initial_sample = preset.sample(appearance_seed(seed, 0)) if preset is not None else None
+    if frozen_rig is not None and initial_sample is not None:
+        initial_sample = frozen_rig.session(initial_sample, pan_jitter_rng(seed, 0))
     table_texture = scene.table_texture
     background_panorama = scene.background_panorama
     if preset is not None:
@@ -275,7 +285,12 @@ def run_recording(
         else OverheadCameraModel(0.0, 0.0, 0.0)
     )
     physics_model = PhysicsModel(amount=scene.physics_amount)
-    physics = PhysicsRandomizer(model) if scene.physics_amount else None
+    # A frozen rig always needs the randomizer, whatever the dial says: its arm
+    # is a draw the envelope already made, so there is something to apply even
+    # when this run would not have drawn one.
+    physics = (
+        PhysicsRandomizer(model) if scene.physics_amount or frozen_rig is not None else None
+    )
     fitted_bias = tracking_bias_rad(load_robot_dynamics_config()) if physics else {}
     viewer_cm = mujoco.viewer.launch_passive(model, data) if use_viewer else None
     viewer = viewer_cm.__enter__() if viewer_cm is not None else _MockViewer()
@@ -337,6 +352,8 @@ def run_recording(
             rng = episode_rng(seed, global_episode)
             domain_seed = appearance_seed(seed, global_episode) if preset is not None else None
             sample = preset.sample(domain_seed) if preset is not None else None
+            if frozen_rig is not None and sample is not None:
+                sample = frozen_rig.session(sample, pan_jitter_rng(seed, global_episode))
             draw = (
                 sample.miscalibration
                 if sample is not None
@@ -376,10 +393,18 @@ def run_recording(
             # preflight and preflight runs live physics: vetting a candidate
             # against the nominal arm when a drawn one will fly it is checking a
             # different world than the one that follows.
-            physics_draw = physics_model.sample(physics_rng(seed, global_episode))
+            physics_draw = (
+                frozen_rig.physics
+                if frozen_rig is not None
+                else physics_model.sample(physics_rng(seed, global_episode))
+            )
             if physics is not None:
                 physics.apply(physics_draw)
             if detector_perception is not None:
+                # Not pinned by a frozen rig: the sidecar records where the
+                # overhead camera *is*, which it does pin, but nothing about how
+                # far its solved extrinsics are from that, so there is no rig
+                # value to hold still. Only --sim-perception detector reads it.
                 detector_perception.set_error(
                     overhead_model.sample(overhead_rng(seed, global_episode))
                 )
@@ -678,6 +703,22 @@ def main() -> None:
         default=None,
         help="strict visual domain-randomization preset; includes measured miscalibration",
     )
+    parser.add_argument(
+        "--frozen-rig",
+        type=Path,
+        default=None,
+        help=(
+            "record on one fixed rig: the *.frozen_rig.json sidecar written by "
+            "freeze_scenario_rig.py beside a frozen evaluation suite. Every episode "
+            "then faces the same robot, cameras, room and physics that suite scores "
+            "on, while the light, the camera response, the sensor noise and the "
+            "cube's resting orientation keep varying -- one installation over many "
+            "sessions, rather than a fresh robot per episode. Requires "
+            "--domain-randomization, which supplies the envelope the still-varying "
+            "fields are drawn from, and overrides --physics-randomization, since the "
+            "sidecar already names the arm"
+        ),
+    )
     parser.add_argument("--seed", type=int, default=None, help="RNG seed for pose sampling")
     parser.add_argument(
         "--max-attempts",
@@ -744,6 +785,8 @@ def main() -> None:
         parser.error("--viewer requires --workers 1")
     if args.first_episode is not None and args.first_episode < 0:
         parser.error("--first-episode must not be negative")
+    if args.frozen_rig is not None and args.domain_randomization is None:
+        parser.error("--frozen-rig requires --domain-randomization")
     if (
         args.perturbation_max_source_radius is not None
         and args.perturbation_max_source_radius <= 0.0
@@ -764,6 +807,7 @@ def main() -> None:
         overhead_perception=args.sim_perception,
         physics_amount=args.physics_randomization,
         domain_randomization=args.domain_randomization,
+        frozen_rig=args.frozen_rig,
     )
     try:
         frames = FrameSizes(
@@ -800,6 +844,11 @@ def main() -> None:
         "wrist_servo": args.wrist_servo,
         "physics_randomization": args.physics_randomization,
         "domain_randomization": _configured_file(args.domain_randomization),
+        # Content-affecting in the strongest sense available: it decides which
+        # robot every episode was recorded on, so topping up a rig-99 staging
+        # area with rig-42 episodes has to fail rather than mix two robots into
+        # one dataset.
+        "frozen_rig": _configured_file(args.frozen_rig),
         "max_attempts": args.max_attempts,
         "perturbed_fraction": args.perturbed_fraction,
         "perturbation_magnitude_m": args.perturbation_magnitude,
