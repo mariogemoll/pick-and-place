@@ -19,7 +19,11 @@ dependencies = [
     # after the 3.3B checkpoint has finished loading.
     "lerobot[feetech,peft,pi,smolvla]==0.5.1",
     "matplotlib",
-    "mujoco",
+    # 3.12.0 published as an sdist with no wheels, so an unpinned resolve builds
+    # from source and dies on MUJOCO_PATH. Every measurement in the policy
+    # documents was taken on 3.11.0, which is also the last release with
+    # binaries, so the pin keeps fresh pods working and results comparable.
+    "mujoco>=3.11,<3.12",
     "numpy",
     # lerobot pulls opencv-python-headless<4.14, and both wheels install the same
     # cv2/ directory -- whichever lands last wins. Hold this to the same range so
