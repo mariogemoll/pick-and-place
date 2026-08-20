@@ -49,7 +49,9 @@ def test_every_scene_gets_one_rig_and_keeps_its_geometry(tmp_path):
     source = tmp_path / "in.json"
     _write_suite(source, 4)
     out = tmp_path / "out.json"
-    _run([str(source), "--from-scenario", "2", "--output", str(out)])
+    # --vary none: this covers the freeze itself, and the fixture's light would
+    # otherwise legitimately differ scene to scene under the default.
+    _run([str(source), "--from-scenario", "2", "--output", str(out), "--vary", "none"])
 
     header, scenarios = load_suite(out)
     assert len(scenarios) == 4
@@ -91,7 +93,8 @@ def test_a_sharded_suite_round_trips(tmp_path):
     source = tmp_path / "in.json"
     _write_suite(source, 5)
     out = tmp_path / "sharded" / "manifest.json"
-    _run([str(source), "--from-scenario", "0", "--output", str(out), "--scenarios-per-file", "2"])
+    _run([str(source), "--from-scenario", "0", "--output", str(out),
+          "--scenarios-per-file", "2", "--vary", "none"])
 
     header, scenarios = load_suite(out)
     assert len(header["scenario_files"]) == 3
