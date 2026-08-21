@@ -3,9 +3,8 @@
 
 """Drive the physical SO-101 follower through a prepared pick-and-carry episode.
 
-This is the home of the hardware execution path, split out of the sim-only
-``pick_and_place/sim.py`` viewer. The sim is the plant: it integrates physics and
-the trajectory's joint set points stream out to the real arm at ``CONTROL_HZ``.
+This is the home of the hardware execution path. The rig is the plant: the
+trajectory's joint set points stream out to the real arm at ``CONTROL_HZ``.
 
 Feedback is applied at two points, not continuously across the whole episode:
 

@@ -3,8 +3,8 @@
 
 """Sample a random pick-and-carry episode that runs clean.
 
-Shared by ``pick_and_place/sim.py`` (sim-only viewer), ``pick_and_place/real.py``
-(the hardware path) and ``record_episodes`` (batch dataset generation). All need
+Shared by ``pick_and_place/real.py`` (the hardware path) and
+``record_episodes`` (batch dataset generation). Both need
 the same thing: poses drawn from
 :mod:`pick_and_place.scripted.episode_sampling`, a trajectory planned for them,
 and :mod:`pick_and_place.runtime.preflight` run over each candidate until one

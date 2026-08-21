@@ -34,25 +34,17 @@ from pick_and_place.policies.policy_evaluation import (
     write_evaluation_artifacts,
 )
 from pick_and_place.runtime.policy_sim import (
-    build_policy_sim_model,
     evaluate_policy_episode,
     PolicySimEnv,
 )
-from pick_and_place.perception.overhead_localization import OverheadLocalizer
-from pick_and_place.plant.wrist_localizer import AsyncWristLocalization, WristCameraLocalizer
 from pick_and_place.runtime.replay_rollout import write_rollout
-from pick_and_place.plant.geometric_overhead import SimGeometricOverheadLocalizer
-from pick_and_place.rollout.scripted import scripted_policy
-from pick_and_place.scripted.policy import ScriptedPolicy
-from pick_and_place.perception.cube_detection import CubeTracker
-from pick_and_place.perception.detector_process import DetectorProcess
+from pick_and_place.rollout.scripted_sim import sim_scripted_controller
 from pick_and_place.cli.policy import (
     add_flow_image_arguments,
     add_policy_arguments,
 )
 from pick_and_place.cli.scene import add_render_size_arguments, add_scene_appearance_arguments
 from pick_and_place.variants.appearance import parse_appearance
-from pick_and_place.core.workspace_bounds import workspace_interior_corners_world
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MANIFEST = REPOSITORY_ROOT / "config" / "evaluation" / "smoke_v1.json"
@@ -281,145 +273,6 @@ def _camera_base_metadata(model: mujoco.MjModel) -> dict:
     return {"source": "authored", "cameras": cameras}
 
 
-def _camera_matrix_for_output(
-    model: mujoco.MjModel,
-    camera_name: str,
-    *,
-    render_hw: tuple[int, int],
-    image_hw: tuple[int, int],
-) -> np.ndarray:
-    """Return the intrinsics of a MuJoCo render after resize-and-center-crop."""
-    camera_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, camera_name)
-    if camera_id < 0:
-        raise ValueError(f"model has no camera named {camera_name!r}")
-    render_height, render_width = render_hw
-    image_height, image_width = image_hw
-    scale = max(image_width / render_width, image_height / render_height)
-    resized_width = max(image_width, round(render_width * scale))
-    resized_height = max(image_height, round(render_height * scale))
-    scale_x = resized_width / render_width
-    scale_y = resized_height / render_height
-    left = (resized_width - image_width) // 2
-    top = (resized_height - image_height) // 2
-    focal = (render_height / 2.0) / math.tan(math.radians(model.cam_fovy[camera_id]) / 2.0)
-    return np.array(
-        [
-            [focal * scale_x, 0.0, render_width * scale_x / 2.0 - left],
-            [0.0, focal * scale_y, render_height * scale_y / 2.0 - top],
-            [0.0, 0.0, 1.0],
-        ]
-    )
-
-
-def _make_scripted_controller(
-    *,
-    image_hw: tuple[int, int],
-    render_hw: tuple[int, int],
-    control_hz: float,
-    env: PolicySimEnv,
-    perception: str,
-) -> tuple[ScriptedPolicy, dict]:
-    """Build the controller-owned nominal camera and kinematic models."""
-    model, data = build_policy_sim_model(*render_hw)
-    mujoco.mj_forward(model, data)
-    camera_matrices = {
-        name: _camera_matrix_for_output(
-            model,
-            name,
-            render_hw=render_hw,
-            image_hw=image_hw,
-        )
-        for name in ("overhead_camera", "wrist_camera")
-    }
-    overhead_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "overhead_camera")
-    overhead_position = data.cam_xpos[overhead_id].copy()
-    overhead_rotation = data.cam_xmat[overhead_id].reshape(3, 3).copy()
-    workspace_corners = workspace_interior_corners_world()
-    # Run AprilTag detection out-of-process. The pupil_apriltags C destructor
-    # (apriltag_detector_destroy) segfaults when a Detector is garbage-collected
-    # inside a multiprocessing pool worker, killing the worker outright
-    # (BrokenProcessPool) and taking every banked episode with it. DetectorProcess
-    # is the same containment sim_recorder.py uses; detection is bit-identical
-    # across the process boundary, so the controller behaves exactly as it does on
-    # real hardware -- only the detector's address space changes.
-    overhead_detector = DetectorProcess(nthreads=1) if perception == "detector" else None
-    wrist_detector = DetectorProcess(nthreads=1)
-    # Both localizers rebuild their detector every episode via reset(). Hand each
-    # one the single persistent handle so no child process leaks per episode --
-    # a DetectorProcess holds no per-frame state and is built for reuse across a
-    # long run.
-    overhead_localizer = (
-        SimGeometricOverheadLocalizer(
-            env.model,
-            env.data,
-            width=min(320, render_hw[1]),
-            height=min(240, render_hw[0]),
-            cube_belief_error=lambda: env.cube_belief_error,
-        )
-        if perception == "geometric"
-        else OverheadLocalizer(
-            camera_matrices["overhead_camera"],
-            overhead_position,
-            overhead_rotation,
-            detector_factory=lambda: overhead_detector,
-        )
-    )
-    controller = scripted_policy(
-        overhead_localizer,
-        workspace_corners,
-        control_hz=control_hz,
-        wrist_localizer=AsyncWristLocalization(
-            WristCameraLocalizer(
-                model,
-                camera_matrices["wrist_camera"],
-                tracker_factory=lambda: CubeTracker(smooth=0.95, detector=wrist_detector),
-            )
-        ),
-    )
-    # ScriptedPolicy.close() only reaches the async wrist wrapper, so tear the two
-    # detector children down alongside it.
-    _controller_close = controller.close
-
-    def _close_with_detectors() -> None:
-        try:
-            _controller_close()
-        finally:
-            if overhead_detector is not None:
-                overhead_detector.close()
-            wrist_detector.close()
-
-    controller.close = _close_with_detectors  # type: ignore[method-assign]
-    metadata = {
-        "type": "scripted",
-        "class": f"{type(controller).__module__}.{type(controller).__name__}",
-        "image_features": {
-            "overhead": OVERHEAD_FEATURE,
-            "wrist": WRIST_FEATURE,
-        },
-        "control_hz": controller.control_hz,
-        "wrist_localization": "asynchronous_latest_completed",
-        "apriltag_detection": "out-of-process (DetectorProcess, nthreads=1)",
-        "target_color": controller.target_color,
-        "overhead_perception": perception,
-        "max_localization_steps": controller.max_localization_steps,
-        "localization_steps_per_search": controller.localization_steps_per_search,
-        "rng_seed": controller.rng_seed,
-        "nominal_camera_calibration": {
-            "overhead_camera": {
-                "camera_matrix": camera_matrices["overhead_camera"].tolist(),
-                "position_m": overhead_position.tolist(),
-                "rotation_world_from_camera": overhead_rotation.tolist(),
-            },
-            "wrist_camera": {
-                "camera_matrix": camera_matrices["wrist_camera"].tolist(),
-                "kinematic_model": "controller-owned nominal MuJoCo model",
-            },
-        },
-        "workspace_corners_world_m": workspace_corners.tolist(),
-    }
-    return controller, metadata
-
-
 def main() -> None:
     args = _parse_args()
     started_at = dt.datetime.now(dt.UTC)
@@ -514,12 +367,14 @@ def main() -> None:
         controller_metadata = _flow_image_metadata(flow_image_controller, args)
     else:
         device = None
-        controller, controller_metadata = _make_scripted_controller(
+        controller, controller_metadata = sim_scripted_controller(
             image_hw=image_hw,
             render_hw=(args.render_height, args.render_width),
             control_hz=next(iter(control_hz_values)),
-            env=env,
+            scene_model=env.model,
+            scene_data=env.data,
             perception=args.scripted_perception,
+            cube_belief_error=lambda: env.cube_belief_error,
         )
     print(
         f"Evaluating {len(scenarios)}/{len(manifest.scenarios)} {manifest.suite!r} scenarios "

@@ -16,40 +16,13 @@ from pathlib import Path
 from pick_and_place.policies.policy import DEFAULT_CHECKPOINT, DEFAULT_INSTRUCTION
 
 
-def add_policy_arguments(
-    parser: argparse.ArgumentParser,
-    *,
-    controllers: tuple[str, ...] = ("lerobot",),
-    checkpoint_default: str | None = DEFAULT_CHECKPOINT,
-    n_action_steps_default: int | None = 100,
-) -> None:
-    """Add the controller choice, the checkpoint, and how it is queried.
+def add_policy_image_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add the resolution the frames handed to a controller are reduced to.
 
-    ``controllers`` lists the implementations this command can run — the
-    evaluation harness also scores the analytic ``scripted`` policy against the
-    learned ones. ``checkpoint_default`` is ``None`` where a command has no
-    sensible default and the caller must name one.
+    Shared rather than leaf-specific: a learned policy takes the size it was
+    trained at, and the expert solves its camera intrinsics for the same size,
+    so both need to agree on what the controller is looking at.
     """
-    parser.add_argument(
-        "--controller",
-        choices=controllers,
-        default="lerobot",
-        help="policy implementation (default: lerobot)",
-    )
-    parser.add_argument(
-        "--checkpoint",
-        default=checkpoint_default,
-        help="HF policy checkpoint or local LeRobot directory, or a flow-policy "
-        "checkpoint-*.pt file",
-    )
-    parser.add_argument("--instruction", default=DEFAULT_INSTRUCTION, help="language task string")
-    parser.add_argument(
-        "--base-checkpoint",
-        default=None,
-        help="base model a LoRA checkpoint adapts, when the path recorded in its "
-        "adapter_config.json does not exist here (also PAP_PI05_BASE)",
-    )
-    parser.add_argument("--device", default="auto", help="auto | cpu | mps | cuda")
     parser.add_argument(
         "--image-height",
         type=int,
@@ -64,6 +37,34 @@ def add_policy_arguments(
         help="width of the frames fed to the policy "
         "(default: the checkpoint's training width, else 640)",
     )
+
+
+def add_lerobot_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    checkpoint_default: str | None = DEFAULT_CHECKPOINT,
+    n_action_steps_default: int | None = 100,
+) -> None:
+    """Add what a LeRobot checkpoint is and how it is queried.
+
+    Every flag here is meaningless to a controller that is not a learned policy,
+    which is why it is a group of its own: a command with leaves declares it on
+    the leaf, so nothing else has to police whether it applies.
+    """
+    parser.add_argument(
+        "--checkpoint",
+        default=checkpoint_default,
+        help="HF policy checkpoint or local LeRobot directory, or a flow-policy "
+        "checkpoint-*.pt file",
+    )
+    parser.add_argument("--instruction", default=DEFAULT_INSTRUCTION, help="language task string")
+    parser.add_argument(
+        "--base-checkpoint",
+        default=None,
+        help="base model a LoRA checkpoint adapts, when the path recorded in its "
+        "adapter_config.json does not exist here (also PAP_PI05_BASE)",
+    )
+    parser.add_argument("--device", default="auto", help="auto | cpu | mps | cuda")
     parser.add_argument(
         "--n-action-steps",
         type=int,
@@ -83,6 +84,35 @@ def add_policy_arguments(
         help="enable ACT temporal ensembling with this coefficient, e.g. 0.01; "
         "requires --n-action-steps 1",
     )
+
+
+def add_policy_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    controllers: tuple[str, ...] = ("lerobot",),
+    checkpoint_default: str | None = DEFAULT_CHECKPOINT,
+    n_action_steps_default: int | None = 100,
+) -> None:
+    """Add the controller choice and every controller's flags at once.
+
+    This is the flat shape: one namespace, so a command using it accepts each
+    family's flags whichever controller was chosen, and has to reject the
+    inapplicable ones by hand. Commands with leaves should take
+    :func:`add_policy_image_arguments` and :func:`add_lerobot_arguments`
+    separately instead, and let the parser do that work.
+    """
+    parser.add_argument(
+        "--controller",
+        choices=controllers,
+        default="lerobot",
+        help="policy implementation (default: lerobot)",
+    )
+    add_lerobot_arguments(
+        parser,
+        checkpoint_default=checkpoint_default,
+        n_action_steps_default=n_action_steps_default,
+    )
+    add_policy_image_arguments(parser)
 
 
 def add_flow_image_arguments(

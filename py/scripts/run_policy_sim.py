@@ -2,14 +2,29 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Run a learned policy in the sim, closed-loop.
+"""Run a policy in the sim, closed-loop.
 
-``--controller lerobot`` (the default) loads a LeRobot checkpoint (ACT,
-SmolVLA, ...); pass ``--checkpoint`` to evaluate a fine-tune, else the base
-``lerobot/smolvla_base``. The base is a plumbing spike, not a working manipulator
-— it has never seen this robot, these cameras, or this instruction, so its
-actions are not meaningful (the arm moves but does not solve the task). A policy
-fine-tuned on the project's dataset is the real use case.
+Two leaves, because what a checkpoint is and how it is queried is not something
+the two controllers share:
+
+``lerobot`` loads a LeRobot checkpoint (ACT, SmolVLA, pi0.5, ...); pass
+``--checkpoint`` to evaluate a fine-tune, else the base ``lerobot/smolvla_base``.
+The base is a plumbing spike, not a working manipulator — it has never seen this
+robot, these cameras, or this instruction, so its actions are not meaningful (the
+arm moves but does not solve the task). A policy fine-tuned on the project's
+dataset is the real use case.
+
+``scripted`` runs the expert, which is what watching a working episode looks
+like: it localizes the cube from the overhead frame, plans an eight-phase
+trajectory, servos the descent off the wrist camera and replans at every phase
+boundary. It takes no checkpoint, and reads the same two images and reported
+joints a learned policy does, which is what makes the two comparable.
+``--scripted-perception detector`` swaps the simulator's own pose for the real
+optical pipeline; ``--miscalibration`` gives it a rig worth correcting for.
+
+Everything about the world and the run — scene, cube pose, render size,
+randomization, seed — is declared once and shared by both leaves, so a number
+produced under one is comparable to a number produced under the other.
 
 The loop is: render the sim cameras, build the observation
 (two images + proprio state), ask the controller for the next hardware-frame
@@ -80,6 +95,7 @@ from pick_and_place.spec.robot import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
 from pick_and_place.core.workspace_bounds import is_cube_drop_allowed, sample_target_plate_yaw
 from pick_and_place.policies.policy import (
     DEFAULT_CHECKPOINT,
+    DEFAULT_IMAGE_HW,
     resolve_checkpoint_cameras,
     select_device,
 )
@@ -94,21 +110,40 @@ from pick_and_place.runtime.policy_sim import (
 # One policy query and one camera render happen per control tick; the sim steps
 # at the model timestep in between. The rate matches the real rig's control loop
 # (and the dataset fps), so a chunked policy's action spacing plays back true.
-from pick_and_place.cli.policy import add_policy_arguments
+from pick_and_place.cli.policy import (
+    add_lerobot_arguments,
+    add_policy_image_arguments,
+)
 from pick_and_place.cli.scene import (
     add_cube_pose_arguments,
+    add_preflight_debug_arguments,
     add_render_size_arguments,
     add_scene_appearance_arguments,
     add_scene_texture_arguments,
+    preflight_debug_from_args,
+)
+from pick_and_place.rollout.scripted_sim import (
+    SCRIPTED_PERCEPTION_MODES,
+    sim_scripted_controller,
 )
 from pick_and_place.spec.robot import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 
 
 def _resolve_recording_hw(
-    parser: argparse.ArgumentParser, args: argparse.Namespace
+    parser: argparse.ArgumentParser, args: argparse.Namespace, image_hw: tuple[int, int]
 ) -> tuple[int, int]:
-    """Validate the recording resolution rendered frames are reduced through."""
-    height, width = args.recording_hw
+    """Validate the recording resolution rendered frames are reduced through.
+
+    A learned policy has to be fed frames that went through the same downsampling
+    its training video did, so the ``lerobot`` leaf requires the resolution and
+    cannot guess it. The expert never saw a video and the leaf does not declare
+    the flag: it reads the frames it is given, and passing them through a resize
+    that models nothing would only cost detail its localizers use.
+    """
+    recording_hw = getattr(args, "recording_hw", None)
+    if recording_hw is None:
+        return image_hw
+    height, width = recording_hw
     if height < 1 or width < 1:
         parser.error("--recording-hw must be positive")
     return (height, width)
@@ -121,6 +156,7 @@ def _build_model(
     render_w: int,
     background_panorama: Path | np.ndarray | None = None,
     table_texture: Path | np.ndarray | None = None,
+    robot_dynamics: bool = True,
 ):
     """Compile the standard (AprilTag, calibrated-camera) scene with the pick cube
     placed as a free rigid body at the requested pose. Mirrors the layout used by
@@ -136,6 +172,7 @@ def _build_model(
         include_environment=True,
         background_panorama=background_panorama,
         table_texture=table_texture,
+        robot_dynamics=robot_dynamics,
     )
     spec.visual.global_.offwidth = max(spec.visual.global_.offwidth, render_w)
     spec.visual.global_.offheight = max(spec.visual.global_.offheight, render_h)
@@ -200,23 +237,19 @@ def _place_cube(data: mujoco.MjData, qadr: int, dofadr: int, pose: CubePose) -> 
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    # Default to the checkpoint's own n_action_steps, as eval_policy_sim.py
-    # already does. The 100 that add_policy_arguments otherwise supplies matches
-    # ACT's chunk and is larger than pi0.5's 50, so it turned every pi0.5
-    # rollout into an argument error unless the flag was passed by hand.
-    add_policy_arguments(parser, n_action_steps_default=None)
-    parser.add_argument(
-        "--recording-hw",
-        type=int,
-        nargs=2,
-        required=True,
-        metavar=("HEIGHT", "WIDTH"),
-        help="resolution the training videos were recorded at, which rendered frames "
-        "are downsampled through on the way to the policy's input size",
-    )
+    # Everything about the world and the run, shared by every leaf so that two
+    # controllers are driven through literally the same declaration. What a
+    # checkpoint is and how it is queried belongs to the leaf that has one.
+    common = argparse.ArgumentParser(add_help=False)
+    parser = common
+    add_policy_image_arguments(parser)
     add_render_size_arguments(parser)
     add_cube_pose_arguments(parser, source_default=(0.22, 0.0))
+    parser.add_argument(
+        "--no-robot-dynamics",
+        action="store_true",
+        help="use raw upstream MuJoCo actuators instead of fitted actuator time constants",
+    )
     parser.add_argument("--seed", type=int, default=None, help="RNG seed for random target sampling")
     parser.add_argument(
         "--miscalibration",
@@ -312,6 +345,48 @@ def main() -> None:
             "the MuJoCo viewer runs its own GUI loop under mjpython and conflicts with it)"
         ),
     )
+    parser = argparse.ArgumentParser(description=__doc__)
+    leaves = parser.add_subparsers(dest="controller", required=True, metavar="CONTROLLER")
+
+    lerobot = leaves.add_parser(
+        "lerobot",
+        parents=[common],
+        help="a LeRobot checkpoint (ACT, SmolVLA, pi0.5, ...)",
+        description="Run a LeRobot checkpoint in the sim, closed-loop.",
+    )
+    # Default to the checkpoint's own n_action_steps. The 100 that
+    # add_lerobot_arguments otherwise supplies matches ACT's chunk and is larger
+    # than pi0.5's 50, so it turned every pi0.5 rollout into an argument error
+    # unless the flag was passed by hand.
+    add_lerobot_arguments(lerobot, n_action_steps_default=None)
+    lerobot.add_argument(
+        "--recording-hw",
+        type=int,
+        nargs=2,
+        required=True,
+        metavar=("HEIGHT", "WIDTH"),
+        help="resolution the training videos were recorded at, which rendered frames "
+        "are downsampled through on the way to the policy's input size",
+    )
+
+    scripted = leaves.add_parser(
+        "scripted",
+        parents=[common],
+        help="the expert: localize, plan, servo the descent, replan at each phase",
+        description="Run the expert in the sim, closed-loop. It takes no checkpoint.",
+    )
+    scripted.add_argument(
+        "--scripted-perception",
+        choices=SCRIPTED_PERCEPTION_MODES,
+        default="geometric",
+        help=(
+            "overhead perception: geometric reads the simulator's own pose behind a "
+            "visibility gate, detector runs the real optical pipeline "
+            "(default: geometric)"
+        ),
+    )
+    add_preflight_debug_arguments(scripted)
+
     args = parser.parse_args()
     if args.show and not args.headless:
         parser.error("--show requires --headless")
@@ -348,11 +423,15 @@ def main() -> None:
     override_hw = (args.image_height, args.image_width) if all(override) else None
 
     controller = None
-    image_hw, _ = resolve_checkpoint_cameras(args.checkpoint, override_hw=override_hw)
+    image_hw = (
+        override_hw or DEFAULT_IMAGE_HW
+        if args.controller == "scripted"
+        else resolve_checkpoint_cameras(args.checkpoint, override_hw=override_hw)[0]
+    )
     if args.render_width < image_hw[1] or args.render_height < image_hw[0]:
         parser.error("--render-width and --render-height must be at least the policy image size")
 
-    recording_hw = _resolve_recording_hw(parser, args)
+    recording_hw = _resolve_recording_hw(parser, args, image_hw)
     if args.render_width < recording_hw[1] or args.render_height < recording_hw[0]:
         parser.error("--render-width and --render-height must be at least the recording resolution")
 
@@ -418,6 +497,7 @@ def main() -> None:
         args.render_width,
         background_panorama=background_panorama,
         table_texture=table_texture,
+        robot_dynamics=not args.no_robot_dynamics,
     )
     randomizer = AppearanceRandomizer(model) if active_sample is not None else None
     wrist_mount = WristMountRandomizer(model) if active_sample is not None else None
@@ -500,6 +580,22 @@ def main() -> None:
     ctrl_high = model.actuator_ctrlrange[:, 1].copy()
 
     hw = image_hw
+    if args.controller == "scripted":
+        controller, _ = sim_scripted_controller(
+            image_hw=hw,
+            render_hw=(args.render_height, args.render_width),
+            control_hz=CONTROL_HZ,
+            # The live scene, so the geometric localizer reads the cube where
+            # physics actually put it. The controller's own nominal cameras are
+            # compiled inside the factory and are deliberately not these.
+            scene_model=model,
+            scene_data=data,
+            perception=args.scripted_perception,
+            cube_belief_error=lambda: (
+                draw.cube_belief_error if draw is not None else (0.0, 0.0, 0.0, 0.0)
+            ),
+            debug=preflight_debug_from_args(args),
+        )
     if controller is None:
         device = select_device(args.device)
         print(f"Loading {args.checkpoint} on {device} (first run downloads the weights)...")
@@ -634,7 +730,12 @@ def main() -> None:
 
     if args.controller == "lerobot":
         print(f"Instruction: {args.instruction!r}")
-    if args.checkpoint == DEFAULT_CHECKPOINT:
+    if args.controller == "scripted":
+        print(
+            "Running closed-loop with the expert, overhead perception "
+            f"{args.scripted_perception!r}."
+        )
+    elif args.checkpoint == DEFAULT_CHECKPOINT:
         print("Running closed-loop. Actions are NOT task-calibrated (un-finetuned base).")
     else:
         print(f"Running closed-loop with fine-tuned checkpoint {args.checkpoint!r}.")
