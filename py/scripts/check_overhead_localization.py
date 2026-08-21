@@ -27,6 +27,7 @@ import argparse
 from functools import partial
 
 from pick_and_place.cli.common import add_seed_argument
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.core.miscalibration import OverheadCameraModel
 from pick_and_place.plant.overhead import DETECTION_HEIGHT, DETECTION_WIDTH
 from pick_and_place.plant.overhead_check import measure
@@ -38,8 +39,9 @@ MEASURED_CUBE_XY_M = (0.006, 0.009)
 MEASURED_TARGET_XY_M = (0.006, 0.009)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the overhead-localization check."""
+    parser = SuggestingArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--episodes", type=int, default=60, help="scenes to localize")
@@ -53,8 +55,11 @@ def main() -> None:
             "whole reason the causes exist."
         ),
     )
-    args = parser.parse_args()
+    return parser
 
+
+def run(args: argparse.Namespace) -> None:
+    """Localize the drawn scenes and report the error distribution."""
     sigmas = OverheadCameraModel()
     if args.no_calibration_error:
         sigmas = OverheadCameraModel(0.0, 0.0, 0.0)
@@ -79,6 +84,10 @@ def main() -> None:
         return
     verdict = "in band" if low <= summary.cube_xy_median_m <= high else "OUT OF BAND"
     print(f"cube planar median is {verdict}")
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":

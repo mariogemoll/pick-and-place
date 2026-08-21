@@ -128,6 +128,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Render the initial overhead frame of chosen scenes.",
         script="render_scene_thumbnails.py",
     ),
+    Command(
+        name="check-overhead-localization",
+        summary="Measure whether simulated overhead perception misses by as much as the rig does.",
+        script="check_overhead_localization.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
