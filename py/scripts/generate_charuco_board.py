@@ -18,25 +18,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from pick_and_place.calibration.charuco_board import make_board
+from pick_and_place.cli.calibration import add_charuco_board_arguments
+from pick_and_place.cli.common import add_output_argument
 from pick_and_place.core.paths import outputs_root
-
-
-# A4 is 210 x 297 mm. This 180 x 240 mm board leaves a real printable margin
-# on every side while still providing 35 ChArUco corners.
-DEFAULT_SQUARES_X = 6
-DEFAULT_SQUARES_Y = 8
-DEFAULT_SQUARE_MM = 30.0
-DEFAULT_MARKER_MM = 22.0
-
-
-def make_board(cv2_module, squares_x: int, squares_y: int, square_mm: float, marker_mm: float):
-    """Return the OpenCV ChArUco board shared with the calibration command."""
-    if marker_mm >= square_mm:
-        raise ValueError("marker size must be smaller than square size")
-    dictionary = cv2_module.aruco.getPredefinedDictionary(cv2_module.aruco.DICT_4X4_50)
-    return cv2_module.aruco.CharucoBoard(
-        (squares_x, squares_y), square_mm / 1000.0, marker_mm / 1000.0, dictionary
-    )
 
 
 def write_pdf(path: Path, board, squares_x: int, squares_y: int, square_mm: float) -> None:
@@ -104,11 +89,8 @@ def write_pdf(path: Path, board, squares_x: int, squares_y: int, square_mm: floa
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path)
-    parser.add_argument("--squares-x", type=int, default=DEFAULT_SQUARES_X)
-    parser.add_argument("--squares-y", type=int, default=DEFAULT_SQUARES_Y)
-    parser.add_argument("--square-mm", type=float, default=DEFAULT_SQUARE_MM)
-    parser.add_argument("--marker-mm", type=float, default=DEFAULT_MARKER_MM)
+    add_output_argument(parser, help="destination PNG for the printable board")
+    add_charuco_board_arguments(parser)
     args = parser.parse_args()
 
     try:

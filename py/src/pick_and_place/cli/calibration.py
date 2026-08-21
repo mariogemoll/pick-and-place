@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import argparse
 
-from pick_and_place.calibration.session_calibration import (
+from pick_and_place.calibration.charuco_board import (
     DEFAULT_MARKER_MM,
     DEFAULT_SQUARE_MM,
     DEFAULT_SQUARES_X,
