@@ -75,6 +75,24 @@ def add_capture_size_arguments(parser: argparse.ArgumentParser, *, width: int, h
     )
 
 
+def add_camera_device_argument(
+    parser: argparse.ArgumentParser, *, required: bool = False, default: str | None = "0"
+) -> None:
+    """Add ``--camera`` for a command that opens exactly one camera.
+
+    The rig commands take :func:`add_rig_camera_arguments` instead, which names
+    the overhead and wrist cameras together. This is for the two calibration
+    commands that point at a single device: what the string may be -- an OpenCV
+    index or a device path -- is the same either way.
+    """
+    parser.add_argument(
+        "--camera",
+        required=required,
+        default=None if required else default,
+        help="OpenCV camera index or device path",
+    )
+
+
 def add_rig_camera_arguments(
     parser: argparse.ArgumentParser,
     *,

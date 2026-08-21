@@ -103,6 +103,7 @@ from pick_and_place.cli.policy import (
     add_lerobot_arguments,
     add_policy_image_arguments,
     add_save_video_argument,
+    add_step_limit_argument,
 )
 from pick_and_place.cli.rig import (
     add_drop_zone_arguments,
@@ -214,12 +215,7 @@ def main() -> None:
     add_policy_image_arguments(parser)
     add_follower_arguments(parser)
     add_rig_camera_arguments(parser, workspace_camera=True)
-    parser.add_argument(
-        "--steps",
-        type=int,
-        default=0,
-        help="stop after this many control ticks (0 = run until Ctrl-C)",
-    )
+    add_step_limit_argument(parser, forever="Ctrl-C")
     add_joint_zeros_argument(
         parser,
         default=None,

@@ -224,3 +224,20 @@ def add_save_video_argument(parser: argparse.ArgumentParser, *, help: str) -> No
     each command writes, because that is all that differs.
     """
     parser.add_argument("--save-video", type=Path, default=None, help=help)
+
+
+def add_step_limit_argument(parser: argparse.ArgumentParser, *, forever: str) -> None:
+    """Add ``--steps``, the control-tick budget a closed-loop run stops after.
+
+    Zero means "do not stop", and ``forever`` names what ends the run instead --
+    Ctrl-C at the rig, a closed viewer in the sim. That the budget is counted in
+    control ticks rather than seconds is the part both runners must agree on: a
+    sim run and a rig run of the same length are then the same number of policy
+    queries.
+    """
+    parser.add_argument(
+        "--steps",
+        type=int,
+        default=0,
+        help=f"stop after this many control ticks (0 = run until {forever})",
+    )

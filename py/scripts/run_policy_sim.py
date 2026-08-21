@@ -93,6 +93,7 @@ from pick_and_place.cli.policy import (
     add_lerobot_arguments,
     add_policy_image_arguments,
     add_save_video_argument,
+    add_step_limit_argument,
 )
 from pick_and_place.cli.scene import (
     add_cube_pose_arguments,
@@ -162,12 +163,7 @@ def main() -> None:
     add_domain_randomization_argument(parser)
     add_scene_texture_arguments(parser)
     add_scene_appearance_arguments(parser)
-    parser.add_argument(
-        "--steps",
-        type=int,
-        default=0,
-        help="stop after this many control ticks (0 = run until the viewer is closed)",
-    )
+    add_step_limit_argument(parser, forever="the viewer is closed")
     parser.add_argument("--headless", action="store_true", help="no viewer; render only for the policy")
     parser.add_argument(
         "--resample-every",
