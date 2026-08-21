@@ -34,7 +34,6 @@ NOT_COMMANDS = {
 #: it -- at that point every script is either a command or on ``NOT_COMMANDS``.
 PENDING = {
     "diagnose_flow_image_policy.py",
-    "export_camera_calibrations.py",
     "pick_and_place/real.py",
     "pick_and_place/record_sim.py",
     "run_flow_image_policy_sim.py",

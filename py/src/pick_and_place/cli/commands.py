@@ -258,6 +258,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Show every attached camera's live feed at once.",
         script="showcamfeeds.py",
     ),
+    Command(
+        name="export-camera-calibrations",
+        summary="Export generic camera calibration JSON for recorded datasets.",
+        script="export_camera_calibrations.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}

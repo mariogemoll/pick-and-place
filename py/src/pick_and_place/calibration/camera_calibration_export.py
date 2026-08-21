@@ -17,6 +17,7 @@ from typing import Any
 
 import mujoco
 
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
 from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
 from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
@@ -132,8 +133,9 @@ def write_camera_calibrations(path: Path, out_size: tuple[int, int] | None = Non
     return path
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the camera-calibration export."""
+    parser = SuggestingArgumentParser(description=__doc__)
     parser.add_argument(
         "-o",
         "--output",
@@ -155,13 +157,28 @@ def main() -> None:
         default=None,
         help="output height for the rectified intrinsics (requires --width)",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def validate(parser: SuggestingArgumentParser, args: argparse.Namespace) -> None:
+    """Reject a half-given output size."""
     if (args.width is None) != (args.height is None):
         parser.error("--width and --height must be given together")
+
+
+def run(args: argparse.Namespace) -> None:
+    """Write the calibration JSON and say where it landed."""
     out_size = (args.width, args.height) if args.width is not None else None
     output = args.output or outputs_root() / "camera_calibrations.json"
     path = write_camera_calibrations(output, out_size)
     print(f"Wrote {path}")
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    validate(parser, args)
+    run(args)
 
 
 if __name__ == "__main__":
