@@ -53,6 +53,7 @@ import numpy as np
 from pick_and_place.sim.domain_randomization import (
     DomainSample,
     DomainRandomizationPreset,
+    domain_sample_payload,
     domain_seed,
     orient_cube,
 )
@@ -115,9 +116,7 @@ def _domain_layer(
                 "target_belief_error": [0.0, 0.0],
             },
         }
-    domain_sample = _round_sample(
-        {name: value for name, value in sample.__dict__.items() if name != "miscalibration"}
-    )
+    domain_sample = _round_sample(domain_sample_payload(sample))
     domain_sample["enabled"] = True
     return {
         "domain_randomization_preset": preset.name,
