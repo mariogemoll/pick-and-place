@@ -12,15 +12,20 @@ import numpy as np
 sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 from pick_and_place.cli.rig import add_follower_arguments
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.core.joint_frames import action_to_joints, real_frame_to_sim
 from pick_and_place.hardware.follower import make_so101_follower
 
-def main():
-    parser = argparse.ArgumentParser(description="Capture the current robot pose as the rest position.")
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the rest-pose capture."""
+    parser = SuggestingArgumentParser(description="Capture the current robot pose as the rest position.")
     add_follower_arguments(parser)
     parser.add_argument("--update", action="store_true", help="Automatically update py/src/pick_and_place/scripted/trajectory.py")
-    args = parser.parse_args()
+    return parser
 
+
+def run(args: argparse.Namespace) -> None:
+    """Read the pose and print it."""
     print(f"Connecting to follower on {args.follower_port}...")
     follower = make_so101_follower(
         args.follower_port, args.follower_id, disable_torque_on_disconnect=False
@@ -65,6 +70,10 @@ def main():
         print(f"\nUpdated {trajectory_path}")
 
     follower.disconnect()
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 if __name__ == "__main__":
     main()

@@ -138,6 +138,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Compare the leader and follower calibrations in the lerobot cache.",
         script="check_calibration.py",
     ),
+    Command(
+        name="capture-rest-pose",
+        summary="Read the arm's current pose and print it as the rest position.",
+        script="capture_rest_pose.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
