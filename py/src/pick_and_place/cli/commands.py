@@ -168,6 +168,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Regenerate the cross-language parity fixtures.",
         script="generate_parity_fixtures.py",
     ),
+    Command(
+        name="render-apriltag-textures",
+        summary="Render the AprilTag PNG textures the simulated scene needs.",
+        script="render_apriltag_textures.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
