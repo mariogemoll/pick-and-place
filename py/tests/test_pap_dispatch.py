@@ -39,7 +39,6 @@ PENDING = {
     "calibrate_camera_intrinsics.py",
     "calibrate_joint_zeros.py",
     "calibrate_robot_dynamics.py",
-    "camera_fps_probe.py",
     "diagnose_flow_image_policy.py",
     "eval_scripted_parallel.py",
     "export_camera_calibrations.py",

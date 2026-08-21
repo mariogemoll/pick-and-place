@@ -30,6 +30,7 @@ import time
 import cv2
 
 from pick_and_place.calibration.cam_align_solve import parse_index_or_path
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.runtime.frame_reader import capture_backend
 
 
@@ -66,8 +67,9 @@ def measure(cap, seconds: float) -> tuple[int, float, tuple[int, int]]:
     return count, elapsed, size
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the camera probe."""
+    parser = SuggestingArgumentParser(description=__doc__)
     parser.add_argument("camera", help="OpenCV camera index or device path")
     parser.add_argument(
         "--resolutions",
@@ -91,11 +93,26 @@ def main() -> None:
         default=3.0,
         help="measurement window per resolution (default: 3)",
     )
-    args = parser.parse_args()
+    return parser
 
-    resolutions = parse_resolutions(args.resolutions)
-    if not resolutions:
+
+def validate(parser: SuggestingArgumentParser, args: argparse.Namespace) -> None:
+    """Reject arguments the parser's own types cannot check.
+
+    Both are decidable from the command line alone, so they belong here rather
+    than half-way through opening a camera -- which is where --fourcc was
+    checked, after the device had already been opened and had to be released
+    again to report a typo.
+    """
+    if not parse_resolutions(args.resolutions):
         parser.error("no resolutions to test")
+    if args.fourcc.lower() != "auto" and len(args.fourcc) != 4:
+        parser.error("--fourcc must be a 4-character code like MJPG or YUYV")
+
+
+def run(args: argparse.Namespace) -> None:
+    """Probe the camera and print what each resolution achieved."""
+    resolutions = parse_resolutions(args.resolutions)
 
     backend = capture_backend(cv2)
     cap = cv2.VideoCapture(parse_index_or_path(args.camera), backend)
@@ -104,9 +121,6 @@ def main() -> None:
         raise SystemExit(f"Could not open camera {args.camera!r}.")
 
     if args.fourcc.lower() != "auto":
-        if len(args.fourcc) != 4:
-            cap.release()
-            parser.error("--fourcc must be a 4-character code like MJPG or YUYV")
         cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*args.fourcc.upper()))
 
     print(
@@ -139,6 +153,13 @@ def main() -> None:
             )
     finally:
         cap.release()
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    validate(parser, args)
+    run(args)
 
 
 if __name__ == "__main__":

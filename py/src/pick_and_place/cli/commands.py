@@ -143,6 +143,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Read the arm's current pose and print it as the rest position.",
         script="capture_rest_pose.py",
     ),
+    Command(
+        name="camera-fps-probe",
+        summary="Measure a camera's real frame rate at several resolutions.",
+        script="camera_fps_probe.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
