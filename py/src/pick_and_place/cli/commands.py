@@ -173,6 +173,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Render the AprilTag PNG textures the simulated scene needs.",
         script="render_apriltag_textures.py",
     ),
+    Command(
+        name="generate-apriltags",
+        summary="Generate printable AprilTag 41h12 PDFs.",
+        script="generate_apriltags.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}

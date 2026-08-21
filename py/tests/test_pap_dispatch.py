@@ -44,7 +44,6 @@ PENDING = {
     "export_camera_calibrations.py",
     "export_episode_rolls.py",
     "freeze_scenario_rig.py",
-    "generate_apriltags.py",
     "generate_scenario_manifest.py",
     "measure_cube_visibility.py",
     "measure_episode_visibility.py",
