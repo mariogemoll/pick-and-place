@@ -10,6 +10,8 @@ in one place is what keeps them identical.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import cv2
 import numpy as np
 from numpy.typing import NDArray
@@ -33,3 +35,27 @@ def resize_and_center_crop(image: NDArray, output_height: int, output_width: int
     left = (resized_width - output_width) // 2
     top = (resized_height - output_height) // 2
     return np.asarray(image[top : top + output_height, left : left + output_width]).copy()
+
+
+def downsample_through_recording(
+    image: np.ndarray,
+    recording_hw: tuple[int, int],
+    output_hw: tuple[int, int],
+    postprocess: Callable[[np.ndarray], np.ndarray] | None = None,
+) -> np.ndarray:
+    """Reduce a source render to a policy image the way a recording did.
+
+    Datasets reach a policy's input size in two hops: the recorder writes its
+    video at ``recording_hw``, and the dataset export downsamples the decoded
+    frame from there. Going straight from the source render to ``output_hw``
+    covers the same field of view but averages a different neighbourhood into
+    each pixel, which at a 96x96 input is a large fraction of the signal. A
+    policy fed one-hop images is therefore off-distribution from one trained on
+    two-hop ones, so anything rendering observations live has to take both hops.
+
+    ``postprocess`` runs at ``recording_hw``, where the recorder applied it.
+    """
+    image = resize_and_center_crop(image, *recording_hw)
+    if postprocess is not None:
+        image = postprocess(image)
+    return resize_and_center_crop(image, *output_hw)

@@ -61,32 +61,20 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
-from pick_and_place.sim.scene import build_scene
-from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
-from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_spec
-from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
-from pick_and_place.spec.robot import JOINT_NAMES
 from pick_and_place.scripted.episode_sampling import sample_cube, sample_target
-from pick_and_place.core.geometry import cube_quat_from_pose, CubePose
+from pick_and_place.core.geometry import CubePose
+from pick_and_place.core.joint_frames import sim_frame_to_real
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
 from pick_and_place.sim.domain_randomization import (
     DomainRandomizationPreset,
-    WristMountRandomizer,
     domain_seed,
     generate_procedural_appearance,
     orient_cube,
-    reload_renderer_textures,
 )
 from pick_and_place.core.miscalibration import MiscalibrationDraw, MiscalibrationModel
-from pick_and_place.variants.scene import AppearanceRandomizer
-from pick_and_place.variants.appearance import (
-    SceneAppearanceOverride,
-    parse_appearance,
-)
-from pick_and_place.rollout.sim import downsample_through_recording
-from pick_and_place.sim.paper_target_marker import add_paper_target_marker, place_paper_target_marker
+from pick_and_place.variants.appearance import parse_appearance
 from pick_and_place.spec.robot import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
-from pick_and_place.core.workspace_bounds import is_cube_drop_allowed, sample_target_plate_yaw
+from pick_and_place.core.workspace_bounds import sample_target_plate_yaw
 from pick_and_place.policies.policy import (
     DEFAULT_CHECKPOINT,
     DEFAULT_IMAGE_HW,
@@ -95,11 +83,7 @@ from pick_and_place.policies.policy import (
 )
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
 from pick_and_place.policies.policy_controllers import LeRobotPolicyController
-from pick_and_place.runtime.policy_sim import (
-    joint_qpos_addresses,
-    real_action_to_sim_ctrl,
-    sim_state_to_real,
-)
+from pick_and_place.runtime.policy_sim import PolicySimEnv, live_scenario
 
 # One policy query and one camera render happen per control tick; the sim steps
 # at the model timestep in between. The rate matches the real rig's control loop
@@ -120,7 +104,14 @@ from pick_and_place.rollout.scripted_sim import (
     SCRIPTED_PERCEPTION_MODES,
     sim_scripted_controller,
 )
-from pick_and_place.spec.robot import CONTROL_HZ, HARDWARE_SIMULATION_HZ
+from pick_and_place.spec.robot import CONTROL_HZ
+
+
+# An interactive run with neither --steps nor --resample-every has no episode
+# length at all -- it flies until the viewer is closed. A scenario still has to
+# name a budget, so this stands in for one: large enough that the env's
+# truncation never arrives before the person watching does.
+UNBOUNDED_EPISODE_STEPS = 1_000_000
 
 
 def _resolve_recording_hw(
@@ -141,93 +132,6 @@ def _resolve_recording_hw(
     if height < 1 or width < 1:
         parser.error("--recording-hw must be positive")
     return (height, width)
-
-def _build_model(
-    source: CubePose,
-    target_xy: tuple[float, float],
-    target_yaw: float,
-    render_h: int,
-    render_w: int,
-    background_panorama: Path | np.ndarray | None = None,
-    table_texture: Path | np.ndarray | None = None,
-    robot_dynamics: bool = True,
-):
-    """Compile the standard (AprilTag, calibrated-camera) scene with the pick cube
-    placed as a free rigid body at the requested pose. Mirrors the layout used by
-    the episode tooling so the cameras and cube match what a policy would see.
-
-    The black drop-zone square is rendered at ``target_xy`` so the frames match a
-    real recording, where a physical paper square on the table marks where the
-    cube must be placed; without it the policy sees no target.
-
-    ``render_h``/``render_w`` enlarge the offscreen framebuffer so the camera
-    renders fed to the policy fit whatever resolution the checkpoint expects."""
-    spec = build_scene(
-        include_environment=True,
-        background_panorama=background_panorama,
-        table_texture=table_texture,
-        robot_dynamics=robot_dynamics,
-    )
-    spec.visual.global_.offwidth = max(spec.visual.global_.offwidth, render_w)
-    spec.visual.global_.offheight = max(spec.visual.global_.offheight, render_h)
-    apply_camera_extrinsics_to_spec(spec, load_local_camera_extrinsics())
-    intrinsics = load_local_camera_intrinsics()
-    for camera in spec.cameras:
-        if camera.name in intrinsics and "fovy_deg" in intrinsics[camera.name]:
-            camera.fovy = float(intrinsics[camera.name]["fovy_deg"])
-
-    cube = spec.body("pick_cube")
-    cube.pos = (source.x, source.y, source.z)
-    cube.quat = cube_quat_from_pose(source)
-    cube.add_freejoint()
-
-    add_paper_target_marker(spec)
-
-    model = spec.compile()
-    model.opt.timestep = 1.0 / HARDWARE_SIMULATION_HZ
-    place_paper_target_marker(
-        model,
-        target_xy,
-        target_yaw,
-        (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
-        usable=is_cube_drop_allowed(target_xy[0], target_xy[1]),
-        alpha=1.0,
-    )
-    return model, mujoco.MjData(model)
-
-
-def _set_neutral(
-    model: mujoco.MjModel,
-    data: mujoco.MjData,
-    joint_offsets_rad: dict[str, float] | None = None,
-) -> None:
-    """Park the arm at the neutral pose with the gripper open, and hold it there
-    by initialising the position-servo set points to the same values."""
-    actuator_id = {
-        name: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name) for name in JOINT_NAMES
-    }
-    offsets = joint_offsets_rad or {}
-    targets = dict(NEUTRAL_ARM_JOINTS)
-    targets["gripper"] = GRIPPER_OPEN
-    for name, value in targets.items():
-        true_value = value + offsets.get(name, 0.0)
-        adr = model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, name)]
-        data.qpos[adr] = true_value
-        data.ctrl[actuator_id[name]] = true_value
-    mujoco.mj_forward(model, data)
-
-
-def _cube_freejoint_addrs(model: mujoco.MjModel) -> tuple[int, int]:
-    """Return the (qpos, qvel) base addresses of the pick cube's free joint."""
-    body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pick_cube")
-    return int(model.jnt_qposadr[model.body_jntadr[body_id]]), int(model.body_dofadr[body_id])
-
-
-def _place_cube(data: mujoco.MjData, qadr: int, dofadr: int, pose: CubePose) -> None:
-    """Drop a cube pose onto the table with zero velocity."""
-    data.qpos[qadr : qadr + 3] = (pose.x, pose.y, pose.z)
-    data.qpos[qadr + 3 : qadr + 7] = cube_quat_from_pose(pose)
-    data.qvel[dofadr : dofadr + 6] = 0.0
 
 
 def main() -> None:
@@ -434,52 +338,50 @@ def main() -> None:
         background_panorama = args.background_panorama
         table_texture = args.table_texture
 
-    model, data = _build_model(
-        source_pose,
-        target_xy,
-        target_yaw,
-        args.render_height,
-        args.render_width,
+    env = PolicySimEnv(
+        image_hw=image_hw,
+        render_hw=(args.render_height, args.render_width),
+        recording_hw=recording_hw,
+        scene_appearance=scene_appearance,
+        # An interactive run is an inspection tool rather than a scored one: it
+        # keeps flying after a placement lands, and --steps and --resample-every
+        # are what end a scene. The oracle still reports, it just does not stop.
+        terminate_on_success=False,
         background_panorama=background_panorama,
         table_texture=table_texture,
         robot_dynamics=not args.no_robot_dynamics,
     )
-    randomizer = AppearanceRandomizer(model) if active_sample is not None else None
-    wrist_mount = WristMountRandomizer(model) if active_sample is not None else None
-    if randomizer is not None:
-        randomizer.apply(active_sample.appearance())
-        wrist_mount.apply(active_sample)
-        randomizer.tint_episode_markers()
+    if scene_appearance is not None:
+        print(f"Scene appearance: {appearance_name}.")
+    if active_sample is not None:
         print(
             f"Domain sample episode {domain_episode}: seed={active_sample.seed}, "
             f"cube_orientation={active_sample.cube_orientation_index}"
         )
 
-    appearance_override = SceneAppearanceOverride(model) if scene_appearance is not None else None
+    # The pose the arm is parked at, in the frame a scenario declares it in.
+    initial_robot_state_real = sim_frame_to_real(NEUTRAL_ARM_JOINTS, GRIPPER_OPEN)
+    # One episode is however long a scene is left running before the next
+    # resample. The env truncates at this budget, which the loop below treats as
+    # a scene ending rather than a stop, so it only has to not fire early.
+    episode_max_steps = args.resample_every or args.steps or UNBOUNDED_EPISODE_STEPS
 
-    def apply_scene_appearance() -> None:
-        """Repaint the scene, after the drop-zone marker has set the plate's colour."""
-        if appearance_override is None:
-            return
-        appearance_override.refresh_plate_baseline()
-        appearance_override.apply(scene_appearance)
+    def reset_episode(source: CubePose, target: tuple[float, float], yaw: float) -> tuple:
+        """Freeze the sampled scene into a scenario and reset the env onto it."""
+        scenario = live_scenario(
+            source=source,
+            target_xy=target,
+            target_plate_yaw_rad=yaw,
+            initial_robot_state_real=initial_robot_state_real,
+            control_hz=CONTROL_HZ,
+            max_steps=episode_max_steps,
+            seed=args.seed,
+            miscalibration=draw,
+            domain_sample=active_sample,
+            domain_preset_name=preset.name if preset is not None else None,
+        )
+        return env.reset(options={"scenario": scenario})
 
-    apply_scene_appearance()
-    if appearance_override is not None:
-        print(f"Scene appearance: {appearance_name}.")
-
-    episode_time_origin = data.time
-
-    def offsets_rad_now() -> dict[str, float]:
-        if draw is None:
-            return {}
-        return draw.offsets_rad(data.time - episode_time_origin)
-
-    _set_neutral(model, data, offsets_rad_now())
-    joint_adr = joint_qpos_addresses(model)
-    cube_qadr, cube_dofadr = _cube_freejoint_addrs(model)
-    ctrl_low = model.actuator_ctrlrange[:, 0].copy()
-    ctrl_high = model.actuator_ctrlrange[:, 1].copy()
 
     hw = image_hw
     if args.controller == "scripted":
@@ -490,12 +392,13 @@ def main() -> None:
             # The live scene, so the geometric localizer reads the cube where
             # physics actually put it. The controller's own nominal cameras are
             # compiled inside the factory and are deliberately not these.
-            scene_model=model,
-            scene_data=data,
+            scene_model=env.model,
+            scene_data=env.data,
             perception=args.scripted_perception,
-            cube_belief_error=lambda: (
-                draw.cube_belief_error if draw is not None else (0.0, 0.0, 0.0, 0.0)
-            ),
+            # The env owns the draw once it has been reset onto a scenario, so
+            # the belief error is read from there rather than from the runner's
+            # copy -- one of them advances the wander, and it is not this one.
+            cube_belief_error=lambda: env.cube_belief_error,
             debug=preflight_debug_from_args(args),
         )
     if controller is None:
@@ -522,20 +425,6 @@ def main() -> None:
     print(f"Policy control rate: {control_hz:g} Hz.")
     controller.reset()
 
-    renderer = mujoco.Renderer(
-        model, height=args.render_height, width=args.render_width
-    )
-
-    def render(camera: str) -> np.ndarray:
-        renderer.update_scene(data, camera=camera)
-        return downsample_through_recording(
-            renderer.render(),
-            recording_hw,
-            hw,
-            randomizer.postprocess if randomizer is not None else None,
-        )
-
-    substeps = max(1, round((1.0 / control_hz) / model.opt.timestep))
     period = 1.0 / control_hz
 
     wrist_writer = overhead_writer = None
@@ -553,16 +442,16 @@ def main() -> None:
         cv2.namedWindow("wrist", cv2.WINDOW_NORMAL)
         cv2.namedWindow("overhead", cv2.WINDOW_NORMAL)
 
-    def resample_scene() -> None:
-        """Restart the episode: park the arm, drop a freshly sampled cube, draw a
-        freshly sampled drop zone, and reset the policy's action chunk."""
-        nonlocal active_sample, domain_episode, draw, episode_time_origin, target_xy
+    def resample_scene() -> tuple:
+        """Restart the episode: draw a fresh scene, and reset the env onto it.
+
+        The draws happen here because sampling interactively is what this runner
+        is for; everything that applies them to the simulator belongs to the env,
+        which is reached through the scenario the draws are frozen into."""
+        nonlocal active_sample, domain_episode, draw, target_xy
         domain_episode += 1
         if preset is not None:
             active_sample = preset.sample(domain_seed(args.seed, domain_episode))
-            randomizer.apply(active_sample.appearance())
-            wrist_mount.apply(active_sample)
-            reload_renderer_textures(renderer, randomizer.texture_ids)
             draw = active_sample.miscalibration
             print(
                 f"Domain sample episode {domain_episode}: seed={active_sample.seed}, "
@@ -574,15 +463,9 @@ def main() -> None:
                 if miscalibration_model is not None
                 else None
             )
-        # Reset all per-episode dynamic state (including velocities and actuator
-        # activation) before restoring the newly sampled scene.
-        mujoco.mj_resetData(model, data)
-        episode_time_origin = data.time
-        _set_neutral(model, data, offsets_rad_now())
         cube = sample_cube(rng)
         if active_sample is not None:
             cube = orient_cube(cube, active_sample.cube_orientation_index)
-        _place_cube(data, cube_qadr, cube_dofadr, cube)
         target = sample_target(rng)
         target_xy = (target.x, target.y)
         target_yaw = sample_target_plate_yaw(
@@ -591,18 +474,7 @@ def main() -> None:
             target.y,
             half_size=DROP_ZONE_HALF_SIZE,
         )
-        place_paper_target_marker(
-            model,
-            (target.x, target.y),
-            target_yaw,
-            (DROP_ZONE_HALF_SIZE, DROP_ZONE_HALF_SIZE),
-            usable=is_cube_drop_allowed(target.x, target.y),
-            alpha=1.0,
-        )
-        if randomizer is not None:
-            randomizer.tint_episode_markers()
-        apply_scene_appearance()
-        mujoco.mj_forward(model, data)
+        reset = reset_episode(cube, target_xy, target_yaw)
         controller.reset()
         if draw is not None:
             offsets = ", ".join(
@@ -613,6 +485,7 @@ def main() -> None:
             f"Resampled: cube ({cube.x:.4f}, {cube.y:.4f}) yaw {cube.yaw:.3f}, "
             f"drop zone ({target.x:.4f}, {target.y:.4f}) yaw {target_yaw:.3f}"
         )
+        return reset
 
     # Press Enter (in the viewer or a --show window) to resample the scene. Every
     # letter key is already bound to a MuJoCo viewer visualization toggle, so a
@@ -626,7 +499,9 @@ def main() -> None:
 
     viewer_ctx = None
     if not args.headless:
-        viewer_ctx = mujoco.viewer.launch_passive(model, data, key_callback=key_callback)
+        viewer_ctx = mujoco.viewer.launch_passive(
+            env.model, env.data, key_callback=key_callback
+        )
     viewer = viewer_ctx.__enter__() if viewer_ctx is not None else None
 
     if args.controller == "lerobot":
@@ -651,6 +526,9 @@ def main() -> None:
     # analysis can treat each sampled scene as an independent rollout.
     trajectory: list[dict] = []
     segment = 0
+    # The first scene was drawn before the controller existed, so the env is
+    # reset onto it here rather than in `resample_scene`.
+    observation, info = reset_episode(source_pose, target_xy, target_yaw)
     try:
         while viewer is None or viewer.is_running():
             tick_start = time.time()
@@ -659,18 +537,11 @@ def main() -> None:
                 pending_resample["flag"] = True
             if pending_resample["flag"]:
                 pending_resample["flag"] = False
-                resample_scene()
+                observation, info = resample_scene()
                 segment += 1
 
-            wrist_frame = render("wrist_camera")
-            overhead_frame = render("overhead_camera")
-            observation = {
-                STATE_FEATURE: sim_state_to_real(
-                    data.qpos[joint_adr], offsets_rad_now()
-                ),
-                OVERHEAD_FEATURE: overhead_frame,
-                WRIST_FEATURE: wrist_frame,
-            }
+            wrist_frame = observation[WRIST_FEATURE]
+            overhead_frame = observation[OVERHEAD_FEATURE]
             if wrist_writer is not None:
                 wrist_writer.append_data(wrist_frame)
                 overhead_writer.append_data(overhead_frame)
@@ -686,7 +557,7 @@ def main() -> None:
             if args.trajectory_json is not None:
                 # Recorded before the step, so joints and cube pose are exactly
                 # the state the policy conditioned on for this tick.
-                cube_now = data.qpos[cube_qadr : cube_qadr + 3]
+                cube_now = info["task_state"]["cube_position_m"]
                 trajectory.append(
                     {
                         "tick": tick,
@@ -697,21 +568,28 @@ def main() -> None:
                         "target_xy": [float(target_xy[0]), float(target_xy[1])],
                     }
                 )
-            ctrl = real_action_to_sim_ctrl(action_real)
-            offsets = offsets_rad_now()
-            offset_ctrl = np.array([offsets.get(name, 0.0) for name in JOINT_NAMES])
-            data.ctrl[:] = np.clip(ctrl + offset_ctrl, ctrl_low, ctrl_high)
-
-            mujoco.mj_step(model, data, nstep=substeps)
+            observation, _, terminated, truncated, info = env.step(action_real)
             if viewer is not None:
                 viewer.sync()
+            # This does not end the run: the scene keeps flying until --steps or
+            # the next resample, which is what makes this a thing to watch
+            # rather than a scored episode. It is worth saying out loud, though.
+            # Truncation is not, being this runner's own budget arriving on
+            # schedule -- it lands on the resample that was coming anyway.
+            if terminated:
+                reason = (
+                    "collision" if info["task_state"]["unexpected_collision"]
+                    else "cube out of bounds" if info["task_state"]["out_of_bounds"]
+                    else "placement confirmed"
+                )
+                print(f"tick {tick:4d}  a scored episode would have ended here: {reason}")
 
             if tick % 10 == 0:
                 np.set_printoptions(precision=3, suppress=True)
-                cube_xyz = data.qpos[cube_qadr : cube_qadr + 3]
+                cube_xyz = info["task_state"]["cube_position_m"]
                 dist = math.hypot(cube_xyz[0] - target_xy[0], cube_xyz[1] - target_xy[1])
                 print(
-                    f"tick {tick:4d}  ctrl(rad)={data.ctrl[:]}  "
+                    f"tick {tick:4d}  ctrl(rad)={env.data.ctrl[:]}  "
                     f"cube=({cube_xyz[0]:+.3f}, {cube_xyz[1]:+.3f}, {cube_xyz[2]:+.3f})  "
                     f"to-target={dist * 100:.1f}cm"
                 )
@@ -726,7 +604,7 @@ def main() -> None:
     except KeyboardInterrupt:
         print("\nInterrupted.")
     finally:
-        renderer.close()
+        env.close()
         close_controller = getattr(controller, "close", None)
         if close_controller is not None:
             close_controller()
@@ -757,7 +635,7 @@ def main() -> None:
             )
         print(f"Wrote {len(trajectory)} ticks over {segment + 1} segments to {args.trajectory_json}")
 
-    cube_xyz = data.qpos[cube_qadr : cube_qadr + 3]
+    cube_xyz = info["task_state"]["cube_position_m"]
     dist = math.hypot(cube_xyz[0] - target_xy[0], cube_xyz[1] - target_xy[1])
     print(
         f"Ran {tick} control ticks. Final cube ({cube_xyz[0]:+.4f}, {cube_xyz[1]:+.4f}, "

@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, replace
 from typing import Any
 
@@ -20,6 +20,7 @@ from pick_and_place.sim.domain_randomization import (
     DomainSample,
     WristMountRandomizer,
     domain_sample_from_payload,
+    domain_sample_payload,
     reload_renderer_textures,
 )
 from pick_and_place.variants.scene import AppearanceRandomizer
@@ -27,11 +28,15 @@ from pick_and_place.sim.collisions import build_geom_sets, is_unexpected, scan_c
 from pick_and_place.spec.robot import CONTROL_HZ, HARDWARE_SIMULATION_HZ
 from pick_and_place.spec.robot import ARM_JOINT_NAMES, GRIPPER_INDEX, JOINT_NAMES
 from pick_and_place.core.joint_frames import real_frame_to_sim, sim_frame_to_real
-from pick_and_place.core.geometry import JAW_CONTACT_POSITION
-from pick_and_place.core.miscalibration import MiscalibrationDraw, miscalibration_from_payload
+from pick_and_place.core.geometry import CubePose, JAW_CONTACT_POSITION, cube_quat_from_pose
+from pick_and_place.core.miscalibration import (
+    MiscalibrationDraw,
+    miscalibration_from_payload,
+    miscalibration_payload,
+)
 from pick_and_place.core.physics import PhysicsDraw
 from pick_and_place.sim.physics import PhysicsRandomizer, tracking_bias_offsets
-from pick_and_place.spec.workspace import DROP_ZONE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
 from pick_and_place.sim.paper_target_marker import add_paper_target_marker, place_paper_target_marker
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, PolicyController, PolicyObservation, STATE_FEATURE, WRIST_FEATURE
 from pick_and_place.policies.policy_evaluation import (
@@ -47,8 +52,9 @@ from pick_and_place.core.robot_dynamics import (
     tracking_bias_vector,
 )
 from pick_and_place.variants.appearance import SceneAppearance, SceneAppearanceOverride
-from pick_and_place.core.image_ops import resize_and_center_crop
+from pick_and_place.core.image_ops import downsample_through_recording
 from pick_and_place.core.workspace_bounds import is_cube_drop_allowed
+from pick_and_place.scripted.scenario_sampling import workspace_region
 
 _MAX_CUBE_RADIUS_M = 0.8
 _MIN_CUBE_HEIGHT_M = -0.05
@@ -159,6 +165,78 @@ def _domain_sample_from_scenario(
     )
 
 
+#: The interactive runner has no frozen suite to name a scenario from, and the
+#: env only uses the id to say which scenario a message is about.
+LIVE_SCENARIO_ID = "live"
+
+
+def live_scenario(
+    *,
+    source: CubePose,
+    target_xy: tuple[float, float],
+    target_plate_yaw_rad: float,
+    initial_robot_state_real: Sequence[float],
+    control_hz: float,
+    max_steps: int,
+    seed: int | None = None,
+    miscalibration: MiscalibrationDraw | None = None,
+    domain_sample: DomainSample | None = None,
+    domain_preset_name: str | None = None,
+    physics: PhysicsDraw | None = None,
+    scenario_id: str = LIVE_SCENARIO_ID,
+) -> EvaluationScenario:
+    """Freeze an interactively sampled episode into a scenario the env can reset.
+
+    :class:`PolicySimEnv` is reset by a fully materialized scenario, because a
+    scored run must come from a frozen manifest and nothing else -- that the
+    manifest is the only source of truth is what makes two scored runs
+    comparable. A caller sampling its own cube and target therefore has to say
+    what it drew in the same language, which is what this does.
+
+    The draws round-trip through their payload form rather than being handed
+    over as objects. That costs a serialization the values did not need, and
+    buys the property worth more: there is exactly one way into the env, so a
+    scenario written to a manifest and a scenario built here cannot diverge in
+    what they mean. It also makes an interactively found scene directly
+    reproducible -- the payload this produces is the payload a manifest carries.
+
+    ``seed`` is provenance, recorded so a trajectory log can say what produced
+    it; the env does not read it. An unseeded run records 0.
+    """
+    physics = PhysicsDraw() if physics is None else physics
+    if miscalibration is None:
+        miscalibration_sample = {
+            "joint_offsets_deg": {},
+            "pan_jitter": None,
+            "cube_belief_error": [0.0, 0.0, 0.0, 0.0],
+            "target_belief_error": [0.0, 0.0],
+        }
+    else:
+        miscalibration_sample = miscalibration_payload(miscalibration)
+    if domain_sample is None:
+        domain_randomization_sample: dict[str, Any] = {"enabled": False}
+    else:
+        domain_randomization_sample = domain_sample_payload(domain_sample)
+        domain_randomization_sample["enabled"] = True
+    return EvaluationScenario(
+        scenario_id=scenario_id,
+        group="live",
+        workspace_region=workspace_region(source),
+        seed=0 if seed is None else int(seed),
+        source_position_m=(source.x, source.y, source.z),
+        source_orientation_wxyz=tuple(float(v) for v in cube_quat_from_pose(source)),
+        target_position_m=(float(target_xy[0]), float(target_xy[1]), CUBE_HALF_SIZE),
+        initial_robot_state_real=tuple(float(v) for v in initial_robot_state_real),
+        domain_randomization_preset=domain_preset_name,
+        domain_randomization_sample=domain_randomization_sample,
+        miscalibration_sample=miscalibration_sample,
+        control_hz=float(control_hz),
+        max_steps=int(max_steps),
+        target_plate_yaw_rad=float(target_plate_yaw_rad),
+        physics_sample=asdict(physics),
+    )
+
+
 class PolicySimEnv(gym.Env):
     """Headless visual policy environment reset by an explicit frozen scenario."""
 
@@ -169,6 +247,7 @@ class PolicySimEnv(gym.Env):
         *,
         image_hw: tuple[int, int],
         render_hw: tuple[int, int] = (1080, 1920),
+        recording_hw: tuple[int, int] | None = None,
         renderer_factory: RendererFactory = mujoco.Renderer,
         scene_appearance: SceneAppearance | None = None,
         terminate_on_success: bool = True,
@@ -184,8 +263,19 @@ class PolicySimEnv(gym.Env):
             raise ValueError("image and render dimensions must be positive")
         if render_height < image_height or render_width < image_width:
             raise ValueError("render dimensions must be at least the policy image dimensions")
+        # A policy trained on video reached its input size in two hops, and the
+        # neighbourhood averaged into each pixel differs from a single hop's.
+        # Defaulting to the policy size is the one-hop path, which is what a
+        # controller that never saw a video wants.
+        recording_hw = image_hw if recording_hw is None else recording_hw
+        recording_height, recording_width = recording_hw
+        if min(recording_height, recording_width) < 1:
+            raise ValueError("recording dimensions must be positive")
+        if render_height < recording_height or render_width < recording_width:
+            raise ValueError("render dimensions must be at least the recording dimensions")
         self.image_hw = image_hw
         self.render_hw = render_hw
+        self.recording_hw = recording_hw
         self.model, self.data = build_policy_sim_model(
             render_height,
             render_width,
@@ -407,10 +497,14 @@ class PolicySimEnv(gym.Env):
     def _render_camera(self, camera: str) -> np.ndarray:
         renderer = self._renderer_instance()
         renderer.update_scene(self.data, camera=camera)
-        image = resize_and_center_crop(renderer.render(), *self.image_hw)
-        if self._domain_sample is not None:
-            image = self._randomizer.postprocess(image)
-        return image
+        # The draw's per-frame noise is applied at the recording size, where the
+        # recorder applied it, rather than after the final reduction.
+        return downsample_through_recording(
+            renderer.render(),
+            self.recording_hw,
+            self.image_hw,
+            self._randomizer.postprocess if self._domain_sample is not None else None,
+        )
 
     def _observation(self) -> dict[str, np.ndarray]:
         observation = {

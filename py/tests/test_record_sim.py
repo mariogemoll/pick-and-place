@@ -15,8 +15,8 @@ import pandas as pd
 import pytest
 
 from pick_and_place.data import sim_dataset_staging as staging
-from pick_and_place.core.image_ops import resize_and_center_crop
-from pick_and_place.rollout.sim import configure_render_quality, downsample_through_recording
+from pick_and_place.core.image_ops import downsample_through_recording, resize_and_center_crop
+from pick_and_place.rollout.sim import configure_render_quality
 from pick_and_place.data.recording_config import FrameSizes
 
 
