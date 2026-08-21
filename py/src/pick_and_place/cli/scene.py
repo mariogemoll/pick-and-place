@@ -167,37 +167,49 @@ def add_seed_base_argument(parser: argparse.ArgumentParser, *, default: int) -> 
 
 
 def add_physics_randomization_argument(parser: argparse.ArgumentParser) -> None:
-    """Add ``--physics-randomization``, how far a drawn arm may differ from the nominal one.
+    """Add ``--physics-randomization``: how far a drawn arm may differ from the nominal one.
 
-    One amount dial over servo gain and time constant, link mass, surface
-    friction, joint damping, stiction and droop. The manifest generator and the
-    recorder draw from the same stream, so they have to spell it the same way.
+    The manifest generator and the sim recorder draw from the same stream, so a
+    suite generated at one amount and recorded at another is not the comparison
+    it looks like.
     """
     parser.add_argument(
         "--physics-randomization",
         type=float,
         default=0.0,
         metavar="AMOUNT",
-        help="how far each episode's arm may differ from the nominal one: servo gain and "
-        "time constant, link mass, surface friction, joint damping, stiction and droop, "
-        "behind one amount dial (default: 0, the nominal arm)",
+        help="how far each episode's arm may differ from the nominal one: servo gain and time "
+        "constant, link mass, surface friction, joint damping, stiction standing in for "
+        "backlash, and how far a joint droops from its command. One dial over all of them, "
+        "0 for the nominal arm every demonstration has shared so far, 1 for the authored "
+        "spread. The spread is a judgment rather than a measurement -- there is one fitted "
+        "dynamics config, so there is no observed day-to-day variation to draw from. Expect "
+        "yield to fall as it goes up: the planner assumes the nominal arm, which is why the "
+        "dial exists",
     )
 
 
-def add_randomization_arguments(parser: argparse.ArgumentParser) -> None:
-    """Add the visual randomization preset and the measured miscalibration draw.
+def add_miscalibration_argument(parser: argparse.ArgumentParser, *, extra_help: str = "") -> None:
+    """Add ``--miscalibration``, the measured real-robot calibration error, injected.
 
-    The recorder and the sim policy runner have to agree on these or a policy is
-    trained on one distribution and watched on another.
+    What the draw *is* is shared -- joint-zero offsets and a believed cube/target
+    pose error, with the plan running in the believed frame and physics in the
+    true one. ``extra_help`` is where a command says what its own loop then does
+    about it, which is the part that differs between recording an expert episode
+    and driving a learned policy.
     """
     parser.add_argument(
         "--miscalibration",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="inject a measured joint-zero miscalibration draw: the plan runs in the believed "
-        "frame and physics in the true one, observations use servo-style readback, and "
-        "actions are shifted into the true physical joint frame",
+        help="inject per-episode draws of the measured real-robot miscalibration (joint-zero "
+        "offsets, believed cube/target pose error): the plan runs in the believed frame and "
+        "physics in the true frame" + extra_help,
     )
+
+
+def add_domain_randomization_argument(parser: argparse.ArgumentParser) -> None:
+    """Add ``--domain-randomization``, the preset that draws a whole scene per episode."""
     parser.add_argument(
         "--domain-randomization",
         type=Path,
