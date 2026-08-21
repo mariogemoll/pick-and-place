@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 from fpdf import FPDF
 
+from pick_and_place.cli.common import add_out_dir_argument
 from pick_and_place.core.paths import outputs_root
 
 # Paper sizes in mm
@@ -153,8 +154,8 @@ def main():
                         help="Robotics presets: workspace_frame (40mm, IDs 12-15), cube (20mm, IDs 0-5), drop_box (60mm, IDs 8-11)")
 
     parser.add_argument("--ids", type=int, nargs='+', help="Specific IDs to generate (0-25)")
-    parser.add_argument("--tag_size_mm", type=float, default=40.0, help="Manual tag size in mm")
-    parser.add_argument("--output_dir", type=str, help="Output directory")
+    parser.add_argument("--tag-size-mm", type=float, default=40.0, help="Manual tag size in mm")
+    add_out_dir_argument(parser, help="directory for the generated PDFs")
     parser.add_argument("--paper", type=str, default="A4", choices=PAPER_SIZES.keys(), help="Paper format")
     
     args = parser.parse_args()
@@ -172,7 +173,7 @@ def main():
         tag_ids = [12, 13, 14, 15]
         print("No IDs or preset specified. Defaulting to workspace_frame tags (12-15).")
 
-    output_dir = args.output_dir or str(outputs_root() / "apriltags")
+    output_dir = str(args.out_dir or outputs_root() / "apriltags")
     generate_tags(tag_ids, output_dir, tag_size, 10.0, args.paper)
 
 if __name__ == "__main__":
