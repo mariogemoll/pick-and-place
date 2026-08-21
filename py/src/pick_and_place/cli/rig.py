@@ -16,18 +16,23 @@ from pathlib import Path
 from pick_and_place.runtime.overhead_detection import DEFAULT_ALERT_SOUND
 
 
-def add_follower_arguments(parser: argparse.ArgumentParser, *, port_required: bool = True) -> None:
+def add_follower_arguments(
+    parser: argparse.ArgumentParser, *, port: bool = True, port_required: bool = True
+) -> None:
     """Add the serial port and calibration id of the SO-101 follower.
 
-    ``port_required`` is false for the one command that can run without the
-    follower attached: the wrist-camera solve drives the leader and only moves
-    the follower if it is there.
+    ``port`` is false for a command that names an arm without opening it -- the
+    calibration comparison reads the stored file and never touches the serial
+    line, so offering it a port would be offering a flag it must then ignore.
+    ``port_required`` keeps the flag but makes it optional, for the wrist-camera
+    solve, which drives the leader and moves the follower only if it is there.
     """
-    parser.add_argument(
-        "--follower-port",
-        required=port_required,
-        help="serial port of the SO-101 follower",
-    )
+    if port:
+        parser.add_argument(
+            "--follower-port",
+            required=port_required,
+            help="serial port of the SO-101 follower",
+        )
     parser.add_argument(
         "--follower-id", default="folly", help="follower calibration id (default: folly)"
     )
@@ -36,8 +41,7 @@ def add_follower_arguments(parser: argparse.ArgumentParser, *, port_required: bo
 def add_leader_arguments(parser: argparse.ArgumentParser, *, port: bool = True) -> None:
     """Add the serial port and calibration id of the SO-101 leader.
 
-    ``port`` is false for the command that only compares stored calibrations and
-    never opens either arm.
+    ``port`` follows the same rule as :func:`add_follower_arguments`.
     """
     if port:
         parser.add_argument(

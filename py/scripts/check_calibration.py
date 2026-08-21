@@ -5,6 +5,8 @@ import argparse
 import json
 from pathlib import Path
 
+from pick_and_place.cli.rig import add_follower_arguments, add_leader_arguments
+
 # Feetech STS3215 resolution: 4096 steps per 360 degrees
 STEPS_PER_DEGREE = 4096 / 360.0
 
@@ -64,8 +66,8 @@ def check_joint(joint_name: str, leader_data: dict, follower_data: dict):
 
 def main():
     parser = argparse.ArgumentParser(description="Check and compare LeRobot calibrations for SO101")
-    parser.add_argument("--leader-id", default="liddy", help="Leader ID in lerobot cache")
-    parser.add_argument("--follower-id", default="folly", help="Follower ID in lerobot cache")
+    add_leader_arguments(parser, port=False)
+    add_follower_arguments(parser, port=False)
     args = parser.parse_args()
 
     leader_path = get_lerobot_calibration_path("teleoperators/so_leader", args.leader_id)
