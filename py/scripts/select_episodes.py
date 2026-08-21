@@ -48,6 +48,10 @@ from pathlib import Path
 
 import numpy as np
 
+from pick_and_place.cli.dataset import (
+    add_source_dataset_argument,
+    add_success_tolerance_argument,
+)
 from pick_and_place.data.dataset_subset import (
     SUCCESS_XY_TOLERANCE_M,
     load_all_episodes,
@@ -57,11 +61,9 @@ from pick_and_place.data.dataset_subset import (
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--src", type=Path, required=True, help="source LeRobotDataset root")
-    parser.add_argument(
-        "--xy-tolerance",
-        type=float,
-        default=SUCCESS_XY_TOLERANCE_M,
+    add_source_dataset_argument(parser)
+    add_success_tolerance_argument(
+        parser,
         help=f"success placement-XY tolerance in metres (default: {SUCCESS_XY_TOLERANCE_M})",
     )
     parser.add_argument(
