@@ -34,7 +34,7 @@ import numpy as np
 from pick_and_place.calibration.charuco_board import make_board
 from pick_and_place.cli.calibration import add_charuco_board_arguments
 from pick_and_place.cli.common import add_output_argument
-from pick_and_place.cli.rig import add_capture_size_arguments
+from pick_and_place.cli.rig import add_camera_device_argument, add_capture_size_arguments
 
 
 @dataclass
@@ -276,7 +276,7 @@ def draw_status(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--camera", default="0", help="OpenCV camera index or device path")
+    add_camera_device_argument(parser)
     add_output_argument(
         parser, required=True, help="destination JSON path for the calibrated intrinsics"
     )

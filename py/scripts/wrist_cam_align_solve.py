@@ -33,6 +33,7 @@ import numpy as np
 
 from pick_and_place.cli.common import add_output_argument
 from pick_and_place.cli.rig import (
+    add_camera_device_argument,
     add_capture_size_arguments,
     add_follower_arguments,
     add_leader_arguments,
@@ -174,7 +175,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     add_leader_arguments(parser)
     add_follower_arguments(parser, port_required=False)
-    parser.add_argument("--camera", required=True, help="OpenCV camera index or device path")
+    add_camera_device_argument(parser, required=True)
     parser.add_argument("--camera-name", default="wrist_camera")
     parser.add_argument("--intrinsics", type=Path, default=None)
     add_output_argument(parser, help="destination JSON for the solved wrist-camera alignment")
