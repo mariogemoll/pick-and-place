@@ -63,6 +63,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="List a dataset's episodes that pass a success filter.",
         script="select_episodes.py",
     ),
+    Command(
+        name="combine-datasets",
+        summary="Merge several LeRobot datasets into one.",
+        script="combine_datasets.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}

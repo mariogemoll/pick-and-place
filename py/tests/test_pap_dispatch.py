@@ -43,7 +43,6 @@ PENDING = {
     "capture_rest_pose.py",
     "check_calibration.py",
     "check_overhead_localization.py",
-    "combine_datasets.py",
     "compare_policy_evaluations.py",
     "consolidate_datasets.py",
     "convert_dataset_resolution.py",
