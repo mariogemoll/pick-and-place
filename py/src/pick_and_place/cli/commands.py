@@ -198,6 +198,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Fit the follower's actuator dynamics from recorded datasets.",
         script="calibrate_robot_dynamics.py",
     ),
+    Command(
+        name="generate-scenario-manifest",
+        summary="Generate a frozen scenario manifest.",
+        script="generate_scenario_manifest.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}

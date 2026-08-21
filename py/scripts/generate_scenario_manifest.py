@@ -59,6 +59,7 @@ from pick_and_place.cli.scene import (
     add_physics_randomization_argument,
     add_seed_base_argument,
 )
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.sim.domain_randomization import (
     DomainSample,
     DomainRandomizationPreset,
@@ -233,8 +234,9 @@ def _scenario(
     }
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the manifest generator."""
+    parser = SuggestingArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     add_suite_name_argument(
@@ -265,7 +267,11 @@ def main() -> None:
             "same --seed-base as the canonical suite for a paired comparison."
         ),
     )
-    args = parser.parse_args()
+    return parser
+
+
+def validate(parser: SuggestingArgumentParser, args: argparse.Namespace) -> None:
+    """Reject the ranges argparse's own types cannot check."""
     if args.count < 1:
         parser.error("--count must be at least 1")
     if not math.isfinite(args.control_hz) or args.control_hz <= 0.0:
@@ -277,6 +283,9 @@ def main() -> None:
     if args.scenarios_per_file is not None and args.scenarios_per_file < 1:
         parser.error("--scenarios-per-file must be at least 1")
 
+
+def run(args: argparse.Namespace) -> None:
+    """Draw the scenarios and write the manifest."""
     preset = (
         DomainRandomizationPreset.load(args.domain_randomization_preset)
         if args.domain_randomization_preset is not None
@@ -306,6 +315,13 @@ def main() -> None:
     }
     _write_manifest(args.output, payload, args.scenarios_per_file)
     print(f"Wrote {args.output}: {len(scenarios)} scenarios")
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    validate(parser, args)
+    run(args)
 
 
 if __name__ == "__main__":
