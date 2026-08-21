@@ -33,6 +33,7 @@ from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
+from pick_and_place.cli.common import add_output_argument
 from pick_and_place.policies.policy_evaluation import (
     EpisodeResult,
     FailureFlags,
@@ -45,7 +46,7 @@ from pick_and_place.policies.policy_evaluation import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("shards", type=Path, nargs="+", help="shard result directories")
-    parser.add_argument("--output", type=Path, required=True, help="merged result directory")
+    add_output_argument(parser, required=True, help="merged result directory")
     return parser.parse_args()
 
 
