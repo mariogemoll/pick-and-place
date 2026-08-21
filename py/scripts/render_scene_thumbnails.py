@@ -23,10 +23,12 @@ import numpy as np
 
 from pick_and_place.cli.common import add_out_dir_argument, add_output_size_arguments
 from pick_and_place.cli.scene import add_scene_appearance_arguments
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 
 
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the thumbnail renderer."""
+    parser = SuggestingArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--phenotypes", type=Path, required=True)
     parser.add_argument(
         "--count", type=int, default=6, help="scenes to render from each end"
@@ -34,11 +36,11 @@ def _parse_args() -> argparse.Namespace:
     add_output_size_arguments(parser, width=480, height=360, noun="thumbnail")
     add_scene_appearance_arguments(parser, default="blue-cube")
     add_out_dir_argument(parser, required=True, help="directory for the rendered thumbnails")
-    return parser.parse_args()
+    return parser
 
 
-def main() -> None:
-    args = _parse_args()
+def run(args: argparse.Namespace) -> None:
+    """Render the thumbnails."""
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -86,6 +88,10 @@ def main() -> None:
         env.close()
     (args.out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Wrote {args.out_dir / 'manifest.json'}")
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":

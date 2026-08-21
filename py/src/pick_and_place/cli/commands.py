@@ -123,6 +123,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Ramp the follower arm to its rest pose and release it.",
         script="park_follower.py",
     ),
+    Command(
+        name="render-scene-thumbnails",
+        summary="Render the initial overhead frame of chosen scenes.",
+        script="render_scene_thumbnails.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
