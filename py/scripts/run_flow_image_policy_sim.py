@@ -29,18 +29,7 @@ import numpy as np
 import torch
 
 from pick_and_place.analysis.flow_trace_recording import FlowTraceRecording, encode
-from pick_and_place.cli.common import add_output_argument
-from pick_and_place.cli.policy import (
-    add_device_argument,
-    add_flow_export_arguments,
-    add_integration_steps_argument,
-    add_save_video_argument,
-)
-from pick_and_place.cli.scene import (
-    add_scene_appearance_arguments,
-    add_seed_base_argument,
-    add_viewer_argument,
-)
+from pick_and_place.cli.run_flow_image_policy_sim import build_parser
 from pick_and_place.policies.flow_image_policy import (
     FlowImagePolicyController,
     summarize_smoothness,
@@ -117,49 +106,8 @@ def observation_frame(observation: dict[str, np.ndarray]) -> np.ndarray:
     )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    add_flow_export_arguments(parser)
-    parser.add_argument(
-        "--scenarios",
-        type=int,
-        default=50,
-        help="how many scenes of the seed stream to run (0 = keep going until the viewer "
-        "is closed or Ctrl-C)",
-    )
-    add_seed_base_argument(parser, default=6_000_000)
-    parser.add_argument(
-        "--act-steps", type=int, default=8, help="executed actions per policy query (default: 8)"
-    )
-    add_integration_steps_argument(parser)
-    parser.add_argument("--policy-seed", type=int, default=0)
-    parser.add_argument(
-        "--noise-correlation",
-        type=float,
-        default=0.0,
-        help="how much of the previous query's noise to carry into the next, from 0 "
-        "(independent draws) to 1 (reused wherever the horizons overlap). Correlating "
-        "the draws keeps consecutive chunks in the same mode (default: 0)",
-    )
-    add_device_argument(parser, default="cuda")
-    add_scene_appearance_arguments(parser)
-    add_output_argument(parser, help="directory for the per-scenario rollout JSON")
-    parser.add_argument(
-        "--record-trace",
-        type=Path,
-        default=None,
-        help="directory to write one .bin per scenario holding the replay state and the "
-        "flow integration path behind every generated horizon, for the web viewer",
-    )
-    add_viewer_argument(
-        parser,
-        help="watch the rollouts in the MuJoCo viewer, throttled to the control rate "
-        "(run under mjpython)",
-    )
-    add_save_video_argument(
-        parser, help="directory to write one mp4 per scenario of the frames the policy sees"
-    )
-    args = parser.parse_args()
+def run(args: argparse.Namespace) -> None:
+    """Run the image-flow policy over the seed stream of scenes."""
 
     policy = FlowImagePolicyController.from_export(
         args.checkpoint,
@@ -323,6 +271,10 @@ def main() -> None:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         with args.output.open("w") as file:
             json.dump(summary, file, indent=2)
+
+
+def main() -> None:
+    run(build_parser(description=__doc__).parse_args())
 
 
 if __name__ == "__main__":

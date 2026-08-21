@@ -284,6 +284,12 @@ COMMANDS: tuple[Command, ...] = (
         script="diagnose_flow_image_policy.py",
         parser="pick_and_place.cli.diagnose_flow_image_policy",
     ),
+    Command(
+        name="run-flow-image-sim",
+        summary="Run the image-conditioned flow policy over a stream of scenes.",
+        script="run_flow_image_policy_sim.py",
+        parser="pick_and_place.cli.run_flow_image_policy_sim",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
