@@ -35,6 +35,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from pick_and_place.cli.rig import add_capture_size_arguments
+
 BOUNDARY = "frameboundary"
 BY_PATH = Path("/dev/v4l/by-path")
 TAG_FAMILY = "tagStandard41h12"
@@ -426,8 +428,7 @@ def main() -> None:
     parser.add_argument(
         "--match", default="", help="only nodes whose device name contains this (default: all)"
     )
-    parser.add_argument("--width", type=int, default=1280)
-    parser.add_argument("--height", type=int, default=720)
+    add_capture_size_arguments(parser, width=1280, height=720)
     parser.add_argument("--frames", type=int, default=8, help="frames to inspect per camera")
     parser.add_argument("--identify-only", action="store_true")
     parser.add_argument("--bind", default="0.0.0.0")
