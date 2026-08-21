@@ -36,6 +36,11 @@ dependencies = [
     "scipy",
     "sounddevice",
     "tqdm",
+    # The trainers' configs are dataclasses so a run can be written out and read
+    # back. tyro accepts both --batch-size and --batch_size, so adopting it
+    # renamed nothing; draccus (already here under lerobot) takes only the
+    # underscored form and would have renamed every trainer flag.
+    "tyro",
     "wandb",
 ]
 

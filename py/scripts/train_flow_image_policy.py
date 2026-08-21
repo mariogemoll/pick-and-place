@@ -16,16 +16,19 @@ warmup, then cosine decay reaching its minimum at the final update.
 
 from __future__ import annotations
 
-import argparse
 import json
 import time
 from dataclasses import asdict
-from pathlib import Path
 
 import numpy as np
 import torch
 
 from pick_and_place.data.flow_image_dataset import FlowImageExport
+from pick_and_place.cli.training import (
+    ImageTrainingRun,
+    config_to_json,
+    parse_training_config,
+)
 from pick_and_place.policies.flow_image_encoder import FlowImageUnet1D, model_config
 from pick_and_place.policies.flow_matching import learning_rate_at_step
 from pick_and_place.policies.image_augmentation import (
@@ -78,78 +81,7 @@ def augment(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--export", type=Path, required=True, help="Diffusion Policy image export")
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--updates", type=int, default=30_000)
-    parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--learning-rate", type=float, default=1e-4)
-    parser.add_argument("--min-learning-rate", type=float, default=1e-6)
-    parser.add_argument("--warmup-steps", type=int, default=500)
-    parser.add_argument("--observation-steps", type=int, default=2)
-    parser.add_argument("--prediction-steps", type=int, default=16)
-    parser.add_argument("--keypoints", type=int, default=32)
-    parser.add_argument("--pretrained-backbone", action="store_true")
-    parser.add_argument(
-        "--trunk-stages",
-        type=int,
-        default=3,
-        choices=(1, 2, 3, 4),
-        help="ResNet18 residual stages to keep; 3 stops after layer3, halving the "
-        "model and doubling the keypoint map the spatial softmax localizes over "
-        "(default: 3). Pass 4 for the full trunk. Note this is the default for "
-        "*new runs* only -- CameraEncoder still defaults to 4, because "
-        "checkpoints written before the flag existed carry no trunk_stages in "
-        "their model_config and must keep loading as full trunks.",
-    )
-    parser.add_argument("--validation-fraction", type=float, default=0.1)
-    parser.add_argument("--validation-interval", type=int, default=2_000)
-    parser.add_argument("--validation-batches", type=int, default=40)
-    parser.add_argument("--checkpoint-interval", type=int, default=5_000)
-    parser.add_argument("--log-interval", type=int, default=100)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--device", default="cuda")
-    parser.add_argument(
-        "--random-shift",
-        type=int,
-        default=0,
-        help="pixels of random translation augmentation per camera (0 disables)",
-    )
-    parser.add_argument(
-        "--random-scale-pct",
-        type=float,
-        default=0.0,
-        help=(
-            "percent of random zoom per camera, standing in for the overhead "
-            "camera's between-session focal length (0 disables)"
-        ),
-    )
-    parser.add_argument(
-        "--photometric-augmentation",
-        action="store_true",
-        help=(
-            "randomize each camera's exposure, white balance, gamma, read noise "
-            "and focus; the ranges are PhotometricRanges' defaults"
-        ),
-    )
-    parser.add_argument(
-        "--resume",
-        type=Path,
-        default=None,
-        help=(
-            "warm-start from a checkpoint's weights and run a fresh schedule. "
-            "The optimizer state is deliberately not restored: this is a new "
-            "cosine cycle, not a continuation of the old one"
-        ),
-    )
-    parser.add_argument("--amp", action="store_true", default=True)
-    parser.add_argument("--no-amp", dest="amp", action="store_false")
-    # Matching train_flow_policy.py: logging is opt-in through --wandb-project,
-    # so a run without it stays offline rather than half-configured.
-    parser.add_argument("--wandb-project")
-    parser.add_argument("--wandb-entity")
-    parser.add_argument("--wandb-run-name")
-    args = parser.parse_args()
+    args = parse_training_config(ImageTrainingRun, description=__doc__)
 
     args.output.mkdir(parents=True, exist_ok=True)
     device = torch.device(args.device)
@@ -217,7 +149,7 @@ def main() -> None:
             project=args.wandb_project,
             entity=args.wandb_entity,
             name=args.wandb_run_name or args.output.name,
-            config=vars(args)
+            config=config_to_json(args)
             | {
                 "export": str(args.export.resolve()),
                 "output": str(args.output.resolve()),
