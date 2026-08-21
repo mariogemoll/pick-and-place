@@ -51,6 +51,7 @@ from pick_and_place.cli.dataset import (
     add_source_dataset_argument,
     add_success_tolerance_argument,
 )
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.data.dataset_subset import (
     SUCCESS_XY_TOLERANCE_M,
     load_all_episodes,
@@ -58,8 +59,9 @@ from pick_and_place.data.dataset_subset import (
 )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the episode selector."""
+    parser = SuggestingArgumentParser(description=__doc__)
     add_source_dataset_argument(parser)
     add_success_tolerance_argument(
         parser,
@@ -73,8 +75,11 @@ def main() -> None:
             'filter (e.g. "placement_detected and placement_xy <= 0.02")'
         ),
     )
-    args = parser.parse_args()
+    return parser
 
+
+def run(args: argparse.Namespace) -> None:
+    """List the episodes of a dataset that pass the filter."""
     episodes = load_all_episodes(args.src).copy()
 
     if args.query is None:
@@ -97,6 +102,10 @@ def main() -> None:
     )
     for idx in kept_indices:
         print(idx)
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":

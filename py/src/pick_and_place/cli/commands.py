@@ -58,6 +58,11 @@ COMMANDS: tuple[Command, ...] = (
         script="eval_policy_sim.py",
         parser="pick_and_place.cli.eval_policy_sim",
     ),
+    Command(
+        name="select-episodes",
+        summary="List a dataset's episodes that pass a success filter.",
+        script="select_episodes.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}

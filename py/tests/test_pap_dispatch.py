@@ -77,7 +77,6 @@ PENDING = {
     "run_flow_image_policy_sim.py",
     "run_policy_real.py",
     "run_policy_sim.py",
-    "select_episodes.py",
     "showcamfeed.py",
     "showcamfeeds.py",
     "split_train_val_episodes.py",
