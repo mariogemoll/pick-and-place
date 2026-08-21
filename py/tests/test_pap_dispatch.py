@@ -43,7 +43,6 @@ PENDING = {
     "eval_scripted_parallel.py",
     "export_camera_calibrations.py",
     "export_episode_rolls.py",
-    "fit_joint_zeros.py",
     "fit_sag.py",
     "freeze_scenario_rig.py",
     "generate_apriltags.py",
