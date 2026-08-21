@@ -30,13 +30,10 @@ def add_dataset_arguments(
     software codec because MuJoCo already owns the GPU, while the teleop recorder
     is free to probe for a hardware encoder.
     """
-    parser.add_argument(
-        "--dataset-root",
-        type=Path,
-        default=None,
-        help="output directory for the LeRobotDataset (default: datasets/<timestamp>)",
+    add_dataset_root_argument(
+        parser, help="output directory for the LeRobotDataset (default: datasets/<timestamp>)"
     )
-    parser.add_argument("--repo-id", default=repo_id, help="dataset repo id stored in metadata")
+    add_repo_id_argument(parser, default=repo_id, help="dataset repo id stored in metadata")
     parser.add_argument(
         "--task",
         default=DEFAULT_TASK,
@@ -150,3 +147,10 @@ def add_video_encoding_arguments(
         default=4,
         help="background image-writer threads for PNG-then-encode mode",
     )
+
+
+def add_dataset_root_argument(
+    parser: argparse.ArgumentParser, *, help: str, required: bool = False
+) -> None:
+    """Add ``--dataset-root``, the LeRobotDataset a command writes or completes."""
+    parser.add_argument("--dataset-root", type=Path, default=None, required=required, help=help)
