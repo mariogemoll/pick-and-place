@@ -93,6 +93,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Export any robot_descriptions model as a web manifest.",
         script="export_generic_robot.py",
     ),
+    Command(
+        name="generate-charuco-board",
+        summary="Render the printable ChArUco calibration board.",
+        script="generate_charuco_board.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}

@@ -54,7 +54,6 @@ PENDING = {
     "fit_sag.py",
     "freeze_scenario_rig.py",
     "generate_apriltags.py",
-    "generate_charuco_board.py",
     "generate_parity_fixtures.py",
     "generate_scenario_manifest.py",
     "measure_cube_visibility.py",
