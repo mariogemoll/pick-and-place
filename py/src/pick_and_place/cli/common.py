@@ -30,9 +30,20 @@ def add_output_argument(
 
     ``help`` is mandatory: a path flag that does not say what lands there is the
     one thing a reader cannot recover from the source.
+
+    The two branches spell the flag out rather than unpacking a list of names,
+    because ``cli_reference.py`` reads this file with ``ast``: a starred call
+    hides the flag from the reference and from the ``dest`` lint that rides
+    along with it.
     """
-    names = ["-o", "--output"] if short else ["--output"]
-    parser.add_argument(*names, type=Path, default=default, required=required, help=help)
+    if short:
+        parser.add_argument(
+            "-o", "--output", type=Path, default=default, required=required, help=help
+        )
+    else:
+        parser.add_argument(
+            "--output", type=Path, default=default, required=required, help=help
+        )
 
 
 def add_out_dir_argument(
@@ -46,16 +57,14 @@ def add_out_dir_argument(
     parser.add_argument("--out-dir", type=Path, default=default, required=required, help=help)
 
 
-def add_seed_argument(
-    parser: argparse.ArgumentParser, *, default: int | None, help: str, flag: str = "--seed"
-) -> None:
+def add_seed_argument(parser: argparse.ArgumentParser, *, default: int | None, help: str) -> None:
     """Add the RNG seed that makes a command's draws repeatable.
 
     ``default`` is deliberately not shared: ``None`` means "draw one" for the
     commands that sample a scene, while the offline ones pin a fixed seed so two
     runs of the same command agree.
     """
-    parser.add_argument(flag, type=int, default=default, help=help)
+    parser.add_argument("--seed", type=int, default=default, help=help)
 
 
 def add_output_size_arguments(
