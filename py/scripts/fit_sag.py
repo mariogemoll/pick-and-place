@@ -42,6 +42,7 @@ from pathlib import Path
 
 import numpy as np
 
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 
 
@@ -248,13 +249,17 @@ def analyze(frames: list[Frame], label: str) -> None:
     )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the sag fit."""
+    parser = SuggestingArgumentParser(description=__doc__)
     parser.add_argument(
         "measurements", type=Path, nargs="+", help="measure_hand_eye_offset --output JSON(s)"
     )
-    args = parser.parse_args()
+    return parser
 
+
+def run(args: argparse.Namespace) -> None:
+    """Fit and report the sag model."""
     frames = load_frames(args.measurements)
     if not frames:
         raise SystemExit("no frames with world deltas and camera poses found")
@@ -264,6 +269,10 @@ def main() -> None:
         analyze([fr for fr in frames if fr.day == day], day)
     if len(days) > 1:
         analyze(frames, "ALL")
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":

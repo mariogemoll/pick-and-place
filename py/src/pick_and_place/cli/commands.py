@@ -158,6 +158,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Fit the arm's joint zeros from hand-eye measurements.",
         script="fit_joint_zeros.py",
     ),
+    Command(
+        name="fit-sag",
+        summary="Fit how far each joint droops from its commanded angle.",
+        script="fit_sag.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
