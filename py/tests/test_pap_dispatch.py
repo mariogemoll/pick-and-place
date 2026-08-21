@@ -41,7 +41,6 @@ PENDING = {
     "diagnose_flow_image_policy.py",
     "eval_scripted_parallel.py",
     "export_camera_calibrations.py",
-    "measure_episode_visibility.py",
     "pick_and_place/finalize_sim_dataset.py",
     "pick_and_place/real.py",
     "pick_and_place/record_sim.py",

@@ -218,6 +218,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Measure how visible the cube is in the policy's own frames.",
         script="measure_cube_visibility.py",
     ),
+    Command(
+        name="measure-episode-visibility",
+        summary="Measure object visibility across staged episodes.",
+        script="measure_episode_visibility.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
