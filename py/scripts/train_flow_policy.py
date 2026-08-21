@@ -2,15 +2,24 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Train the state-conditioned flow policy on an exported dataset."""
+"""Train the state-conditioned flow policy on an exported dataset.
+
+``--config PATH`` seeds every flag from an earlier run's ``config.json``, so a
+recorded run can be repeated with one thing changed rather than reconstructed by
+hand. The command line still wins over the file.
+"""
 
 from __future__ import annotations
 
-import argparse
 import json
-from pathlib import Path
 
 import torch
+
+from pick_and_place.cli.training import (
+    StateTrainingRun,
+    config_to_json,
+    parse_training_config,
+)
 
 from pick_and_place.policies.flow_matching import (
     VelocityModel,
@@ -31,43 +40,18 @@ def select_device(requested: str) -> torch.device:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset", type=Path, required=True)
-    parser.add_argument("--validation", type=Path)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--updates", type=int, default=20_000)
-    parser.add_argument("--batch-size", type=int, default=256)
-    parser.add_argument("--learning-rate", type=float, default=0.003)
-    parser.add_argument("--min-learning-rate", type=float)
-    parser.add_argument("--warmup-steps", type=int, default=0)
-    parser.add_argument("--architecture", choices=("unet1d", "mlp"), default="unet1d")
-    parser.add_argument("--hidden-dim", type=int, default=256)
-    parser.add_argument("--hidden-layers", type=int, default=2)
-    parser.add_argument("--time-embedding-dim", type=int, default=32)
-    parser.add_argument("--prediction-steps", type=int, default=16)
-    parser.add_argument("--unet-down-dims", type=int, nargs="+", default=(64, 128, 256))
-    parser.add_argument("--unet-kernel-size", type=int, default=5)
-    parser.add_argument("--unet-groups", type=int, default=8)
-    parser.add_argument("--device", choices=("auto", "cpu", "mps", "cuda"), default="auto")
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--validation-interval", type=int, default=1)
-    parser.add_argument("--cube-symmetry-augmentation", action="store_true")
-    parser.add_argument("--checkpoint-interval", type=int)
-    parser.add_argument("--wandb-project")
-    parser.add_argument("--wandb-entity")
-    parser.add_argument("--wandb-run-name")
-    args = parser.parse_args()
+    args = parse_training_config(StateTrainingRun, description=__doc__)
     if args.output.exists():
         raise FileExistsError(f"output already exists: {args.output}")
     if args.checkpoint_interval is not None and args.checkpoint_interval < 1:
-        parser.error("--checkpoint-interval must be positive")
+        raise SystemExit("--checkpoint-interval must be positive")
     manifest_path = args.dataset.resolve().parent / "export.json"
     if manifest_path.is_file():
         with manifest_path.open() as file:
             manifest = json.load(file)
         exported_prediction_steps = int(manifest["prediction_steps"])
         if args.prediction_steps != exported_prediction_steps:
-            parser.error(
+            raise SystemExit(
                 f"--prediction-steps {args.prediction_steps} does not match "
                 f"{manifest_path} ({exported_prediction_steps})"
             )
@@ -106,7 +90,7 @@ def main() -> None:
                 args.output / f"checkpoint-{step:06d}.pt",
             )
 
-    config = vars(args) | {"dataset": str(args.dataset.resolve()), "device": str(device)}
+    config = config_to_json(args) | {"dataset": str(args.dataset.resolve()), "device": str(device)}
     config["validation"] = str(args.validation.resolve()) if args.validation else None
     wandb_run = None
     metrics_callback = None
