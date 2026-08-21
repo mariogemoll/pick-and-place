@@ -148,6 +148,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Measure a camera's real frame rate at several resolutions.",
         script="camera_fps_probe.py",
     ),
+    Command(
+        name="fit-pan-zero",
+        summary="Fit the shoulder-pan zero from a hand-eye measurement.",
+        script="fit_pan_zero.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}

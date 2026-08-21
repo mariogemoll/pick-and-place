@@ -44,7 +44,6 @@ PENDING = {
     "export_camera_calibrations.py",
     "export_episode_rolls.py",
     "fit_joint_zeros.py",
-    "fit_pan_zero.py",
     "fit_sag.py",
     "freeze_scenario_rig.py",
     "generate_apriltags.py",

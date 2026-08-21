@@ -27,12 +27,18 @@ from pathlib import Path
 
 import numpy as np
 
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the pan-zero fit."""
+    parser = SuggestingArgumentParser(description=__doc__)
     parser.add_argument("measurement", type=Path, help="measure_hand_eye_offset --output JSON")
-    args = parser.parse_args()
+    return parser
 
+
+def run(args: argparse.Namespace) -> None:
+    """Fit and report the pan zero."""
     with args.measurement.open() as f:
         summary = json.load(f)
 
@@ -70,6 +76,10 @@ def main() -> None:
         f"mean={arr.mean():+.3f}deg std={arr.std():.3f}deg"
     )
     print(f"suggested exporter flag: --joint-offsets-deg shoulder_pan={np.median(arr):.2f}")
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":
