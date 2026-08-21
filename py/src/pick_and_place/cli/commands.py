@@ -268,6 +268,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Record scripted demonstration episodes in the simulator.",
         script="pick_and_place/record_sim.py",
     ),
+    Command(
+        name="run-scripted-real",
+        summary="Run the scripted expert on the rig.",
+        script="pick_and_place/real.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
