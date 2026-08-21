@@ -163,6 +163,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Fit how far each joint droops from its commanded angle.",
         script="fit_sag.py",
     ),
+    Command(
+        name="generate-parity-fixtures",
+        summary="Regenerate the cross-language parity fixtures.",
+        script="generate_parity_fixtures.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}

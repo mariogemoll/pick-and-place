@@ -32,6 +32,7 @@ from typing import Any
 
 import numpy as np
 
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.core import transforms as tf
 from pick_and_place.core.joint_frames import (
     gripper_angle_to_position,
@@ -517,8 +518,9 @@ def serialize(fixture: dict[str, Any]) -> str:
     return "{\n" + ",\n".join(entries) + "\n}\n"
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the parity fixture generator."""
+    parser = SuggestingArgumentParser(description=__doc__)
     parser.add_argument(
         "-o",
         "--output-dir",
@@ -526,13 +528,20 @@ def main() -> None:
         default=FIXTURE_DIR,
         help="where to write the fixtures (default: the committed fixtures/parity)",
     )
-    args = parser.parse_args()
+    return parser
 
+
+def run(args: argparse.Namespace) -> None:
+    """Write the fixtures TypeScript is checked against."""
     args.output_dir.mkdir(parents=True, exist_ok=True)
     for name, fixture in build_fixtures(kinematics()).items():
         path = args.output_dir / name
         path.write_text(serialize(fixture), encoding="utf-8")
         print(f"wrote {path} ({path.stat().st_size} bytes)")
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":
