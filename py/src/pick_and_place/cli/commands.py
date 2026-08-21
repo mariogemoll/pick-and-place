@@ -248,6 +248,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Solve a camera's intrinsics against the ChArUco board.",
         script="calibrate_camera_intrinsics.py",
     ),
+    Command(
+        name="showcamfeed",
+        summary="Show one camera's live feed in a window.",
+        script="showcamfeed.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
