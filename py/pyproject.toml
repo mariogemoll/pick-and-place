@@ -58,7 +58,18 @@ where = ["src"]
 pick_and_place = ["*.xml"]
 
 [dependency-groups]
+# What ``pick_and_place.sim.export`` and the AprilTag texture renderer actually
+# import. Installing these alongside the package itself with --no-deps yields a
+# working exporter without the training stack, which is most of the install.
+# The pins mirror the ones in [project.dependencies]; keep them in step.
+export = [
+    "fpdf",
+    "mujoco<3.12",
+    "numpy",
+    "opencv-python>=4.9,<4.14",
+]
 dev = [
     "pytest",
+    "pytest-xdist",
     "ruff>=0.9.0",
 ]

@@ -1,0 +1,18 @@
+name: "Install GL system libraries"
+description: "Install the OpenGL/EGL libraries MuJoCo and pymeshlab load at runtime."
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        apt_opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=30"
+        for attempt in 1 2 3; do
+          if timeout 180 sudo apt-get $apt_opts update \
+            && timeout 180 sudo apt-get $apt_opts install -y libopengl0 libegl1-mesa-dev; then
+            exit 0
+          fi
+          echo "apt-get attempt $attempt failed or stalled, retrying in 15s"
+          sleep 15
+        done
+        echo "apt-get failed after 3 attempts"
+        exit 1

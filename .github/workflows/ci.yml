@@ -1,20 +1,42 @@
 name: CI
 on:
   push:
+    branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build:
+  repo-checks:
     runs-on: ubuntu-latest
-    env:
-      MUJOCO_GL: egl
     steps:
+      # check_files_in_repo.sh walks every blob in the history.
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          submodules: recursive
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: "Install script dependencies"
+        working-directory: scripts
+        run: pnpm i
       - name: "Check for large files"
         run: scripts/check_files_in_repo.sh
+      - name: "Check license headers"
+        run: scripts/check-license-headers.sh
+
+  ts:
+    runs-on: ubuntu-latest
+    steps:
+      # The exporter compiles the scene, whose meshes live in the SO-ARM100 submodule.
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -25,73 +47,26 @@ jobs:
         with:
           python-version: '3.13'
       - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
       - name: "Install JS dependencies"
         working-directory: ts
         run: pnpm i
-      - name: "Install script dependencies"
-        working-directory: scripts
-        run: pnpm i
-      - name: "Install mesh generation system dependencies"
-        timeout-minutes: 12
-        run: |
-          apt_opts="-o Acquire::Retries=3 -o Acquire::http::Timeout=30"
-          for attempt in 1 2 3; do
-            if timeout 180 sudo apt-get $apt_opts update \
-              && timeout 180 sudo apt-get $apt_opts install -y libopengl0 libegl1-mesa-dev; then
-              exit 0
-            fi
-            echo "apt-get attempt $attempt failed or stalled, retrying in 15s"
-            sleep 15
-          done
-          echo "apt-get failed after 3 attempts"
-          exit 1
-      - name: "Install simulation package dependencies"
+      # Five test files read ts/public/so101.json, which is generated, not
+      # committed. The exporter writes it alongside the .xml it is asked for,
+      # and needs only a fraction of the simulation package's dependencies.
+      - name: "Install exporter dependencies"
         working-directory: py
-        run: uv pip install --system -e . --group dev
-      - name: "Install mesh optimization package dependencies"
-        working-directory: mesh_optimization
-        run: uv pip install --system -e . --group dev
+        run: |
+          uv pip install --system --group export
+          uv pip install --system --no-deps -e .
       - name: "Generate AprilTag textures"
         working-directory: py
         run: python scripts/render_apriltag_textures.py --all-defaults
-      - name: "Run ruff on simulation package"
-        working-directory: py
-        run: python -m ruff check .
-      - name: "Check package layering"
-        working-directory: py
-        run: python scripts/check_package_layering.py
-      - name: "Run simulation package tests"
-        working-directory: py
-        run: python -m pytest
       - name: "Generate web model"
         working-directory: py
-        run: |
-          python -m pick_and_place.sim.export -o ../ts/public/so101.xml
-          rm ../ts/public/so101.xml
-      - name: "Run ruff on mesh optimization package"
-        working-directory: mesh_optimization
-        run: python -m ruff check .
-      - name: "Generate meshes"
-        working-directory: mesh_optimization
-        run: python scripts/simplify_meshes.py
-      - name: "Optimize meshes"
-        working-directory: ts
-        run: pnpm run optimize-meshes
-      - name: "Generate generic robot meshes (UR5e + Robotiq 2F-85, Panda)"
-        working-directory: mesh_optimization
-        run: |
-          python scripts/simplify_generic_meshes.py ur5e_mj_description --gripper robotiq_2f85_mj_description
-          python scripts/simplify_generic_meshes.py panda_mj_description
-      - name: "Optimize generic robot meshes"
-        working-directory: ts
-        run: |
-          pnpm exec bash scripts/optimize-glbs.sh ../intermediary-glb-generic/ur5e_mj_description public/ur5e_assets
-          pnpm exec bash scripts/optimize-glbs.sh ../intermediary-glb-generic/panda_mj_description public/panda_assets
-      - name: "Generate generic robot web models"
-        working-directory: py
-        run: |
-          python scripts/export_generic_robot.py ur5e_mj_description --gripper robotiq_2f85_mj_description -o ../ts/public/ur5e.json
-          python scripts/export_generic_robot.py panda_mj_description -o ../ts/public/panda.json
+        run: python -m pick_and_place.sim.export -o ../ts/public/so101.xml
       - name: "ESLint the ESLint config"
         working-directory: ts
         run: pnpm eslint -c basic.eslint.config.js basic.eslint.config.js eslint.config.js
@@ -107,8 +82,104 @@ jobs:
       - name: "Run stylelint"
         working-directory: ts
         run: pnpm stylelint "src/**/*.css"
-      - name: "Check license headers"
-        run: scripts/check-license-headers.sh
       - name: "Build TS project"
         working-directory: ts
         run: pnpm build
+
+  python:
+    runs-on: ubuntu-latest
+    env:
+      MUJOCO_GL: egl
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+      - uses: ./.github/actions/install-gl
+        timeout-minutes: 12
+      - name: "Install simulation package dependencies"
+        working-directory: py
+        run: uv pip install --system -e . --group dev
+      - name: "Generate AprilTag textures"
+        working-directory: py
+        run: python scripts/render_apriltag_textures.py --all-defaults
+      - name: "Run ruff on simulation package"
+        working-directory: py
+        run: python -m ruff check .
+      - name: "Check package layering"
+        working-directory: py
+        run: python scripts/check_package_layering.py
+      - name: "Run simulation package tests"
+        working-directory: py
+        run: python -m pytest -n auto
+      # export_generic_robot.py has no unit tests, so running it is its only
+      # coverage. Nothing consumes the output. The SO-101 exporter needs no
+      # equivalent step: test_export.py covers it and the ts job runs it.
+      - name: "Export the generic robots"
+        working-directory: py
+        run: |
+          python scripts/export_generic_robot.py ur5e_mj_description \
+            --gripper robotiq_2f85_mj_description -o "$RUNNER_TEMP/ur5e.json"
+          python scripts/export_generic_robot.py panda_mj_description -o "$RUNNER_TEMP/panda.json"
+
+  meshes:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: so101
+            generate: python scripts/simplify_meshes.py
+            optimize: pnpm run optimize-meshes
+          - name: ur5e
+            generate: >-
+              python scripts/simplify_generic_meshes.py ur5e_mj_description
+              --gripper robotiq_2f85_mj_description
+            optimize: >-
+              pnpm exec bash scripts/optimize-glbs.sh
+              ../intermediary-glb-generic/ur5e_mj_description public/ur5e_assets
+          - name: panda
+            generate: python scripts/simplify_generic_meshes.py panda_mj_description
+            optimize: >-
+              pnpm exec bash scripts/optimize-glbs.sh
+              ../intermediary-glb-generic/panda_mj_description public/panda_assets
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
+      - name: "Install JS dependencies"
+        working-directory: ts
+        run: pnpm i
+      - uses: ./.github/actions/install-gl
+        timeout-minutes: 12
+      - name: "Install mesh optimization package dependencies"
+        working-directory: mesh_optimization
+        run: uv pip install --system -e . --group dev
+      - name: "Run ruff on mesh optimization package"
+        working-directory: mesh_optimization
+        run: python -m ruff check .
+      - name: "Generate ${{ matrix.name }} meshes"
+        working-directory: mesh_optimization
+        run: ${{ matrix.generate }}
+      - name: "Optimize ${{ matrix.name }} meshes"
+        working-directory: ts
+        run: ${{ matrix.optimize }}
