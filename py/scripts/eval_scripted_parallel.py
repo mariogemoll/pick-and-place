@@ -32,15 +32,19 @@ from pathlib import Path
 from tqdm import tqdm
 
 from pick_and_place.cli.common import add_output_argument
-from pick_and_place.cli.evaluation import add_manifest_argument, add_shard_arguments
+from pick_and_place.cli.evaluation import (
+    EVALUATION_DIR,
+    add_manifest_argument,
+    add_shard_arguments,
+)
 from pick_and_place.cli.scene import add_render_size_arguments
+from pick_and_place.core.paths import REPO_ROOT
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MANIFEST = REPOSITORY_ROOT / "config" / "evaluation" / "canonical_100_v1.json.xz"
+DEFAULT_MANIFEST = EVALUATION_DIR / "canonical_100_v1.json.xz"
 
 SYSTEM = platform.system()
 BACKENDS_BY_SYSTEM = {
@@ -248,7 +252,7 @@ def main() -> None:
             "action_frame": "hardware (arm degrees, gripper position 0-100)",
         },
         "device": None,
-        "code": git_provenance(REPOSITORY_ROOT),
+        "code": git_provenance(REPO_ROOT),
         "package_versions": package_versions(["gymnasium", "mujoco", "numpy"]),
         "videos_saved": False,
         "parallel_workers": jobs,

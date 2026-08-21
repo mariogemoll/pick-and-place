@@ -25,7 +25,7 @@ import mujoco
 import numpy as np
 import torch
 
-from pick_and_place.cli.eval_policy_sim import REPOSITORY_ROOT
+from pick_and_place.core.paths import REPO_ROOT
 from pick_and_place.policies.policy import (
     DEFAULT_IMAGE_HW,
     resolve_checkpoint_cameras,
@@ -441,7 +441,7 @@ def run_evaluation(cfg: EvaluationRun, *, report: Callable[[str], None] = print)
             "action_frame": "hardware (arm degrees, gripper position 0-100)",
         },
         "device": str(device) if device is not None else None,
-        "code": git_provenance(REPOSITORY_ROOT),
+        "code": git_provenance(REPO_ROOT),
         "package_versions": package_versions(
             ["gymnasium", "mujoco", "numpy"]
             + (

@@ -15,8 +15,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
-EVALUATION_DIR = REPOSITORY_ROOT / "config" / "evaluation"
+from pick_and_place.core.paths import REPO_ROOT
+
+EVALUATION_DIR = REPO_ROOT / "config" / "evaluation"
 
 
 def add_manifest_argument(parser: argparse.ArgumentParser, *, default: Path) -> None:
@@ -36,7 +37,7 @@ def _repository_relative(path: Path) -> str:
     checkout path in it is noise everywhere but the box that printed it.
     """
     try:
-        return str(path.relative_to(REPOSITORY_ROOT))
+        return str(path.relative_to(REPO_ROOT))
     except ValueError:
         return str(path)
 
