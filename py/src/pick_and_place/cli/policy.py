@@ -39,23 +39,44 @@ def add_policy_image_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_checkpoint_argument(
+    parser: argparse.ArgumentParser,
+    *,
+    default: str | None = DEFAULT_CHECKPOINT,
+    required: bool = False,
+    help: str = "HF policy checkpoint or local LeRobot directory",
+) -> None:
+    """Add ``--checkpoint``, which every learned policy needs and the expert does not.
+
+    Separate from :func:`add_lerobot_arguments` because more than one leaf takes
+    a checkpoint without taking the rest of how a LeRobot policy is queried.
+    """
+    parser.add_argument("--checkpoint", default=default, required=required, help=help)
+
+
+def add_device_argument(parser: argparse.ArgumentParser) -> None:
+    """Add ``--device``, which any leaf that runs a network needs."""
+    parser.add_argument("--device", default="auto", help="auto | cpu | mps | cuda")
+
+
 def add_lerobot_arguments(
     parser: argparse.ArgumentParser,
     *,
     checkpoint_default: str | None = DEFAULT_CHECKPOINT,
+    checkpoint_required: bool = False,
     n_action_steps_default: int | None = 100,
 ) -> None:
     """Add what a LeRobot checkpoint is and how it is queried.
 
-    Every flag here is meaningless to a controller that is not a learned policy,
+    Every flag here is meaningless to a controller that is not a LeRobot policy,
     which is why it is a group of its own: a command with leaves declares it on
     the leaf, so nothing else has to police whether it applies.
     """
-    parser.add_argument(
-        "--checkpoint",
+    add_checkpoint_argument(
+        parser,
         default=checkpoint_default,
-        help="HF policy checkpoint or local LeRobot directory, or a flow-policy "
-        "checkpoint-*.pt file",
+        required=checkpoint_required,
+        help="HF policy checkpoint or local LeRobot directory",
     )
     parser.add_argument("--instruction", default=DEFAULT_INSTRUCTION, help="language task string")
     parser.add_argument(
@@ -64,7 +85,7 @@ def add_lerobot_arguments(
         help="base model a LoRA checkpoint adapts, when the path recorded in its "
         "adapter_config.json does not exist here (also PAP_PI05_BASE)",
     )
-    parser.add_argument("--device", default="auto", help="auto | cpu | mps | cuda")
+    add_device_argument(parser)
     parser.add_argument(
         "--n-action-steps",
         type=int,
@@ -116,7 +137,10 @@ def add_policy_arguments(
 
 
 def add_flow_image_arguments(
-    parser: argparse.ArgumentParser, *, recording_hw: bool = True
+    parser: argparse.ArgumentParser,
+    *,
+    recording_hw: bool = True,
+    flow_export_required: bool = False,
 ) -> None:
     """Add the flags that configure the image-conditioned flow policy.
 
@@ -128,6 +152,9 @@ def add_flow_image_arguments(
     they reduce camera frames through the training videos' resolution on the way
     to the model, while the evaluation harness renders at that resolution
     directly.
+
+    ``flow_export_required`` lets a leaf that cannot run without the export say
+    so in the parser, rather than checking it after the fact.
     """
     if recording_hw:
         parser.add_argument(
@@ -145,6 +172,7 @@ def add_flow_image_arguments(
         "--flow-export",
         type=Path,
         default=None,
+        required=flow_export_required,
         help="dataset export directory the checkpoint was trained on "
         "(holds export.json and normalization.npz)",
     )

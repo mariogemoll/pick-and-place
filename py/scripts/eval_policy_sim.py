@@ -40,8 +40,11 @@ from pick_and_place.runtime.policy_sim import (
 from pick_and_place.runtime.replay_rollout import write_rollout
 from pick_and_place.rollout.scripted_sim import sim_scripted_controller
 from pick_and_place.cli.policy import (
+    add_checkpoint_argument,
+    add_device_argument,
     add_flow_image_arguments,
-    add_policy_arguments,
+    add_lerobot_arguments,
+    add_policy_image_arguments,
 )
 from pick_and_place.cli.scene import add_render_size_arguments, add_scene_appearance_arguments
 from pick_and_place.variants.appearance import parse_appearance
@@ -52,14 +55,11 @@ SCRIPTED_IMAGE_HW = DEFAULT_IMAGE_HW
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-    add_policy_arguments(
-        parser,
-        controllers=("lerobot", "scripted", "flow-image"),
-        checkpoint_default=None,
-        n_action_steps_default=None,
-    )
-    add_flow_image_arguments(parser)
+    # The manifest, the output and the world the scenarios run in: shared, so a
+    # flow number and a SmolVLA number are produced under one declaration.
+    common = argparse.ArgumentParser(add_help=False)
+    parser = common
+    add_policy_image_arguments(parser)
     add_render_size_arguments(parser)
     add_scene_appearance_arguments(parser)
     parser.add_argument(
@@ -104,16 +104,50 @@ def _parse_args() -> argparse.Namespace:
             "viewer replays; a few kilobytes an episode against megabytes of video"
         ),
     )
-    parser.add_argument(
+    parser = argparse.ArgumentParser(description=__doc__)
+    leaves = parser.add_subparsers(dest="controller", required=True, metavar="CONTROLLER")
+
+    lerobot = leaves.add_parser(
+        "lerobot",
+        parents=[common],
+        help="a LeRobot checkpoint (ACT, SmolVLA, pi0.5, ...)",
+        description="Score a LeRobot checkpoint against a frozen scenario manifest.",
+    )
+    add_lerobot_arguments(
+        lerobot, checkpoint_default=None, checkpoint_required=True, n_action_steps_default=None
+    )
+
+    flow_image = leaves.add_parser(
+        "flow-image",
+        parents=[common],
+        help="the image-conditioned flow-matching policy",
+        description="Score an image-flow export against a frozen scenario manifest.",
+    )
+    add_checkpoint_argument(
+        flow_image, default=None, required=True, help="flow-policy checkpoint-*.pt file"
+    )
+    add_device_argument(flow_image)
+    # recording_hw=False: the evaluator renders at the target resolution directly,
+    # so the flag the live runners need would parse here and do nothing.
+    add_flow_image_arguments(flow_image, recording_hw=False, flow_export_required=True)
+
+    scripted = leaves.add_parser(
+        "scripted",
+        parents=[common],
+        help="the expert: localize, plan, servo the descent, replan at each phase",
+        description="Score the expert against a frozen scenario manifest.",
+    )
+    scripted.add_argument(
         "--scripted-perception",
         choices=("geometric", "detector"),
         default="geometric",
         help=(
-            "simulated overhead perception for the scripted controller: geometric "
-            "uses the 80%% segmentation visibility gate and controlled pose beliefs; "
-            "detector runs the real optical pipeline (default: geometric)"
+            "simulated overhead perception: geometric uses the 80%% segmentation "
+            "visibility gate and controlled pose beliefs; detector runs the real "
+            "optical pipeline (default: geometric)"
         ),
     )
+
     args = parser.parse_args()
     if (args.image_height is None) != (args.image_width is None):
         parser.error("pass both --image-height and --image-width, or neither")
@@ -134,13 +168,7 @@ def _parse_args() -> argparse.Namespace:
         not math.isfinite(args.max_episode_seconds) or args.max_episode_seconds <= 0.0
     ):
         parser.error("--max-episode-seconds must be a positive finite number")
-    if args.controller in ("lerobot", "flow-image") and args.checkpoint is None:
-        parser.error(f"--checkpoint is required for the {args.controller} controller")
-    if args.controller == "scripted" and args.checkpoint is not None:
-        parser.error("--checkpoint does not apply to the scripted controller")
     if args.controller == "flow-image":
-        if args.flow_export is None:
-            parser.error("--flow-export is required for the flow-image controller")
         for name, path in (("checkpoint", args.checkpoint), ("flow-export", args.flow_export)):
             if not Path(path).exists():
                 parser.error(f"--{name} does not exist: {path}")
@@ -437,20 +465,23 @@ def main() -> None:
         if close_controller is not None:
             close_controller()
 
+    checkpoint = getattr(args, "checkpoint", None)
     run = {
         "schema_version": 1,
         "started_at_utc": started_at.isoformat(),
         "finished_at_utc": dt.datetime.now(dt.UTC).isoformat(),
+        # A leaf that takes no checkpoint does not declare the flag, so absent
+        # and unset are the same thing here and both mean "not a checkpoint run".
         "checkpoint": (
             {
-                "path_or_repository_id": args.checkpoint,
-                "fingerprint": fingerprint_checkpoint(args.checkpoint),
+                "path_or_repository_id": checkpoint,
+                "fingerprint": fingerprint_checkpoint(checkpoint),
             }
-            if args.checkpoint is not None
+            if checkpoint is not None
             else None
         ),
         "controller": controller_metadata,
-        "instruction": args.instruction if args.controller == "lerobot" else None,
+        "instruction": getattr(args, "instruction", None),
         "scenario_manifest": {
             "path": str(args.manifest.resolve()),
             "sha256": manifest.sha256(),
