@@ -34,6 +34,7 @@ from pick_and_place.cli.dataset import (
     add_success_tolerance_argument,
     add_write_argument,
 )
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.data.dataset_subset import SUCCESS_XY_TOLERANCE_M
 from pick_and_place.data.sim_dataset_staging import (
     episode_staging_root,
@@ -44,8 +45,9 @@ from pick_and_place.data.sim_dataset_staging import (
 )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the dataset finalizer."""
+    parser = SuggestingArgumentParser(description=__doc__)
     add_dataset_root_argument(
         parser,
         required=True,
@@ -88,13 +90,19 @@ def main() -> None:
         help="repository id for the --attempts-root dataset (default: <repo-id>-attempts)",
     )
     add_write_argument(parser, help="perform the final merge")
-    args = parser.parse_args()
+    return parser
 
+
+def validate(parser: SuggestingArgumentParser, args: argparse.Namespace) -> None:
+    """Reject the counts argparse's own types cannot check."""
     if args.episodes < 1:
         parser.error("--episodes must be at least 1")
     if args.xy_tolerance <= 0.0:
         parser.error("--xy-tolerance must be positive")
 
+
+def run(args: argparse.Namespace) -> None:
+    """Merge the staged episodes, or report what the merge would do."""
     episodes_root = episode_staging_root(args.dataset_root)
     staged = staged_episode_dirs(episodes_root)
     complete = find_episode_datasets(episodes_root)
@@ -147,6 +155,13 @@ def main() -> None:
             output_repo_id=attempts_repo_id,
             keep_episodes=args.keep_episodes,
         )
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    validate(parser, args)
+    run(args)
 
 
 if __name__ == "__main__":

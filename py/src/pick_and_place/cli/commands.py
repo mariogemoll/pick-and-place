@@ -233,6 +233,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Solve the wrist camera's alignment against the workspace tags.",
         script="wrist_cam_align_solve.py",
     ),
+    Command(
+        name="finalize-sim-dataset",
+        summary="Merge staged sim episodes into a finished dataset.",
+        script="pick_and_place/finalize_sim_dataset.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
