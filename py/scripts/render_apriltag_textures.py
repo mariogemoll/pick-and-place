@@ -20,6 +20,8 @@ import numpy as np
 
 from generate_apriltags import TAG_41H12_BITS
 
+from pick_and_place.cli.common import add_out_dir_argument
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = REPO_ROOT / "assets" / "apriltags" / "textures"
 
@@ -109,7 +111,9 @@ def render_specs(specs: tuple[TextureSpec, ...], out_dir: Path, px_per_cell: int
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--out-dir", type=Path, default=OUT_DIR)
+    add_out_dir_argument(
+        parser, default=OUT_DIR, help="directory for the rendered sticker PNGs"
+    )
     parser.add_argument("--px-per-cell", type=int, default=32)
     parser.add_argument("--ids", type=parse_ids, default=None, help="IDs like 12-15 or 0-5,8-11.")
     parser.add_argument("--sticker-mm", type=float, default=60.0)
