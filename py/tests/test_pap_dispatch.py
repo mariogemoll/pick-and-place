@@ -48,7 +48,6 @@ PENDING = {
     "diagnose_flow_image_policy.py",
     "eval_scripted_parallel.py",
     "export_camera_calibrations.py",
-    "export_diffusion_policy_dataset.py",
     "export_episode_rolls.py",
     "export_generic_robot.py",
     "fit_joint_zeros.py",

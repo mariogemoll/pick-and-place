@@ -83,6 +83,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Copy a dataset keeping only its successful episodes.",
         script="keep_successful_episodes.py",
     ),
+    Command(
+        name="export-policy-dataset",
+        summary="Export a LeRobot dataset as the image policy's training export.",
+        script="export_diffusion_policy_dataset.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
