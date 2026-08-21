@@ -187,3 +187,39 @@ def add_drop_zone_arguments(parser: argparse.ArgumentParser) -> None:
         default="black",
         help="color of the drop-zone square to detect as the target (default: black)",
     )
+
+
+def add_joint_zeros_argument(
+    parser: argparse.ArgumentParser, *, default: Path | None, help: str
+) -> None:
+    """Add ``--joint-zeros``, the session calibration the servo readback is mapped through.
+
+    ``default`` differs by command on purpose: the scripted runner reads the
+    committed sidecar, while the policy runner requires the file to be named,
+    because a learned policy fed uncorrected readback is being shown a different
+    arm than the one it was trained on.
+    """
+    parser.add_argument("--joint-zeros", type=Path, default=default, help=help)
+
+
+def add_max_joint_speed_argument(
+    parser: argparse.ArgumentParser, *, default: float, extra_help: str = ""
+) -> None:
+    """Add ``--max-joint-speed``, the per-joint velocity cap in deg/s.
+
+    Both commands that take it feed ``runtime.ramp``, so the units and the
+    "``<=0`` means no cap" convention are shared -- that convention is the part
+    worth declaring once, since a command reading a non-positive value as an
+    error rather than as "uncapped" would be wrong in a way nothing catches.
+
+    ``default`` is not shared: parking an arm that may be anywhere ramps at its
+    own pace unless told otherwise, while a policy run caps every tick by
+    default. ``extra_help`` is where a command adds what else it does with it.
+    """
+    parser.add_argument(
+        "--max-joint-speed",
+        type=float,
+        default=default,
+        help=f"hard per-joint velocity cap in deg/s; <=0 disables the cap (default: {default:g})"
+        + extra_help,
+    )
