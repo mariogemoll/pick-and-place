@@ -54,9 +54,15 @@ def add_checkpoint_argument(
     parser.add_argument("--checkpoint", default=default, required=required, help=help)
 
 
-def add_device_argument(parser: argparse.ArgumentParser) -> None:
-    """Add ``--device``, which any leaf that runs a network needs."""
-    parser.add_argument("--device", default="auto", help="auto | cpu | mps | cuda")
+def add_device_argument(parser: argparse.ArgumentParser, *, default: str = "auto") -> None:
+    """Add ``--device``, which any leaf that runs a network needs.
+
+    ``default`` is not shared: the commands that run wherever they are started
+    resolve "auto", while the two flow commands were written for a rented GPU box
+    and default to ``cuda`` so that forgetting the flag fails loudly instead of
+    quietly training on the CPU.
+    """
+    parser.add_argument("--device", default=default, help="auto | cpu | mps | cuda")
 
 
 def add_lerobot_arguments(
@@ -174,3 +180,47 @@ def add_flow_image_arguments(
         "the draws keeps consecutive chunks in the same mode, which smooths the motion "
         "at replan boundaries (default: 0)",
     )
+
+
+def add_flow_export_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add the checkpoint and the export that together are one image-flow policy.
+
+    The checkpoint holds only weights: the normalization bounds, the control rate
+    and the input resolution live in the export beside it, so neither is a policy
+    on its own and no command takes one without the other.
+
+    These spell themselves ``--checkpoint`` and ``--export``, unprefixed. The
+    ``--flow-*`` names in :func:`add_flow_image_arguments` exist because the
+    commands with leaves have to disambiguate against the lerobot flags; the two
+    standalone flow commands have nothing to disambiguate against.
+    """
+    parser.add_argument(
+        "--checkpoint", type=Path, required=True, help="flow-policy checkpoint-*.pt file"
+    )
+    parser.add_argument(
+        "--export",
+        type=Path,
+        required=True,
+        help="dataset export directory the checkpoint was trained on "
+        "(holds export.json and normalization.npz)",
+    )
+
+
+def add_integration_steps_argument(parser: argparse.ArgumentParser, *, default: int = 10) -> None:
+    """Add ``--integration-steps``, the Euler steps the flow is integrated over."""
+    parser.add_argument(
+        "--integration-steps",
+        type=int,
+        default=default,
+        help=f"Euler steps used to integrate the flow (default: {default})",
+    )
+
+
+def add_save_video_argument(parser: argparse.ArgumentParser, *, help: str) -> None:
+    """Add ``--save-video``: write out the exact frames the policy was fed.
+
+    Not a render of the scene -- the frames as the controller saw them, which is
+    what makes it a diagnostic rather than a recording. ``help`` names the files
+    each command writes, because that is all that differs.
+    """
+    parser.add_argument("--save-video", type=Path, default=None, help=help)

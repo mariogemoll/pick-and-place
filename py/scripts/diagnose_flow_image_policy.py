@@ -28,6 +28,12 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from pick_and_place.cli.common import add_seed_argument
+from pick_and_place.cli.policy import (
+    add_device_argument,
+    add_flow_export_arguments,
+    add_integration_steps_argument,
+)
 from pick_and_place.data.flow_image_dataset import FlowImageExport
 from pick_and_place.policies.flow_image_encoder import FlowImageUnet1D
 
@@ -37,13 +43,12 @@ IMAGE_STD = (0.229, 0.224, 0.225)
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--export", type=Path, required=True)
+    add_flow_export_arguments(parser)
     parser.add_argument("--batches", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--integration-steps", type=int, default=10)
-    parser.add_argument("--device", default="cuda")
-    parser.add_argument("--seed", type=int, default=0)
+    add_integration_steps_argument(parser)
+    add_device_argument(parser, default="cuda")
+    add_seed_argument(parser, default=0, help="Torch seed for the flow's noise draw")
     args = parser.parse_args()
 
     device = torch.device(args.device)
