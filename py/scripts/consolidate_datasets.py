@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from pick_and_place.cli.common import add_out_dir_argument
+from pick_and_place.cli.dataset import add_write_argument
 from pick_and_place.core.paths import ENV_VAR, datasets_root
 
 
@@ -71,13 +73,12 @@ def main() -> None:
         type=Path,
         help=f"parent directories to scan for run directories (default: ${ENV_VAR}/datasets)",
     )
-    parser.add_argument(
-        "--out-dir",
-        type=Path,
+    add_out_dir_argument(
+        parser,
         help="output root; each day is written to <out-dir>/<YYYYMMDD> "
         f"(default: ${ENV_VAR}/datasets)",
     )
-    parser.add_argument("--write", action="store_true", help="perform the merge")
+    add_write_argument(parser, help="perform the merge")
     args = parser.parse_args()
 
     source_roots = args.source_roots or [datasets_root()]
