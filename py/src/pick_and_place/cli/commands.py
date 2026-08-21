@@ -118,6 +118,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Compare evaluation runs against a baseline.",
         script="compare_policy_evaluations.py",
     ),
+    Command(
+        name="park-follower",
+        summary="Ramp the follower arm to its rest pose and release it.",
+        script="park_follower.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}

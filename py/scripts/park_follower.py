@@ -23,6 +23,7 @@ import argparse
 import numpy as np
 
 from pick_and_place.cli.rig import add_follower_arguments, add_max_joint_speed_argument
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.core.joint_frames import follower_clamp_limits, sim_frame_to_real
 from pick_and_place.hardware.follower import make_so101_follower
 from pick_and_place.runtime.ramp import ramp_follower
@@ -36,8 +37,9 @@ from pick_and_place.spec.robot import (
 )
 
 
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the parking command."""
+    parser = SuggestingArgumentParser(description=__doc__)
     add_follower_arguments(parser)
     add_max_joint_speed_argument(
         parser,
@@ -58,14 +60,11 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="park at REST but leave torque enabled, so the arm holds instead of going limp",
     )
-    return parser.parse_args()
+    return parser
 
 
-def main() -> None:
-    args = _parse_args()
-
-    # MuJoCo supplies the joint limits to clamp against and the neutral/rest
-    # poses in the real frame. It is never stepped.
+def run(args: argparse.Namespace) -> None:
+    """Park the arm."""
     model = build_scene(include_environment=True).compile()
     kinematics = derive_kinematics(model)
     clamp_low, clamp_high = follower_clamp_limits(kinematics)
@@ -126,6 +125,10 @@ def main() -> None:
 
     print("Disconnecting hardware...")
     follower.disconnect()
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":
