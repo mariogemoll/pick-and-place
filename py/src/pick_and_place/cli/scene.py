@@ -68,16 +68,23 @@ def add_render_size_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def add_scene_appearance_arguments(parser: argparse.ArgumentParser) -> None:
-    """Add the recolouring that matches a re-rendered dataset's look."""
+def add_scene_appearance_arguments(
+    parser: argparse.ArgumentParser, *, default: str | None = None
+) -> None:
+    """Add the recolouring that matches a re-rendered dataset's look.
+
+    ``default`` names the palette a command renders in when it is not told
+    otherwise; ``None`` leaves the scene as compiled.
+    """
     parser.add_argument(
         "--scene-appearance",
         type=str,
-        default=None,
+        default=default,
         metavar="NAME",
         help="recolour the scene the way a re-rendered dataset was rendered, either a "
         f"preset ({', '.join(sorted(APPEARANCE_PRESETS))}) or an ad-hoc spec such as "
-        "'cube=blue,floor=dark-gray' (default: the scene as compiled)",
+        "'cube=blue,floor=dark-gray' (default: "
+        + (f"{default})" if default is not None else "the scene as compiled)"),
     )
 
 
