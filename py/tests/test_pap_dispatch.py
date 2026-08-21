@@ -46,7 +46,6 @@ PENDING = {
     "showcamfeed.py",
     "showcamfeeds.py",
     "train_flow_image_policy.py",
-    "wrist_cam_align_solve.py",
 }
 
 

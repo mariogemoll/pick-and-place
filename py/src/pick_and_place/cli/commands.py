@@ -228,6 +228,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Score the expert over a manifest across worker processes.",
         script="eval_scripted_parallel.py",
     ),
+    Command(
+        name="wrist-cam-align-solve",
+        summary="Solve the wrist camera's alignment against the workspace tags.",
+        script="wrist_cam_align_solve.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
