@@ -404,7 +404,7 @@ def test_episode_timeout_default_leaves_room_for_resampling():
 def test_vcodec_defaults_to_software_h264():
     """`auto` probes for a HW encoder and silently picks the ~4x slower path."""
     module = _record_sim_module()
-    source = inspect.getsource(module.main)
+    source = inspect.getsource(module.build_parser)
 
     assert 'vcodec="h264"' in source, "the sim recorder must pin the software codec"
     assert 'vcodec="auto"' not in source
