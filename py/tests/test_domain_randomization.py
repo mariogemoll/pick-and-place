@@ -7,6 +7,7 @@ The other half — everything that is only pixels — is applied by
 ``pick_and_place.variants`` and tested in ``test_variant_scene.py``.
 """
 
+import dataclasses
 import json
 import colorsys
 from collections import Counter
@@ -14,7 +15,9 @@ from pathlib import Path
 
 import mujoco
 import numpy as np
+import pytest
 
+from pick_and_place.core.miscalibration import DEFAULT_JOINT_OFFSET_SIGMA_DEG
 from pick_and_place.sim.domain_randomization import (
     DomainRandomizationPreset,
     WristMountRandomizer,
@@ -164,3 +167,72 @@ def test_preset_loading_rejects_unknown_fields(tmp_path):
         assert "unknown" in str(exc)
     else:
         raise AssertionError("unknown preset field was accepted")
+
+
+def test_omitting_joint_offset_sigma_keeps_the_measured_drift():
+    preset = DomainRandomizationPreset.load(PRESET)
+    assert preset.joint_offset_sigma_deg == DEFAULT_JOINT_OFFSET_SIGMA_DEG
+
+
+def test_a_preset_may_widen_the_joint_offset_draws(tmp_path):
+    payload = json.loads(PRESET.read_text())
+    payload["joint_offset_sigma_deg"] = {"shoulder_pan": 3.0}
+    path = tmp_path / "wide.json"
+    path.write_text(json.dumps(payload))
+    wide = DomainRandomizationPreset.load(path)
+
+    # Named joints are overridden; the rest keep the measured drift.
+    assert wide.joint_offset_sigma_deg["shoulder_pan"] == 3.0
+    assert wide.joint_offset_sigma_deg["wrist_flex"] == DEFAULT_JOINT_OFFSET_SIGMA_DEG["wrist_flex"]
+
+    narrow = DomainRandomizationPreset.load(PRESET)
+    pans = [
+        abs(p.sample(s).miscalibration.base_offsets_deg["shoulder_pan"])
+        for p in (narrow, wide)
+        for s in range(2000)
+    ]
+    narrow_pans, wide_pans = pans[:2000], pans[2000:]
+    assert np.mean(wide_pans) > 1.8 * np.mean(narrow_pans)
+
+
+def test_widening_one_joint_leaves_the_rest_of_the_draw_alone():
+    """The override changes drawn values, not the number or order of draws, so
+    a widened preset stays comparable to the narrow one scene for scene."""
+    payload = json.loads(PRESET.read_text())
+    narrow = DomainRandomizationPreset.load(PRESET)
+    wide = dataclasses.replace(
+        narrow, joint_offset_sigma_deg={**narrow.joint_offset_sigma_deg, "shoulder_pan": 3.0}
+    )
+    for seed in (0, 7, 4242):
+        a, b = narrow.sample(seed), wide.sample(seed)
+        assert a.exposure == b.exposure
+        assert a.background_rgb == b.background_rgb
+        assert a.miscalibration.cube_belief_error == b.miscalibration.cube_belief_error
+        assert a.miscalibration.base_offsets_deg["shoulder_pan"] != pytest.approx(
+            b.miscalibration.base_offsets_deg["shoulder_pan"]
+        )
+    assert payload["name"] == "act_mild_v1"
+
+
+def test_preset_loading_rejects_unfitted_joints(tmp_path):
+    payload = json.loads(PRESET.read_text())
+    payload["joint_offset_sigma_deg"] = {"wrist_roll": 1.0}
+    path = tmp_path / "bad.json"
+    path.write_text(json.dumps(payload))
+    try:
+        DomainRandomizationPreset.load(path)
+    except ValueError as exc:
+        assert "wrist_roll" in str(exc)
+    else:
+        raise AssertionError("an unfitted joint was accepted")
+
+
+def test_the_shipped_wide_preset_is_the_narrow_one_with_wider_offsets():
+    wide_path = PRESET.parent / "act_mild_wide_offsets_v1.json"
+    narrow, wide = json.loads(PRESET.read_text()), json.loads(wide_path.read_text())
+    assert set(wide) - set(narrow) == {"joint_offset_sigma_deg"}
+    for key in narrow:
+        if key != "name":
+            assert wide[key] == narrow[key], f"{key} differs beyond the offsets"
+    for joint, sigma in wide["joint_offset_sigma_deg"].items():
+        assert sigma == pytest.approx(2.0 * DEFAULT_JOINT_OFFSET_SIGMA_DEG[joint])
