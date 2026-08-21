@@ -205,3 +205,19 @@ def add_randomization_arguments(parser: argparse.ArgumentParser) -> None:
         help="strict per-episode sim randomization preset; includes measured miscalibration, "
         "cameras, lighting, materials, cube orientation and appearance",
     )
+
+
+def add_speed_argument(parser: argparse.ArgumentParser) -> None:
+    """Add ``--speed``, the multiplier on the expert's nominal trajectory pace.
+
+    The rig runner and the sim recorder drive the same planned trajectory through
+    the same easing, so a dataset recorded at one pace and a rig run at another
+    are the same motion at different speeds -- which is only true while both mean
+    the multiplier the same way.
+    """
+    parser.add_argument(
+        "--speed",
+        type=float,
+        default=1.0,
+        help="playback speed multiplier of the nominal trajectory pace (1.0 = nominal)",
+    )
