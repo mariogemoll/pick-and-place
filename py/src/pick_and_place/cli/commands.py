@@ -290,6 +290,12 @@ COMMANDS: tuple[Command, ...] = (
         script="run_flow_image_policy_sim.py",
         parser="pick_and_place.cli.run_flow_image_policy_sim",
     ),
+    Command(
+        name="run-policy-real",
+        summary="Run a policy on the physical arm, closed-loop.",
+        script="run_policy_real.py",
+        parser="pick_and_place.cli.run_policy_real",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
