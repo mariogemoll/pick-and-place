@@ -31,6 +31,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from pick_and_place.cli.common import add_output_argument
 from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
 from pick_and_place.perception.cube_detection import (
     cube_pose_to_world,
@@ -132,7 +133,7 @@ def main() -> None:
         nargs="+",
         help="pair export root(s), dataset dirs, or single episode dirs",
     )
-    parser.add_argument("--output", type=Path, default=None, help="write the summary JSON here")
+    add_output_argument(parser, help="write the summary JSON here")
     args = parser.parse_args()
 
     episode_dirs: list[Path] = []
