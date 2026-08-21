@@ -31,7 +31,8 @@ def add_follower_arguments(
         parser.add_argument(
             "--follower-port",
             required=port_required,
-            help="serial port of the SO-101 follower",
+            help="serial port of the SO-101 follower"
+            + ("" if port_required else " (optional; omit to run without it)"),
         )
     parser.add_argument(
         "--follower-id", default="folly", help="follower calibration id (default: folly)"
