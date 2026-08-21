@@ -188,6 +188,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Open the composed MuJoCo scene in the viewer.",
         script="view_scene.py",
     ),
+    Command(
+        name="preview-cameras",
+        summary="Serve a browser preview of every attached camera.",
+        script="preview_cameras.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
