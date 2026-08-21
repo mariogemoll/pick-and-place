@@ -133,6 +133,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Measure whether simulated overhead perception misses by as much as the rig does.",
         script="check_overhead_localization.py",
     ),
+    Command(
+        name="check-calibration",
+        summary="Compare the leader and follower calibrations in the lerobot cache.",
+        script="check_calibration.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}

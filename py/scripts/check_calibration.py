@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from pick_and_place.cli.rig import add_follower_arguments, add_leader_arguments
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 
 # Feetech STS3215 resolution: 4096 steps per 360 degrees
 STEPS_PER_DEGREE = 4096 / 360.0
@@ -64,12 +65,16 @@ def check_joint(joint_name: str, leader_data: dict, follower_data: dict):
         print(f"ℹ️  NOTE: Homing offsets differ by {diff_home_deg:.1f}°. This is normal if the servo horns were attached at different angles during assembly, but if they were built identically, one might have been zeroed in the wrong physical pose.")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Check and compare LeRobot calibrations for SO101")
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the calibration comparison."""
+    parser = SuggestingArgumentParser(description="Check and compare LeRobot calibrations for SO101")
     add_leader_arguments(parser, port=False)
     add_follower_arguments(parser, port=False)
-    args = parser.parse_args()
+    return parser
 
+
+def run(args: argparse.Namespace) -> None:
+    """Print the comparison."""
     leader_path = get_lerobot_calibration_path("teleoperators/so_leader", args.leader_id)
     follower_path = get_lerobot_calibration_path("robots/so_follower", args.follower_id)
 
@@ -85,6 +90,10 @@ def main():
     
     for joint in joints:
         check_joint(joint, leader_data, follower_data)
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 if __name__ == "__main__":
     main()
