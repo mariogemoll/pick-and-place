@@ -98,6 +98,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Render the printable ChArUco calibration board.",
         script="generate_charuco_board.py",
     ),
+    Command(
+        name="measure-hand-eye-offset",
+        summary="Measure the wrist camera's offset from the gripper.",
+        script="measure_hand_eye_offset.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
