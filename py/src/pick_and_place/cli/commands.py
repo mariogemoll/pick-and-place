@@ -223,6 +223,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Measure object visibility across staged episodes.",
         script="measure_episode_visibility.py",
     ),
+    Command(
+        name="eval-scripted-parallel",
+        summary="Score the expert over a manifest across worker processes.",
+        script="eval_scripted_parallel.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}

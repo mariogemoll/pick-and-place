@@ -36,7 +36,6 @@ PENDING = {
     "calibrate_camera_intrinsics.py",
     "calibrate_joint_zeros.py",
     "diagnose_flow_image_policy.py",
-    "eval_scripted_parallel.py",
     "export_camera_calibrations.py",
     "pick_and_place/finalize_sim_dataset.py",
     "pick_and_place/real.py",
