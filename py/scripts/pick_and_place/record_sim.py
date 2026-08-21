@@ -50,6 +50,7 @@ import mujoco
 import mujoco.viewer
 from tqdm import tqdm
 
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.spec.camera import CAMERA_INTRINSICS_BY_NAME
 from pick_and_place.sim.domain_randomization import (
     DomainRandomizationPreset,
@@ -556,8 +557,9 @@ def _worker(kwargs: dict, index_queue, status, worker_id: int) -> None:
     run_recording(index_source=next_index, heartbeat=report, **kwargs)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the sim recorder."""
+    parser = SuggestingArgumentParser(description=__doc__)
     parser.add_argument(
         "--episodes",
         type=int,
@@ -744,8 +746,16 @@ def main() -> None:
         help=f"saved camera image height (default: {SAVED_IMAGE_HEIGHT})",
     )
     add_render_size_arguments(parser)
-    args = parser.parse_args()
+    return parser
 
+
+def validate(parser: SuggestingArgumentParser, args: argparse.Namespace) -> None:
+    """Reject what the parser's own types cannot check, before anything is recorded.
+
+    Only what is decidable from the arguments themselves. Whether a staging area
+    already holds the episodes being asked for is a fact about the disk, so it
+    is a runtime failure in :func:`run` rather than a usage error here.
+    """
     if args.episodes < 1:
         parser.error("--episodes must be at least 1")
     if args.workers < 1:
@@ -765,7 +775,19 @@ def main() -> None:
         and args.perturbation_max_source_radius <= 0.0
     ):
         parser.error("--perturbation-max-source-radius must be positive")
+    try:
+        FrameSizes(
+            render_width=args.render_width,
+            render_height=args.render_height,
+            image_width=args.image_width,
+            image_height=args.image_height,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
+
+def run(args: argparse.Namespace) -> None:
+    """Record the episodes into the staging area."""
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     base_root = (
         args.dataset_root if args.dataset_root is not None else datasets_root() / timestamp
@@ -782,15 +804,12 @@ def main() -> None:
         domain_randomization=args.domain_randomization,
         frozen_rig=args.frozen_rig,
     )
-    try:
-        frames = FrameSizes(
-            render_width=args.render_width,
-            render_height=args.render_height,
-            image_width=args.image_width,
-            image_height=args.image_height,
-        )
-    except ValueError as exc:
-        parser.error(str(exc))
+    frames = FrameSizes(
+        render_width=args.render_width,
+        render_height=args.render_height,
+        image_width=args.image_width,
+        image_height=args.image_height,
+    )
 
     # Episodes are staged as siblings of the eventual aggregate so collection
     # can be topped up and resumed without touching an already-finalized root.
@@ -839,18 +858,20 @@ def main() -> None:
         else args.first_episode
     )
     if first_episode > 0 and args.seed is None:
-        parser.error("a top-up run requires --seed; reuse the staging area's original seed")
+        raise SystemExit(
+            "a top-up run requires --seed; reuse the staging area's original seed"
+        )
     complete_indices = {episode_index(path) for path in find_episode_datasets(episodes_root)}
     indices = list(range(first_episode, first_episode + args.episodes))
     conflicts = sorted(complete_indices.intersection(indices))
     if conflicts:
-        parser.error(
+        raise SystemExit(
             f"requested range overlaps complete staged episode(s): {conflicts[:10]}"
         )
     try:
         ensure_collection_config(episodes_root, collection_config)
     except ValueError as exc:
-        parser.error(str(exc))
+        raise SystemExit(str(exc)) from exc
 
     job = dict(
         seed=args.seed,
@@ -908,6 +929,13 @@ def main() -> None:
         "Top up by running this recorder again with the same --dataset-root and --seed. "
         "Finalize with finalize_sim_dataset.py once enough successful episodes are staged."
     )
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    validate(parser, args)
+    run(args)
 
 
 if __name__ == "__main__":

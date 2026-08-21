@@ -263,6 +263,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Export generic camera calibration JSON for recorded datasets.",
         script="export_camera_calibrations.py",
     ),
+    Command(
+        name="record-sim",
+        summary="Record scripted demonstration episodes in the simulator.",
+        script="pick_and_place/record_sim.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
