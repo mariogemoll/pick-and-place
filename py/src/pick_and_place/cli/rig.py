@@ -16,11 +16,57 @@ from pathlib import Path
 from pick_and_place.runtime.overhead_detection import DEFAULT_ALERT_SOUND
 
 
-def add_follower_arguments(parser: argparse.ArgumentParser) -> None:
-    """Add the serial port and calibration id of the SO-101 follower."""
-    parser.add_argument("--follower-port", required=True, help="serial port of the SO-101 follower")
+def add_follower_arguments(parser: argparse.ArgumentParser, *, port_required: bool = True) -> None:
+    """Add the serial port and calibration id of the SO-101 follower.
+
+    ``port_required`` is false for the one command that can run without the
+    follower attached: the wrist-camera solve drives the leader and only moves
+    the follower if it is there.
+    """
+    parser.add_argument(
+        "--follower-port",
+        required=port_required,
+        help="serial port of the SO-101 follower",
+    )
     parser.add_argument(
         "--follower-id", default="folly", help="follower calibration id (default: folly)"
+    )
+
+
+def add_leader_arguments(parser: argparse.ArgumentParser, *, port: bool = True) -> None:
+    """Add the serial port and calibration id of the SO-101 leader.
+
+    ``port`` is false for the command that only compares stored calibrations and
+    never opens either arm.
+    """
+    if port:
+        parser.add_argument(
+            "--leader-port", required=True, help="serial port of the SO-101 leader"
+        )
+    parser.add_argument(
+        "--leader-id", default="liddy", help="leader calibration id (default: liddy)"
+    )
+
+
+def add_capture_size_arguments(parser: argparse.ArgumentParser, *, width: int, height: int) -> None:
+    """Add the resolution a command asks a camera device for.
+
+    Distinct from the size of what a command *produces*
+    (:func:`pick_and_place.cli.common.add_output_size_arguments`): a driver may
+    refuse the resolution asked for and hand back another, which is what
+    camera_fps_probe.py exists to find out.
+    """
+    parser.add_argument(
+        "--width",
+        type=int,
+        default=width,
+        help=f"capture width to request from the camera (default: {width})",
+    )
+    parser.add_argument(
+        "--height",
+        type=int,
+        default=height,
+        help=f"capture height to request from the camera (default: {height})",
     )
 
 
