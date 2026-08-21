@@ -34,6 +34,7 @@ import pyarrow.parquet as pq
 
 from pick_and_place.cli.common import add_output_argument, add_seed_argument
 from pick_and_place.cli.dataset import add_val_fraction_argument
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.spec.robot import CONTROL_HZ
 from pick_and_place.spec.robot import GRIPPER_INDEX, JOINT_NAMES
 
@@ -306,8 +307,9 @@ def _write_config(
     output.write_text(json.dumps(payload, indent=2) + "\n")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the dynamics fit."""
+    parser = SuggestingArgumentParser(description=__doc__)
     parser.add_argument("dataset_roots", type=Path, nargs="+", help="LeRobotDataset root(s)")
     add_output_argument(
         parser,
@@ -351,8 +353,11 @@ def main() -> None:
         action="store_true",
         help="print the fit without writing the JSON artifact",
     )
-    args = parser.parse_args()
+    return parser
 
+
+def validate(parser: SuggestingArgumentParser, args: argparse.Namespace) -> None:
+    """Reject the numeric ranges argparse's own types cannot check."""
     if args.max_delay_frames < 0:
         parser.error("--max-delay-frames must be non-negative")
     if args.min_excitation < 0:
@@ -364,6 +369,9 @@ def main() -> None:
     if args.max_episodes_per_dataset is not None and args.max_episodes_per_dataset < 1:
         parser.error("--max-episodes-per-dataset must be positive")
 
+
+def run(args: argparse.Namespace) -> None:
+    """Fit the dynamics and write the calibration."""
     fps_values = []
     episodes: list[EpisodeSeries] = []
     for root in args.dataset_roots:
@@ -423,6 +431,13 @@ def main() -> None:
         args=args,
     )
     print(f"Wrote {args.output}")
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    validate(parser, args)
+    run(args)
 
 
 if __name__ == "__main__":

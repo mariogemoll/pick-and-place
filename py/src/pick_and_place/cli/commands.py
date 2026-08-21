@@ -193,6 +193,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Serve a browser preview of every attached camera.",
         script="preview_cameras.py",
     ),
+    Command(
+        name="calibrate-robot-dynamics",
+        summary="Fit the follower's actuator dynamics from recorded datasets.",
+        script="calibrate_robot_dynamics.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
