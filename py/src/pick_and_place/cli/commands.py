@@ -238,6 +238,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Merge staged sim episodes into a finished dataset.",
         script="pick_and_place/finalize_sim_dataset.py",
     ),
+    Command(
+        name="calibrate-joint-zeros",
+        summary="Measure the arm's joint zeros at the start of a session.",
+        script="calibrate_joint_zeros.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
