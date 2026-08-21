@@ -29,6 +29,7 @@ import mujoco
 import numpy as np
 
 from pick_and_place.cli.common import add_output_argument
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.sim.export import web_manifest
 
 GRIPPER_PREFIX = "gripper_"
@@ -152,8 +153,9 @@ def derive_joint_mimics(model: mujoco.MjModel) -> dict[str, dict[str, Any]]:
     return mimics
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the generic robot exporter."""
+    parser = SuggestingArgumentParser(description=__doc__)
     parser.add_argument("robot", help="robot_descriptions module name, e.g. ur5e_mj_description")
     add_output_argument(parser, required=True, short=True, help="output JSON path")
     parser.add_argument(
@@ -165,8 +167,11 @@ def main() -> None:
         default="attachment_site",
         help="site on the base robot to attach --gripper to (default: attachment_site)",
     )
-    args = parser.parse_args()
+    return parser
 
+
+def run(args: argparse.Namespace) -> None:
+    """Write the web manifest for the named robot."""
     module = importlib.import_module(f"robot_descriptions.{args.robot}")
     spec = mujoco.MjSpec.from_file(str(module.MJCF_PATH))
 
@@ -196,6 +201,10 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Wrote {args.output}")
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":

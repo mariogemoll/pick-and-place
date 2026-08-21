@@ -88,6 +88,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Export a LeRobot dataset as the image policy's training export.",
         script="export_diffusion_policy_dataset.py",
     ),
+    Command(
+        name="export-generic-robot",
+        summary="Export any robot_descriptions model as a web manifest.",
+        script="export_generic_robot.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
