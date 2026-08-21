@@ -59,7 +59,6 @@ PENDING = {
     "generate_charuco_board.py",
     "generate_parity_fixtures.py",
     "generate_scenario_manifest.py",
-    "keep_successful_episodes.py",
     "measure_cube_visibility.py",
     "measure_episode_visibility.py",
     "measure_hand_eye_offset.py",

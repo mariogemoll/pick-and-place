@@ -78,6 +78,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Split a dataset's episodes into train and validation sets.",
         script="split_train_val_episodes.py",
     ),
+    Command(
+        name="keep-successful-episodes",
+        summary="Copy a dataset keeping only its successful episodes.",
+        script="keep_successful_episodes.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
