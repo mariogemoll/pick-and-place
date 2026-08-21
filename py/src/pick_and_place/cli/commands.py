@@ -213,6 +213,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Rewrite a suite so every scene faces one frozen rig.",
         script="freeze_scenario_rig.py",
     ),
+    Command(
+        name="measure-cube-visibility",
+        summary="Measure how visible the cube is in the policy's own frames.",
+        script="measure_cube_visibility.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
