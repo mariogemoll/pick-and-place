@@ -29,6 +29,7 @@ from typing import Any
 import mujoco
 import numpy as np
 
+from pick_and_place.cli.common import add_output_argument
 from pick_and_place.sim.export import web_manifest
 
 GRIPPER_PREFIX = "gripper_"
@@ -155,7 +156,7 @@ def derive_joint_mimics(model: mujoco.MjModel) -> dict[str, dict[str, Any]]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("robot", help="robot_descriptions module name, e.g. ur5e_mj_description")
-    parser.add_argument("-o", "--output", type=Path, required=True, help="output JSON path")
+    add_output_argument(parser, required=True, short=True, help="output JSON path")
     parser.add_argument(
         "--gripper",
         help="robot_descriptions module name for an end effector to attach, e.g. robotiq_2f85_mj_description",
