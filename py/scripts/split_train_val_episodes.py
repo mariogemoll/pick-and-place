@@ -29,12 +29,18 @@ import argparse
 import random
 from pathlib import Path
 
+from pick_and_place.cli.common import add_seed_argument
+from pick_and_place.cli.dataset import (
+    add_source_dataset_argument,
+    add_val_fraction_argument,
+    add_write_argument,
+)
 from pick_and_place.data.dataset_subset import load_all_episodes, write_subset_dataset
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--src", type=Path, required=True, help="source LeRobotDataset root")
+    add_source_dataset_argument(parser)
     parser.add_argument(
         "--train-dst",
         type=Path,
@@ -47,19 +53,13 @@ def main() -> None:
         default=None,
         help="val output root (default: <src>-val alongside the source)",
     )
-    parser.add_argument(
-        "--val-fraction",
-        type=float,
-        default=0.15,
-        help="fraction of episodes to hold out for validation (default: 0.15)",
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
+    add_val_fraction_argument(parser)
+    add_seed_argument(
+        parser,
         default=0,
         help="seed for the deterministic shuffle that assigns episodes to train/val (default: 0)",
     )
-    parser.add_argument("--write", action="store_true", help="perform the split")
+    add_write_argument(parser, help="perform the split")
     args = parser.parse_args()
 
     train_dst = args.train_dst if args.train_dst is not None else args.src.with_name(f"{args.src.name}-train")

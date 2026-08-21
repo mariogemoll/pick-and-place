@@ -90,3 +90,23 @@ def add_source_dataset_argument(
 ) -> None:
     """Add ``--src``, the dataset an offline tool reads."""
     parser.add_argument("--src", type=Path, required=True, help=help)
+
+
+def add_write_argument(parser: argparse.ArgumentParser, *, help: str) -> None:
+    """Add ``--write``, which the offline dataset tools require before they act.
+
+    Every one of them defaults to a dry run and prints what it would do, because
+    each writes a new multi-gigabyte dataset. ``help`` names the operation so the
+    switch reads as the verb it gates.
+    """
+    parser.add_argument("--write", action="store_true", help=help)
+
+
+def add_val_fraction_argument(parser: argparse.ArgumentParser, *, default: float = 0.15) -> None:
+    """Add ``--val-fraction``, the share of episodes held back from training."""
+    parser.add_argument(
+        "--val-fraction",
+        type=float,
+        default=default,
+        help=f"fraction of episodes to hold out for validation (default: {default})",
+    )
