@@ -739,12 +739,15 @@ def main() -> None:
             viewer_ctx.__exit__(None, None, None)
     if args.trajectory_json is not None:
         args.trajectory_json.parent.mkdir(parents=True, exist_ok=True)
+        # A leaf that takes no checkpoint declares neither flag, so both are
+        # absent from the namespace rather than unset.
+        checkpoint = getattr(args, "checkpoint", None)
         with args.trajectory_json.open("w") as file:
             json.dump(
                 {
-                    "checkpoint": str(args.checkpoint),
+                    "checkpoint": str(checkpoint) if checkpoint is not None else None,
                     "seed": args.seed,
-                    "n_action_steps": args.n_action_steps,
+                    "n_action_steps": getattr(args, "n_action_steps", None),
                     "scene_appearance": args.scene_appearance,
                     "resample_every": args.resample_every,
                     "segments": segment + 1,
