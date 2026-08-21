@@ -102,7 +102,8 @@ the calibrated response automatically.
 Use raw upstream actuator dynamics for comparison:
 
 ```sh
-PYTHONPATH=py/src mjpython py/scripts/pick_and_place/sim.py --no-robot-dynamics
+PYTHONPATH=py/src mjpython py/scripts/run_policy_sim.py scripted \
+  --no-robot-dynamics
 ```
 
 ```sh
