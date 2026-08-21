@@ -78,18 +78,12 @@ from pick_and_place.sim.domain_randomization import (
     reload_renderer_textures,
 )
 from pick_and_place.core.miscalibration import MiscalibrationDraw, MiscalibrationModel
-from pick_and_place.sim.camera_pose_envelope import set_camera_jitter, snapshot_camera
-from pick_and_place.variants.draw import BackgroundRandomization, CameraRandomization
-from pick_and_place.variants.scene import (
-    AppearanceRandomizer,
-    scene_texture_ids,
-    set_scene_texture,
-)
+from pick_and_place.variants.scene import AppearanceRandomizer
 from pick_and_place.variants.appearance import (
     SceneAppearanceOverride,
     parse_appearance,
 )
-from pick_and_place.rollout.sim import OVERHEAD_CAMERA, downsample_through_recording
+from pick_and_place.rollout.sim import downsample_through_recording
 from pick_and_place.sim.paper_target_marker import add_paper_target_marker, place_paper_target_marker
 from pick_and_place.spec.robot import GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
 from pick_and_place.core.workspace_bounds import is_cube_drop_allowed, sample_target_plate_yaw
@@ -272,38 +266,6 @@ def main() -> None:
     add_scene_texture_arguments(parser)
     add_scene_appearance_arguments(parser)
     parser.add_argument(
-        "--camera-randomization",
-        type=Path,
-        default=None,
-        help=(
-            "domain-randomization preset whose overhead_camera_* scalars draw a fresh "
-            "per-episode overhead camera pose+focal jitter; "
-            "nothing else from the preset is applied"
-        ),
-    )
-    parser.add_argument(
-        "--camera-seed",
-        type=int,
-        default=0,
-        help="root seed for --camera-randomization's per-episode draw (default: 0)",
-    )
-    parser.add_argument(
-        "--background-randomization",
-        type=Path,
-        default=None,
-        help=(
-            "domain-randomization preset whose background/table colour, blur and blob-count "
-            "ranges draw a fresh procedural background+table texture per episode. Needs "
-            "--background-panorama/--table-texture (the finite-floor scene) to have any effect"
-        ),
-    )
-    parser.add_argument(
-        "--background-seed",
-        type=int,
-        default=0,
-        help="root seed for --background-randomization's per-episode draw (default: 0)",
-    )
-    parser.add_argument(
         "--steps",
         type=int,
         default=0,
@@ -391,23 +353,6 @@ def main() -> None:
     if args.show and not args.headless:
         parser.error("--show requires --headless")
 
-    # The full preset already draws cameras and appearance (plus lighting,
-    # materials, cube orientation and miscalibration); applying the narrow
-    # rendering draws on top of it would randomize the same axes twice.
-    if args.domain_randomization is not None and (
-        args.camera_randomization is not None or args.background_randomization is not None
-    ):
-        parser.error(
-            "--domain-randomization already randomizes cameras and appearance; "
-            "--camera-randomization/--background-randomization are the narrower alternative"
-        )
-    if args.background_randomization is not None and (
-        args.background_panorama is None and args.table_texture is None
-    ):
-        parser.error(
-            "--background-randomization needs the finite-floor scene: "
-            "pass --background-panorama and/or --table-texture"
-        )
     try:
         appearance_name, scene_appearance = (
             parse_appearance(args.scene_appearance)
@@ -510,38 +455,7 @@ def main() -> None:
             f"cube_orientation={active_sample.cube_orientation_index}"
         )
 
-    # The narrow rendering draws a re-rendered dataset was produced with: an
-    # overhead camera pose+focal jitter and a procedural background/table
-    # texture per episode, and nothing else.
-    camera_randomization = (
-        CameraRandomization.from_preset(args.camera_randomization, seed=args.camera_seed)
-        if args.camera_randomization is not None
-        else None
-    )
-    background_randomization = (
-        BackgroundRandomization.from_preset(
-            args.background_randomization, seed=args.background_seed
-        )
-        if args.background_randomization is not None
-        else None
-    )
-    overhead_base = snapshot_camera(model, OVERHEAD_CAMERA)
-    texture_ids = scene_texture_ids(model)
-    base_tex_data = model.tex_data.copy()
     appearance_override = SceneAppearanceOverride(model) if scene_appearance is not None else None
-
-    def apply_render_randomization(
-        episode_idx: int, renderer: mujoco.Renderer | None = None
-    ) -> None:
-        """Draw this episode's overhead camera jitter and scene texture."""
-        if camera_randomization is not None:
-            set_camera_jitter(model, overhead_base, camera_randomization.draw(episode_idx))
-        if background_randomization is not None:
-            set_scene_texture(
-                model, texture_ids, background_randomization.draw(episode_idx), base_tex_data
-            )
-            if renderer is not None:
-                reload_renderer_textures(renderer, texture_ids)
 
     def apply_scene_appearance() -> None:
         """Repaint the scene, after the drop-zone marker has set the plate's colour."""
@@ -550,21 +464,9 @@ def main() -> None:
         appearance_override.refresh_plate_baseline()
         appearance_override.apply(scene_appearance)
 
-    apply_render_randomization(domain_episode)
     apply_scene_appearance()
     if appearance_override is not None:
         print(f"Scene appearance: {appearance_name}.")
-    if camera_randomization is not None:
-        print(
-            f"Camera randomization: {args.camera_randomization} (seed {args.camera_seed}) -> "
-            f"±{camera_randomization.position_mm:g} mm / ±{camera_randomization.rotation_deg:g}° "
-            f"/ ±{camera_randomization.focal_pct:g}% focal."
-        )
-    if background_randomization is not None:
-        print(
-            f"Background randomization: {args.background_randomization} "
-            f"(seed {args.background_seed}) -> fresh background/table texture per episode."
-        )
 
     episode_time_origin = data.time
 
@@ -672,7 +574,6 @@ def main() -> None:
                 if miscalibration_model is not None
                 else None
             )
-        apply_render_randomization(domain_episode, renderer)
         # Reset all per-episode dynamic state (including velocities and actuator
         # activation) before restoring the newly sampled scene.
         mujoco.mj_resetData(model, data)

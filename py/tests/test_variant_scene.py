@@ -15,6 +15,7 @@ import numpy as np
 
 from pick_and_place.sim.domain_randomization import (
     DomainRandomizationPreset,
+    domain_seed,
     generate_procedural_appearance,
 )
 from pick_and_place.variants.scene import AppearanceRandomizer
@@ -28,7 +29,6 @@ from pick_and_place.sim.camera_pose_envelope import (
     set_camera_jitter,
     snapshot_camera,
 )
-from pick_and_place.variants.draw import BackgroundRandomization, CameraRandomization
 from pick_and_place.variants.scene import scene_texture_ids, set_scene_texture
 from pick_and_place.rollout.sim import OVERHEAD_CAMERA, build_recording_scene
 
@@ -72,31 +72,10 @@ def test_successive_jitters_do_not_compound():
     assert np.allclose(model.cam_pos[base.camera], once)
 
 
-def test_camera_randomization_is_seeded_per_episode():
-    randomization = CameraRandomization.from_preset(PRESET, seed=7)
-    assert randomization.position_mm == 25.0
-    assert randomization.rotation_deg == 3.0
-    assert randomization.focal_pct == 2.5
-
-    assert randomization.draw(3) == randomization.draw(3)
-    assert randomization.draw(3) != randomization.draw(4)
-    assert CameraRandomization.from_preset(PRESET, seed=8).draw(3) != randomization.draw(3)
-
-    jitter = randomization.draw(0)
-    assert max(abs(value) for value in jitter.position_m) <= 0.025
-    assert max(abs(value) for value in jitter.rotation_deg) <= 3.0
-    assert abs(jitter.focal_scale - 1.0) <= 0.025
-
-
-def test_background_randomization_is_seeded_per_episode():
-    randomization = BackgroundRandomization.from_preset(PRESET, seed=11)
-
-    first = randomization.draw(0)
-    assert np.array_equal(first.background_rgb, randomization.draw(0).background_rgb)
-    assert not np.array_equal(first.background_rgb, randomization.draw(1).background_rgb)
-    assert not np.array_equal(
-        first.table_rgb, BackgroundRandomization.from_preset(PRESET, seed=12).draw(0).table_rgb
-    )
+def _appearance(seed: int, episode: int = 0):
+    """A procedural background/table draw, straight from the preset."""
+    sample = DomainRandomizationPreset.load(PRESET).sample(domain_seed(seed, episode))
+    return generate_procedural_appearance(sample.appearance())
 
 
 def test_the_groundplane_scene_has_no_scene_textures_to_randomize():
@@ -104,9 +83,7 @@ def test_the_groundplane_scene_has_no_scene_textures_to_randomize():
     assert scene_texture_ids(model) == ()
     # Nothing to write into, so the model must come out untouched.
     before = model.tex_data.copy()
-    set_scene_texture(
-        model, (), BackgroundRandomization.from_preset(PRESET, seed=1).draw(0), before
-    )
+    set_scene_texture(model, (), _appearance(1), before)
     assert np.array_equal(model.tex_data, before)
 
 
@@ -118,7 +95,7 @@ def test_the_finite_floor_scene_textures_are_written_and_restored():
     assert len(texture_ids) == 2
 
     compiled = model.tex_data.copy()
-    appearance = BackgroundRandomization.from_preset(PRESET, seed=11).draw(0)
+    appearance = _appearance(11)
     set_scene_texture(model, texture_ids, appearance, compiled)
     assert not np.array_equal(model.tex_data, compiled)
 
