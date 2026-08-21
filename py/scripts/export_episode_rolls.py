@@ -48,6 +48,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
+from pick_and_place.cli.common import add_out_dir_argument, add_seed_argument
 from pick_and_place.scripted.episode_sampling import (
     pickup_yaw_from_azimuth,
     sample_cube,
@@ -366,7 +367,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("-n", "--num-episodes", type=int, default=len(DEFAULT_GRIP_PRESETS))
     parser.add_argument("--fps", type=float, default=DEFAULT_FPS)
-    parser.add_argument("--seed", type=int, default=0, help="base RNG seed")
+    add_seed_argument(parser, default=0, help="base RNG seed")
     parser.add_argument(
         "--max-attempts", type=int, default=50, help="pose resamples per episode"
     )
@@ -406,9 +407,8 @@ def main() -> None:
         help="with --continuous-chain, set the last robot end pose to the first "
         "sampled robot start pose so the replay loops continuously",
     )
-    parser.add_argument(
-        "--out-dir",
-        type=Path,
+    add_out_dir_argument(
+        parser,
         default=Path(__file__).resolve().parents[2] / "ts" / "public" / "episodes",
         help="directory to write episode_NN.bin files (default: ts/public/episodes)",
     )
