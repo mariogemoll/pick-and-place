@@ -31,6 +31,8 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
+from pick_and_place.cli.common import add_output_argument
+from pick_and_place.cli.rig import add_follower_arguments, add_rig_camera_arguments
 from pick_and_place.sim.model import build_model
 from pick_and_place.core.joint_frames import action_to_joints, real_frame_to_sim
 from pick_and_place.hardware.follower import make_so101_follower
@@ -114,18 +116,8 @@ def _persist(output: Path, day: str, result, config: CalibrationConfig) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--camera", default="0", help="overhead camera index or path")
-    parser.add_argument("--camera-name", default="overhead_camera", help="overhead camera name")
-    parser.add_argument("--wrist-camera", default="1", help="wrist camera index or path")
-    parser.add_argument("--overhead-intrinsics", type=Path, default=None)
-    parser.add_argument(
-        "--wrist-intrinsics",
-        type=Path,
-        default=None,
-        help="wrist intrinsics JSON (default: local sidecar)",
-    )
-    parser.add_argument("--follower-port", required=True, help="follower serial port")
-    parser.add_argument("--follower-id", default="folly", help="follower calibration id")
+    add_rig_camera_arguments(parser, wrist_intrinsics=True)
+    add_follower_arguments(parser)
     parser.add_argument(
         "--viewer", action="store_true", help="show the 3D MuJoCo viewer (default: headless)"
     )
@@ -140,7 +132,11 @@ def main() -> None:
         help="always ask the operator to move the cube instead of the robot relocating it",
     )
     parser.add_argument("--day", default=datetime.date.today().strftime("%Y%m%d"))
-    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    add_output_argument(
+        parser,
+        default=DEFAULT_OUTPUT,
+        help="solved joint zeros JSON (default: config/joint_zeros.json)",
+    )
     args = parser.parse_args()
 
     from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
