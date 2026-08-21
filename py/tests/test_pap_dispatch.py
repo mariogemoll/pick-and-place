@@ -44,7 +44,6 @@ PENDING = {
     "check_calibration.py",
     "check_overhead_localization.py",
     "compare_policy_evaluations.py",
-    "consolidate_datasets.py",
     "convert_dataset_resolution.py",
     "diagnose_flow_image_policy.py",
     "eval_scripted_parallel.py",

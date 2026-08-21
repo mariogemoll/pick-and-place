@@ -32,6 +32,7 @@ import pandas as pd
 
 from pick_and_place.cli.common import add_out_dir_argument
 from pick_and_place.cli.dataset import add_write_argument
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.core.paths import ENV_VAR, datasets_root
 
 
@@ -65,8 +66,9 @@ def source_episode_count(run_root: Path) -> int:
     return total
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the dataset consolidator."""
+    parser = SuggestingArgumentParser(description=__doc__)
     parser.add_argument(
         "source_roots",
         nargs="*",
@@ -79,8 +81,11 @@ def main() -> None:
         f"(default: ${ENV_VAR}/datasets)",
     )
     add_write_argument(parser, help="perform the merge")
-    args = parser.parse_args()
+    return parser
 
+
+def run(args: argparse.Namespace) -> None:
+    """Consolidate the source roots, or report what the merge would do."""
     source_roots = args.source_roots or [datasets_root()]
     out_dir = args.out_dir or datasets_root()
 
@@ -126,6 +131,10 @@ def main() -> None:
                 f"Merged output left at {out_path} for inspection."
             )
         print(f"  Wrote {merged_total} episode(s) to {out_path}")
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":
