@@ -253,6 +253,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Show one camera's live feed in a window.",
         script="showcamfeed.py",
     ),
+    Command(
+        name="showcamfeeds",
+        summary="Show every attached camera's live feed at once.",
+        script="showcamfeeds.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}

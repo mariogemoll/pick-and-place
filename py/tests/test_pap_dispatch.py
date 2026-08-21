@@ -40,7 +40,6 @@ PENDING = {
     "run_flow_image_policy_sim.py",
     "run_policy_real.py",
     "run_policy_sim.py",
-    "showcamfeeds.py",
     "train_flow_image_policy.py",
 }
 
