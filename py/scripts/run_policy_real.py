@@ -4,14 +4,19 @@
 
 """Run a learned policy on the physical SO-101, closed-loop.
 
-``--controller lerobot`` (the default) runs ACT, SmolVLA, or another LeRobot
-checkpoint. ``--controller flow-image`` runs an image-conditioned flow policy in
-this process, from a checkpoint and the dataset export it was trained on
-(``--flow-export``).
+Two leaves, because what a checkpoint is and how it is queried is not something
+the two controllers share.
 
-The flow-image controller is queried at the policy's trained rate, and its live
-camera frames are reduced through the dataset export's recorded video resolution
-before reaching the model's input resolution.
+``lerobot`` loads a LeRobot checkpoint (ACT, SmolVLA, pi0.5, ...); pass
+``--checkpoint`` to run a fine-tune, else the base ``lerobot/smolvla_base``,
+an un-finetuned plumbing spike (the arm moves but does not solve the task).
+``flow-image`` runs an image-conditioned flow policy in this process, from a
+checkpoint and the dataset export it was trained on (``--flow-export``); it is
+queried at the policy's trained rate, and its live camera frames are reduced
+through the export's recorded video resolution before reaching the model's
+input resolution.
+
+Everything about the rig and the run is declared once and shared by both leaves.
 
 The hardware counterpart to ``run_policy_sim.py``. Where the sim run renders MuJoCo
 cameras and integrates physics, this reads two real cameras and a real arm: each
@@ -42,10 +47,6 @@ resized to its input resolution every tick, via the same geometry
 the dataset conversion applies to recorded datasets — so the live
 frames fed to the policy match the ones it was fine-tuned on, pixel-geometry for
 pixel-geometry. The resolution defaults to whatever the checkpoint was trained on.
-
-``--checkpoint`` selects the policy; the default ``lerobot/smolvla_base`` is an
-un-finetuned plumbing spike (the arm moves but does not solve the task). A
-checkpoint fine-tuned on the project's dataset is the real use case.
 
 ``--save-video`` records policy inputs, ``--record-video`` captures continuous
 native camera footage, and ``--action-log`` stores measured states, predicted
@@ -96,8 +97,11 @@ from pick_and_place.policies.dataset_export import resolve_recording_hw
 from pick_and_place.policies.flow_image_policy import FlowImagePolicyController
 from pick_and_place.scripted.episode_sampling import sample_hunt_pose, sample_near_neutral
 from pick_and_place.cli.policy import (
+    add_checkpoint_argument,
+    add_device_argument,
     add_flow_image_arguments,
-    add_policy_arguments,
+    add_lerobot_arguments,
+    add_policy_image_arguments,
 )
 from pick_and_place.cli.rig import (
     add_drop_zone_arguments,
@@ -158,15 +162,8 @@ def launch_flow_image_controller(
     args: argparse.Namespace,
     *,
     override_hw: tuple[int, int] | None,
-    default_checkpoint: str,
 ) -> tuple[FlowImagePolicyController, tuple[int, int]]:
-    """Validate the flow-policy arguments and load the controller."""
-    if args.checkpoint == default_checkpoint:
-        parser.error(
-            "--checkpoint (a checkpoint-*.pt file) is required for the flow-image controller"
-        )
-    if args.flow_export is None:
-        parser.error("--flow-export is required for the flow-image controller")
+    """Resolve the recording resolution and load the controller."""
     try:
         recording_hw = resolve_recording_hw(
             args.flow_export / "normalization.npz", args.recording_hw
@@ -206,9 +203,12 @@ def _drain_stdin_lines() -> bool:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    add_policy_arguments(parser, controllers=("lerobot", "flow-image"))
-    add_flow_image_arguments(parser)
+    # The rig and the run, shared by every leaf so that the two controllers
+    # drive the same arm through literally the same declaration. What a
+    # checkpoint is and how it is queried belongs to the leaf that has one.
+    common = argparse.ArgumentParser(add_help=False)
+    parser = common
+    add_policy_image_arguments(parser)
     add_follower_arguments(parser)
     add_rig_camera_arguments(parser, workspace_camera=True)
     parser.add_argument(
@@ -389,6 +389,29 @@ def main() -> None:
     )
     add_drop_zone_arguments(parser)
     add_operator_alert_arguments(parser)
+    parser = argparse.ArgumentParser(description=__doc__)
+    leaves = parser.add_subparsers(dest="controller", required=True, metavar="CONTROLLER")
+
+    lerobot = leaves.add_parser(
+        "lerobot",
+        parents=[common],
+        help="a LeRobot checkpoint (ACT, SmolVLA, pi0.5, ...)",
+        description="Run a LeRobot checkpoint on the physical arm, closed-loop.",
+    )
+    add_lerobot_arguments(lerobot)
+
+    flow_image = leaves.add_parser(
+        "flow-image",
+        parents=[common],
+        help="the image-conditioned flow-matching policy",
+        description="Run an image-flow export on the physical arm, closed-loop.",
+    )
+    add_checkpoint_argument(
+        flow_image, default=None, required=True, help="flow-policy checkpoint-*.pt file"
+    )
+    add_device_argument(flow_image)
+    add_flow_image_arguments(flow_image, flow_export_required=True)
+
     args = parser.parse_args()
     if args.workspace_camera is not None and args.record_video is None:
         parser.error("--workspace-camera requires --record-video")
@@ -408,17 +431,12 @@ def main() -> None:
     recording_hw = None
     if args.controller == "flow-image":
         chunked_controller, recording_hw = launch_flow_image_controller(
-            parser, args, override_hw=override_hw, default_checkpoint=DEFAULT_CHECKPOINT
+            parser, args, override_hw=override_hw
         )
-    if chunked_controller is not None:
         img_h, img_w = chunked_controller.image_hw
         overhead_key, wrist_key = OVERHEAD_FEATURE, WRIST_FEATURE
         control_hz = chunked_controller.policy_hz
     else:
-        if args.recording_hw is not None:
-            parser.error(
-                "--recording-hw only applies to the flow-image controller"
-            )
         (img_h, img_w), (overhead_key, wrist_key) = resolve_checkpoint_cameras(
             args.checkpoint, override_hw=override_hw
         )
@@ -531,6 +549,7 @@ def main() -> None:
             device,
             n_action_steps=args.n_action_steps,
             temporal_ensemble_coeff=args.temporal_ensemble_coeff,
+            base_checkpoint=args.base_checkpoint,
         )
     else:
         policy = chunked_controller
