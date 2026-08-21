@@ -53,6 +53,7 @@ from pick_and_place.cli.evaluation import (
     add_scenarios_per_file_argument,
     add_suite_name_argument,
 )
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 
 #: The three blocks that together are "the rig". Everything else in a scenario
 #: -- the cube pose, the target, the workspace region, the step budget -- is the
@@ -132,8 +133,9 @@ def load_suite(manifest_path: Path) -> tuple[dict[str, Any], list[dict[str, Any]
     return payload, scenarios
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the rig freezer."""
+    parser = SuggestingArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("manifest", type=Path, help="suite to rewrite")
     parser.add_argument(
         "--from-scenario",
@@ -164,11 +166,11 @@ def parse_args() -> argparse.Namespace:
     add_output_argument(parser, required=True, help="output manifest path")
     add_suite_name_argument(parser, help="suite name (default: derived from the source)")
     add_scenarios_per_file_argument(parser)
-    return parser.parse_args()
+    return parser
 
 
-def main() -> None:
-    args = parse_args()
+def run(args: argparse.Namespace) -> None:
+    """Rewrite the suite and write the new manifest."""
     header, scenarios = load_suite(args.manifest)
     if not scenarios:
         raise SystemExit(f"{args.manifest} holds no scenarios")
@@ -243,6 +245,10 @@ def main() -> None:
         f"{suite}: {len(frozen)} scenarios on one rig from {label}, "
         f"varying {len(varied)} field(s) -> {args.output}"
     )
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":
