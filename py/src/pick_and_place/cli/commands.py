@@ -73,6 +73,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Merge run directories into one dataset per day.",
         script="consolidate_datasets.py",
     ),
+    Command(
+        name="split-train-val-episodes",
+        summary="Split a dataset's episodes into train and validation sets.",
+        script="split_train_val_episodes.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
