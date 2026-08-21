@@ -75,6 +75,7 @@ from pick_and_place.cli.dataset import (
     add_source_dataset_argument,
     add_video_encoding_arguments,
 )
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
 from pick_and_place.data.recording import RecordingSession
 from pick_and_place.perception.image_rectify import (
@@ -165,8 +166,9 @@ class VideoFrameReader:
         self._frames.close()
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the resolution converter."""
+    parser = SuggestingArgumentParser(description=__doc__)
     add_source_dataset_argument(parser)
     add_destination_dataset_argument(
         parser,
@@ -221,9 +223,17 @@ def main() -> None:
             "with select_episodes.py to export only e.g. the successful episodes."
         ),
     )
-    args = parser.parse_args()
+    return parser
+
+
+def validate(parser: SuggestingArgumentParser, args: argparse.Namespace) -> None:
+    """Reject a worker count the parser cannot express."""
     if args.camera_workers < 1:
         parser.error("--camera-workers must be positive")
+
+
+def run(args: argparse.Namespace) -> None:
+    """Write the converted dataset at the requested resolution."""
     include_episodes = (
         read_episode_indices(args.episodes_file) if args.episodes_file is not None else None
     )
@@ -453,6 +463,13 @@ def main() -> None:
         recording.finalize()
 
     print(f"Done. Wrote {dst_root}")
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    validate(parser, args)
+    run(args)
 
 
 if __name__ == "__main__":
