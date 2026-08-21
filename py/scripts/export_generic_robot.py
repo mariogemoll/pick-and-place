@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
-from pathlib import Path
 from typing import Any
 
 import mujoco
