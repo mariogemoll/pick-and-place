@@ -108,6 +108,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Re-render a dataset's video at another resolution.",
         script="convert_dataset_resolution.py",
     ),
+    Command(
+        name="merge-evaluation-shards",
+        summary="Merge sharded evaluation runs into one result.",
+        script="merge_evaluation_shards.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}

@@ -57,7 +57,6 @@ PENDING = {
     "generate_scenario_manifest.py",
     "measure_cube_visibility.py",
     "measure_episode_visibility.py",
-    "merge_evaluation_shards.py",
     "park_follower.py",
     "pick_and_place/finalize_sim_dataset.py",
     "pick_and_place/real.py",
