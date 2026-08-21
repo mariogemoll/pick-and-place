@@ -13,16 +13,13 @@ deliberately not commands.
 
 from __future__ import annotations
 
-import importlib
-import importlib.util
 from pathlib import Path
 
 import pytest
 
 from pick_and_place.cli.commands import COMMANDS, COMMANDS_BY_NAME
+from pick_and_place.cli.dispatch import SCRIPTS_DIR, load_parser_owner
 from pick_and_place.cli.suggest import SuggestingArgumentParser
-
-SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 
 #: Files under ``scripts/`` that are not commands, and why.
 NOT_COMMANDS = {
@@ -109,17 +106,7 @@ def test_summaries_are_one_sentence() -> None:
 @pytest.mark.parametrize("command", COMMANDS, ids=lambda c: c.name)
 def test_parser_builds_and_suggests(command) -> None:
     """Every command's parser exists, builds, and offers a hint on a typo."""
-    if command.parser_module is None:
-        spec = importlib.util.spec_from_file_location(
-            f"pap_command_{command.name}", SCRIPTS_DIR / command.script
-        )
-        assert spec is not None and spec.loader is not None
-        owner = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(owner)
-    else:
-        owner = importlib.import_module(command.parser_module)
-
-    parser = owner.build_parser()
+    parser = load_parser_owner(command).build_parser()
     assert isinstance(parser, SuggestingArgumentParser), (
         f"{command.name} builds a plain ArgumentParser, so a typo in it gets no hint"
     )
