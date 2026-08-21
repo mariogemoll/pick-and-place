@@ -68,6 +68,13 @@ from typing import Any
 
 import numpy as np
 
+from pick_and_place.cli.common import add_output_size_arguments
+from pick_and_place.cli.dataset import (
+    add_destination_dataset_argument,
+    add_repo_id_argument,
+    add_source_dataset_argument,
+    add_video_encoding_arguments,
+)
 from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
 from pick_and_place.data.recording import RecordingSession
 from pick_and_place.perception.image_rectify import (
@@ -160,20 +167,17 @@ class VideoFrameReader:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--src", type=Path, required=True, help="source LeRobotDataset root")
-    parser.add_argument(
-        "--dst",
-        type=Path,
-        default=None,
+    add_source_dataset_argument(parser)
+    add_destination_dataset_argument(
+        parser,
         help="output dataset root (default: <src>-<width>x<height> alongside the source)",
     )
-    parser.add_argument(
-        "--repo-id",
-        default=None,
-        help="repo id for the output dataset (default: <src dir name>-<width>x<height>)",
+    add_repo_id_argument(
+        parser, help="repo id for the output dataset (default: <src dir name>-<width>x<height>)"
     )
-    parser.add_argument("--width", type=int, default=SQUARE_SIZE, help="output width (px)")
-    parser.add_argument("--height", type=int, default=SQUARE_SIZE, help="output height (px)")
+    add_output_size_arguments(
+        parser, width=SQUARE_SIZE, height=SQUARE_SIZE, noun="output frame"
+    )
     parser.add_argument(
         "--already-rectified",
         action="store_true",
@@ -182,22 +186,10 @@ def main() -> None:
             "then center-crop and resize them"
         ),
     )
-    parser.add_argument(
-        "--vcodec",
-        default="auto",
-        help="LeRobot video codec (default: auto = best available HW encoder)",
-    )
-    parser.add_argument(
-        "--streaming-encoding",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="encode video during capture; --no-streaming-encoding falls back to PNG-then-encode",
-    )
-    parser.add_argument(
-        "--image-writer-threads",
-        type=int,
-        default=4,
-        help="background image-writer threads for PNG-then-encode mode",
+    add_video_encoding_arguments(
+        parser,
+        vcodec="auto",
+        vcodec_help="LeRobot video codec (default: auto = best available HW encoder)",
     )
     parser.add_argument(
         "--camera-workers",

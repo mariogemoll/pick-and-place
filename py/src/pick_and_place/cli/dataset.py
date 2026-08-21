@@ -42,20 +42,7 @@ def add_dataset_arguments(
         default=DEFAULT_TASK,
         help="natural-language task instruction saved with every frame",
     )
-    parser.add_argument("--vcodec", default=vcodec, help=vcodec_help)
-    parser.add_argument(
-        "--streaming-encoding",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="encode video during capture; --no-streaming-encoding falls back to "
-        "PNG-then-encode",
-    )
-    parser.add_argument(
-        "--image-writer-threads",
-        type=int,
-        default=4,
-        help="background image-writer threads for PNG-then-encode mode",
-    )
+    add_video_encoding_arguments(parser, vcodec=vcodec, vcodec_help=vcodec_help)
 
 
 def add_episodes_root_argument(parser: argparse.ArgumentParser, *, help: str) -> None:
@@ -138,3 +125,28 @@ def add_success_tolerance_argument(parser: argparse.ArgumentParser, *, help: str
     contains episodes its own metadata calls failures.
     """
     parser.add_argument("--xy-tolerance", type=float, default=SUCCESS_XY_TOLERANCE_M, help=help)
+
+
+def add_video_encoding_arguments(
+    parser: argparse.ArgumentParser, *, vcodec: str, vcodec_help: str
+) -> None:
+    """Add how a dataset's video is encoded, whoever is writing it.
+
+    Separate from :func:`add_dataset_arguments` because the offline converter
+    writes a dataset without recording one: it takes the encoder settings and
+    none of the flags describing a capture session.
+    """
+    parser.add_argument("--vcodec", default=vcodec, help=vcodec_help)
+    parser.add_argument(
+        "--streaming-encoding",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="encode video during capture; --no-streaming-encoding falls back to "
+        "PNG-then-encode",
+    )
+    parser.add_argument(
+        "--image-writer-threads",
+        type=int,
+        default=4,
+        help="background image-writer threads for PNG-then-encode mode",
+    )
