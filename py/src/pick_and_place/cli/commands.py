@@ -243,6 +243,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Measure the arm's joint zeros at the start of a session.",
         script="calibrate_joint_zeros.py",
     ),
+    Command(
+        name="calibrate-camera-intrinsics",
+        summary="Solve a camera's intrinsics against the ChArUco board.",
+        script="calibrate_camera_intrinsics.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}

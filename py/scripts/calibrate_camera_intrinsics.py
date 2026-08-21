@@ -35,6 +35,7 @@ from pick_and_place.calibration.charuco_board import make_board
 from pick_and_place.cli.calibration import add_charuco_board_arguments
 from pick_and_place.cli.common import add_output_argument
 from pick_and_place.cli.rig import add_camera_device_argument, add_capture_size_arguments
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 
 
 @dataclass
@@ -274,8 +275,11 @@ def draw_status(
     draw_coverage_grid(cv2_module, frame, coverage)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the intrinsics solve."""
+    parser = SuggestingArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     add_camera_device_argument(parser)
     add_output_argument(
         parser, required=True, help="destination JSON path for the calibrated intrinsics"
@@ -291,7 +295,17 @@ def main() -> None:
         help="only accept captures with this frame orientation (default: landscape)",
     )
     parser.add_argument("--rational", action="store_true", help="use OpenCV's 8-coefficient rational lens model")
-    args = parser.parse_args()
+    return parser
+
+
+def validate(parser: SuggestingArgumentParser, args: argparse.Namespace) -> None:
+    """Reject a board geometry the printer would also refuse."""
+    if args.marker_mm >= args.square_mm:
+        parser.error("--marker-mm must be smaller than --square-mm")
+
+
+def run(args: argparse.Namespace) -> None:
+    """Capture views, solve the intrinsics, and write them."""
 
     try:
         import cv2
@@ -299,10 +313,7 @@ def main() -> None:
         raise SystemExit("camera calibration requires opencv-python") from exc
     if not hasattr(cv2, "aruco") or not hasattr(cv2.aruco, "CharucoDetector"):
         raise SystemExit("this OpenCV build has no ChArUco support; install opencv-python >= 4.7")
-    try:
-        board = make_board(cv2, args.squares_x, args.squares_y, args.square_mm, args.marker_mm)
-    except ValueError as exc:
-        parser.error(str(exc))
+    board = make_board(cv2, args.squares_x, args.squares_y, args.square_mm, args.marker_mm)
 
     from pick_and_place.calibration.cam_align_solve import open_camera, parse_index_or_path, read_camera_frame
     detector = cv2.aruco.CharucoDetector(board)
@@ -422,6 +433,13 @@ def main() -> None:
     finally:
         cap.release()
         cv2.destroyAllWindows()
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    validate(parser, args)
+    run(args)
 
 
 if __name__ == "__main__":
