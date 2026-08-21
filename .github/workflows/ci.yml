@@ -67,6 +67,15 @@ jobs:
       - name: "Generate web model"
         working-directory: py
         run: python -m pick_and_place.sim.export -o ../ts/public/so101.xml
+      # export_generic_robot.py has no unit tests, so running it is its only
+      # coverage. Nothing consumes the output; it rides along here because this
+      # job already has the exporter installed.
+      - name: "Export the generic robots"
+        working-directory: py
+        run: |
+          python scripts/export_generic_robot.py ur5e_mj_description \
+            --gripper robotiq_2f85_mj_description -o "$RUNNER_TEMP/ur5e.json"
+          python scripts/export_generic_robot.py panda_mj_description -o "$RUNNER_TEMP/panda.json"
       - name: "ESLint the ESLint config"
         working-directory: ts
         run: pnpm eslint -c basic.eslint.config.js basic.eslint.config.js eslint.config.js
@@ -118,15 +127,6 @@ jobs:
       - name: "Run simulation package tests"
         working-directory: py
         run: python -m pytest -n auto
-      # export_generic_robot.py has no unit tests, so running it is its only
-      # coverage. Nothing consumes the output. The SO-101 exporter needs no
-      # equivalent step: test_export.py covers it and the ts job runs it.
-      - name: "Export the generic robots"
-        working-directory: py
-        run: |
-          python scripts/export_generic_robot.py ur5e_mj_description \
-            --gripper robotiq_2f85_mj_description -o "$RUNNER_TEMP/ur5e.json"
-          python scripts/export_generic_robot.py panda_mj_description -o "$RUNNER_TEMP/panda.json"
 
   meshes:
     runs-on: ubuntu-latest
