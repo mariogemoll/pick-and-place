@@ -398,7 +398,11 @@ def main() -> None:
         help="a LeRobot checkpoint (ACT, SmolVLA, pi0.5, ...)",
         description="Run a LeRobot checkpoint on the physical arm, closed-loop.",
     )
-    add_lerobot_arguments(lerobot)
+    # Default to the checkpoint's own n_action_steps. The 100 that
+    # add_lerobot_arguments otherwise supplies matches ACT's chunk and exceeds
+    # the 50 that smolvla_base, every SmolVLA fine-tune and pi0.5 carry, so it
+    # rejected all three before a single frame was read.
+    add_lerobot_arguments(lerobot, n_action_steps_default=None)
 
     flow_image = leaves.add_parser(
         "flow-image",
