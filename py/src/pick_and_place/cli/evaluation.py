@@ -59,7 +59,9 @@ def add_shard_arguments(parser: argparse.ArgumentParser) -> None:
         "--offset",
         type=int,
         default=0,
-        help="skip the first N scenarios, applied before --limit",
+        help="skip the first N scenarios, applied before --limit. Together the two shard one "
+        "suite across concurrent workers; the shards stay comparable because each scenario is "
+        "independent and carries its own seed, and merge_evaluation_shards.py reassembles them",
     )
 
 

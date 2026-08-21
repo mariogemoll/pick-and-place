@@ -19,6 +19,7 @@ import argparse
 import math
 from pathlib import Path
 
+from pick_and_place.cli.common import add_output_argument
 from pick_and_place.cli.policy import (
     add_checkpoint_argument,
     add_device_argument,
@@ -26,10 +27,14 @@ from pick_and_place.cli.policy import (
     add_lerobot_arguments,
     add_policy_image_arguments,
 )
+from pick_and_place.cli.evaluation import (
+    EVALUATION_DIR,
+    add_manifest_argument,
+    add_shard_arguments,
+)
 from pick_and_place.cli.scene import add_render_size_arguments, add_scene_appearance_arguments
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
-DEFAULT_MANIFEST = REPOSITORY_ROOT / "config" / "evaluation" / "smoke_v1.json"
+DEFAULT_MANIFEST = EVALUATION_DIR / "smoke_v1.json"
 
 
 def build_parser(description: str | None = None) -> argparse.ArgumentParser:
@@ -41,29 +46,9 @@ def build_parser(description: str | None = None) -> argparse.ArgumentParser:
     add_policy_image_arguments(parser)
     add_render_size_arguments(parser)
     add_scene_appearance_arguments(parser)
-    parser.add_argument(
-        "--manifest",
-        type=Path,
-        default=DEFAULT_MANIFEST,
-        help=f"frozen scenario manifest (default: {DEFAULT_MANIFEST})",
-    )
-    parser.add_argument("--output", type=Path, required=True, help="new evaluation run directory")
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="run only the first N scenarios for a non-headline wiring check",
-    )
-    parser.add_argument(
-        "--offset",
-        type=int,
-        default=0,
-        help=(
-            "skip the first N scenarios, applied before --limit. Together the two shard one "
-            "suite across concurrent workers; the shards stay comparable because each scenario "
-            "is independent and carries its own seed"
-        ),
-    )
+    add_manifest_argument(parser, default=DEFAULT_MANIFEST)
+    add_output_argument(parser, required=True, help="new evaluation run directory")
+    add_shard_arguments(parser)
     parser.add_argument(
         "--max-episode-seconds",
         type=float,
