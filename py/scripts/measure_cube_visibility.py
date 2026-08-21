@@ -28,18 +28,18 @@ from typing import Any
 
 import numpy as np
 
-from pick_and_place.cli.common import add_output_argument
-from pick_and_place.cli.dataset import (
-    add_episodes_root_argument,
-    add_image_size_argument,
-    add_max_episodes_argument,
-)
 from pick_and_place.analysis.scene_visibility import (
     OBJECT_COVERAGE,
     SceneMeasurer,
     contrast,
     load_episode_truth,
     video_render_hw,
+)
+from pick_and_place.cli.common import add_output_argument
+from pick_and_place.cli.dataset import (
+    add_episodes_root_argument,
+    add_image_size_argument,
+    add_max_episodes_argument,
 )
 from pick_and_place.rollout.sim import OVERHEAD_CAMERA, WRIST_CAMERA
 from pick_and_place.core.task_phases import PHASES
