@@ -126,13 +126,6 @@ That command writes both `so101.xml` and `so101.json`; only the `.json` is
 needed for tests. CI gets this by accident — its step reads as a smoke test of
 the exporter and deletes the `.xml` afterwards, leaving the `.json` behind.
 
-The live policy page's parity test
-(`ts/src/visualizations/live-policy/parity.test.ts`) needs more than that: a
-compiled scene, an exported policy, and a recorded rollout. It **skips itself**
-when they are absent rather than failing, so a clone still runs green — which
-also means a green run does not prove that check ran. See
-[The live policy page](#the-live-policy-page).
-
 ### The simulator needs generated AprilTag textures
 
 `assets/apriltags/textures/` is **not** in the repository — the textures are
@@ -248,8 +241,6 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   `workspace_overlays`, `paper_target_marker`, `frame_tags`,
   `derive_kinematics`, `camera_pose_envelope`, `camera_extrinsics`, `export`,
   `physics` (apply an arm draw to a compiled scene, and take it back),
-  `physics_export` (the policy scene with everything that is only pixels taken
-  out, for the browser to step),
   and `domain_randomization` — the randomization envelope plus the half of a
   draw that shapes behavior (the wrist camera's mount error, the cube's resting
   orientation, the miscalibration). Loads the stock MJCF
@@ -264,18 +255,17 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   `sim_dataset_staging`, `lerobot_dataset` (reading a dataset's info, episode
   rows and per-episode states), `diffusion_policy_dataset` and
   `flow_image_dataset` (the video export the image flow policy trains on, and
-  the windowing over it), `flow_policy_dataset`, `stored_npz`, and
+  the windowing over it), `stored_npz`, and
   `trajectory_artifact` (one episode's behavior with no pixels in it — the true
   world and the believed one side by side, which is what a scene can be
   re-rendered from).
 - **`policies/`** — controller implementations and the contract they are scored
   against: `policy_controllers`, `policy`, `policy_evaluation` (frozen scenario
   manifests in `config/evaluation/` and a success oracle),
-  and the two flow-matching policies: the state-only one (`flow_matching`,
-  `flow_policy`, `diffusion_policy_unet`, `flow_onnx` — the sampler as one
-  traceable graph, for the browser) and the image-conditioned one
-  (`flow_image_policy`, `flow_image_encoder`, `image_augmentation`). ACT and
-  SmolVLA are *evaluated* here but trained externally via the `lerobot` CLI.
+  and the image-conditioned flow-matching policy (`flow_image_policy`,
+  `flow_image_encoder`, `image_augmentation`, `diffusion_policy_unet`,
+  `learning_schedule`). ACT and SmolVLA are *evaluated* here but trained
+  externally via the `lerobot` CLI.
 - **`runtime/`** — what an episode needs around the loop that runs it, and the
   policy runners that do not use that loop. `episodes` samples an episode that
   runs clean and `preflight` vets a trajectory under live physics — the two the
@@ -378,9 +368,8 @@ The 54 scripts are the commands the project is driven by. Broadly:
   `run_flow_{policy,image_policy}_sim.py`, `eval_scripted_parallel.py`,
   `compare_policy_evaluations.py`, `merge_evaluation_shards.py`,
   `generate_scenario_manifest.py`
-- **Train** — `train_flow_{policy,image_policy}.py`,
-  `export_{flow_policy,diffusion_policy}_dataset.py`,
-  `diagnose_flow_image_policy.py`
+- **Train** — `train_flow_image_policy.py`,
+  `export_diffusion_policy_dataset.py`, `diagnose_flow_image_policy.py`
 - **Datasets** — `combine_datasets.py`, `consolidate_datasets.py`,
   `split_train_val_episodes.py`, `convert_dataset_resolution.py`,
   `keep_successful_episodes.py`, `select_episodes.py`
@@ -392,168 +381,12 @@ The 54 scripts are the commands the project is driven by. Broadly:
   `check_overhead_localization.py` (does simulated overhead perception miss by
   as much as the rig does?)
 - **Web assets** — `export_generic_robot.py`, `export_episode_rolls.py`,
-  `render_apriltag_textures.py`, `export_web_policy_scene.py`,
-  `export_flow_policy_onnx.py`, `export_policy_parity_fixture.py`,
-  `render_scene_thumbnails.py`
+  `render_apriltag_textures.py`, `render_scene_thumbnails.py`
 - **Viewers and diagnostics** — `view_{robot,scene}.py`, `replay_episode.py`,
   `showcamfeed*.py`, `camera_fps_probe.py`, `park_follower.py`
 
 Scripts should parse arguments and delegate. Stable algorithms, file formats,
 and calibration logic belong in the package even when a CLI is the only caller.
-
-### Current state flow policy
-
-The selected state-only flow checkpoint as of 2026-08-10 is the 30,000-update
-temporal 1D U-Net with cube-symmetry augmentation:
-
-```text
-s3://allyouneed/pick-and-place/outputs/flow-policy-unet1d-rot6-cubeaug-30k-seed0/checkpoint.pt
-```
-
-Its matching export is:
-
-```text
-s3://allyouneed/pick-and-place/flow-policy-data/flow-policy-state-recovery-far-clean-993ep-rot6-cubeaug-val10/
-```
-
-The checkpoint SHA-256 is
-`9ce2818a6c23676fe4c352ddff49ad991e22847548a48d30010dd323c5601247`.
-Do not run it with a different export: `export.json` and `normalization.npz` are
-part of the model contract.
-
-The deployment operating point is predict 16, execute 8, and integrate the flow
-with 10 Euler steps. A paired 20-scene check found the same 19/20 success at 10
-and 100 steps, while 10 steps was 7.65 times faster. On 200 development-selection
-scenes from seed stream 6,000,000, it scored **188/200 settled placements
-(94.0%)**, with 11.35 mm median and 18.74 mm p90 final planar error. This is a
-selection result, not the untouched seed-7,000,000 validation result; do not
-promote the 94% number to a final benchmark until that one-time evaluation runs.
-
-Use `py/scripts/run_flow_policy_sim.py` for an interactive or headless rollout.
-Pass `--integration-steps 10 --act-steps 8`; the script's older integration-step
-default is 100. Full provenance and episode records are at:
-
-```text
-s3://allyouneed/pick-and-place/outputs/flow-policy-unet1d-rot6-cubeaug-30k-seed0/evaluation-selection-seed6m-20260810/
-```
-
-## The live policy page
-
-`ts/policy.html` runs the task in the reader's browser: MuJoCo's WebAssembly
-build steps the scene, the state flow policy runs through `onnxruntime-web`, and
-the cube and target plate are dragged wherever the reader wants them. It is a
-separate page from the index on purpose — the simulator and the inference
-runtime together are an order of magnitude heavier than everything the index
-loads.
-
-**It is not a benchmark, and the page says so.** A different engine build rounds
-differently and one episode is one episode; the scored numbers come from the
-Python harness over the frozen manifests in `config/evaluation/`.
-
-### Building its assets
-
-The page needs five files, none of them committed. Two are the ordinary web
-manifests the other visualizations already use; three are new.
-
-Prerequisites, if this is a fresh clone: the submodules
-(`git submodule update --init`), the AprilTag textures
-(`MUJOCO_GL=egl python py/scripts/render_apriltag_textures.py --all-defaults`),
-and `onnx` and `onnxruntime`, which the ONNX exporter needs and the default
-install does not bring:
-
-```sh
-VIRTUAL_ENV=~/venvs/pick-and-place uv pip install -e py --group web-export
-```
-
-The checkpoint and its export are the ones named in
-[Current state flow policy](#current-state-flow-policy), and they live in S3
-rather than on disk:
-
-```sh
-export PAP_FLOW=$PAP_DATA_ROOT/flow-policy
-aws s3 cp s3://allyouneed/pick-and-place/outputs/\
-flow-policy-unet1d-rot6-cubeaug-30k-seed0/checkpoint.pt "$PAP_FLOW"/
-aws s3 sync s3://allyouneed/pick-and-place/flow-policy-data/\
-flow-policy-state-recovery-far-clean-993ep-rot6-cubeaug-val10/ "$PAP_FLOW"/export/
-```
-
-Then, from `py/`:
-
-```sh
-# The robot and the environment, as the other visualizations use them.
-MUJOCO_GL=egl python -m pick_and_place.sim.export -o ../ts/public/so101.xml
-MUJOCO_GL=egl python -m pick_and_place.sim.export --environment-only \
-    -o ../ts/public/environment.xml
-
-# The scene the browser steps, and the policy it runs.
-MUJOCO_GL=egl python scripts/export_web_policy_scene.py -o ../ts/public/policy-scene
-MUJOCO_GL=egl python scripts/export_flow_policy_onnx.py \
-    --checkpoint "$PAP_FLOW"/checkpoint.pt --export "$PAP_FLOW"/export \
-    -o ../ts/public/flow-policy
-
-# Only needed to run the parity test.
-MUJOCO_GL=egl python scripts/export_policy_parity_fixture.py \
-    --checkpoint "$PAP_FLOW"/checkpoint.pt --export "$PAP_FLOW"/export \
-    -o ../ts/test-fixtures/policy-parity.json
-```
-
-Both `sim.export` invocations write an `.xml` beside the `.json`. Only the
-`.json` is read, by the page and by the tests; the `.xml` is a by-product.
-
-The parity fixture goes to `ts/test-fixtures/` rather than `ts/public/` because
-everything under `public/` is copied into the build and served to every visitor,
-and that file is an input to one test.
-
-The ONNX exporter prints the checkpoint's SHA-256, which should read
-`9ce2818a…5601247`. `export.json` and `normalization.npz` are part of the model
-contract, so a checkpoint paired with a different export is a silent error the
-digest is there to catch.
-
-### Three things that are easy to get wrong
-
-- **The scene is a compiled binary (`.mjb`), not MJCF.** MuJoCo's XML writer
-  rounds to six significant figures. The binary carries the compiled model
-  verbatim, so the browser steps the same numbers Python does. The cost is that
-  a binary is tied to the engine that wrote it: the manifest records the MuJoCo
-  version and the page refuses to load against a different one. **Keep the
-  `@mujoco/mujoco` npm version and the Python `mujoco` version equal.**
-- **Deleting visual geometry moves the arm unless the inertials are frozen
-  first.** Three bodies — `wrist_camera_mount`, `overhead_camera_mount`,
-  `workspace_frame_frame` — infer their mass from geometry rather than declaring
-  it, so stripping the meshes took two thirds of the wrist mount's mass off the
-  arm. `physics_export.freeze_inertials` compiles the intact scene and writes
-  what MuJoCo computed back into the spec before anything is removed;
-  `py/tests/test_physics_export.py` pins it.
-- **The tracking bias is scaled to zero at the nominal operating point.**
-  `tracking_bias_rad` returns the fitted droop, but `PolicySimEnv` applies it
-  through `tracking_bias_offsets`, and a scenario with no physics randomization
-  has `tracking_bias_scale = 0.0`. Exporting the fitted value directly pushed
-  every browser command a couple of degrees past its target. The export goes
-  through the same scaling.
-
-### What checks it
-
-`ts/src/visualizations/live-policy/parity.test.ts` replays a rollout Python
-actually ran — same scene, same noise draws — through the whole browser stack in
-Node, and compares. It asserts two different things:
-
-- **The first tick, tightly.** Both sides start from the same state and the same
-  noise, so the only difference left is arithmetic: the observation matches
-  exactly, the action to a few times 1e-5 degrees, the resulting state to 2e-7.
-  This is what catches defects — the tracking-bias bug above sat at 2.8e-3 here.
-- **The whole rollout, loosely.** Forty ticks of contact-rich closed-loop
-  physics amplify a last-place difference into about 0.04 degrees of drift. That
-  bound says the browser stayed in the same episode; nothing tighter is
-  available and no tolerance would make it so.
-
-### Precision
-
-The exported graph is full precision by default: 17.4 MB, and it agrees with
-PyTorch to 5e-7 in the normalized action space. `--precision fp16` halves it to
-9.7 MB and moves the sampled endpoint by about 1.4e-3, which is a change in what
-the policy *does*, not in how it is stored. **Score it on the development scenes
-before promoting it** — the same way the 10-versus-100 integration-step question
-was settled.
 
 ## Mesh pipeline
 
@@ -576,8 +409,7 @@ Gitignored, machine-local, and sometimes very large:
 
 | Path | Contents |
 | --- | --- |
-| `ts/public/` | All generated web assets, including the live policy page's compiled scene and policy weights. |
-| `ts/test-fixtures/` | Generated test inputs that must not be served, currently the live policy parity rollout. |
+| `ts/public/` | All generated web assets. |
 | `datasets/` | Recorded and simulated LeRobot datasets. Tens of GB. |
 | `outputs/`, `output/` | Training runs, checkpoints, diagnostics. |
 | `intermediary-glb/`, `dist_assets/` | Mesh pipeline intermediates. |
