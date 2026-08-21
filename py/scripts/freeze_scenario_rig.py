@@ -48,6 +48,12 @@ import lzma
 from pathlib import Path
 from typing import Any
 
+from pick_and_place.cli.common import add_output_argument
+from pick_and_place.cli.evaluation import (
+    add_scenarios_per_file_argument,
+    add_suite_name_argument,
+)
+
 #: The three blocks that together are "the rig". Everything else in a scenario
 #: -- the cube pose, the target, the workspace region, the step budget -- is the
 #: task, and is left exactly as it was so suites stay paired scene by scene.
@@ -155,9 +161,9 @@ def parse_args() -> argparse.Namespace:
             f"Pass 'none' to freeze the block whole (default: {','.join(DEFAULT_VARY)})"
         ),
     )
-    parser.add_argument("--output", type=Path, required=True, help="output manifest path")
-    parser.add_argument("--suite", default=None, help="suite name (default: derived from the source)")
-    parser.add_argument("--scenarios-per-file", type=int, default=None)
+    add_output_argument(parser, required=True, help="output manifest path")
+    add_suite_name_argument(parser, help="suite name (default: derived from the source)")
+    add_scenarios_per_file_argument(parser)
     return parser.parse_args()
 
 
