@@ -16,6 +16,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from pick_and_place.data.dataset_subset import SUCCESS_XY_TOLERANCE_M
+
 DEFAULT_TASK = "Pick up the cube and place it at the target."
 
 
@@ -110,3 +112,29 @@ def add_val_fraction_argument(parser: argparse.ArgumentParser, *, default: float
         default=default,
         help=f"fraction of episodes to hold out for validation (default: {default})",
     )
+
+
+def add_destination_dataset_argument(parser: argparse.ArgumentParser, *, help: str) -> None:
+    """Add ``--dst``, the dataset an offline tool writes.
+
+    Always optional: every tool that takes one derives a name beside the source
+    when it is omitted, and ``help`` is where that derivation is spelled out.
+    """
+    parser.add_argument("--dst", type=Path, default=None, help=help)
+
+
+def add_repo_id_argument(
+    parser: argparse.ArgumentParser, *, default: str | None = None, help: str
+) -> None:
+    """Add ``--repo-id``, the dataset identifier stored in the output's metadata."""
+    parser.add_argument("--repo-id", default=default, help=help)
+
+
+def add_success_tolerance_argument(parser: argparse.ArgumentParser, *, help: str) -> None:
+    """Add ``--xy-tolerance``, the placement error an episode counts as a success within.
+
+    Three commands decide what "successful" means, and they have to decide it the
+    same way: a dataset filtered at one tolerance and finalized at another
+    contains episodes its own metadata calls failures.
+    """
+    parser.add_argument("--xy-tolerance", type=float, default=SUCCESS_XY_TOLERANCE_M, help=help)
