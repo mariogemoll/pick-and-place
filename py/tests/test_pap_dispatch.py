@@ -72,6 +72,20 @@ def test_summaries_are_one_sentence() -> None:
     assert bad == []
 
 
+def test_every_command_has_a_group() -> None:
+    """`pap --help` lists commands under their group, so an ungrouped one vanishes."""
+    assert [c.name for c in COMMANDS if not c.group] == []
+
+
+def test_groups_are_contiguous() -> None:
+    """A group named twice would print twice, splitting its commands in the help."""
+    seen: list[str] = []
+    for command in COMMANDS:
+        if not seen or seen[-1] != command.group:
+            seen.append(command.group)
+    assert len(seen) == len(set(seen)), f"group order is interleaved: {seen}"
+
+
 @pytest.mark.parametrize("command", COMMANDS, ids=lambda c: c.name)
 def test_parser_builds_and_suggests(command) -> None:
     """Every command's parser exists, builds, and offers a hint on a typo."""

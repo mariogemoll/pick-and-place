@@ -71,15 +71,23 @@ def build_parser() -> SuggestingArgumentParser:
 
 
 def _command_listing() -> str:
-    """Render the command table for ``pap --help``.
+    """Render the command table for ``pap --help``, grouped as the table groups it.
 
     Written by hand rather than as an argparse subparser listing: subparsers
     would have to exist, and they cannot exist without importing what is behind
     them.
     """
     width = max(len(command.name) for command in COMMANDS)
-    lines = [f"  {command.name:<{width}}  {command.summary}" for command in COMMANDS]
-    return "commands:\n" + "\n".join(lines) + "\n\nRun `pap COMMAND --help` for a command's own flags."
+    lines: list[str] = []
+    for group in dict.fromkeys(command.group for command in COMMANDS):
+        lines.append(f"\n{group}:")
+        lines += [
+            f"  {command.name:<{width}}  {command.summary}"
+            for command in COMMANDS
+            if command.group == group
+        ]
+    listing = "\n".join(lines).lstrip("\n")
+    return f"{listing}\n\nRun `pap COMMAND --help` for a command's own flags."
 
 
 def dispatch(command: Command, arguments: list[str]) -> None:
