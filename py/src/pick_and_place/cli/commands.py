@@ -278,6 +278,12 @@ COMMANDS: tuple[Command, ...] = (
         summary="Run a policy in the sim, closed-loop.",
         script="run_policy_sim.py",
     ),
+    Command(
+        name="diagnose-flow-image-policy",
+        summary="Report an image flow policy's open-loop action error.",
+        script="diagnose_flow_image_policy.py",
+        parser="pick_and_place.cli.diagnose_flow_image_policy",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}

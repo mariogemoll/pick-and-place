@@ -27,12 +27,7 @@ import json
 import numpy as np
 import torch
 
-from pick_and_place.cli.common import add_seed_argument
-from pick_and_place.cli.policy import (
-    add_device_argument,
-    add_flow_export_arguments,
-    add_integration_steps_argument,
-)
+from pick_and_place.cli.diagnose_flow_image_policy import build_parser
 from pick_and_place.data.flow_image_dataset import FlowImageExport
 from pick_and_place.policies.flow_image_encoder import FlowImageUnet1D
 
@@ -40,16 +35,8 @@ IMAGE_MEAN = (0.485, 0.456, 0.406)
 IMAGE_STD = (0.229, 0.224, 0.225)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    add_flow_export_arguments(parser)
-    parser.add_argument("--batches", type=int, default=20)
-    parser.add_argument("--batch-size", type=int, default=32)
-    add_integration_steps_argument(parser)
-    add_device_argument(parser, default="cuda")
-    add_seed_argument(parser, default=0, help="Torch seed for the flow's noise draw")
-    args = parser.parse_args()
-
+def run(args: argparse.Namespace) -> None:
+    """Sample held-out windows and report the open-loop joint error."""
     device = torch.device(args.device)
     contents = torch.load(args.checkpoint, map_location=device, weights_only=False)
     model = FlowImageUnet1D(**contents["model_config"]).to(device)
@@ -111,6 +98,10 @@ def main() -> None:
           f"p90 {np.percentile(executed, 90):.3f} deg")
     print(f"gripper: mean {degrees[:, :8, 5].mean():.4f} (normalized units x span/2)")
     print(json.dumps({"mean_deg_executed": float(executed.mean())}))
+
+
+def main() -> None:
+    run(build_parser(description=__doc__).parse_args())
 
 
 if __name__ == "__main__":

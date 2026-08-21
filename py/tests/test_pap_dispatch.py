@@ -33,7 +33,6 @@ NOT_COMMANDS = {
 #: green at every step of it. When it is empty, delete it and the test that reads
 #: it -- at that point every script is either a command or on ``NOT_COMMANDS``.
 PENDING = {
-    "diagnose_flow_image_policy.py",
     "run_flow_image_policy_sim.py",
     "run_policy_real.py",
     "train_flow_image_policy.py",
