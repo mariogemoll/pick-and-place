@@ -28,6 +28,14 @@ Each command names two things the dispatcher imports **after** parsing:
     the file exposing ``run(args)``, relative to ``py/scripts``. Imported by
     path rather than by name, because ``scripts/`` is not a package and
     ``scripts/pick_and_place/`` would shadow the real one if it were.
+
+``typed_config``
+    true for the one command that has no ``ArgumentParser`` to expose. The
+    trainer takes a dataclass config through ``tyro`` so a run can be written
+    out and read back with ``--config``; its parser module offers
+    ``parse_arguments(argv)`` instead of ``build_parser()``. One command in
+    fifty carrying its own idiom is worth a field here -- hiding it behind a
+    shim that pretended to be argparse would not be.
 """
 
 from __future__ import annotations
@@ -43,6 +51,7 @@ class Command:
     summary: str
     script: str
     parser: str | None = None
+    typed_config: bool = False
 
     @property
     def parser_module(self) -> str | None:
@@ -295,6 +304,13 @@ COMMANDS: tuple[Command, ...] = (
         summary="Run a policy on the physical arm, closed-loop.",
         script="run_policy_real.py",
         parser="pick_and_place.cli.run_policy_real",
+    ),
+    Command(
+        name="train-flow-image",
+        summary="Train the image-conditioned flow-matching policy.",
+        script="train_flow_image_policy.py",
+        parser="pick_and_place.cli.train_flow_image_policy",
+        typed_config=True,
     ),
 )
 

@@ -76,3 +76,16 @@ def load_runner(command: Command, parser_owner: ModuleType) -> ModuleType:
     if command.parser_module is None:
         return parser_owner
     return load_script(command.script)
+
+
+def parse_arguments(command: Command, parser_owner: ModuleType, arguments: list[str]):
+    """Parse a command's arguments with whichever seam it exposes.
+
+    Returns ``(args, parser)``. ``parser`` is ``None`` for the typed-config
+    command, which has none -- callers use it only to run ``validate``, and that
+    command has nothing to validate that ``tyro`` has not already.
+    """
+    if command.typed_config:
+        return parser_owner.parse_arguments(arguments), None
+    parser = parser_owner.build_parser()
+    return parser.parse_args(arguments), parser

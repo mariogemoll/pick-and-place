@@ -32,7 +32,11 @@ if str(SCRIPTS_DIR.parent / "src") not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR.parent / "src"))
 
 from pick_and_place.cli.commands import COMMANDS, COMMANDS_BY_NAME, Command  # noqa: E402
-from pick_and_place.cli.dispatch import load_parser_owner, load_runner  # noqa: E402
+from pick_and_place.cli.dispatch import (  # noqa: E402
+    load_parser_owner,
+    load_runner,
+    parse_arguments,
+)
 from pick_and_place.cli.suggest import SuggestingArgumentParser  # noqa: E402
 
 
@@ -90,13 +94,12 @@ def dispatch(command: Command, arguments: list[str]) -> None:
     # mechanism argparse already uses, rather than a way around it.
     argv0, sys.argv[0] = sys.argv[0], f"pap {command.name}"
     try:
-        parser = owner.build_parser()
+        args, parser = parse_arguments(command, owner, arguments)
     finally:
         sys.argv[0] = argv0
-    args = parser.parse_args(arguments)
 
     validate = getattr(owner, "validate", None)
-    if validate is not None:
+    if parser is not None and validate is not None:
         validate(parser, args)
 
     load_runner(command, owner).run(args)
