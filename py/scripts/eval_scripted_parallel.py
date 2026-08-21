@@ -31,6 +31,10 @@ from pathlib import Path
 
 from tqdm import tqdm
 
+from pick_and_place.cli.common import add_output_argument
+from pick_and_place.cli.evaluation import add_manifest_argument, add_shard_arguments
+from pick_and_place.cli.scene import add_render_size_arguments
+
 SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
@@ -104,28 +108,12 @@ def _shards(indices: list[int], jobs: int) -> list[list[int]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
-    parser.add_argument("--output", type=Path, required=True)
+    add_manifest_argument(parser, default=DEFAULT_MANIFEST)
+    add_output_argument(parser, required=True, help="new evaluation run directory")
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 1, 12))
     parser.add_argument("--backend", choices=BACKENDS, default=DEFAULT_BACKEND)
-    parser.add_argument("--render-height", type=int, default=1080)
-    parser.add_argument("--render-width", type=int, default=1920)
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="evaluate at most N scenarios",
-    )
-    parser.add_argument(
-        "--offset",
-        type=int,
-        default=0,
-        help=(
-            "skip the first N scenarios, applied before --limit. Together the two shard one "
-            "suite across runs that compare_policy_evaluations.py can reassemble, which also "
-            "means a crashed shard costs only its own slice."
-        ),
-    )
+    add_render_size_arguments(parser)
+    add_shard_arguments(parser)
     parser.add_argument(
         "--drop-target",
         choices=("detected", "ground-truth"),
