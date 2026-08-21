@@ -59,7 +59,14 @@ _JAW_PREFIXES = ("fixed_jaw_col", "moving_jaw_col")
 RendererFactory = Callable[..., Any]
 
 
-def build_policy_sim_model(render_height: int, render_width: int) -> tuple[mujoco.MjModel, mujoco.MjData]:
+def build_policy_sim_model(
+    render_height: int,
+    render_width: int,
+    *,
+    background_panorama=None,
+    table_texture=None,
+    robot_dynamics: bool = True,
+) -> tuple[mujoco.MjModel, mujoco.MjData]:
     """Compile the visual-policy scene with a free pick cube.
 
     The cameras sit at their authored poses, so a scored evaluation is
@@ -76,7 +83,12 @@ def build_policy_sim_model(render_height: int, render_width: int) -> tuple[mujoc
     """
     if render_height < 1 or render_width < 1:
         raise ValueError("render dimensions must be positive")
-    spec = build_scene(include_environment=True)
+    spec = build_scene(
+        include_environment=True,
+        background_panorama=background_panorama,
+        table_texture=table_texture,
+        robot_dynamics=robot_dynamics,
+    )
     spec.visual.global_.offwidth = max(spec.visual.global_.offwidth, render_width)
     spec.visual.global_.offheight = max(spec.visual.global_.offheight, render_height)
 
@@ -161,6 +173,9 @@ class PolicySimEnv(gym.Env):
         scene_appearance: SceneAppearance | None = None,
         terminate_on_success: bool = True,
         include_images: bool = True,
+        background_panorama=None,
+        table_texture=None,
+        robot_dynamics: bool = True,
     ) -> None:
         super().__init__()
         image_height, image_width = image_hw
@@ -171,7 +186,13 @@ class PolicySimEnv(gym.Env):
             raise ValueError("render dimensions must be at least the policy image dimensions")
         self.image_hw = image_hw
         self.render_hw = render_hw
-        self.model, self.data = build_policy_sim_model(render_height, render_width)
+        self.model, self.data = build_policy_sim_model(
+            render_height,
+            render_width,
+            background_panorama=background_panorama,
+            table_texture=table_texture,
+            robot_dynamics=robot_dynamics,
+        )
         self._renderer_factory = renderer_factory
         self._renderer: Any | None = None
         self.include_images = include_images

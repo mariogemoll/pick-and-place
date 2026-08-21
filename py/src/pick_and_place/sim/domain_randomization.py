@@ -354,6 +354,26 @@ def domain_sample_fields() -> set[str]:
     return {field.name for field in dataclasses.fields(DomainSample)} - {"miscalibration"}
 
 
+def domain_sample_payload(sample: DomainSample) -> dict[str, Any]:
+    """A drawn sample as the block a scenario carries, ready for the inverse below.
+
+    ``miscalibration`` is left out because a scenario serializes it separately:
+    it is the half that had to be applied while the trajectory was generated,
+    not while it is rendered.
+
+    The values come out unrounded, which is what a caller holding a live draw
+    wants -- the round trip through :func:`domain_sample_from_payload` returns an
+    equal sample. Writing a manifest is the other case, and
+    ``generate_scenario_manifest.py`` rounds on top of this so a committed file
+    stays readable and diffs cleanly.
+    """
+    return {
+        name: value
+        for name, value in sample.__dict__.items()
+        if name != "miscalibration"
+    }
+
+
 def domain_sample_from_payload(
     payload: dict[str, Any],
     miscalibration: MiscalibrationDraw,
