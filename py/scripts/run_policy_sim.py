@@ -61,6 +61,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.scripted.episode_sampling import sample_cube, sample_target
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.core.joint_frames import sim_frame_to_real
@@ -120,9 +121,9 @@ UNBOUNDED_EPISODE_STEPS = 1_000_000
 
 
 def _resolve_recording_hw(
-    parser: argparse.ArgumentParser, args: argparse.Namespace, image_hw: tuple[int, int]
+    args: argparse.Namespace, image_hw: tuple[int, int]
 ) -> tuple[int, int]:
-    """Validate the recording resolution rendered frames are reduced through.
+    """Resolve the recording resolution rendered frames are reduced through.
 
     A learned policy has to be fed frames that went through the same downsampling
     its training video did, so the ``lerobot`` leaf requires the resolution and
@@ -134,12 +135,11 @@ def _resolve_recording_hw(
     if recording_hw is None:
         return image_hw
     height, width = recording_hw
-    if height < 1 or width < 1:
-        parser.error("--recording-hw must be positive")
     return (height, width)
 
 
-def main() -> None:
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the sim policy runner: a shared world, two leaves."""
     # Everything about the world and the run, shared by every leaf so that two
     # controllers are driven through literally the same declaration. What a
     # checkpoint is and how it is queried belongs to the leaf that has one.
@@ -196,7 +196,7 @@ def main() -> None:
             "the MuJoCo viewer runs its own GUI loop under mjpython and conflicts with it)"
         ),
     )
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = SuggestingArgumentParser(description=__doc__)
     leaves = parser.add_subparsers(dest="controller", required=True, metavar="CONTROLLER")
 
     lerobot = leaves.add_parser(
@@ -238,22 +238,40 @@ def main() -> None:
     )
     add_preflight_debug_arguments(scripted)
 
-    args = parser.parse_args()
+    return parser
+
+
+def validate(parser: SuggestingArgumentParser, args: argparse.Namespace) -> None:
+    """Reject what the parser cannot express, before a scene is compiled.
+
+    Everything here is decidable from the arguments alone. What the render size
+    has to be at least is not: it depends on the resolution the *checkpoint* was
+    trained at, which is only known once the checkpoint has been opened, so
+    those checks stay in :func:`run`.
+    """
     if args.show and not args.headless:
         parser.error("--show requires --headless")
-
-    try:
-        appearance_name, scene_appearance = (
+    if args.scene_appearance is not None:
+        try:
             parse_appearance(args.scene_appearance)
-            if args.scene_appearance is not None
-            else (None, None)
-        )
-    except ValueError as exc:
-        parser.error(str(exc))
-
+        except ValueError as exc:
+            parser.error(str(exc))
     override = (args.image_height, args.image_width)
     if any(override) and not all(override):
         parser.error("pass both --image-height and --image-width, or neither")
+    recording_hw = getattr(args, "recording_hw", None)
+    if recording_hw is not None and min(recording_hw) < 1:
+        parser.error("--recording-hw must be positive")
+
+
+def run(args: argparse.Namespace) -> None:
+    """Run the chosen controller in the sim, closed-loop."""
+    appearance_name, scene_appearance = (
+        parse_appearance(args.scene_appearance)
+        if args.scene_appearance is not None
+        else (None, None)
+    )
+    override = (args.image_height, args.image_width)
     override_hw = (args.image_height, args.image_width) if all(override) else None
 
     controller = None
@@ -263,11 +281,15 @@ def main() -> None:
         else resolve_checkpoint_cameras(args.checkpoint, override_hw=override_hw)[0]
     )
     if args.render_width < image_hw[1] or args.render_height < image_hw[0]:
-        parser.error("--render-width and --render-height must be at least the policy image size")
+        raise SystemExit(
+            "--render-width and --render-height must be at least the policy image size"
+        )
 
-    recording_hw = _resolve_recording_hw(parser, args, image_hw)
+    recording_hw = _resolve_recording_hw(args, image_hw)
     if args.render_width < recording_hw[1] or args.render_height < recording_hw[0]:
-        parser.error("--render-width and --render-height must be at least the recording resolution")
+        raise SystemExit(
+            "--render-width and --render-height must be at least the recording resolution"
+        )
 
     print(
         f"Feeding {image_hw[1]}x{image_hw[0]} (WxH) overhead and wrist frames, "
@@ -626,6 +648,13 @@ def main() -> None:
         f"Ran {tick} control ticks. Final cube ({cube_xyz[0]:+.4f}, {cube_xyz[1]:+.4f}, "
         f"{cube_xyz[2]:+.4f}), {dist * 100:.1f}cm from the drop-zone center."
     )
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    validate(parser, args)
+    run(args)
 
 
 if __name__ == "__main__":

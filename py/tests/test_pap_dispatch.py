@@ -36,7 +36,6 @@ PENDING = {
     "diagnose_flow_image_policy.py",
     "run_flow_image_policy_sim.py",
     "run_policy_real.py",
-    "run_policy_sim.py",
     "train_flow_image_policy.py",
 }
 
