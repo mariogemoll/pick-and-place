@@ -32,6 +32,8 @@ import numpy as np
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
+from pick_and_place.cli.common import add_output_argument, add_seed_argument
+from pick_and_place.cli.dataset import add_val_fraction_argument
 from pick_and_place.spec.robot import CONTROL_HZ
 from pick_and_place.spec.robot import GRIPPER_INDEX, JOINT_NAMES
 
@@ -307,9 +309,8 @@ def _write_config(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dataset_roots", type=Path, nargs="+", help="LeRobotDataset root(s)")
-    parser.add_argument(
-        "--output",
-        type=Path,
+    add_output_argument(
+        parser,
         default=Path("config/robot_dynamics/so101_follower.json"),
         help="output calibration JSON (default: config/robot_dynamics/so101_follower.json)",
     )
@@ -337,13 +338,8 @@ def main() -> None:
         default=1.0,
         help="maximum plausible first-order response alpha per frame (default: 1.0)",
     )
-    parser.add_argument(
-        "--val-fraction",
-        type=float,
-        default=0.15,
-        help="episode fraction held out for validation (default: 0.15)",
-    )
-    parser.add_argument("--seed", type=int, default=0, help="train/val split seed")
+    add_val_fraction_argument(parser)
+    add_seed_argument(parser, default=0, help="train/val split seed")
     parser.add_argument(
         "--max-episodes-per-dataset",
         type=int,
