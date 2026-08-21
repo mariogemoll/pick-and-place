@@ -41,7 +41,6 @@ PENDING = {
     "diagnose_flow_image_policy.py",
     "eval_scripted_parallel.py",
     "export_camera_calibrations.py",
-    "export_episode_rolls.py",
     "freeze_scenario_rig.py",
     "measure_cube_visibility.py",
     "measure_episode_visibility.py",

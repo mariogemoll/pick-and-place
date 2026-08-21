@@ -203,6 +203,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Generate a frozen scenario manifest.",
         script="generate_scenario_manifest.py",
     ),
+    Command(
+        name="export-episode-rolls",
+        summary="Export episode rolls for the browser replay viewer.",
+        script="export_episode_rolls.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}
