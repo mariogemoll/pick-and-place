@@ -50,6 +50,15 @@ from pathlib import Path
 
 import numpy as np
 
+from pick_and_place.cli.common import add_output_argument
+from pick_and_place.cli.evaluation import (
+    add_scenarios_per_file_argument,
+    add_suite_name_argument,
+)
+from pick_and_place.cli.scene import (
+    add_physics_randomization_argument,
+    add_seed_base_argument,
+)
 from pick_and_place.sim.domain_randomization import (
     DomainSample,
     DomainRandomizationPreset,
@@ -228,39 +237,23 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument(
-        "--suite",
-        default=None,
-        help="suite name; defaults to canonical_100_v1, or dr_100_v1 with a preset",
+    add_suite_name_argument(
+        parser, help="suite name; defaults to canonical_100_v1, or dr_100_v1 with a preset"
     )
-    parser.add_argument("--count", type=int, default=100)
-    parser.add_argument("--seed-base", type=int, default=1701)
+    parser.add_argument("--count", type=int, default=100, help="scenarios to generate")
+    add_seed_base_argument(parser, default=1701)
     parser.add_argument("--control-hz", type=float, default=CONTROL_HZ)
     parser.add_argument("--max-steps", type=int, default=MAX_STEPS)
-    parser.add_argument(
-        "--physics-randomization",
-        type=float,
-        default=0.0,
-        metavar="AMOUNT",
-        help="physics-randomization amount, using the scripted recorder's draw stream",
-    )
+    add_physics_randomization_argument(parser)
     parser.add_argument(
         "--randomize-initial-robot-state",
         action="store_true",
         help="freeze a varied start drawn from the recorder's near-neutral envelope",
     )
-    parser.add_argument(
-        "--output",
-        type=Path,
-        required=True,
-        help="output manifest; use an .xz suffix for compressed JSON",
+    add_output_argument(
+        parser, required=True, help="output manifest; use an .xz suffix for compressed JSON"
     )
-    parser.add_argument(
-        "--scenarios-per-file",
-        type=int,
-        default=None,
-        help="write a sharded manifest with at most this many scenarios per compressed file",
-    )
+    add_scenarios_per_file_argument(parser)
     parser.add_argument(
         "--domain-randomization-preset",
         type=Path,

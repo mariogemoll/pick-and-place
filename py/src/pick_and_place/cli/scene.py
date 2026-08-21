@@ -139,3 +139,69 @@ def preflight_debug_from_args(args: argparse.Namespace) -> PreflightDebug:
         trajectory_dir=args.save_failed_trajectories,
         trajectory_limit=args.failed_trajectory_limit,
     )
+
+
+def add_viewer_argument(parser: argparse.ArgumentParser, *, help: str) -> None:
+    """Add ``--viewer``: run the MuJoCo viewer alongside whatever else is happening.
+
+    Every command that offers it is headless by default, because a viewer needs a
+    display and ``mjpython`` on macOS. ``help`` says what the viewer would show,
+    which is the part that differs.
+    """
+    parser.add_argument("--viewer", action="store_true", help=help)
+
+
+def add_seed_base_argument(parser: argparse.ArgumentParser, *, default: int) -> None:
+    """Add ``--seed-base``, the head of a scene stream rather than a single draw.
+
+    Scene *i* is drawn from ``seed-base + i``, which is what makes a stream of
+    scenes reproducible without pinning each one. Distinct from ``--seed``: that
+    seeds one draw, this seeds a sequence.
+    """
+    parser.add_argument(
+        "--seed-base",
+        type=int,
+        default=default,
+        help=f"scene stream seed; scene i is drawn from seed-base + i (default: {default})",
+    )
+
+
+def add_physics_randomization_argument(parser: argparse.ArgumentParser) -> None:
+    """Add ``--physics-randomization``, how far a drawn arm may differ from the nominal one.
+
+    One amount dial over servo gain and time constant, link mass, surface
+    friction, joint damping, stiction and droop. The manifest generator and the
+    recorder draw from the same stream, so they have to spell it the same way.
+    """
+    parser.add_argument(
+        "--physics-randomization",
+        type=float,
+        default=0.0,
+        metavar="AMOUNT",
+        help="how far each episode's arm may differ from the nominal one: servo gain and "
+        "time constant, link mass, surface friction, joint damping, stiction and droop, "
+        "behind one amount dial (default: 0, the nominal arm)",
+    )
+
+
+def add_randomization_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add the visual randomization preset and the measured miscalibration draw.
+
+    The recorder and the sim policy runner have to agree on these or a policy is
+    trained on one distribution and watched on another.
+    """
+    parser.add_argument(
+        "--miscalibration",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="inject a measured joint-zero miscalibration draw: the plan runs in the believed "
+        "frame and physics in the true one, observations use servo-style readback, and "
+        "actions are shifted into the true physical joint frame",
+    )
+    parser.add_argument(
+        "--domain-randomization",
+        type=Path,
+        default=None,
+        help="strict per-episode sim randomization preset; includes measured miscalibration, "
+        "cameras, lighting, materials, cube orientation and appearance",
+    )

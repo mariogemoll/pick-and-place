@@ -65,9 +65,17 @@ def add_shard_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def add_suite_arguments(parser: argparse.ArgumentParser, *, suite_help: str) -> None:
-    """Add how a written manifest names itself and how many files it spans."""
-    parser.add_argument("--suite", default=None, help=suite_help)
+def add_suite_name_argument(parser: argparse.ArgumentParser, *, help: str) -> None:
+    """Add ``--suite``, the name a written manifest carries in its own header.
+
+    The name reaches stored results, so what a suite is called is part of what a
+    number means; ``help`` says where each command's default comes from.
+    """
+    parser.add_argument("--suite", default=None, help=help)
+
+
+def add_scenarios_per_file_argument(parser: argparse.ArgumentParser) -> None:
+    """Add ``--scenarios-per-file``, which spreads one suite over several files."""
     parser.add_argument(
         "--scenarios-per-file",
         type=int,
