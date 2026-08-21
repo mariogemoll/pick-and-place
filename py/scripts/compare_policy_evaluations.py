@@ -26,6 +26,8 @@ import math
 from pathlib import Path
 from typing import Any
 
+from pick_and_place.cli.suggest import SuggestingArgumentParser
+
 PLACED_TOLERANCE_M = 0.06
 
 #: Rollout settings that must agree before two runs can be compared. A
@@ -61,8 +63,9 @@ COMPARABLE_FIELDS = (
 )
 
 
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the evaluation comparison."""
+    parser = SuggestingArgumentParser(description=__doc__)
     parser.add_argument(
         "runs",
         nargs="+",
@@ -81,7 +84,7 @@ def _parse_args() -> argparse.Namespace:
         help="report rates even when the runs did not face the same scenarios or settings",
     )
     parser.add_argument("--json", type=Path, default=None, help="also write the comparison here")
-    return parser.parse_args()
+    return parser
 
 
 def _get(mapping: dict[str, Any], path: tuple[str, ...]) -> Any:
@@ -240,8 +243,8 @@ def _rate_row(run: EvaluationRun, metric: str) -> dict[str, Any]:
             "ci95": [low, high]}
 
 
-def main() -> None:
-    args = _parse_args()
+def run(args: argparse.Namespace) -> None:
+    """Compare the runs and print the table."""
     runs = [EvaluationRun(directory) for directory in args.runs]
     baseline = (
         EvaluationRun(args.baseline)
@@ -322,6 +325,10 @@ def main() -> None:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(comparison, indent=2, sort_keys=True) + "\n")
         print(f"\nWrote {args.json}")
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":

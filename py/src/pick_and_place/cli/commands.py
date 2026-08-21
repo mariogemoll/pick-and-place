@@ -113,6 +113,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Merge sharded evaluation runs into one result.",
         script="merge_evaluation_shards.py",
     ),
+    Command(
+        name="compare-policy-evaluations",
+        summary="Compare evaluation runs against a baseline.",
+        script="compare_policy_evaluations.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}

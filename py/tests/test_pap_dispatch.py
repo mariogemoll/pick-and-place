@@ -43,7 +43,6 @@ PENDING = {
     "capture_rest_pose.py",
     "check_calibration.py",
     "check_overhead_localization.py",
-    "compare_policy_evaluations.py",
     "diagnose_flow_image_policy.py",
     "eval_scripted_parallel.py",
     "export_camera_calibrations.py",
