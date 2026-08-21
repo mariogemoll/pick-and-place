@@ -190,30 +190,6 @@ class SimCameraRig:
         self._renderer.close()
 
 
-def downsample_through_recording(
-    image: np.ndarray,
-    recording_hw: tuple[int, int],
-    output_hw: tuple[int, int],
-    postprocess: Callable[[np.ndarray], np.ndarray] | None = None,
-) -> np.ndarray:
-    """Reduce a source render to a policy image the way a recording did.
-
-    Datasets reach a policy's input size in two hops: the recorder writes its
-    video at ``recording_hw``, and the dataset export downsamples the decoded
-    frame from there. Going straight from the source render to ``output_hw``
-    covers the same field of view but averages a different neighbourhood into
-    each pixel, which at a 96x96 input is a large fraction of the signal. A
-    policy fed one-hop images is therefore off-distribution from one trained on
-    two-hop ones, so anything rendering observations live has to take both hops.
-
-    ``postprocess`` runs at ``recording_hw``, where the recorder applied it.
-    """
-    image = resize_and_center_crop(image, *recording_hw)
-    if postprocess is not None:
-        image = postprocess(image)
-    return resize_and_center_crop(image, *output_hw)
-
-
 def configure_render_quality(model: mujoco.MjModel) -> None:
     """Use a dense, tightly focused shadow map for supersampled recordings."""
     model.vis.quality.shadowsize = SHADOW_MAP_SIZE

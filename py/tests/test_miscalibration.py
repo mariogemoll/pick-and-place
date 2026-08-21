@@ -4,10 +4,17 @@
 import math
 
 import numpy as np
+import pytest
 
 from pick_and_place.core.joint_frames import real_frame_to_sim, sim_frame_to_real
 from pick_and_place.core.geometry import CubePose
-from pick_and_place.core.miscalibration import MiscalibrationModel
+from pick_and_place.core.miscalibration import (
+    DEFAULT_PAN_JITTER_SIGMA_DEG,
+    DEFAULT_PAN_JITTER_TAU_S,
+    MiscalibrationModel,
+    miscalibration_from_payload,
+    miscalibration_payload,
+)
 
 
 def test_sample_is_reproducible():
@@ -91,3 +98,49 @@ def test_belief_errors_offset_cube_and_target():
     tx, ty = draw.target_belief_error
     assert (target.x, target.y) == (true_pose.x + tx, true_pose.y + ty)
     assert target.z == true_pose.z
+
+
+def test_a_drawn_jitter_names_the_seed_it_runs_on():
+    """Serializing a draw needs the stream's name, not its current value."""
+    draw = MiscalibrationModel().sample(np.random.default_rng(5))
+    assert draw.pan_jitter is not None
+    assert draw.pan_jitter.seed is not None
+    assert draw.pan_jitter.sigma_deg == DEFAULT_PAN_JITTER_SIGMA_DEG
+    assert draw.pan_jitter.tau_s == DEFAULT_PAN_JITTER_TAU_S
+
+
+def test_payload_round_trip_reproduces_the_whole_wander():
+    """Not just the shape: the rebuilt draw must wander through the same path.
+
+    The value at ``t`` is drawn lazily as time advances, so a payload that only
+    carried sigma and tau would deserialize into a different realization while
+    looking exactly right.
+    """
+    draw = MiscalibrationModel().sample(np.random.default_rng(11))
+    rebuilt = miscalibration_from_payload(miscalibration_payload(draw), context="test")
+    times = [0.0, 0.1, 0.5, 1.0, 3.0, 10.0, 30.0]
+    assert [rebuilt.offsets_deg(t) for t in times] == [draw.offsets_deg(t) for t in times]
+
+
+def test_payload_refuses_a_jitter_it_cannot_reproduce():
+    """A caller-supplied stream is deliberately not the one the seed names."""
+    draw = miscalibration_from_payload(
+        miscalibration_payload(MiscalibrationModel().sample(np.random.default_rng(3))),
+        context="test",
+        jitter_rng=np.random.default_rng(0),
+    )
+    assert draw.pan_jitter is not None
+    assert draw.pan_jitter.seed is None
+    with pytest.raises(ValueError, match="caller-supplied stream"):
+        miscalibration_payload(draw)
+
+
+def test_a_draw_without_jitter_round_trips():
+    model = MiscalibrationModel(pan_jitter_sigma_deg=0.0)
+    draw = model.sample(np.random.default_rng(2))
+    assert draw.pan_jitter is None
+    rebuilt = miscalibration_from_payload(miscalibration_payload(draw), context="test")
+    assert rebuilt.pan_jitter is None
+    assert rebuilt.base_offsets_deg == draw.base_offsets_deg
+    assert rebuilt.cube_belief_error == draw.cube_belief_error
+    assert rebuilt.target_belief_error == draw.target_belief_error

@@ -96,14 +96,44 @@ class SlowJitter:
     Models the slow within-session wander of a joint zero: standard deviation
     ``sigma`` and correlation time ``tau`` seconds. ``value(t)`` may be called
     with any non-decreasing sequence of times.
+
+    ``seed`` records the seed ``rng`` was built from, when there is one. It is
+    what lets a live draw be written back out as a payload: the shape alone does
+    not pin a realization, and the wander is drawn lazily as ``value`` is
+    called, so nothing already sampled describes the rest of it. A jitter
+    running on a stream it was handed rather than one it can name leaves this
+    ``None``, and is not serializable -- see :func:`miscalibration_payload`.
     """
 
-    def __init__(self, sigma: float, tau: float, rng: np.random.Generator) -> None:
+    def __init__(
+        self,
+        sigma: float,
+        tau: float,
+        rng: np.random.Generator,
+        *,
+        seed: int | None = None,
+    ) -> None:
         self._sigma = float(sigma)
         self._tau = float(tau)
         self._rng = rng
+        self._seed = seed if seed is None else int(seed)
         self._t: float | None = None
         self._x = float(rng.normal(0.0, sigma)) if sigma > 0.0 else 0.0
+
+    @property
+    def sigma_deg(self) -> float:
+        """The wander's standard deviation, in degrees."""
+        return self._sigma
+
+    @property
+    def tau_s(self) -> float:
+        """The wander's correlation time, in seconds."""
+        return self._tau
+
+    @property
+    def seed(self) -> int | None:
+        """The seed this jitter's stream was built from, if it was named."""
+        return self._seed
 
     def value(self, t: float) -> float:
         if self._sigma <= 0.0:
@@ -257,15 +287,17 @@ class MiscalibrationModel:
             + float(rng.normal(0.0, self.joint_offset_sigma_deg.get(name, 0.0)))
             for name in joint_names
         }
-        jitter = (
-            SlowJitter(
+        jitter = None
+        if self.pan_jitter_sigma_deg > 0.0:
+            # Named rather than consumed straight into a generator, so the draw
+            # can be written back out as a payload that reproduces this wander.
+            jitter_seed = int(rng.integers(2**63))
+            jitter = SlowJitter(
                 self.pan_jitter_sigma_deg,
                 self.pan_jitter_tau_s,
-                np.random.default_rng(rng.integers(2**63)),
+                np.random.default_rng(jitter_seed),
+                seed=jitter_seed,
             )
-            if self.pan_jitter_sigma_deg > 0.0
-            else None
-        )
         return MiscalibrationDraw(
             base_offsets_deg=base,
             pan_jitter=jitter,
@@ -345,8 +377,13 @@ def miscalibration_from_payload(
         seed = int(raw_jitter["seed"])
         if seed != raw_jitter["seed"]:
             raise ValueError("pan_jitter seed must be an integer")
+        # A caller that supplied its own stream gets the shape but not the
+        # realization, so the payload's seed no longer describes the wander and
+        # is not carried onto the draw.
         rng = jitter_rng if jitter_rng is not None else np.random.default_rng(seed)
-        pan_jitter = SlowJitter(sigma_deg, tau_s, rng)
+        pan_jitter = SlowJitter(
+            sigma_deg, tau_s, rng, seed=None if jitter_rng is not None else seed
+        )
 
     return MiscalibrationDraw(
         base_offsets_deg=joint_offsets,
@@ -356,3 +393,37 @@ def miscalibration_from_payload(
             payload["target_belief_error"], 2, "target_belief_error"
         ),
     )
+
+
+def miscalibration_payload(draw: MiscalibrationDraw) -> dict[str, object]:
+    """Write a draw back out as the ``miscalibration_sample`` block of a scenario.
+
+    The inverse of :func:`miscalibration_from_payload`, for a caller holding a
+    live draw that has to reach something reset by a frozen scenario.
+
+    A jitter is serialized by seed rather than by its current value, because
+    the value is only where the wander happens to be: the process is drawn
+    lazily as time advances, so reproducing it means replaying the stream from
+    the start. That is also why an unnamed stream cannot be written out at all
+    -- a payload naming a seed the draw never used would deserialize into a
+    different wander while looking exactly right.
+    """
+    if draw.pan_jitter is not None and draw.pan_jitter.seed is None:
+        raise ValueError(
+            "cannot serialize a pan jitter running on a caller-supplied stream: "
+            "its realization is not reproducible from a seed"
+        )
+    return {
+        "joint_offsets_deg": dict(draw.base_offsets_deg),
+        "pan_jitter": (
+            None
+            if draw.pan_jitter is None
+            else {
+                "sigma_deg": draw.pan_jitter.sigma_deg,
+                "tau_s": draw.pan_jitter.tau_s,
+                "seed": draw.pan_jitter.seed,
+            }
+        ),
+        "cube_belief_error": list(draw.cube_belief_error),
+        "target_belief_error": list(draw.target_belief_error),
+    }
