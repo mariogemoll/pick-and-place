@@ -10,8 +10,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         index: resolve(__dirname, 'index.html'),
-        colors: resolve(__dirname, 'colors.html'),
-        policy: resolve(__dirname, 'policy.html')
+        colors: resolve(__dirname, 'colors.html')
       }
     }
   }

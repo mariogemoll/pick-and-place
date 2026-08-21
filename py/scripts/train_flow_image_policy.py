@@ -30,7 +30,7 @@ from pick_and_place.cli.training import (
     parse_training_config,
 )
 from pick_and_place.policies.flow_image_encoder import FlowImageUnet1D, model_config
-from pick_and_place.policies.flow_matching import learning_rate_at_step
+from pick_and_place.policies.learning_schedule import learning_rate_at_step
 from pick_and_place.policies.image_augmentation import (
     PhotometricRanges,
     random_photometric,

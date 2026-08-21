@@ -14,9 +14,7 @@
     "optimize-meshes": "mkdir -p public/so101_assets && for file in ../intermediary-glb/*.glb; do gltf-transform meshopt \"$file\" \"public/so101_assets/$(basename \"$file\")\"; done"
   },
   "dependencies": {
-    "@mujoco/mujoco": "3.11.0",
     "meshoptimizer": "^1.1.1",
-    "onnxruntime-web": "1.27.0",
     "three": "^0.184.0"
   },
   "devDependencies": {

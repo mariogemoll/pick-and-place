@@ -1,23 +1,14 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""What the two flow trainers configure, as data rather than as parser calls.
+"""What the flow trainer configures, as data rather than as parser calls.
 
-The trainers share fourteen flags by name, type and meaning, and that is what
-:class:`TrainingRun` collects. **They deliberately do not share the values.** A
-state model trains at batch 256 and learning rate 3e-3; an image model at 64 and
-1e-4, because it is a different network on different data. So each leaf inherits
-the field and overrides the default, and the shared part is the declaration, not
-the number.
+A run is written out and read back: ``config.json`` recorded the flags for years
+without anything being able to replay them, and ``--config`` closes that.
 
-That is the opposite of the evaluator's shared flags, where the whole point is
-that two runs are only comparable if the world was described by literally the
-same declaration *and* the same values. Worth keeping the distinction in view:
-here sharing removes duplication, there it protects a measurement.
-
-Configs are dataclasses so a run can be written out and read back --
-``config.json`` recorded the flags for years without anything being able to
-replay them.
+There used to be a second trainer here -- the state-conditioned policy -- and a
+shared base for the fourteen flags the two declared in common. It was deleted
+with the policy, and the base went with it: one subclass is not a hierarchy.
 """
 
 from __future__ import annotations
@@ -31,62 +22,26 @@ T = TypeVar("T")
 
 
 @dataclass(kw_only=True)
-class TrainingRun:
-    """Flags both flow trainers take. Leaves override the defaults."""
-
-    output: Path
-    """directory the checkpoints and config.json are written to"""
-    updates: int = 20_000
-    """optimizer steps to run"""
-    batch_size: int = 256
-    learning_rate: float = 3e-3
-    min_learning_rate: float | None = None
-    """floor for the cosine schedule; unset holds the peak rate"""
-    warmup_steps: int = 0
-    prediction_steps: int = 16
-    """action-chunk horizon; must match the export's own"""
-    seed: int = 0
-    validation_interval: int = 1
-    checkpoint_interval: int | None = None
-    """steps between intermediate checkpoints; unset writes only the final one"""
-    wandb_project: str | None = None
-    """logging is opt-in, so a run without it stays offline rather than half-configured"""
-    wandb_entity: str | None = None
-    wandb_run_name: str | None = None
-
-
-@dataclass(kw_only=True)
-class StateTrainingRun(TrainingRun):
-    """The state-conditioned flow policy: cube pose and target in, actions out."""
-
-    dataset: Path
-    """flow-policy export the model trains on"""
-    validation: Path | None = None
-    device: Literal["auto", "cpu", "mps", "cuda"] = "auto"
-    architecture: Literal["unet1d", "mlp"] = "unet1d"
-    hidden_dim: int = 256
-    hidden_layers: int = 2
-    time_embedding_dim: int = 32
-    unet_down_dims: tuple[int, ...] = (64, 128, 256)
-    unet_kernel_size: int = 5
-    unet_groups: int = 8
-    cube_symmetry_augmentation: bool = False
-    """reflect the cube's yaw symmetry into extra training pairs"""
-
-
-@dataclass(kw_only=True)
-class ImageTrainingRun(TrainingRun):
+class ImageTrainingRun:
     """The image-conditioned flow policy: two camera streams in, actions out."""
 
     export: Path
     """Diffusion Policy image export the model trains on"""
+    output: Path
+    """directory the checkpoints and config.json are written to"""
     updates: int = 30_000
+    """optimizer steps to run"""
     batch_size: int = 64
     learning_rate: float = 1e-4
     min_learning_rate: float | None = 1e-6
+    """floor for the cosine schedule; unset holds the peak rate"""
     warmup_steps: int = 500
+    prediction_steps: int = 16
+    """action-chunk horizon; must match the export's own"""
+    seed: int = 0
     validation_interval: int = 2_000
     checkpoint_interval: int | None = 5_000
+    """steps between intermediate checkpoints; unset writes only the final one"""
     device: str = "cuda"
     """torch device string, so 'cuda:1' works on a multi-GPU box"""
     observation_steps: int = 2
@@ -114,6 +69,10 @@ class ImageTrainingRun(TrainingRun):
     state is deliberately not restored: this is a new cosine cycle, not a
     continuation of the old one"""
     amp: bool = True
+    wandb_project: str | None = None
+    """logging is opt-in, so a run without it stays offline rather than half-configured"""
+    wandb_entity: str | None = None
+    wandb_run_name: str | None = None
 
 
 def config_to_json(config: Any) -> dict[str, Any]:

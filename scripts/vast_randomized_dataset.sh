@@ -107,7 +107,6 @@ repo="$workspace/pick-and-place"
 staging="$workspace/data/$run_name"
 master_root="$staging"
 attempts_root="$workspace/data/$run_name-attempts"
-flow_export="$workspace/artifacts/flow-policy-state-$run_name"
 output_root="$workspace/outputs/$run_name"
 output_prefix="$bucket_root/outputs/$run_name"
 job_log="$workspace/randomized-dataset.log"
@@ -321,22 +320,7 @@ else
 fi
 halt_if_stopping attempts
 
-stage 5 "export the state-only flow-policy arrays"
-if [ ! -f "$flow_export/train.npz" ]; then
-  "$V" py/scripts/export_flow_policy_dataset.py \
-    --src "$master_root" \
-    --output "$flow_export" \
-    --validation-fraction 0.1 \
-    --seed 0
-fi
-ls -la "$flow_export"
-cp "$flow_export/export.json" "$output_root/job-metadata/flow-export.json"
-flow_tarball="$workspace/artifacts/$(basename "$flow_export").tar.zst"
-[ -f "$flow_tarball" ] || tar --use-compress-program='zstd -3 -T0' \
-  -cf "$flow_tarball" -C "$workspace/artifacts" "$(basename "$flow_export")"
-publish "$flow_tarball" "$bucket_root/flow-policy-data/$(basename "$flow_export").tar.zst"
-
-stage 6 "census: what the randomization actually produced"
+stage 5 "census: what the randomization actually produced"
 "$V" - "$master_root" <<'PY' | tee "$output_root/job-metadata/randomization-census.txt"
 import glob
 import sys
@@ -381,4 +365,3 @@ echo
 echo "=== [$(date +%H:%M:%S)] done"
 echo "staged      $bucket_root/datasets/$run_name-staged.tar.zst"
 echo "master      $bucket_root/datasets/$run_name-lerobot.tar.zst"
-echo "flow export $bucket_root/flow-policy-data/$(basename "$flow_export").tar.zst"
