@@ -10,6 +10,12 @@ import argparse
 import json
 from pathlib import Path
 
+from pick_and_place.cli.common import add_output_argument
+from pick_and_place.cli.dataset import (
+    add_image_size_argument,
+    add_max_episodes_argument,
+    add_source_dataset_argument,
+)
 from pick_and_place.data.diffusion_policy_dataset import (
     DEFAULT_POLICY_HZ,
     export_diffusion_policy_dataset,
@@ -19,31 +25,16 @@ from pick_and_place.spec.action_encoding import ActionEncoding, parse_action_enc
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--src", type=Path, required=True, help="source LeRobot dataset root")
-    parser.add_argument(
-        "--output",
-        type=Path,
-        required=True,
-        help="new Diffusion Policy dataset directory",
-    )
-    parser.add_argument(
-        "--image-size",
-        type=int,
-        default=96,
-        help="square image size; must be a multiple of 8 (default: 96)",
-    )
+    add_source_dataset_argument(parser)
+    add_output_argument(parser, required=True, help="new Diffusion Policy dataset directory")
+    add_image_size_argument(parser)
     parser.add_argument(
         "--policy-hz",
         type=int,
         default=DEFAULT_POLICY_HZ,
         help=f"output sampling rate; must divide the source FPS (default: {DEFAULT_POLICY_HZ})",
     )
-    parser.add_argument(
-        "--max-episodes",
-        type=int,
-        default=None,
-        help="export only the first N episodes for a smoke run",
-    )
+    add_max_episodes_argument(parser, help="export only the first N episodes for a smoke run")
     parser.add_argument(
         "--workers",
         type=int,

@@ -83,3 +83,10 @@ def add_image_size_argument(parser: argparse.ArgumentParser, *, default: int = 9
         default=default,
         help=f"square image size; must be a multiple of 8 (default: {default})",
     )
+
+
+def add_source_dataset_argument(
+    parser: argparse.ArgumentParser, *, help: str = "source LeRobotDataset root"
+) -> None:
+    """Add ``--src``, the dataset an offline tool reads."""
+    parser.add_argument("--src", type=Path, required=True, help=help)
