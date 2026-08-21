@@ -178,6 +178,11 @@ COMMANDS: tuple[Command, ...] = (
         summary="Generate printable AprilTag 41h12 PDFs.",
         script="generate_apriltags.py",
     ),
+    Command(
+        name="replay-episode",
+        summary="Replay a recorded episode in the viewer or to an mp4.",
+        script="replay_episode.py",
+    ),
 )
 
 COMMANDS_BY_NAME = {command.name: command for command in COMMANDS}

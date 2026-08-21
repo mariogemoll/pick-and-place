@@ -51,7 +51,6 @@ PENDING = {
     "pick_and_place/real.py",
     "pick_and_place/record_sim.py",
     "preview_cameras.py",
-    "replay_episode.py",
     "run_flow_image_policy_sim.py",
     "run_policy_real.py",
     "run_policy_sim.py",

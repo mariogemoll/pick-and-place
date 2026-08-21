@@ -21,6 +21,7 @@ import mujoco
 import numpy as np
 
 from pick_and_place.cli.common import add_output_size_arguments
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.sim.scene import build_scene
 from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
 from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_spec
@@ -177,8 +178,9 @@ def _play_viewer(model: mujoco.MjModel, data: mujoco.MjData, qpos: np.ndarray, f
                     time.sleep(remaining)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the episode replay."""
+    parser = SuggestingArgumentParser(description=__doc__)
     parser.add_argument("episode", type=Path, help="path to an episode .npz")
     parser.add_argument(
         "--video",
@@ -200,8 +202,11 @@ def main() -> None:
         default=64,
         help="maximum saved collision contact points to mark in the replay scene",
     )
-    args = parser.parse_args()
+    return parser
 
+
+def run(args: argparse.Namespace) -> None:
+    """Replay the episode."""
     record = np.load(args.episode, allow_pickle=True)
     qpos = record["qpos"]
     fps = args.fps if args.fps is not None else float(record["control_hz"])
@@ -235,6 +240,10 @@ def main() -> None:
         _render_video(model, data, qpos, args.video, args.camera, fps, args.width, args.height)
     else:
         _play_viewer(model, data, qpos, fps)
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":
