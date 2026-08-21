@@ -107,35 +107,6 @@ def add_lerobot_arguments(
     )
 
 
-def add_policy_arguments(
-    parser: argparse.ArgumentParser,
-    *,
-    controllers: tuple[str, ...] = ("lerobot",),
-    checkpoint_default: str | None = DEFAULT_CHECKPOINT,
-    n_action_steps_default: int | None = 100,
-) -> None:
-    """Add the controller choice and every controller's flags at once.
-
-    This is the flat shape: one namespace, so a command using it accepts each
-    family's flags whichever controller was chosen, and has to reject the
-    inapplicable ones by hand. Commands with leaves should take
-    :func:`add_policy_image_arguments` and :func:`add_lerobot_arguments`
-    separately instead, and let the parser do that work.
-    """
-    parser.add_argument(
-        "--controller",
-        choices=controllers,
-        default="lerobot",
-        help="policy implementation (default: lerobot)",
-    )
-    add_lerobot_arguments(
-        parser,
-        checkpoint_default=checkpoint_default,
-        n_action_steps_default=n_action_steps_default,
-    )
-    add_policy_image_arguments(parser)
-
-
 def add_flow_image_arguments(
     parser: argparse.ArgumentParser,
     *,

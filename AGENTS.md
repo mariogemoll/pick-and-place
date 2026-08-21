@@ -450,7 +450,7 @@ surface in `git status`, not because they are still a valid place to write.
 Recorded here so they are not mistaken for intentional design:
 
 - `scripts/run_policy_real.py` is oversized and combines too many
-  responsibilities: one 1,052-line `main` holding fourteen nested closures that
+  responsibilities: one 1,074-line `main` holding fourteen nested closures that
   share state through `nonlocal`. It is the last file in the tree over the
   40 KB ceiling.
 - Scripts hold 14.5k lines against the package's 27.5k. The balance moved as
