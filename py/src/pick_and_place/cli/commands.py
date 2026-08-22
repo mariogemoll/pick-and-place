@@ -143,8 +143,8 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="train-flow-image",
         summary="Train the image-conditioned flow-matching policy.",
-        script="train_flow_image_policy.py",
-        parser="pick_and_place.cli.train_flow_image_policy",
+        module="pick_and_place.cli.train_flow_image_policy",
+        parser="pick_and_place.cli.train_flow_image_policy_parser",
         typed_config=True,
         group="Train",
     ),
