@@ -78,7 +78,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="run-policy-sim",
         summary="Run a policy in the sim, closed-loop.",
-        script="run_policy_sim.py",
+        module="pick_and_place.cli.run_policy_sim",
         group="Run a policy",
     ),
     Command(
