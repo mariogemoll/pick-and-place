@@ -349,7 +349,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="view-scene",
         summary="Open the composed MuJoCo scene in the viewer.",
-        script="view_scene.py",
+        module="pick_and_place.cli.view_scene",
         group="Viewers and probes",
     ),
     Command(
