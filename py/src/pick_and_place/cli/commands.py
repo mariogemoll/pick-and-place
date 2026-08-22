@@ -239,6 +239,18 @@ COMMANDS: tuple[Command, ...] = (
         group="Calibrate the rig",
     ),
     Command(
+        name="project-pattern",
+        summary="Project the ChArUco board onto the workspace floor and hold it.",
+        module="pick_and_place.cli.project_pattern",
+        group="Calibrate the rig",
+    ),
+    Command(
+        name="calibrate-projector",
+        summary="Solve where the projector's pixels land on the workspace floor.",
+        module="pick_and_place.cli.calibrate_projector",
+        group="Calibrate the rig",
+    ),
+    Command(
         name="measure-hand-eye-offset",
         summary="Measure the wrist camera's offset from the gripper.",
         module="pick_and_place.cli.measure_hand_eye_offset",
