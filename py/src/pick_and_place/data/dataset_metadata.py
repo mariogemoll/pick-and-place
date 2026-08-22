@@ -15,7 +15,7 @@ def driver_metadata(driver: str) -> dict[str, str]:
 
     Values are open-ended so the same dataset can mix collection sources:
     ``"teleop"`` (a human on the SO-101 leader), ``"analytic"`` (the planner in
-    ``real.py``), and later e.g. an RL or VLA policy.
+    ``pap run-scripted-real``), and later e.g. an RL or VLA policy.
     """
     return {"driver": driver}
 

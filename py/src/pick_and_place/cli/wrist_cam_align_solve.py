@@ -15,7 +15,7 @@ accurate joint readbacks for the calibration.
 The result is saved to `config/camera_extrinsics/wrist_camera.json`.
 
 Example:
-    python py/scripts/wrist_cam_align_solve.py --leader-port /dev/ttyUSB0 --follower-port /dev/ttyUSB1 --camera 1 --show
+    pap wrist-cam-align-solve --leader-port /dev/ttyUSB0 --follower-port /dev/ttyUSB1 --camera 1 --show
 """
 
 from __future__ import annotations

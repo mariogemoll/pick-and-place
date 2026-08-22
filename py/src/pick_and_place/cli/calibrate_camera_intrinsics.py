@@ -6,14 +6,14 @@
 First generate and print the board at exact scale:
 
     cd py
-    python scripts/generate_charuco_board.py
+    pap generate-charuco-board
 
 Then calibrate a camera. Keep the board still briefly at each pose; views are
 captured automatically when it is stable and sufficiently different from the
 previous capture.  Cover the image corners, vary distance, and include modest
 30--45 degree tilts.
 
-    python scripts/calibrate_camera_intrinsics.py \
+    pap calibrate-camera-intrinsics \
         --camera 0 \
         --output ../config/camera_intrinsics/iphone_overview.json
 

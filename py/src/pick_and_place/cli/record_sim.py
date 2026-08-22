@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Record pick-and-place LeRobotDatasets from the sim, mirroring ``real.py``.
+"""Record pick-and-place LeRobotDatasets from the sim, mirroring ``pap run-scripted-real``.
 
 Each run samples episodes, plays their trajectories under the model's
 position-servo physics, and stages each completed trajectory as an independent
@@ -23,7 +23,7 @@ episode indices off a shared queue. Each episode is written as its own
 single-episode dataset under ``<root>_episodes/`` and finalized immediately.
 Repeated runs against the same root append new global episode indices, making
 it possible to top up the staging area until it contains enough successful
-placements. Run ``finalize_sim_dataset.py`` afterward to select exactly the
+placements. Run ``pap finalize-sim-dataset`` afterward to select exactly the
 desired number and merge them into ``<root>`` without re-encoding video.
 
 That granularity is also what bounds a failure: an episode that wedges or dies
@@ -31,7 +31,7 @@ costs only itself, never the episodes a worker had already banked. The parent
 kills and replaces a worker whose episode exceeds ``--episode-timeout``. Pose
 sampling and rendering are pure CPU/GL — no training GPU is involved.
 
-This is sim-only. To collect on the physical SO-101 follower, use ``real.py``.
+This is sim-only. To collect on the physical SO-101 follower, use ``pap run-scripted-real``.
 """
 
 from __future__ import annotations
@@ -683,7 +683,7 @@ def build_parser() -> SuggestingArgumentParser:
         default=None,
         help=(
             "record on one fixed rig: the *.frozen_rig.json sidecar written by "
-            "freeze_scenario_rig.py beside a frozen evaluation suite. Every episode "
+            "pap freeze-scenario-rig beside a frozen evaluation suite. Every episode "
             "then faces the same robot, cameras, room and physics that suite scores "
             "on, while the light, the camera response, the sensor noise and the "
             "cube's resting orientation keep varying -- one installation over many "
@@ -926,7 +926,7 @@ def run(args: argparse.Namespace) -> None:
     )
     print(
         "Top up by running this recorder again with the same --dataset-root and --seed. "
-        "Finalize with finalize_sim_dataset.py once enough successful episodes are staged."
+        "Finalize with pap finalize-sim-dataset once enough successful episodes are staged."
     )
 
 

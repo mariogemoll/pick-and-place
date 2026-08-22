@@ -3,7 +3,7 @@
 
 """Finalize exactly N successful staged simulation episodes into one dataset.
 
-``record_sim.py`` writes one independently finalized dataset per attempted
+``pap record-sim`` writes one independently finalized dataset per attempted
 episode and can be run repeatedly against the same destination to top up that
 staging area. This command is the separate commit phase: it derives placement
 success from the recorded metadata, selects the first requested number in
@@ -116,7 +116,7 @@ def run(args: argparse.Namespace) -> None:
     if len(successful) < args.episodes:
         needed = args.episodes - len(successful)
         raise SystemExit(
-            f"Need {needed} more successful episode(s); run record_sim.py again "
+            f"Need {needed} more successful episode(s); run pap record-sim again "
             "against the same --dataset-root, then retry finalization."
         )
 

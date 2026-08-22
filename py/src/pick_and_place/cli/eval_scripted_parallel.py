@@ -7,7 +7,7 @@ Scenarios are independent, so this shards the manifest across a spawn-based
 process pool. Each worker builds its own PolicySimEnv and scripted controller
 (a fresh MuJoCo/GL context per process, never inherited), evaluates its slice,
 and returns EpisodeResults. The parent re-orders them to manifest order and
-writes the same self-contained run directory as ``eval_policy_sim.py``.
+writes the same self-contained run directory as ``pap eval-policy-sim``.
 
 AprilTag detection runs out-of-process (``DetectorProcess``), so the
 ``pupil_apriltags`` destructor segfault cannot kill a pool worker.

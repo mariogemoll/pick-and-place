@@ -3,7 +3,7 @@
 
 """Park the physical SO-101 at REST and release its torque.
 
-``run_policy_real.py`` parks the arm in a ``finally`` block on every ordinary
+``pap run-policy-real`` parks the arm in a ``finally`` block on every ordinary
 exit, but a segfault in a native extension -- OpenCV, the AprilTag detector,
 torch -- takes the interpreter down before that block runs. The servos hold
 torque in their own registers, so the arm is left energized wherever it stood,

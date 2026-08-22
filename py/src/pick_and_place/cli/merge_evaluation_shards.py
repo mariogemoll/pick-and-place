@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Merge sharded ``eval_policy_sim.py`` runs into one evaluation result.
+"""Merge sharded ``pap eval-policy-sim`` runs into one evaluation result.
 
-``eval_policy_sim.py`` takes ``--offset`` and ``--limit``, which split one
+``pap eval-policy-sim`` takes ``--offset`` and ``--limit``, which split one
 manifest across concurrent workers. Scenarios are independent and each carries
 its own seed, so the shards are comparable and their union is exactly the
 result a single serial run would have produced -- but each shard writes its own
@@ -20,7 +20,7 @@ hour serially but a few minutes across a dozen workers. The previous SmolVLA
 run could only afford eight scenarios per checkpoint, which is too few to rank
 them; that is why "is 20,000 steps the ceiling?" went unanswered.
 
-    python py/scripts/merge_evaluation_shards.py \
+    pap merge-evaluation-shards \
         --output eval/headline-050000 eval/shards/050000-*
 """
 

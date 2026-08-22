@@ -7,7 +7,7 @@ Kept apart for the reason the evaluator's parser is, and more so: this
 command imports mujoco and lerobot at module scope, so asking it what its flags
 are cost 1.3 seconds. Here it costs an argparse import.
 
-There is a second reason for this one. ``run_policy_real.py`` is the file still
+There is a second reason for this one. ``pap run-policy-real`` is the file still
 over the repository's 40 KB ceiling, with a 1,074-line ``main``; the two hundred
 lines of flag declarations that moved here are lines it no longer carries.
 

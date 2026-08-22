@@ -9,11 +9,11 @@ robot_descriptions ``*_mj_description`` package.
 
 Usage::
 
-    python scripts/export_generic_robot.py ur5e_mj_description -o public/ur5e.json
+    pap export-generic-robot ur5e_mj_description -o public/ur5e.json
 
 An end effector can be attached to a named site on the base robot::
 
-    python scripts/export_generic_robot.py ur5e_mj_description \\
+    pap export-generic-robot ur5e_mj_description \\
         --gripper robotiq_2f85_mj_description -o public/ur5e.json
 """
 

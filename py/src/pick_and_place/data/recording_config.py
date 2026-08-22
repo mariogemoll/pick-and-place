@@ -49,7 +49,7 @@ class SceneDraw:
     #: dial. Zero is the nominal arm every demonstration has shared so far.
     physics_amount: float = 0.0
     domain_randomization: Path | None = None
-    #: A ``*.frozen_rig.json`` sidecar left by ``freeze_scenario_rig.py``. Pins
+    #: A ``*.frozen_rig.json`` sidecar left by ``pap freeze-scenario-rig``. Pins
     #: the robot, the cameras, the room and the physics to one draw the
     #: randomization envelope produced, so a dataset is "this installation, many
     #: sessions" rather than a fresh robot every episode. Needs

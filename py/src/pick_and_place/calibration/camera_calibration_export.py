@@ -77,7 +77,7 @@ def export_camera_calibrations(
     By default the intrinsics describe the raw, lens-distorted camera at its
     native resolution, matching what a recorded (unconverted) dataset's video
     pixels are. Pass ``out_size`` as ``(width, height)`` to instead describe the
-    rectified, center-cropped frame that ``convert_dataset_resolution.py``
+    rectified, center-cropped frame that ``pap convert-dataset-resolution``
     produces at that size (e.g. ``(512, 512)`` for the VLA, ``(640, 480)`` for
     ACT) -- extrinsics are unaffected by that conversion, but the pinhole
     intrinsics (focal length, principal point, image size) are not the same
@@ -147,7 +147,7 @@ def build_parser() -> SuggestingArgumentParser:
         type=int,
         default=None,
         help=(
-            "emit intrinsics for the rectified crop convert_dataset_resolution.py produces "
+            "emit intrinsics for the rectified crop pap convert-dataset-resolution produces "
             "at this width (requires --height), instead of the raw native-resolution camera"
         ),
     )

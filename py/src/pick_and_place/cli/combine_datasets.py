@@ -5,10 +5,10 @@
 
 This script merges several same-schema dataset roots into a single
 training-ready dataset, e.g. multiple outputs of
-``convert_dataset_resolution.py`` into one combined dataset.
+``pap convert-dataset-resolution`` into one combined dataset.
 
 Uses ``lerobot.datasets.aggregate.aggregate_datasets``, same as
-``consolidate_datasets.py``: episode/frame reindexing, video concatenation
+``pap consolidate-datasets``: episode/frame reindexing, video concatenation
 (stream-copy, no re-encoding -- no video quality loss), task-string
 unification, and stats aggregation all come from there. Every episode from
 every source is kept.

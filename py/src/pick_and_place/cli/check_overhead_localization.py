@@ -14,7 +14,7 @@ overhead camera is and where its calibration says it is — and this is the
 measurement that says whether that reproduces the rig or not. Run it after
 changing any of the three sigmas, or the scene, or the detector.
 
-    python scripts/check_overhead_localization.py --episodes 60
+    pap check-overhead-localization --episodes 60
 
 Reports the cube's planar and vertical miss, its yaw miss, and the drop plate's
 planar miss, next to how often a scene could not be localized at all.

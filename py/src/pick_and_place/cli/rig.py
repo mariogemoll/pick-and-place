@@ -59,7 +59,7 @@ def add_capture_size_arguments(parser: argparse.ArgumentParser, *, width: int, h
     Distinct from the size of what a command *produces*
     (:func:`pick_and_place.cli.common.add_output_size_arguments`): a driver may
     refuse the resolution asked for and hand back another, which is what
-    camera_fps_probe.py exists to find out.
+    pap camera-fps-probe exists to find out.
     """
     parser.add_argument(
         "--width",

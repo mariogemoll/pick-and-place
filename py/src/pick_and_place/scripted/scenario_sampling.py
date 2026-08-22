@@ -3,7 +3,7 @@
 
 """The declared reset distribution shared by evaluation manifests and RL resets.
 
-``py/scripts/generate_scenario_manifest.py`` freezes draws from this
+``pap generate-scenario-manifest`` freezes draws from this
 distribution into immutable benchmark manifests; DPPO fine-tuning draws from it
 live on a disjoint seed stream. Keeping one implementation is what makes
 "training and evaluation come from the same distribution" a fact about the code

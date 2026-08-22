@@ -11,7 +11,7 @@ several operator-placed positions, then persists them to
 ``config/joint_zeros.json``.
 
 The fitted values are the amounts to *add* to the sim joints (exporter sign),
-directly comparable to the offline per-day values from ``fit_joint_zeros.py``.
+directly comparable to the offline per-day values from ``pap fit-joint-zeros``.
 This stage only reports them; wiring them into the scripted pipeline as a
 feed-forward correction is a separate step. Run it, compare the printed zeros to
 the known offline day values, and sanity-check the sign with a one-joint sweep

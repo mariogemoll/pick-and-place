@@ -47,7 +47,7 @@ def add_shard_arguments(parser: argparse.ArgumentParser) -> None:
 
     Scenarios are independent and each carries its own seed, so the slices stay
     comparable and their union is the result a serial run would have produced --
-    which is what ``merge_evaluation_shards.py`` reassembles. It also means a
+    which is what ``pap merge-evaluation-shards`` reassembles. It also means a
     crashed shard costs only its own slice.
     """
     parser.add_argument(
@@ -62,7 +62,7 @@ def add_shard_arguments(parser: argparse.ArgumentParser) -> None:
         default=0,
         help="skip the first N scenarios, applied before --limit. Together the two shard one "
         "suite across concurrent workers; the shards stay comparable because each scenario is "
-        "independent and carries its own seed, and merge_evaluation_shards.py reassembles them",
+        "independent and carries its own seed, and pap merge-evaluation-shards reassembles them",
     )
 
 

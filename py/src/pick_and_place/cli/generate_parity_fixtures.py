@@ -15,7 +15,7 @@ demonstration. TypeScript follows.
 
 Run from ``py/``::
 
-    MUJOCO_GL=egl python scripts/generate_parity_fixtures.py
+    MUJOCO_GL=egl pap generate-parity-fixtures
 
 Committed output, so regenerate deliberately and review the diff.
 """

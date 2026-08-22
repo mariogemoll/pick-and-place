@@ -3,7 +3,7 @@
 
 """Merge per-run LeRobotDatasets into one dataset per recording day.
 
-Each invocation of ``pick_and_place/real.py`` writes its own LeRobotDataset
+Each invocation of ``pap run-scripted-real`` writes its own LeRobotDataset
 under a ``<YYYYMMDD>_<HHMMSS>`` directory. This script discovers every such
 run directory under one or more source roots, groups them by calendar day
 (parsed from the directory name), and merges each day's runs into a single

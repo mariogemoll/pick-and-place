@@ -18,7 +18,7 @@ create the two subsets. The source dataset is never modified.
 
 Example:
 
-    python py/scripts/split_train_val_episodes.py \
+    pap split-train-val-episodes \
         --src path/to/dataset-success --val-fraction 0.15 --seed 0
 """
 

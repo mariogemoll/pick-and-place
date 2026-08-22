@@ -5,7 +5,7 @@
 
 Plays a prepared episode's trajectory under the same position-servo physics as
 ``sim.py`` and writes it straight into a LeRobotDataset with the same schema as
-the real recordings (``real.py``): one frame per control tick, holding the
+the real recordings (``pap run-scripted-real``): one frame per control tick, holding the
 measured joints as ``observation.state``, the commanded set point as ``action``,
 and a wrist and overhead camera image. State and images are captured before the
 tick's command is applied, so each frame pairs the observation at time t with

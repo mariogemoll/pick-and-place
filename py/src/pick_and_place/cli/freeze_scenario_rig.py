@@ -25,13 +25,13 @@ intensity renders a black scene -- so the nominal rig is always copied from a
 suite that already has one.
 
     # a rig the envelope actually produced
-    python py/scripts/freeze_scenario_rig.py \\
+    pap freeze-scenario-rig \\
         config/evaluation/randomized_selection_200_v1/manifest.json \\
         --from-scenario 7 \\
         --output /tmp/rig-007/manifest.json --scenarios-per-file 50
 
     # the authored rig, on the same 200 scenes
-    python py/scripts/freeze_scenario_rig.py \\
+    pap freeze-scenario-rig \\
         config/evaluation/randomized_selection_200_v1/manifest.json \\
         --rig-from config/evaluation/canonical_100_v1.json.xz --from-scenario 0 \\
         --label nominal \\

@@ -3,7 +3,7 @@
 
 """One rig, recorded once and applied to everything that runs against it.
 
-``py/scripts/freeze_scenario_rig.py`` rewrites an evaluation suite so every
+``pap freeze-scenario-rig`` rewrites an evaluation suite so every
 scene faces the same draw of the robot, the cameras and the physics, and leaves
 a ``*.frozen_rig.json`` sidecar saying which draw that was. Scoring reads the
 rewritten suite; anything else that wants the same rig -- recording

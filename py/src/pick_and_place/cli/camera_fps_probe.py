@@ -17,7 +17,7 @@ At 1080p most USB webcams top out near 30 fps in raw formats; ``--fourcc MJPG``
 probe lets you set it and compare.
 
 Example:
-    python py/scripts/camera_fps_probe.py 0 \
+    pap camera-fps-probe 0 \
         --resolutions 1920x1080,1280x720,640x480 --fps 60 --fourcc MJPG
 """
 

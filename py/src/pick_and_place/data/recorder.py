@@ -3,7 +3,7 @@
 
 """Generic per-episode recording: accumulate named per-tick arrays, then save.
 
-Used by both the sim recorder (``record_sim.py``) and the real-arm
+Used by both the sim recorder (``pap record-sim``) and the real-arm
 executor (``executor.py``) to log their per-tick joint data and save it to
 ``.npz`` alongside episode-level metadata.
 """

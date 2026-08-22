@@ -31,28 +31,28 @@ rows read from the data parquet.
 
 Pass ``--episodes-file`` to convert only a subset of the source episodes
 (their output indices renumber accordingly); produce that list with
-``select_episodes.py`` to export and convert, say, only the successful
+``pap select-episodes`` to export and convert, say, only the successful
 episodes in a single pass rather than filtering into an intermediate dataset
 first.
 
 Examples:
 
     # 512x512 square (VLA)
-    python py/scripts/convert_dataset_resolution.py \
+    pap convert-dataset-resolution \
         --src datasets/20260702 --width 512 --height 512
 
     # 640x480 (ACT)
-    python py/scripts/convert_dataset_resolution.py \
+    pap convert-dataset-resolution \
         --src datasets/20260702 --width 640 --height 480
 
     # A sim recording, already a pinhole render: crop and resize only
-    python py/scripts/convert_dataset_resolution.py \
+    pap convert-dataset-resolution \
         --src datasets/as-recorded --width 512 --height 512 \
         --already-rectified --vcodec h264
 
     # Only the successful episodes, converted to 512x512
-    python py/scripts/select_episodes.py --src datasets/20260702 \
-        | python py/scripts/convert_dataset_resolution.py \
+    pap select-episodes --src datasets/20260702 \
+        | pap convert-dataset-resolution \
             --src datasets/20260702 --width 512 --height 512 --episodes-file -
 """
 
@@ -219,7 +219,7 @@ def build_parser() -> SuggestingArgumentParser:
             "file listing the source episode_index values to keep (whitespace/comma/newline "
             "separated, '-' for stdin); only those episodes are converted and their output "
             "indices renumber accordingly. Default: convert every episode. Produce this list "
-            "with select_episodes.py to export only e.g. the successful episodes."
+            "with pap select-episodes to export only e.g. the successful episodes."
         ),
     )
     return parser

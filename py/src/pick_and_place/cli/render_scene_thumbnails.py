@@ -7,7 +7,7 @@ A phenotype found in the feature table is a claim about what the scene looks
 like; this renders the scenes so the claim can be checked by eye. Runs on the
 CPU through software rendering, so it needs no GPU.
 
-    MUJOCO_GL=osmesa python py/scripts/render_scene_thumbnails.py \\
+    MUJOCO_GL=osmesa pap render-scene-thumbnails \\
       --phenotypes outputs/scene-difficulty/phenotypes.json \\
       --count 6 --out-dir outputs/scene-difficulty/thumbnails
 """

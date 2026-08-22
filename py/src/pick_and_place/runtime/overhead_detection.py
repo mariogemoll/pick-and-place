@@ -3,7 +3,7 @@
 
 """Overhead-camera cube/drop-zone detection and operator helpers.
 
-Shared by the hardware collection scripts: the analytic runner (``real.py``)
+Shared by the hardware collection scripts: the analytic runner (``pap run-scripted-real``)
 and the rig's episode recorders. Holds the overhead cube
 and drop-zone trackers, the verification-overlay writer, the placement-error
 metadata builder, the best-effort audible operator notifier, and the mock

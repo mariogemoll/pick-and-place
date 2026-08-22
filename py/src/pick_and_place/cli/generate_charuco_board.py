@@ -9,7 +9,7 @@ square with a ruler before calibrating.
 Example:
 
     cd py
-    python scripts/generate_charuco_board.py
+    pap generate-charuco-board
 """
 
 from __future__ import annotations

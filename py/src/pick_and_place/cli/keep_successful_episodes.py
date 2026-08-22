@@ -3,7 +3,7 @@
 
 """Drop failed episodes from a LeRobotDataset, keeping only the successful ones.
 
-``consolidate_datasets.py`` and ``combine_datasets.py`` deliberately keep every
+``pap consolidate-datasets`` and ``pap combine-datasets`` deliberately keep every
 episode, successful or not, so consumers can define "success" themselves. This
 script is that consumer: it derives success from the recorded placement points
 (``placement_detected`` and ``cube_end``/``target`` within ``--xy-tolerance``,
@@ -18,7 +18,7 @@ modified.
 
 Example:
 
-    python py/scripts/keep_successful_episodes.py \
+    pap keep-successful-episodes \
         --src path/to/dataset --dst path/to/dataset-success
 """
 

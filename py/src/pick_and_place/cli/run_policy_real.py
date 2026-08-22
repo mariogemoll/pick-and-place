@@ -17,7 +17,7 @@ input resolution.
 
 Everything about the rig and the run is declared once and shared by both leaves.
 
-The hardware counterpart to ``run_policy_sim.py``. Where the sim run renders MuJoCo
+The hardware counterpart to ``pap run-policy-sim``. Where the sim run renders MuJoCo
 cameras and integrates physics, this reads two real cameras and a real arm: each
 control tick it snapshots the latest overhead and wrist frames, reads the
 follower's joints, asks the selected controller for an action, and streams it back

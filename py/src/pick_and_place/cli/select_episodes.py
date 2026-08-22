@@ -25,17 +25,17 @@ convert its resolution, split it, copy it, count it, etc.
 Examples:
 
     # Good episodes to a file, then convert only those to 512x512
-    python py/scripts/select_episodes.py --src datasets/20260702 > good.txt
-    python py/scripts/convert_dataset_resolution.py \
+    pap select-episodes --src datasets/20260702 > good.txt
+    pap convert-dataset-resolution \
         --src datasets/20260702 --width 512 --height 512 --episodes-file good.txt
 
     # Same thing in one pipe
-    python py/scripts/select_episodes.py --src datasets/20260702 \
-        | python py/scripts/convert_dataset_resolution.py \
+    pap select-episodes --src datasets/20260702 \
+        | pap convert-dataset-resolution \
             --src datasets/20260702 --width 512 --height 512 --episodes-file -
 
     # Arbitrary filter (placement_xy is synthesized and available)
-    python py/scripts/select_episodes.py --src datasets/20260702 \
+    pap select-episodes --src datasets/20260702 \
         --query "placement_detected and placement_xy <= 0.02"
 """
 

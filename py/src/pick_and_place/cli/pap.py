@@ -8,7 +8,7 @@
     pap eval-policy-sim scripted --manifest config/evaluation/smoke_v1.json --output out/
 
 **Dispatch is lazy, and that is a hard requirement rather than an optimization.**
-``run_policy_sim.py`` imports mujoco, torch and lerobot at module scope, and
+``run_policy_sim`` imports mujoco, torch and lerobot at module scope, and
 sets ``PYTORCH_ENABLE_MPS_FALLBACK`` *before* torch is imported. A dispatcher
 that imported every command module to build its command table would take seconds
 to print help and would break that ordering. So the table in
@@ -88,7 +88,7 @@ def dispatch(command: Command, arguments: list[str]) -> None:
     # subparser takes its own from its parent's at the moment it is added. So a
     # leaf's usage line is fixed before ``build_parser`` returns, and assigning
     # ``parser.prog`` afterwards would rename the root and leave every leaf
-    # still calling itself eval_policy_sim.py. Setting argv[0] first is the
+    # still calling itself eval_policy_sim. Setting argv[0] first is the
     # mechanism argparse already uses, rather than a way around it.
     argv0, sys.argv[0] = sys.argv[0], f"pap {command.name}"
     try:

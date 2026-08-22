@@ -6,7 +6,7 @@
 The hardware adapter supplies rectified overhead and wrist RGB plus raw
 hardware-frame joint readback at 30 Hz. ``ScriptedPolicy`` owns localization,
 search, planning, wrist visual servoing, trajectory playback, and checkpoint
-replanning, exactly as it does in ``eval_policy_sim.py``.
+replanning, exactly as it does in ``pap eval-policy-sim``.
 """
 
 from __future__ import annotations
