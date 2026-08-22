@@ -250,7 +250,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="measure-hand-eye-offset",
         summary="Measure the wrist camera's offset from the gripper.",
-        script="measure_hand_eye_offset.py",
+        module="pick_and_place.cli.measure_hand_eye_offset",
         group="Calibrate the rig",
     ),
     Command(
