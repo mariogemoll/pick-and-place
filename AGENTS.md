@@ -31,8 +31,8 @@ These are non-negotiable and override convenience.
   - `SPDX-License-Identifier: 0BSD`
 - **No large files.** `scripts/check_files_in_repo.sh` fails the build above
   40 KB per file. One file in the tree is still over it —
-  `scripts/run_policy_real.py`. Those ceilings are a ratchet: lower them as the
-  files shrink, never raise them to land new code. The check walks the whole
+  `py/src/pick_and_place/cli/run_policy_real.py`. Those ceilings are a ratchet:
+  lower them as the files shrink, never raise them to land new code. The check walks the whole
   history, so paths that have since shrunk or moved stay listed at the ceiling
   their largest historical blob needs — `runtime/executor.py` has moved to
   `rollout/real.py` and is 23 KB there, but keeps a 61 KB entry under its old
@@ -140,7 +140,7 @@ ValueError: Error: Error opening file
 Generate all fourteen before running anything that builds a scene:
 
 ```sh
-MUJOCO_GL=egl python py/scripts/render_apriltag_textures.py --all-defaults
+cd py && MUJOCO_GL=egl python scripts/pap.py render-apriltag-textures --all-defaults
 ```
 
 The output is deterministic, so a regenerated set matches any other machine's.
@@ -164,7 +164,7 @@ tests in `ts/src/parity/` fail when TypeScript does.
 `test_parity.py` fail, regenerate:
 
 ```sh
-cd py && MUJOCO_GL=egl python scripts/generate_parity_fixtures.py
+cd py && MUJOCO_GL=egl python scripts/pap.py generate-parity-fixtures
 ```
 
 then expect the TypeScript tests to fail until that side follows. Review the
@@ -177,7 +177,7 @@ left out.
 | Directory | Contents |
 | --- | --- |
 | `SO-ARM100/` | Vendored hardware submodule: CAD, STL, URDF, MJCF, BOM. |
-| `py/` | The `pick_and_place` package (151 modules in 15 subpackages), 54 CLI scripts, 68 test files. Simulation, real-robot control, calibration, datasets, policies. |
+| `py/` | The `pick_and_place` package (200 modules in 15 subpackages, 49 of them `pap` commands), 74 test files. Simulation, real-robot control, calibration, datasets, policies. |
 | `ts/` | Vite + Three.js browser app: the visualizations embedded in the web page. |
 | `mesh_optimization/` | Standalone Python subproject that decimates high-poly STL into web-ready GLB. |
 | `scripts/` | Repository-level shell/TS tooling: license headers, file-size check, mesh pipeline, remote-GPU job scripts. |
@@ -307,7 +307,7 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   the rig (0.4 mm against 6-9 mm), so a residual calibration error is drawn and
   the belief error becomes an outcome rather than a value applied to the truth.
   `overhead_check` is the measurement that says whether it lands on the rig's
-  distribution; `scripts/check_overhead_localization.py` runs it. Two known
+  distribution; `pap check-overhead-localization` runs it. Two known
   properties: the arm can stand in the way, which is why the rig hunts and why
   sim now does too, and simulated yaw is still cleaner than the rig's (~0.4
   against ~2 degrees) because rendered tags carry no sensor noise. `Sighting.fresh`
@@ -353,40 +353,34 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
 - **`analysis/`** — reports about recorded runs and about the scene:
   `episode_video`, `policy_recording`, `scene_visibility`,
   `flow_trace_recording`.
-- **`cli/`** — the argument groups the scripts compose their parsers from, one
-  per subsystem: `policy` (controller choice and how a checkpoint is queried),
-  `rig` (follower, cameras, recalibration, operator alerts), `scene` (cube
-  pinning, render size, appearance, preflight diagnostics), `dataset`. A flag
-  two commands share is declared once, here, not agreed by hand in each.
+- **`cli/`** — the commands themselves, one module each, plus the argument
+  groups they compose their parsers from, one per subsystem: `policy`
+  (controller choice and how a checkpoint is queried), `rig` (follower,
+  cameras, recalibration, operator alerts), `scene` (cube pinning, render size,
+  appearance, preflight diagnostics), `dataset`. A flag two commands share is
+  declared once, here, not agreed by hand in each.
 
-### Script categories
+### The command tree
 
-The 54 scripts are the commands the project is driven by. Broadly:
+The 49 commands are what the project is driven by, and they reach the terminal
+through one entry point:
 
-- **Run the task** — `pick_and_place/{sim,real,record_sim,finalize_sim_dataset}.py`
-- **Run a policy** — `run_policy_{sim,real}.py`, `eval_policy_sim.py`,
-  `run_flow_{policy,image_policy}_sim.py`, `eval_scripted_parallel.py`,
-  `compare_policy_evaluations.py`, `merge_evaluation_shards.py`,
-  `generate_scenario_manifest.py`
-- **Train** — `train_flow_image_policy.py`,
-  `export_diffusion_policy_dataset.py`, `diagnose_flow_image_policy.py`
-- **Datasets** — `combine_datasets.py`, `consolidate_datasets.py`,
-  `split_train_val_episodes.py`, `convert_dataset_resolution.py`,
-  `keep_successful_episodes.py`, `select_episodes.py`
-- **Calibration** — `calibrate_{camera_intrinsics,joint_zeros,robot_dynamics}.py`,
-  `wrist_cam_align_solve.py`, `generate_charuco_board.py`,
-  `export_camera_calibrations.py`, `measure_hand_eye_offset.py`,
-  `fit_{pan_zero,joint_zeros,sag}.py`, `check_calibration.py`
-- **What the policy can see** — `measure_cube_visibility.py`,
-  `check_overhead_localization.py` (does simulated overhead perception miss by
-  as much as the rig does?)
-- **Web assets** — `export_generic_robot.py`, `export_episode_rolls.py`,
-  `render_apriltag_textures.py`, `render_scene_thumbnails.py`
-- **Viewers and diagnostics** — `view_{robot,scene}.py`, `replay_episode.py`,
-  `showcamfeed*.py`, `camera_fps_probe.py`, `park_follower.py`
+```sh
+cd py
+python scripts/pap.py --help                  # every command, grouped
+python scripts/pap.py eval-policy-sim --help  # one command's own flags
+```
 
-Scripts should parse arguments and delegate. Stable algorithms, file formats,
-and calibration logic belong in the package even when a CLI is the only caller.
+`pap --help` is the list; a second one here would only go stale. The groups it
+prints — run a policy, score a policy, train, record and shape datasets,
+calibrate the rig, what the policy can see, web and print assets, viewers and
+probes — are the categories, and they are declared in
+`pick_and_place/cli/commands.py`.
+
+A command module should parse arguments and delegate. Stable algorithms, file
+formats, and calibration logic belong further down the package even when one
+command is the only caller: `cli/` may import anything and nothing may import
+`cli/`, so logic left up there is logic nothing else can reach.
 
 ## Mesh pipeline
 
@@ -449,15 +443,16 @@ surface in `git status`, not because they are still a valid place to write.
 
 Recorded here so they are not mistaken for intentional design:
 
-- `scripts/run_policy_real.py` is oversized and combines too many
+- `cli/run_policy_real.py` is oversized and combines too many
   responsibilities: one 1,074-line `main` holding fourteen nested closures that
   share state through `nonlocal`. It is the last file in the tree over the
   40 KB ceiling.
-- Scripts hold 14.5k lines against the package's 27.5k. The balance moved as
-  stable logic was pulled out of the recording scripts into `rollout/`.
+- `cli/` holds 15.8k lines against the rest of the package's 28k. Moving the
+  commands into the package did not change that balance; it made it visible to
+  the layering check, which had never seen a third of the Python.
 - **`execute_episode`'s recording branch has no caller.** Its one production
-  caller is `calibrate_joint_zeros.py`, which passes only the episode, follower,
-  viewer and wrist camera. `recording`, `overhead_camera_cap`,
+  caller is `cli/calibrate_joint_zeros.py`, which passes only the episode,
+  follower, viewer and wrist camera. `recording`, `overhead_camera_cap`,
   `workspace_camera_cap`, `record_rest_to_rest`, `success_metadata`,
   `failed_trajectory_dir` and `joint_offsets_deg` are reachable from nothing —
   real-robot recording goes through
