@@ -274,7 +274,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="check-calibration",
         summary="Compare the leader and follower calibrations in the lerobot cache.",
-        script="check_calibration.py",
+        module="pick_and_place.cli.check_calibration",
         group="Calibrate the rig",
     ),
     Command(
