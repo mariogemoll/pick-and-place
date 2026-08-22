@@ -330,7 +330,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="generate-apriltags",
         summary="Generate printable AprilTag 41h12 PDFs.",
-        script="generate_apriltags.py",
+        module="pick_and_place.cli.generate_apriltags",
         group="Web and print assets",
     ),
     Command(
