@@ -368,6 +368,18 @@ COMMANDS: tuple[Command, ...] = (
         group="Viewers and probes",
     ),
     Command(
+        name="project-media",
+        summary="Project a photo or video into the workspace frame square.",
+        module="pick_and_place.cli.project_media",
+        group="Viewers and probes",
+    ),
+    Command(
+        name="project-dvd",
+        summary="Bounce a logo around the workspace square, checking the calibration.",
+        module="pick_and_place.cli.project_dvd",
+        group="Viewers and probes",
+    ),
+    Command(
         name="camera-fps-probe",
         summary="Measure a camera's real frame rate at several resolutions.",
         module="pick_and_place.cli.camera_fps_probe",

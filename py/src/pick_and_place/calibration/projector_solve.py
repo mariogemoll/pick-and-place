@@ -35,13 +35,50 @@ which is exactly where a drop target would be placed.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
 
+from pick_and_place.core.paths import REPO_ROOT
+from pick_and_place.core.workspace_bounds import WORKSPACE_FRAME_INNER_HALF_EXTENT
 from pick_and_place.spec.workspace import WORKSPACE_FRAME_APRILTAG_PLATES
+
+#: Where ``pap calibrate-projector`` writes its answer. Machine-local and
+#: gitignored, like the camera calibration it sits beside: it describes one
+#: projector standing in one spot, not the project.
+CALIBRATION_PATH = REPO_ROOT / "config" / "projector" / "overhead_projector.json"
+
+
+@dataclass(frozen=True)
+class ProjectorCalibration:
+    """A solved projector, read back off disk."""
+
+    projector_to_workspace: NDArray[np.float64]
+    projector_size: tuple[int, int]
+    solved: str
+    rms_mm: float
+
+
+def load_projector_calibration(path: Path | None = None) -> ProjectorCalibration:
+    """Read a solved projector calibration, or say how to make one."""
+    resolved = path if path is not None else CALIBRATION_PATH
+    if not resolved.exists():
+        raise FileNotFoundError(
+            f"no projector calibration at {resolved}. Run `pap calibrate-projector` first; "
+            "it is invalidated by moving the projector, so this is expected after a remount."
+        )
+    data = json.loads(resolved.read_text())
+    width, height = data["projector_size"]
+    return ProjectorCalibration(
+        projector_to_workspace=np.array(data["homography"], dtype=float),
+        projector_size=(int(width), int(height)),
+        solved=str(data.get("solved", "unknown")),
+        rms_mm=float(data.get("rms_mm", float("nan"))),
+    )
 
 
 @dataclass(frozen=True)
@@ -184,3 +221,54 @@ def solve_projector_to_workspace(
 def workspace_to_projector(matrix: NDArray) -> NDArray[np.float64]:
     """Invert the fit, which is the direction the target plate is actually placed in."""
     return np.linalg.inv(np.asarray(matrix, dtype=float))
+
+
+def image_to_workspace_square(
+    image_size: tuple[int, int],
+    *,
+    half_extent_m: float = WORKSPACE_FRAME_INNER_HALF_EXTENT,
+    stretch: bool = False,
+) -> NDArray[np.float64]:
+    """Map an image's pixels onto the square inside the workspace frame rails.
+
+    The default extent is the frame's **inner rail**, not the corner plates'
+    centres: the plates sit 32.6 mm inside the rails, so filling only as far as
+    them leaves a visible unlit border all the way round.
+
+    **The image's bottom edge faces the arm.** The arm stands on the frame's
+    north side, and the workspace is habitually looked at with the robot at the
+    bottom, so the picture is laid down turned to match that view rather than
+    the frame's own axes. It is a half turn, not a mirror, so lettering still
+    reads. A caller wanting some other orientation rotates the image itself.
+
+    ``stretch`` fills the square regardless of the image's shape. The default
+    instead fits the image inside it at its own aspect ratio and centres what is
+    left over, because the square is 1:1 and almost no photograph is.
+    """
+    width, height = image_size
+    if width <= 0 or height <= 0:
+        raise ValueError(f"image must have positive extent, got {image_size}")
+
+    half_x = half_extent_m
+    half_y = half_extent_m
+    if not stretch:
+        aspect = width / height
+        if aspect >= 1.0:
+            half_y = half_extent_m / aspect
+        else:
+            half_x = half_extent_m * aspect
+
+    source = np.array(
+        [[0.0, 0.0], [width, 0.0], [width, height], [0.0, height]], dtype=float
+    )
+    # A half turn of the frame's own axes: the image's top edge runs se -> sw,
+    # putting the arm's side of the frame along the picture's bottom.
+    destination = np.array(
+        [[half_x, -half_y], [-half_x, -half_y], [-half_x, half_y], [half_x, half_y]],
+        dtype=float,
+    )
+
+    import cv2
+
+    matrix, _ = cv2.findHomography(source, destination, 0)
+    return np.asarray(matrix, dtype=float)

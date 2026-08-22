@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
+import json
+
 import cv2
 import numpy as np
 import pytest
@@ -8,6 +10,8 @@ import pytest
 from pick_and_place.calibration.projector_solve import (
     apply_homography,
     camera_to_workspace,
+    image_to_workspace_square,
+    load_projector_calibration,
     solve_projector_to_workspace,
     workspace_plate_centers,
     workspace_to_projector,
@@ -100,6 +104,82 @@ def test_solve_needs_four_points():
         solve_projector_to_workspace(
             np.zeros((3, 2)), np.zeros((3, 2)), cam_to_ws, cv2_module=cv2
         )
+
+
+def test_image_bottom_edge_faces_the_arm():
+    """The workspace is looked at with the robot at the bottom, so the map is turned."""
+    matrix = image_to_workspace_square((400, 400), half_extent_m=0.230)
+
+    corners = apply_homography(matrix, np.array([[0, 0], [400, 0], [400, 400], [0, 400]]))
+    assert corners[0] == pytest.approx([0.230, -0.230], abs=1e-7)  # top-left -> se
+    assert corners[1] == pytest.approx([-0.230, -0.230], abs=1e-7)  # top-right -> sw
+    assert corners[2] == pytest.approx([-0.230, 0.230], abs=1e-7)  # bottom-right -> nw
+    assert corners[3] == pytest.approx([0.230, 0.230], abs=1e-7)  # bottom-left -> ne
+
+
+def test_the_turn_is_a_rotation_not_a_mirror():
+    """A mirrored map fits the square just as well and renders lettering backwards.
+
+    The determinant must be **negative**, which is the giveaway that trips people
+    up: an image's rows run downward while workspace y runs up, so the correct
+    overhead map already flips one axis. Turning it by half a turn flips both and
+    leaves the sign alone. A map that came out positive would be the mirrored
+    one -- equally square, equally well fitted, and wrong.
+    """
+    turned = image_to_workspace_square((400, 300), half_extent_m=0.230)
+    assert np.linalg.det(turned[:2, :2]) < 0
+
+
+def test_image_to_workspace_square_preserves_aspect_by_default():
+    """A 2:1 image must not be stretched to fill a 1:1 square."""
+    matrix = image_to_workspace_square((800, 400), half_extent_m=0.230)
+    corners = apply_homography(matrix, np.array([[0, 0], [800, 0], [800, 400]]))
+
+    # Magnitudes only: the half turn reverses both axes, and which way they
+    # run is what test_image_bottom_edge_faces_the_arm pins down.
+    width = abs(corners[1][0] - corners[0][0])
+    height = abs(corners[1][1] - corners[2][1])
+    assert width == pytest.approx(0.460, abs=1e-7)  # fills the square across
+    assert height == pytest.approx(0.230, abs=1e-7)  # letterboxed down
+    assert width / height == pytest.approx(2.0)
+
+
+def test_image_to_workspace_square_stretches_on_request():
+    matrix = image_to_workspace_square((800, 400), half_extent_m=0.230, stretch=True)
+    corners = apply_homography(matrix, np.array([[0, 0], [800, 0], [800, 400]]))
+
+    assert abs(corners[1][1] - corners[2][1]) == pytest.approx(0.460, abs=1e-7)
+
+
+def test_image_to_workspace_square_rejects_an_empty_image():
+    with pytest.raises(ValueError, match="positive extent"):
+        image_to_workspace_square((0, 400))
+
+
+def test_load_projector_calibration_says_how_to_make_one(tmp_path):
+    with pytest.raises(FileNotFoundError, match="pap calibrate-projector"):
+        load_projector_calibration(tmp_path / "absent.json")
+
+
+def test_load_projector_calibration_reads_a_written_fit(tmp_path):
+    path = tmp_path / "fit.json"
+    path.write_text(
+        json.dumps(
+            {
+                "homography": [[1.0, 0, 0], [0, 1.0, 0], [0, 0, 1.0]],
+                "projector_size": [1920, 1080],
+                "solved": "2026-08-22",
+                "rms_mm": 0.33,
+            }
+        )
+    )
+
+    calibration = load_projector_calibration(path)
+
+    assert calibration.projector_size == (1920, 1080)
+    assert calibration.solved == "2026-08-22"
+    assert calibration.rms_mm == pytest.approx(0.33)
+    assert calibration.projector_to_workspace.shape == (3, 3)
 
 
 def test_workspace_to_projector_inverts_the_fit():
