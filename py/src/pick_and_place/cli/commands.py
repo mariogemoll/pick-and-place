@@ -379,7 +379,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="showcamfeeds",
         summary="Show every attached camera's live feed at once.",
-        script="showcamfeeds.py",
+        module="pick_and_place.cli.showcamfeeds",
         group="Viewers and probes",
     ),
 )
