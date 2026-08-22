@@ -91,8 +91,8 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="run-flow-image-sim",
         summary="Run the image-conditioned flow policy over a stream of scenes.",
-        script="run_flow_image_policy_sim.py",
-        parser="pick_and_place.cli.run_flow_image_policy_sim",
+        module="pick_and_place.cli.run_flow_image_policy_sim",
+        parser="pick_and_place.cli.run_flow_image_policy_sim_parser",
         group="Run a policy",
     ),
     Command(
