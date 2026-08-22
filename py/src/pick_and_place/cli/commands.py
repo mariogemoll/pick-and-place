@@ -293,7 +293,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="measure-cube-visibility",
         summary="Measure how visible the cube is in the policy's own frames.",
-        script="measure_cube_visibility.py",
+        module="pick_and_place.cli.measure_cube_visibility",
         group="What the policy can see",
     ),
     Command(
