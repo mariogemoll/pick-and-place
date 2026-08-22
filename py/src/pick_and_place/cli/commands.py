@@ -312,7 +312,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="export-generic-robot",
         summary="Export any robot_descriptions model as a web manifest.",
-        script="export_generic_robot.py",
+        module="pick_and_place.cli.export_generic_robot",
         group="Web and print assets",
     ),
     Command(
