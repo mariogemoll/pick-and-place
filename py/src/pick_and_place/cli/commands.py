@@ -183,7 +183,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="consolidate-datasets",
         summary="Merge run directories into one dataset per day.",
-        script="consolidate_datasets.py",
+        module="pick_and_place.cli.consolidate_datasets",
         group="Record and shape datasets",
     ),
     Command(
