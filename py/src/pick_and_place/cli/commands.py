@@ -84,8 +84,8 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="run-policy-real",
         summary="Run a policy on the physical arm, closed-loop.",
-        script="run_policy_real.py",
-        parser="pick_and_place.cli.run_policy_real",
+        module="pick_and_place.cli.run_policy_real",
+        parser="pick_and_place.cli.run_policy_real_parser",
         group="Run a policy",
     ),
     Command(
