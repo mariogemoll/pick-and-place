@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
@@ -28,6 +27,7 @@ import pandas as pd
 from pick_and_place.cli.common import add_out_dir_argument
 from pick_and_place.cli.dataset import add_write_argument
 from pick_and_place.cli.suggest import SuggestingArgumentParser
+from pick_and_place.core.paths import REPO_ROOT
 
 
 def source_episode_count(root: Path) -> int:
@@ -58,7 +58,7 @@ def build_parser() -> SuggestingArgumentParser:
     parser.add_argument(
         "--parent",
         type=Path,
-        default=Path(__file__).resolve().parents[2] / "datasets-512",
+        default=REPO_ROOT / "datasets-512",
         help="where to look for sources when none are given explicitly (default: datasets-512/)",
     )
     add_out_dir_argument(parser, help="output dataset root (default: <--parent>/combined)")

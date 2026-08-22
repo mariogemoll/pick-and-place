@@ -177,7 +177,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="combine-datasets",
         summary="Merge several LeRobot datasets into one.",
-        script="combine_datasets.py",
+        module="pick_and_place.cli.combine_datasets",
         group="Record and shape datasets",
     ),
     Command(
