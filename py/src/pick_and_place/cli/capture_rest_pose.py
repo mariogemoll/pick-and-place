@@ -1,20 +1,16 @@
-#!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
 import argparse
 import math
-import sys
 from pathlib import Path
 import numpy as np
-
-# Add py/src to path so we can import pick_and_place
-sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 from pick_and_place.cli.rig import add_follower_arguments
 from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.core.joint_frames import action_to_joints, real_frame_to_sim
 from pick_and_place.hardware.follower import make_so101_follower
+from pick_and_place.spec import robot as robot_spec
 
 def build_parser() -> SuggestingArgumentParser:
     """Return the parser for the rest-pose capture."""
@@ -48,8 +44,10 @@ def run(args: argparse.Namespace) -> None:
     print(f"REST_GRIPPER = math.radians(({pos:.1f} - 2.3) / 96.2 * 130 - 10)")
     
     if args.update:
-        trajectory_path = Path(__file__).resolve().parents[1] / "src" / "pick_and_place" / "trajectory.py"
-        content = trajectory_path.read_text()
+        # The module that declares them, asked for its own file rather than
+        # spelled out: these constants have already outlived one path.
+        rest_pose_path = Path(robot_spec.__file__)
+        content = rest_pose_path.read_text()
         
         import re
         
@@ -66,8 +64,8 @@ def run(args: argparse.Namespace) -> None:
         new_gripper = f"REST_GRIPPER = math.radians(({pos:.1f} - 2.3) / 96.2 * 130 - 10)"
         content = re.sub(r"REST_GRIPPER = .*", new_gripper, content)
         
-        trajectory_path.write_text(content)
-        print(f"\nUpdated {trajectory_path}")
+        rest_pose_path.write_text(content)
+        print(f"\nUpdated {rest_pose_path}")
 
     follower.disconnect()
 

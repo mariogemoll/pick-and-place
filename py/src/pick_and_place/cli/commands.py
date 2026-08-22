@@ -280,7 +280,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="capture-rest-pose",
         summary="Read the arm's current pose and print it as the rest position.",
-        script="capture_rest_pose.py",
+        module="pick_and_place.cli.capture_rest_pose",
         group="Calibrate the rig",
     ),
     Command(
