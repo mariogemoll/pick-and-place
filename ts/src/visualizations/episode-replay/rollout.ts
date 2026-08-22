@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: 0BSD
 
 // Parser for the "PPRL" episode rollout format written by
-// py/scripts/export_episode_rolls.py. Each frame is the sim's full qpos: the
+// `pap export-episode-rolls`. Each frame is the sim's full qpos: the
 // 6 arm/gripper joint angles (radians) followed by the cube's free-joint pose
 // (pos[3] + quat[4], MuJoCo's w,x,y,z order) — the minimal state needed to
 // drive the existing joint-hierarchy robot model frame by frame.

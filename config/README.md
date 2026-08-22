@@ -20,18 +20,16 @@ Generate the project's standard OpenCV ChArUco board as a vector A4 PDF. Print
 it at 100% scale (with no printer scaling), and verify a square with a ruler:
 
 ```sh
-cd py
-python scripts/generate_charuco_board.py
+pap generate-charuco-board
 ```
 
 Then run the interactive Python calibrator. It automatically captures stable,
 distinct views and writes the requested JSON file:
 
 ```sh
-cd py
-python scripts/calibrate_camera_intrinsics.py \
+pap calibrate-camera-intrinsics \
   --camera 0 \
-  --output ../config/camera_intrinsics/overhead_camera.json
+  --output config/camera_intrinsics/overhead_camera.json
 ```
 
 Move the board through the whole image at several distances and moderate tilts.
@@ -42,10 +40,9 @@ The calibration command is independent of the scene's camera names. For
 example, an iPhone overview camera can be stored separately:
 
 ```sh
-cd py
-python scripts/calibrate_camera_intrinsics.py \
+pap calibrate-camera-intrinsics \
   --camera 0 \
-  --output ../config/camera_intrinsics/iphone_overview.json
+  --output config/camera_intrinsics/iphone_overview.json
 ```
 
 The file becomes part of a scene or replay workflow only when that workflow is
@@ -88,7 +85,7 @@ response. The fitted file lives at:
 Generate it from a dataset root:
 
 ```sh
-PYTHONPATH=py/src python3 py/scripts/calibrate_robot_dynamics.py \
+pap calibrate-robot-dynamics \
   "$PAP_DATA_ROOT/datasets/combined" \
   --output config/robot_dynamics/so101_follower.json
 ```
@@ -102,7 +99,7 @@ the calibrated response automatically.
 Use raw upstream actuator dynamics for comparison:
 
 ```sh
-PYTHONPATH=py/src mjpython py/scripts/run_policy_sim.py scripted \
+mjpython -m pick_and_place.cli.pap run-policy-sim scripted \
   --no-robot-dynamics
 ```
 

@@ -2,7 +2,7 @@
  "SPDX-FileCopyrightText": "2026 Mario Gemoll",
  "SPDX-License-Identifier": "0BSD",
  "description": "Cube, contact and grasp transforms as 16 row-major numbers each.",
- "generator": "py/scripts/generate_parity_fixtures.py",
+ "generator": "pap generate-parity-fixtures",
  "pregraspDistance": 0.045,
  "contactCases": [
   {"pose":{"x":0.22,"y":0.0,"z":0.015,"roll":0.0,"pitch":0.0,"yaw":0.0},"face":"+x","worldFromCube":[1.0,0.0,0.0,0.22,0.0,1.0,0.0,0.0,0.0,0.0,1.0,0.015,0.0,0.0,0.0,1.0],"worldFromCubeContact":[6.12323399574e-17,0.0,-1.0,0.23501,0.0,1.0,0.0,0.0,1.0,0.0,6.12323399574e-17,0.01,0.0,0.0,0.0,1.0],"simpleGrasp":[-1.0,0.0,0.0,0.23713,0.0,-1.0,0.0,0.0,6.12323399574e-17,0.0,1.0,0.109363,0.0,0.0,0.0,1.0]},

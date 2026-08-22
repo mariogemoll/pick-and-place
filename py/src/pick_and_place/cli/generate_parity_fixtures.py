@@ -110,7 +110,7 @@ def _document(description: str, **payload: Any) -> dict[str, Any]:
     return {
         **_LICENSE,
         "description": description,
-        "generator": "py/scripts/generate_parity_fixtures.py",
+        "generator": "pap generate-parity-fixtures",
         **payload,
     }
 

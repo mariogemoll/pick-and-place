@@ -14,7 +14,6 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SCRIPT="$HERE/py/scripts/preview_cameras.py"
 PIDFILE="$HERE/runs/campreview.pid"
 LOG="$HERE/runs/campreview.log"
 PORT="${CAM_PORT:-8080}"
@@ -44,7 +43,7 @@ case "${1:-status}" in
       fi
     fi
     # Unbuffered, so the identification result reaches the log immediately.
-    PYTHONUNBUFFERED=1 nohup "$PY" "$SCRIPT" --port "$PORT" >"$LOG" 2>&1 &
+    PYTHONUNBUFFERED=1 nohup "$PY" -m pick_and_place.cli.pap preview-cameras --port "$PORT" >"$LOG" 2>&1 &
     echo $! > "$PIDFILE"
     sleep 10
     if pid=$(running_pid); then
@@ -94,7 +93,7 @@ case "${1:-status}" in
     ;;
 
   identify)
-    "$PY" "$SCRIPT" --identify-only 2>&1 | grep -v '^\[ WARN'
+    "$PY" -m pick_and_place.cli.pap preview-cameras --identify-only 2>&1 | grep -v '^\[ WARN'
     ;;
 
   restart)

@@ -2,7 +2,7 @@
  "SPDX-FileCopyrightText": "2026 Mario Gemoll",
  "SPDX-License-Identifier": "0BSD",
  "description": "Sim-frame/real-frame joint conversion, including the calibrated gripper map.",
- "generator": "py/scripts/generate_parity_fixtures.py",
+ "generator": "pap generate-parity-fixtures",
  "gripperAngleToPosition": [
   {"angleRad":-0.523598775598,"position":2.3},
   {"angleRad":-0.436332312999,"position":2.3},

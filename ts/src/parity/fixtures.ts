@@ -4,7 +4,7 @@
 /// <reference types="node" />
 
 // Loading and comparison helpers for the cross-language parity fixtures in
-// `fixtures/parity/`. Python writes them (py/scripts/generate_parity_fixtures.py)
+// `fixtures/parity/`. Python writes them (`pap generate-parity-fixtures`)
 // and checks itself against them (py/tests/test_parity.py); the tests beside
 // this file are the TypeScript half of the same check.
 

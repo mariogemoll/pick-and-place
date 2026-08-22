@@ -213,7 +213,7 @@ for attempt in 1 2 3 4 5 6; do
     batch=$(( episodes - successes ))
   fi
   echo "requesting $batch more attempts"
-  "$V" py/scripts/pick_and_place/record_sim.py \
+  "$V" -m pick_and_place.cli.pap record-sim \
     --episodes "$batch" \
     --workers "$workers" \
     --seed "$seed" \
@@ -249,7 +249,7 @@ if [ ! -d "$master_root" ]; then
   # The success filter drops roughly two attempts in five here, and those are
   # exactly the negatives an offline critic needs -- a value function fitted only
   # to successes regresses a near-constant and cannot rank anything.
-  "$V" py/scripts/pick_and_place/finalize_sim_dataset.py \
+  "$V" -m pick_and_place.cli.pap finalize-sim-dataset \
     --dataset-root "$master_root" \
     --episodes "$merge_count" \
     --repo-id "local/$run_name" \

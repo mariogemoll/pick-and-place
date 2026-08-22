@@ -220,7 +220,7 @@ python -c "from huggingface_hub import snapshot_download; \
 aws s3 sync s3://allyouneed/pick-and-place/outputs/<run>/train/checkpoints/020000 \
   "$PAP_DATA_ROOT/<run>-020000"
 
-mjpython py/scripts/run_policy_sim.py \
+mjpython -m pick_and_place.cli.pap run-policy-sim lerobot \
   --checkpoint "$PAP_DATA_ROOT/<run>-020000/pretrained_model" \
   --base-checkpoint "$PAP_DATA_ROOT/pi05_base_pinned" \
   --recording-hw 720 960 \
@@ -372,7 +372,7 @@ episodes and 291,618 frames with both camera streams re-encoded from 960x720 to
 512x512. Produce one from any recorded dataset with:
 
 ```sh
-python py/scripts/convert_dataset_resolution.py \
+pap convert-dataset-resolution \
   --src "$PAP_DATA_ROOT/datasets/as-recorded" \
   --width 512 --height 512 --already-rectified --vcodec h264
 ```

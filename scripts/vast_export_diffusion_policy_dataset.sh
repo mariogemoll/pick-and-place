@@ -74,7 +74,7 @@ echo "Exporting $source_root as $action_encoding actions."
 
 cd "$repo"
 git rev-parse HEAD
-"$venv/bin/python" py/scripts/export_diffusion_policy_dataset.py \
+"$venv/bin/python" -m pick_and_place.cli.pap export-policy-dataset \
   --src "$source_root" \
   --output "$artifact_root" \
   --image-size "$image_size" \

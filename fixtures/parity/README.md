@@ -12,14 +12,14 @@ the real arm and generates every demonstration; TypeScript follows.
 
 | Where | What it does |
 | --- | --- |
-| `py/scripts/generate_parity_fixtures.py` | Writes these files. |
+| `pap generate-parity-fixtures` | Writes these files. |
 | `py/tests/test_parity.py` | Fails when Python stops reproducing them. |
 | `ts/src/parity/*.test.ts` | Fails when TypeScript stops reproducing them. |
 
 ## Regenerating
 
 ```sh
-cd py && MUJOCO_GL=egl python scripts/generate_parity_fixtures.py
+MUJOCO_GL=egl pap generate-parity-fixtures
 ```
 
 A moved planner shows up first as a failure in `py/tests/test_parity.py`.

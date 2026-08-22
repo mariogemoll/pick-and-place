@@ -2,7 +2,7 @@
  "SPDX-FileCopyrightText": "2026 Mario Gemoll",
  "SPDX-License-Identifier": "0BSD",
  "description": "SO-101 kinematics derived from the compiled model. TypeScript derives the same numbers from ts/public/so101.json.",
- "generator": "py/scripts/generate_parity_fixtures.py",
+ "generator": "pap generate-parity-fixtures",
  "kinematics": {
   "panAxis": [
    0.0388353,
