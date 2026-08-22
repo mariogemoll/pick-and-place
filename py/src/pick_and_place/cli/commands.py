@@ -361,7 +361,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="preview-cameras",
         summary="Serve a browser preview of every attached camera.",
-        script="preview_cameras.py",
+        module="pick_and_place.cli.preview_cameras",
         group="Viewers and probes",
     ),
     Command(
