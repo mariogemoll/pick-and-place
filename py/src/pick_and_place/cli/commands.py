@@ -262,7 +262,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="fit-joint-zeros",
         summary="Fit the arm's joint zeros from hand-eye measurements.",
-        script="fit_joint_zeros.py",
+        module="pick_and_place.cli.fit_joint_zeros",
         group="Calibrate the rig",
     ),
     Command(
