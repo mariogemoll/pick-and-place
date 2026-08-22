@@ -11,28 +11,24 @@ a registry built by decorators: a decorator has to run, and running it means
 importing the module it decorates.
 
 The cost is that a summary lives here rather than beside its command, and can go
-stale. ``tests/test_commands.py`` checks the table against the tree instead:
-every command resolves, every script is either registered or deliberately not.
+stale. ``tests/test_pap_dispatch.py`` checks the table against the tree instead:
+every command resolves, and every module in ``cli/`` is either a command, a
+shared argument group, or declared not to be one.
 
-Each command names two things the dispatcher imports **after** parsing:
+Each command names what the dispatcher imports **after** parsing:
+
+``module``
+    the module exposing ``run(args)``, under ``pick_and_place.cli``.
 
 ``parser``
     the module exposing ``build_parser()``, and optionally ``validate(parser,
-    args)``. It defaults to the script itself, which is right whenever importing
-    the script is cheap. Where it is not -- the commands that pull torch or
-    lerobot at module scope -- the parser lives in ``pick_and_place.cli.<name>``
-    and this field names it, so ``pap <command> --help`` costs an argparse
-    import rather than a deep-learning stack.
-
-``module``
-    the module exposing ``run(args)``, imported by name.
-
-``script``
-    what a command not yet moved into the package names instead: the file
-    exposing ``run(args)``, relative to ``py/scripts``, imported by path
-    because ``scripts/`` is not a package and ``scripts/pick_and_place/``
-    would shadow the real one if it were. Every command holds exactly one of
-    these two, and ``script`` goes away with the last one that needs it.
+    args)``. It defaults to the command's own module, which is right whenever
+    importing that module is cheap. Where it is not -- the five commands that
+    pull torch or lerobot at module scope -- the flags live in
+    ``pick_and_place.cli.<name>_parser`` and this field names it, so ``pap
+    <command> --help`` costs an argparse import rather than a deep-learning
+    stack. Two modules for one command, which is a statement about import cost
+    and nothing else.
 
 ``typed_config``
     true for the one command that has no ``ArgumentParser`` to expose. The
@@ -54,24 +50,19 @@ class Command:
 
     name: str
     summary: str
-    script: str = ""
-    module: str = ""
+    module: str
     parser: str | None = None
     typed_config: bool = False
     group: str = ""
 
-    def __post_init__(self) -> None:
-        if bool(self.script) == bool(self.module):
-            raise ValueError(f"{self.name} must name either a script or a module, not both")
-
     @property
     def parser_module(self) -> str | None:
-        """The importable module holding ``build_parser``, or ``None`` for the script."""
+        """The module holding ``build_parser``, or ``None`` for the command's own."""
         return self.parser
 
 
 #: Every command ``pap`` offers, grouped the way ``pap --help`` lists them.
-#: The groups follow the script categories in ``pick-and-place``'s AGENTS.md,
+#: The groups follow the command categories in ``pick-and-place``'s AGENTS.md,
 #: because a flat list of forty-eight names is not something anyone reads.
 COMMANDS: tuple[Command, ...] = (
     # Run a policy
