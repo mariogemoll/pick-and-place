@@ -226,7 +226,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="calibrate-robot-dynamics",
         summary="Fit the follower's actuator dynamics from recorded datasets.",
-        script="calibrate_robot_dynamics.py",
+        module="pick_and_place.cli.calibrate_robot_dynamics",
         group="Calibrate the rig",
     ),
     Command(
