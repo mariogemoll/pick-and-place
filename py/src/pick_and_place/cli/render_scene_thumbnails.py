@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
@@ -41,9 +40,6 @@ def build_parser() -> SuggestingArgumentParser:
 
 def run(args: argparse.Namespace) -> None:
     """Render the thumbnails."""
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
     from PIL import Image
 
     from pick_and_place.runtime.training_scenes import training_scenario

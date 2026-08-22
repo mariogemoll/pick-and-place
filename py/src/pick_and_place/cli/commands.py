@@ -336,7 +336,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="render-scene-thumbnails",
         summary="Render the initial overhead frame of chosen scenes.",
-        script="render_scene_thumbnails.py",
+        module="pick_and_place.cli.render_scene_thumbnails",
         group="Web and print assets",
     ),
     Command(
