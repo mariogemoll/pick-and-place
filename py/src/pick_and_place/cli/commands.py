@@ -189,7 +189,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="convert-dataset-resolution",
         summary="Re-render a dataset's video at another resolution.",
-        script="convert_dataset_resolution.py",
+        module="pick_and_place.cli.convert_dataset_resolution",
         group="Record and shape datasets",
     ),
     Command(
