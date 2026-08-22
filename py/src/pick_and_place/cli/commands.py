@@ -112,7 +112,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="eval-scripted-parallel",
         summary="Score the expert over a manifest across worker processes.",
-        script="eval_scripted_parallel.py",
+        module="pick_and_place.cli.eval_scripted_parallel",
         group="Score a policy",
     ),
     Command(
