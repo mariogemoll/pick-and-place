@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
@@ -100,6 +99,7 @@ from pick_and_place.spec.robot import (
     REST_ARM_JOINTS,
     REST_GRIPPER,
 )
+from pick_and_place.core.paths import REPO_ROOT
 from pick_and_place.core.workspace_bounds import (
     PAN_AXIS,
     is_cube_recovery_target_allowed,
@@ -108,7 +108,6 @@ from pick_and_place.core.workspace_bounds import (
 
 OVERHEAD_CAPTURE_SIZE = (1920, 1080)
 WRIST_CAPTURE_SIZE = (1280, 720)
-REPO_ROOT = Path(__file__).resolve().parents[3]
 MAX_POLICY_SLEW_PER_SECOND = np.array([60.0, 60.0, 75.0, 90.0, 120.0, 150.0])
 PICKUP_GRIPPER_MARGIN = 5.0
 

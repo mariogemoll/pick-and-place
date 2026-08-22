@@ -98,7 +98,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="run-scripted-real",
         summary="Run the scripted expert on the rig.",
-        script="pick_and_place/real.py",
+        module="pick_and_place.cli.run_scripted_real",
         group="Run a policy",
     ),
     # Score a policy
