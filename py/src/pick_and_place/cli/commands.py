@@ -355,7 +355,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="replay-episode",
         summary="Replay a recorded episode in the viewer or to an mp4.",
-        script="replay_episode.py",
+        module="pick_and_place.cli.replay_episode",
         group="Viewers and probes",
     ),
     Command(
