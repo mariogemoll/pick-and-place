@@ -299,7 +299,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="measure-episode-visibility",
         summary="Measure object visibility across staged episodes.",
-        script="measure_episode_visibility.py",
+        module="pick_and_place.cli.measure_episode_visibility",
         group="What the policy can see",
     ),
     Command(
