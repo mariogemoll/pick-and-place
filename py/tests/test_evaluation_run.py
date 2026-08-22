@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from pick_and_place.cli.eval_policy_sim import build_parser, validate
+from pick_and_place.cli.eval_policy_sim_parser import build_parser, validate
 
 
 def _parse(argv):

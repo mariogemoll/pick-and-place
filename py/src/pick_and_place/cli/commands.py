@@ -105,8 +105,8 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="eval-policy-sim",
         summary="Score a controller against a frozen scenario manifest.",
-        script="eval_policy_sim.py",
-        parser="pick_and_place.cli.eval_policy_sim",
+        module="pick_and_place.cli.eval_policy_sim",
+        parser="pick_and_place.cli.eval_policy_sim_parser",
         group="Score a policy",
     ),
     Command(
