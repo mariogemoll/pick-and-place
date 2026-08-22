@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
@@ -25,19 +24,10 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
-SCRIPTS_DIR = Path(__file__).resolve().parent
-if str(SCRIPTS_DIR.parent / "src") not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR.parent / "src"))
-
-from pick_and_place.cli.commands import COMMANDS, COMMANDS_BY_NAME, Command  # noqa: E402
-from pick_and_place.cli.dispatch import (  # noqa: E402
-    load_parser_owner,
-    load_runner,
-    parse_arguments,
-)
-from pick_and_place.cli.suggest import SuggestingArgumentParser  # noqa: E402
+from pick_and_place.cli.commands import COMMANDS, COMMANDS_BY_NAME, Command
+from pick_and_place.cli.dispatch import load_parser_owner, load_runner, parse_arguments
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 
 
 def build_parser() -> SuggestingArgumentParser:

@@ -140,7 +140,7 @@ ValueError: Error: Error opening file
 Generate all fourteen before running anything that builds a scene:
 
 ```sh
-cd py && MUJOCO_GL=egl python scripts/pap.py render-apriltag-textures --all-defaults
+cd py && MUJOCO_GL=egl python -m pick_and_place.cli.pap render-apriltag-textures --all-defaults
 ```
 
 The output is deterministic, so a regenerated set matches any other machine's.
@@ -164,7 +164,7 @@ tests in `ts/src/parity/` fail when TypeScript does.
 `test_parity.py` fail, regenerate:
 
 ```sh
-cd py && MUJOCO_GL=egl python scripts/pap.py generate-parity-fixtures
+cd py && MUJOCO_GL=egl python -m pick_and_place.cli.pap generate-parity-fixtures
 ```
 
 then expect the TypeScript tests to fail until that side follows. Review the
@@ -366,9 +366,8 @@ The 49 commands are what the project is driven by, and they reach the terminal
 through one entry point:
 
 ```sh
-cd py
-python scripts/pap.py --help                  # every command, grouped
-python scripts/pap.py eval-policy-sim --help  # one command's own flags
+python -m pick_and_place.cli.pap --help                  # every command, grouped
+python -m pick_and_place.cli.pap eval-policy-sim --help  # one command's own flags
 ```
 
 `pap --help` is the list; a second one here would only go stale. The groups it
