@@ -18,10 +18,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from generate_apriltags import TAG_41H12_BITS
-
 from pick_and_place.cli.common import add_out_dir_argument
 from pick_and_place.cli.suggest import SuggestingArgumentParser
+from pick_and_place.spec.apriltags import TAG_41H12_BITS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = REPO_ROOT / "assets" / "apriltags" / "textures"
