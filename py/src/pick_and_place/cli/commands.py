@@ -318,7 +318,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="export-episode-rolls",
         summary="Export episode rolls for the browser replay viewer.",
-        script="export_episode_rolls.py",
+        module="pick_and_place.cli.export_episode_rolls",
         group="Web and print assets",
     ),
     Command(

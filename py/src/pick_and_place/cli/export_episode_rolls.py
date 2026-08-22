@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
@@ -50,6 +49,7 @@ import numpy as np
 
 from pick_and_place.cli.common import add_out_dir_argument, add_seed_argument
 from pick_and_place.cli.suggest import SuggestingArgumentParser
+from pick_and_place.core.paths import REPO_ROOT
 from pick_and_place.scripted.episode_sampling import (
     pickup_yaw_from_azimuth,
     sample_cube,
@@ -411,7 +411,7 @@ def build_parser() -> SuggestingArgumentParser:
     )
     add_out_dir_argument(
         parser,
-        default=Path(__file__).resolve().parents[2] / "ts" / "public" / "episodes",
+        default=REPO_ROOT / "ts" / "public" / "episodes",
         help="directory to write episode_NN.bin files (default: ts/public/episodes)",
     )
     parser.add_argument(
