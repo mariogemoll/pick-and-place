@@ -55,6 +55,17 @@ VIRTUAL_ENV=~/venvs/pick-and-place uv pip install -e py --group dev
 Prefer a plain venv over pyenv inside a container. Use `uv pip install` to
 populate it, then call `python` directly rather than `uv run`.
 
+**`pap` is a console script, so it appears on install and not before.** An
+environment created before it existed has no `pap` until it is reinstalled:
+
+```sh
+VIRTUAL_ENV=~/venvs/pick-and-place uv pip install -e py --no-deps
+```
+
+The same applies after any change to `[project.scripts]`. `python -m
+pick_and_place.cli.pap` runs the same entry point without the shim, which is
+the escape hatch when the reinstall is not worth it, and what CI uses.
+
 System packages needed for a headless Linux box:
 
 ```sh
@@ -93,6 +104,10 @@ path default that points inside the repository.
 python -m ruff check .
 MUJOCO_GL=egl python -m pytest
 python scripts/check_package_layering.py
+
+# The commands — from anywhere
+pap --help                    # every command, grouped
+pap eval-policy-sim --help    # one command's own flags
 
 # TypeScript — from ts/
 pnpm i
@@ -140,7 +155,7 @@ ValueError: Error: Error opening file
 Generate all fourteen before running anything that builds a scene:
 
 ```sh
-cd py && MUJOCO_GL=egl python -m pick_and_place.cli.pap render-apriltag-textures --all-defaults
+MUJOCO_GL=egl pap render-apriltag-textures --all-defaults
 ```
 
 The output is deterministic, so a regenerated set matches any other machine's.
@@ -164,7 +179,7 @@ tests in `ts/src/parity/` fail when TypeScript does.
 `test_parity.py` fail, regenerate:
 
 ```sh
-cd py && MUJOCO_GL=egl python -m pick_and_place.cli.pap generate-parity-fixtures
+MUJOCO_GL=egl pap generate-parity-fixtures
 ```
 
 then expect the TypeScript tests to fail until that side follows. Review the
@@ -366,8 +381,8 @@ The 49 commands are what the project is driven by, and they reach the terminal
 through one entry point:
 
 ```sh
-python -m pick_and_place.cli.pap --help                  # every command, grouped
-python -m pick_and_place.cli.pap eval-policy-sim --help  # one command's own flags
+pap --help                    # every command, grouped
+pap eval-policy-sim --help    # one command's own flags
 ```
 
 `pap --help` is the list; a second one here would only go stale. The groups it
