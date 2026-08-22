@@ -201,7 +201,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="select-episodes",
         summary="List a dataset's episodes that pass a success filter.",
-        script="select_episodes.py",
+        module="pick_and_place.cli.select_episodes",
         group="Record and shape datasets",
     ),
     Command(
