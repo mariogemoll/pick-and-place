@@ -232,7 +232,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="wrist-cam-align-solve",
         summary="Solve the wrist camera's alignment against the workspace tags.",
-        script="wrist_cam_align_solve.py",
+        module="pick_and_place.cli.wrist_cam_align_solve",
         group="Calibrate the rig",
     ),
     Command(
