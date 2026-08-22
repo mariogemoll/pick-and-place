@@ -130,7 +130,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="generate-scenario-manifest",
         summary="Generate a frozen scenario manifest.",
-        script="generate_scenario_manifest.py",
+        module="pick_and_place.cli.generate_scenario_manifest",
         group="Score a policy",
     ),
     Command(
