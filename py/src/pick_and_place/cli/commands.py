@@ -305,7 +305,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="check-overhead-localization",
         summary="Measure whether simulated overhead perception misses by as much as the rig does.",
-        script="check_overhead_localization.py",
+        module="pick_and_place.cli.check_overhead_localization",
         group="What the policy can see",
     ),
     # Web and print assets
