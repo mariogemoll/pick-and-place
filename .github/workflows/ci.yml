@@ -63,7 +63,7 @@ jobs:
           uv pip install --system --no-deps -e .
       - name: "Generate AprilTag textures"
         working-directory: py
-        run: python -m pick_and_place.cli.pap render-apriltag-textures --all-defaults
+        run: pap render-apriltag-textures --all-defaults
       - name: "Generate web model"
         working-directory: py
         run: python -m pick_and_place.sim.export -o ../ts/public/so101.xml
@@ -73,10 +73,9 @@ jobs:
       - name: "Export the generic robots"
         working-directory: py
         run: |
-          python -m pick_and_place.cli.pap export-generic-robot ur5e_mj_description \
+          pap export-generic-robot ur5e_mj_description \
             --gripper robotiq_2f85_mj_description -o "$RUNNER_TEMP/ur5e.json"
-          python -m pick_and_place.cli.pap export-generic-robot panda_mj_description \
-            -o "$RUNNER_TEMP/panda.json"
+          pap export-generic-robot panda_mj_description -o "$RUNNER_TEMP/panda.json"
       - name: "ESLint the ESLint config"
         working-directory: ts
         run: pnpm eslint -c basic.eslint.config.js basic.eslint.config.js eslint.config.js
@@ -118,7 +117,7 @@ jobs:
         run: uv pip install --system -e . --group dev
       - name: "Generate AprilTag textures"
         working-directory: py
-        run: python -m pick_and_place.cli.pap render-apriltag-textures --all-defaults
+        run: pap render-apriltag-textures --all-defaults
       - name: "Run ruff on simulation package"
         working-directory: py
         run: python -m ruff check .
