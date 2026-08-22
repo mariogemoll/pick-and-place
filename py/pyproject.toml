@@ -44,6 +44,12 @@ dependencies = [
     "wandb",
 ]
 
+# The one entry point. `pap --help` lists every command; each is a module under
+# pick_and_place.cli. Takes effect on install, so an existing environment needs
+# a reinstall before the `pap` shim appears -- see AGENTS.md.
+[project.scripts]
+pap = "pick_and_place.cli.pap:main"
+
 [tool.ruff]
 line-length = 100
 

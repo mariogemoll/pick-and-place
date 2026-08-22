@@ -2,7 +2,7 @@
  "SPDX-FileCopyrightText": "2026 Mario Gemoll",
  "SPDX-License-Identifier": "0BSD",
  "description": "Forward kinematics: arm joints to the world position of the gripper's IK target. Python solves the planar chain in closed form, which tracks the model's own kinematics to well under a millimetre rather than exactly \u2014 assert accordingly.",
- "generator": "py/scripts/generate_parity_fixtures.py",
+ "generator": "pap generate-parity-fixtures",
  "cases": [
   {"label":"simple +x z+0 @ (0.028, -0.120) [up]","joints":{"shoulder_pan":1.51504753063,"shoulder_lift":-0.492629058825,"elbow_flex":1.0399691682,"wrist_flex":1.02345621742,"wrist_roll":-1.57786560811},"tip":[0.0455066108703,-0.119543363771,0.01]},
   {"label":"simple +x z+0.03 @ (0.028, -0.120) [up]","joints":{"shoulder_pan":1.51504753063,"shoulder_lift":-0.613779970773,"elbow_flex":0.887714995983,"wrist_flex":1.29686130158,"wrist_roll":-1.57786560811},"tip":[0.0455066108703,-0.119543363771,0.04]},

@@ -162,7 +162,7 @@ for shift in "${shift_list[@]}"; do
 done
 
 if [ ! -f "$repo/assets/apriltags/textures/tagStandard41h12_00014_60x60mm_tag40mm.png" ]; then
-  "$venv/bin/python" py/scripts/render_apriltag_textures.py --all-defaults
+  "$venv/bin/python" -m pick_and_place.cli.pap render-apriltag-textures --all-defaults
 fi
 
 printf '%s\n' \
@@ -195,8 +195,7 @@ score_arm() {
     hi=$(( (index + 1) * scenario_count / shards ))
     name=$(printf 'shard-%02d' "$index")
     if [ "$hi" -gt "$lo" ]; then
-      "$venv/bin/python" py/scripts/eval_policy_sim.py \
-        --controller flow-image \
+      "$venv/bin/python" -m pick_and_place.cli.pap eval-policy-sim flow-image \
         --checkpoint "$input_root/$arm/$final_checkpoint" \
         --flow-export "$artifact_root" \
         --flow-act-steps 8 \
@@ -221,7 +220,7 @@ score_arm() {
 
   # The merge refuses overlapping windows and shards that scored a different
   # checkpoint, so a partial or stale set cannot become a headline number.
-  "$venv/bin/python" py/scripts/merge_evaluation_shards.py \
+  "$venv/bin/python" -m pick_and_place.cli.pap merge-evaluation-shards \
     --output "$output_root/$arm" "$shard_root"/shard-*/ \
     2>&1 | tee "$output_root/$arm.log"
 }
@@ -235,7 +234,7 @@ done
 if [ "${#shift_list[@]}" -eq 2 ]; then
   baseline="$output_root/$run_prefix-shift${shift_list[0]}"
   comparison="$output_root/paired-comparison.json"
-  "$venv/bin/python" py/scripts/compare_policy_evaluations.py \
+  "$venv/bin/python" -m pick_and_place.cli.pap compare-policy-evaluations \
     "$output_root/$run_prefix-shift${shift_list[0]}" \
     "$output_root/$run_prefix-shift${shift_list[1]}" \
     --baseline "$baseline" --json "$comparison" \

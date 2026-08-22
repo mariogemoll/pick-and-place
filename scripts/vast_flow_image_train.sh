@@ -120,7 +120,7 @@ if [ ! -d "$artifact_root" ]; then
       exit 1
     fi
     source_root=$(dirname "$(dirname "$info_path")")
-    "$venv/bin/python" py/scripts/export_diffusion_policy_dataset.py \
+    "$venv/bin/python" -m pick_and_place.cli.pap export-policy-dataset \
       --src "$source_root" \
       --output "$artifact_root" \
       --image-size "$image_size" \
@@ -183,7 +183,7 @@ PY
   trap cleanup_sync EXIT
 
   echo "Training $run_name"
-  "$venv/bin/python" py/scripts/train_flow_image_policy.py \
+  "$venv/bin/python" -m pick_and_place.cli.pap train-flow-image \
     --export "$artifact_root" \
     --output "$output_root" \
     --updates "$updates" \

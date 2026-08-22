@@ -137,6 +137,6 @@ fi
 # .../tagStandard41h12_00014_60x60mm_tag40mm.png". Training does not notice --
 # it reads the dataset -- so this only surfaces the first time a pod evaluates a
 # policy, which is exactly when a long job is already underway.
-MUJOCO_GL=egl "$venv/bin/python" "$repo/py/scripts/render_apriltag_textures.py" --all-defaults
+MUJOCO_GL=egl "$venv/bin/python" -m pick_and_place.cli.pap render-apriltag-textures --all-defaults
 
 echo "PROVISION COMPLETE"

@@ -2,7 +2,7 @@
  "SPDX-FileCopyrightText": "2026 Mario Gemoll",
  "SPDX-License-Identifier": "0BSD",
  "description": "Shared easing curves, sampled past both ends to pin the clamping.",
- "generator": "py/scripts/generate_parity_fixtures.py",
+ "generator": "pap generate-parity-fixtures",
  "smoothstep": [
   {"t":-0.03125,"value":0.0},
   {"t":-0.015625,"value":0.0},

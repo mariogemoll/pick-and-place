@@ -2,7 +2,7 @@
  "SPDX-FileCopyrightText": "2026 Mario Gemoll",
  "SPDX-License-Identifier": "0BSD",
  "description": "solve_simple_grasp_ik over reachable, out-of-reach and out-of-plane gripper poses. An empty branch list means unreachable.",
- "generator": "py/scripts/generate_parity_fixtures.py",
+ "generator": "pap generate-parity-fixtures",
  "cases": [
   {"label":"simple +x z+0 @ (0.028, -0.120)","worldFromGripper":[-1.0,0.0,0.0,0.0455066108703,0.0,-1.0,0.0,-0.119543363771,6.12323399574e-17,0.0,1.0,0.109363,0.0,0.0,0.0,1.0],"branches":[{"elbow":"up","joints":{"shoulder_pan":1.51504753063,"shoulder_lift":-0.492629058825,"elbow_flex":1.0399691682,"wrist_flex":1.02345621742,"wrist_roll":-1.57786560811}}]},
   {"label":"simple +x z+0.03 @ (0.028, -0.120)","worldFromGripper":[-1.0,0.0,0.0,0.0455066108703,0.0,-1.0,0.0,-0.119543363771,6.12323399574e-17,0.0,1.0,0.139363,0.0,0.0,0.0,1.0],"branches":[{"elbow":"up","joints":{"shoulder_pan":1.51504753063,"shoulder_lift":-0.613779970773,"elbow_flex":0.887714995983,"wrist_flex":1.29686130158,"wrist_roll":-1.57786560811}}]},

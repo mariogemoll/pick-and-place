@@ -46,7 +46,7 @@ cd "$repo"
 # cannot compile a scene. Provisioning renders them; do it here too, because
 # this script is the first thing that would notice they are missing.
 if [ ! -f "$repo/assets/apriltags/textures/tagStandard41h12_00014_60x60mm_tag40mm.png" ]; then
-  "$venv/bin/python" py/scripts/render_apriltag_textures.py --all-defaults
+  "$venv/bin/python" -m pick_and_place.cli.pap render-apriltag-textures --all-defaults
 fi
 
 if [ ! -d "$checkpoint_dir" ]; then
@@ -71,8 +71,7 @@ score() {
   echo "=== $tag: step $step on $manifest ==="
   rm -rf "${out:?}/$tag"
   # shellcheck disable=SC2086
-  "$venv/bin/python" py/scripts/eval_policy_sim.py \
-    --controller lerobot \
+  "$venv/bin/python" -m pick_and_place.cli.pap eval-policy-sim lerobot \
     --checkpoint "$ckpts/$step/pretrained_model" \
     --base-checkpoint "$checkpoint_dir" \
     --manifest "config/evaluation/$manifest" \
