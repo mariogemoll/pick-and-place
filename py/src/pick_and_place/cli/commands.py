@@ -151,7 +151,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="export-policy-dataset",
         summary="Export a LeRobot dataset as the image policy's training export.",
-        script="export_diffusion_policy_dataset.py",
+        module="pick_and_place.cli.export_diffusion_policy_dataset",
         group="Train",
     ),
     Command(
