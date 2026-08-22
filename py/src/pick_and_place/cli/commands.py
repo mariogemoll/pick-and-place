@@ -238,7 +238,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="generate-charuco-board",
         summary="Render the printable ChArUco calibration board.",
-        script="generate_charuco_board.py",
+        module="pick_and_place.cli.generate_charuco_board",
         group="Calibrate the rig",
     ),
     Command(
