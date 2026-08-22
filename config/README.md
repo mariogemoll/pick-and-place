@@ -75,6 +75,28 @@ python -m pick_and_place.calibration.cam_align_solve \
 The command reports reprojection error and the delta from the nominal authored
 camera pose before saving the measured pose.
 
+## Projector
+
+The optional projector aimed at the workspace floor is solved into a
+projector-pixel to workspace-metre homography, written to:
+
+- `projector/overhead_projector.json`
+
+Also ignored by git: it describes one projector standing in one spot, and moving
+the projector invalidates it. Solve it with the projector connected and the
+overhead camera able to see all four corner plates:
+
+```sh
+pap calibrate-projector --camera-index 2
+```
+
+The command projects a Gray code sequence, decodes it against the overhead
+camera, and reports coverage, how many cells landed on the board, and the RMS
+and worst residual of the fit in millimetres. `--dry-run` solves without
+writing. `pap project-dvd` is the quickest check that a written solve is still
+good: the logo is animated in metres, so it turns exactly on the frame rails
+when the homography holds.
+
 ## Robot Dynamics
 
 Recorded LeRobot datasets can be used to fit the follower arm's actuator
