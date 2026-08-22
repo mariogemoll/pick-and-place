@@ -268,7 +268,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="fit-sag",
         summary="Fit how far each joint droops from its commanded angle.",
-        script="fit_sag.py",
+        module="pick_and_place.cli.fit_sag",
         group="Calibrate the rig",
     ),
     Command(
