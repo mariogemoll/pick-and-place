@@ -124,7 +124,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="compare-policy-evaluations",
         summary="Compare evaluation runs against a baseline.",
-        script="compare_policy_evaluations.py",
+        module="pick_and_place.cli.compare_policy_evaluations",
         group="Score a policy",
     ),
     Command(

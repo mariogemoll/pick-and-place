@@ -3,23 +3,12 @@
 
 """Statistics and guards behind the paired evaluation comparison."""
 
-import importlib.util
 import json
 from pathlib import Path
 
 import pytest
 
-COMPARE_SCRIPT = Path(__file__).resolve().parents[1] / "scripts/compare_policy_evaluations.py"
-
-
-def _load_compare_module():
-    spec = importlib.util.spec_from_file_location("compare_policy_evaluations", COMPARE_SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-compare = _load_compare_module()
+from pick_and_place.cli import compare_policy_evaluations as compare
 
 
 def test_wilson_interval_stays_inside_the_unit_range_at_the_extremes() -> None:
