@@ -24,10 +24,8 @@ import datetime as dt
 import os
 import platform
 import queue
-import sys
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict
-from pathlib import Path
 
 from tqdm import tqdm
 
@@ -41,11 +39,12 @@ from pick_and_place.cli.scene import add_render_size_arguments
 from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.core.paths import REPO_ROOT
 
-SCRIPTS_DIR = Path(__file__).resolve().parent
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
-
 DEFAULT_MANIFEST = EVALUATION_DIR / "canonical_100_v1.json.xz"
+
+#: Overhead perception mode, matching eval-policy-sim's scripted default. Not a
+#: flag here: the detector mode runs an AprilTag pipeline per worker, and this
+#: command exists to shard the mode a demonstration suite is recorded in.
+SCRIPTED_PERCEPTION = "geometric"
 
 SYSTEM = platform.system()
 BACKENDS_BY_SYSTEM = {
@@ -62,7 +61,7 @@ BACKENDS = BACKENDS_BY_SYSTEM.get(SYSTEM, ("glfw",))
 DEFAULT_BACKEND = DEFAULT_BACKEND_BY_SYSTEM.get(SYSTEM, "glfw")
 
 
-def _evaluate_shard(payload: tuple) -> list[tuple[int, object]]:
+def _evaluate_shard(payload: tuple) -> tuple[list[tuple[int, object]], dict]:
     manifest_path, indices, image_hw, render_hw, control_hz, backend, drop_target, progress = payload
     os.environ["MUJOCO_GL"] = backend
     if backend == "osmesa":
@@ -71,15 +70,23 @@ def _evaluate_shard(payload: tuple) -> list[tuple[int, object]]:
         os.environ.setdefault("LP_NUM_THREADS", "1")
 
     from pick_and_place.policies.policy_evaluation import ScenarioManifest
+    from pick_and_place.rollout.scripted_sim import sim_scripted_controller
     from pick_and_place.runtime.policy_sim import PolicySimEnv, evaluate_policy_episode
 
-    import eval_policy_sim as eps
-
     scenarios = ScenarioManifest.load(manifest_path).scenarios
-    controller, _ = eps._make_scripted_controller(
-        image_hw=image_hw, render_hw=render_hw, control_hz=control_hz
-    )
     env = PolicySimEnv(image_hw=image_hw, render_hw=render_hw)
+    # Built exactly as eval-policy-sim's scripted leaf builds it: the controller
+    # owns a nominal scene of its own and is handed the live one only so the
+    # geometric localizer can read the pose it is allowed to see.
+    controller, controller_metadata = sim_scripted_controller(
+        image_hw=image_hw,
+        render_hw=render_hw,
+        control_hz=control_hz,
+        scene_model=env.model,
+        scene_data=env.data,
+        perception=SCRIPTED_PERCEPTION,
+        cube_belief_error=lambda: env.cube_belief_error,
+    )
     results: list[tuple[int, object]] = []
     try:
         for index in indices:
@@ -101,7 +108,7 @@ def _evaluate_shard(payload: tuple) -> list[tuple[int, object]]:
         close = getattr(controller, "close", None)
         if close is not None:
             close()
-    return results
+    return results, controller_metadata
 
 
 def _shards(indices: list[int], jobs: int) -> list[list[int]]:
@@ -149,7 +156,6 @@ def run(args: argparse.Namespace) -> None:
     os.environ["MUJOCO_GL"] = args.backend
     if args.backend == "osmesa":
         os.environ.setdefault("LP_NUM_THREADS", "1")
-    import eval_policy_sim as eps
     from pick_and_place.policies.policy_evaluation import (
         ScenarioManifest,
         TaskOracleConfig,
@@ -157,6 +163,7 @@ def run(args: argparse.Namespace) -> None:
         package_versions,
         write_evaluation_artifacts,
     )
+    from pick_and_place.rollout.evaluation import SCRIPTED_IMAGE_HW
 
     started_at = dt.datetime.now(dt.UTC)
     manifest = ScenarioManifest.load(args.manifest)
@@ -172,17 +179,11 @@ def run(args: argparse.Namespace) -> None:
     if len(control_hz_values) != 1:
         raise ValueError("scripted evaluation requires one control frequency per run")
     control_hz = next(iter(control_hz_values))
-    image_hw = eps.SCRIPTED_IMAGE_HW
+    image_hw = SCRIPTED_IMAGE_HW
     render_hw = (args.render_height, args.render_width)
 
     jobs = max(1, min(args.jobs, len(scenarios)))
     shards = _shards(selected_indices, jobs)
-    _, controller_metadata = eps._make_scripted_controller(
-        image_hw=image_hw, render_hw=render_hw, control_hz=control_hz
-    )
-    # Recorded so the two arms of a drop-target ablation are distinguishable
-    # from their run directories alone.
-    controller_metadata["drop_target_source"] = args.drop_target
     print(
         f"Evaluating {len(scenarios)} {manifest.suite!r} scenarios (scripted, "
         f"drop target {args.drop_target}) across {jobs} workers."
@@ -226,10 +227,17 @@ def run(args: argparse.Namespace) -> None:
                     continue
                 completed += 1
                 bar.update(1)
+        # Every worker builds the same controller from the same nominal scene, so
+        # the first shard's description of it describes the run.
+        controller_metadata: dict = {}
         for future in futures:
-            indexed.extend(future.result())
+            shard_results, controller_metadata = future.result()
+            indexed.extend(shard_results)
 
     results = [result for _, result in sorted(indexed, key=lambda item: item[0])]
+    # Recorded so the two arms of a drop-target ablation are distinguishable
+    # from their run directories alone.
+    controller_metadata["drop_target_source"] = args.drop_target
 
     run = {
         "schema_version": 1,
