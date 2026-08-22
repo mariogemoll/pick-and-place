@@ -207,7 +207,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="split-train-val-episodes",
         summary="Split a dataset's episodes into train and validation sets.",
-        script="split_train_val_episodes.py",
+        module="pick_and_place.cli.split_train_val_episodes",
         group="Record and shape datasets",
     ),
     # Calibrate the rig
