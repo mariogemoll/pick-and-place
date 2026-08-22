@@ -165,7 +165,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="record-sim",
         summary="Record scripted demonstration episodes in the simulator.",
-        script="pick_and_place/record_sim.py",
+        module="pick_and_place.cli.record_sim",
         group="Record and shape datasets",
     ),
     Command(

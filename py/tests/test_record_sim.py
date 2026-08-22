@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-import importlib.util
 import inspect
 import sys
 import types
@@ -9,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
+from pick_and_place.cli import record_sim
 from pick_and_place.rollout.episode_setup import appearance_seed, episode_rng
 from pick_and_place.rollout.worker_pool import claim_retry, find_wedged_workers
 import pandas as pd
@@ -18,17 +18,6 @@ from pick_and_place.data import sim_dataset_staging as staging
 from pick_and_place.core.image_ops import downsample_through_recording, resize_and_center_crop
 from pick_and_place.rollout.sim import configure_render_quality
 from pick_and_place.data.recording_config import FrameSizes
-
-
-RECORD_SIM_PATH = Path(__file__).parents[1] / "scripts" / "pick_and_place" / "record_sim.py"
-
-
-def _record_sim_module():
-    spec = importlib.util.spec_from_file_location("record_sim", RECORD_SIM_PATH)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def _episode_dir(root: Path, name: str, *, complete: bool) -> Path:
@@ -61,12 +50,11 @@ def test_only_committed_episode_dirs_are_merged(tmp_path):
     re-record the index because it looked complete, killing the worker that
     tried.
     """
-    module = _record_sim_module()
     _episode_dir(tmp_path, "ep000000", complete=True)
     _episode_dir(tmp_path, "ep000001", complete=False)  # killed mid-episode
     _episode_dir(tmp_path, "ep000002", complete=True)
 
-    found = module.find_episode_datasets(tmp_path)
+    found = record_sim.find_episode_datasets(tmp_path)
 
     assert [path.name for path in found] == ["ep000000", "ep000002"]
 
@@ -89,18 +77,16 @@ def test_episode_dirs_merge_in_global_index_order(tmp_path):
     Workers pull from a shared queue, so they finish out of order; ordering by
     index keeps a merged dataset's episode order reproducible.
     """
-    module = _record_sim_module()
     for name in ("ep000010", "ep000002", "ep000001"):
         _episode_dir(tmp_path, name, complete=True)
 
-    found = module.find_episode_datasets(tmp_path)
+    found = record_sim.find_episode_datasets(tmp_path)
 
     assert [path.name for path in found] == ["ep000001", "ep000002", "ep000010"]
 
 
 def test_find_episode_datasets_tolerates_a_missing_root(tmp_path):
-    module = _record_sim_module()
-    assert module.find_episode_datasets(tmp_path / "never_created") == []
+    assert record_sim.find_episode_datasets(tmp_path / "never_created") == []
 
 
 def test_merge_episodes_passes_roots_through_in_order(tmp_path, monkeypatch):
@@ -282,7 +268,7 @@ def test_resuming_at_an_offset_extends_the_run_instead_of_repeating_it():
 
 def test_recording_defaults_supersample_saved_frames():
     """Rendering above the saved size is what keeps the frames free of aliasing."""
-    frames = inspect.signature(_record_sim_module().run_recording).parameters["frames"].default
+    frames = inspect.signature(record_sim.run_recording).parameters["frames"].default
 
     assert (frames.image_width, frames.image_height) == (960, 720)
     assert (frames.render_width, frames.render_height) == (1920, 1080)
@@ -396,15 +382,13 @@ def test_watchdog_reports_every_wedged_worker_not_just_the_first():
 
 def test_episode_timeout_default_leaves_room_for_resampling():
     """Nominal episode is ~35 s; the limit must not clip a slow-but-healthy one."""
-    module = _record_sim_module()
 
-    assert module.DEFAULT_EPISODE_TIMEOUT >= 35.0 * 5
+    assert record_sim.DEFAULT_EPISODE_TIMEOUT >= 35.0 * 5
 
 
 def test_vcodec_defaults_to_software_h264():
     """`auto` probes for a HW encoder and silently picks the ~4x slower path."""
-    module = _record_sim_module()
-    source = inspect.getsource(module.build_parser)
+    source = inspect.getsource(record_sim.build_parser)
 
     assert 'vcodec="h264"' in source, "the sim recorder must pin the software codec"
     assert 'vcodec="auto"' not in source
