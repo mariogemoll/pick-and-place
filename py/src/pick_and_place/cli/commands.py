@@ -118,7 +118,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="merge-evaluation-shards",
         summary="Merge sharded evaluation runs into one result.",
-        script="merge_evaluation_shards.py",
+        module="pick_and_place.cli.merge_evaluation_shards",
         group="Score a policy",
     ),
     Command(

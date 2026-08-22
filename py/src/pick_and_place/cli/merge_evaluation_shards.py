@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
@@ -34,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from pick_and_place.cli.common import add_output_argument
+from pick_and_place.cli.evaluation import EVALUATION_DIR
 from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.policies.policy_evaluation import (
     EpisodeResult,
@@ -65,7 +65,7 @@ def resolve_manifest(recorded: str) -> Path:
     path = Path(recorded)
     if path.exists():
         return path
-    local = Path(__file__).resolve().parents[2] / "config" / "evaluation" / path.name
+    local = EVALUATION_DIR / path.name
     if local.exists():
         return local
     raise SystemExit(f"cannot find manifest {path.name}: not at {recorded}, not at {local}")
