@@ -171,7 +171,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="finalize-sim-dataset",
         summary="Merge staged sim episodes into a finished dataset.",
-        script="pick_and_place/finalize_sim_dataset.py",
+        module="pick_and_place.cli.finalize_sim_dataset",
         group="Record and shape datasets",
     ),
     Command(
