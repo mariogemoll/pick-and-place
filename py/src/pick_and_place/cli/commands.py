@@ -324,7 +324,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="render-apriltag-textures",
         summary="Render the AprilTag PNG textures the simulated scene needs.",
-        script="render_apriltag_textures.py",
+        module="pick_and_place.cli.render_apriltag_textures",
         group="Web and print assets",
     ),
     Command(
