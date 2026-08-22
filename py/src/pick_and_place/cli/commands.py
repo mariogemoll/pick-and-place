@@ -286,7 +286,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="park-follower",
         summary="Ramp the follower arm to its rest pose and release it.",
-        script="park_follower.py",
+        module="pick_and_place.cli.park_follower",
         group="Calibrate the rig",
     ),
     # What the policy can see
