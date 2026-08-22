@@ -214,7 +214,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="calibrate-camera-intrinsics",
         summary="Solve a camera's intrinsics against the ChArUco board.",
-        script="calibrate_camera_intrinsics.py",
+        module="pick_and_place.cli.calibrate_camera_intrinsics",
         group="Calibrate the rig",
     ),
     Command(
