@@ -18,6 +18,7 @@ the list reached empty and went away with it.
 
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -45,12 +46,20 @@ def test_every_command_name_is_unique() -> None:
 
 
 def test_every_command_names_a_script_that_exists() -> None:
-    missing = [c.name for c in COMMANDS if not (SCRIPTS_DIR / c.script).is_file()]
+    missing = [c.name for c in COMMANDS if c.script and not (SCRIPTS_DIR / c.script).is_file()]
+    assert missing == []
+
+
+def test_every_command_names_a_module_that_exists() -> None:
+    """Found without being imported, so the check costs nothing a heavy command drags in."""
+    missing = [
+        c.name for c in COMMANDS if c.module and importlib.util.find_spec(c.module) is None
+    ]
     assert missing == []
 
 
 def test_every_script_is_a_command_or_deliberately_not() -> None:
-    registered = {command.script for command in COMMANDS}
+    registered = {command.script for command in COMMANDS if command.script}
     unaccounted = [
         name
         for path in _scripts()

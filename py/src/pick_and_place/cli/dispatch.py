@@ -14,6 +14,10 @@ inside the standard library.
 Nothing here imports a command at module scope. That is the point: the table in
 :mod:`pick_and_place.cli.commands` is data, and this is what turns one entry of
 it into code, after the command has been named.
+
+A command that has moved into the package needs none of that -- it is a module,
+and importing it by name is all resolving it takes. The path loading below
+survives only as long as the commands that still live under ``py/scripts``.
 """
 
 from __future__ import annotations
@@ -58,16 +62,28 @@ def load_script(relative_path: str) -> ModuleType:
     return module
 
 
+def load_command(command: Command) -> ModuleType:
+    """Import what exposes the command's ``run(args)``.
+
+    A command that has moved into the package is imported by name. One still
+    under ``py/scripts`` is loaded by path, which is what :func:`load_script`
+    exists for.
+    """
+    if command.module:
+        return importlib.import_module(command.module)
+    return load_script(command.script)
+
+
 def load_parser_owner(command: Command) -> ModuleType:
     """Import whatever exposes the command's ``build_parser`` -- and nothing more.
 
-    For most commands that is the script itself, which is cheap. For the ones
-    that pull torch or lerobot at module scope it is a module under ``cli/``,
-    so asking a command what its flags are costs an argparse import rather than
-    a deep-learning stack.
+    For most commands that is the command's own module, which is cheap. For the
+    ones that pull torch or lerobot at module scope it is a second module, so
+    asking a command what its flags are costs an argparse import rather than a
+    deep-learning stack.
     """
     if command.parser_module is None:
-        return load_script(command.script)
+        return load_command(command)
     return importlib.import_module(command.parser_module)
 
 
@@ -75,7 +91,7 @@ def load_runner(command: Command, parser_owner: ModuleType) -> ModuleType:
     """Import what exposes the command's ``run(args)``, reusing the parser's module."""
     if command.parser_module is None:
         return parser_owner
-    return load_script(command.script)
+    return load_command(command)
 
 
 def parse_arguments(command: Command, parser_owner: ModuleType, arguments: list[str]):

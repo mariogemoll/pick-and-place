@@ -24,10 +24,15 @@ Each command names two things the dispatcher imports **after** parsing:
     and this field names it, so ``pap <command> --help`` costs an argparse
     import rather than a deep-learning stack.
 
+``module``
+    the module exposing ``run(args)``, imported by name.
+
 ``script``
-    the file exposing ``run(args)``, relative to ``py/scripts``. Imported by
-    path rather than by name, because ``scripts/`` is not a package and
-    ``scripts/pick_and_place/`` would shadow the real one if it were.
+    what a command not yet moved into the package names instead: the file
+    exposing ``run(args)``, relative to ``py/scripts``, imported by path
+    because ``scripts/`` is not a package and ``scripts/pick_and_place/``
+    would shadow the real one if it were. Every command holds exactly one of
+    these two, and ``script`` goes away with the last one that needs it.
 
 ``typed_config``
     true for the one command that has no ``ArgumentParser`` to expose. The
@@ -49,10 +54,15 @@ class Command:
 
     name: str
     summary: str
-    script: str
+    script: str = ""
+    module: str = ""
     parser: str | None = None
     typed_config: bool = False
     group: str = ""
+
+    def __post_init__(self) -> None:
+        if bool(self.script) == bool(self.module):
+            raise ValueError(f"{self.name} must name either a script or a module, not both")
 
     @property
     def parser_module(self) -> str | None:
