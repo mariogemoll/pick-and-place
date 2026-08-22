@@ -136,7 +136,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="freeze-scenario-rig",
         summary="Rewrite a suite so every scene faces one frozen rig.",
-        script="freeze_scenario_rig.py",
+        module="pick_and_place.cli.freeze_scenario_rig",
         group="Score a policy",
     ),
     # Train

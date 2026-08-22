@@ -11,10 +11,8 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-
-from freeze_scenario_rig import RIG_FIELDS, load_suite  # noqa: E402
-import freeze_scenario_rig  # noqa: E402
+from pick_and_place.cli import freeze_scenario_rig
+from pick_and_place.cli.freeze_scenario_rig import RIG_FIELDS, load_suite
 
 
 def _scenario(index: int, offset: float) -> dict:
