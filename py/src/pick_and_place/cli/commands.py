@@ -367,7 +367,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="camera-fps-probe",
         summary="Measure a camera's real frame rate at several resolutions.",
-        script="camera_fps_probe.py",
+        module="pick_and_place.cli.camera_fps_probe",
         group="Viewers and probes",
     ),
     Command(
