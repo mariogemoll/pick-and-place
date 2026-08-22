@@ -220,7 +220,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="calibrate-joint-zeros",
         summary="Measure the arm's joint zeros at the start of a session.",
-        script="calibrate_joint_zeros.py",
+        module="pick_and_place.cli.calibrate_joint_zeros",
         group="Calibrate the rig",
     ),
     Command(

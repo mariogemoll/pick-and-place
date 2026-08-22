@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
@@ -35,6 +34,7 @@ from pick_and_place.cli.common import add_output_argument
 from pick_and_place.cli.rig import add_follower_arguments, add_rig_camera_arguments
 from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.sim.model import build_model
+from pick_and_place.core.paths import REPO_ROOT
 from pick_and_place.core.joint_frames import action_to_joints, real_frame_to_sim
 from pick_and_place.hardware.follower import make_so101_follower
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE
@@ -50,7 +50,6 @@ from pick_and_place.calibration.session_calibration import (
 from pick_and_place.spec.robot import REST_ARM_JOINTS, REST_GRIPPER
 from pick_and_place.core.workspace_bounds import PAN_AXIS
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT = REPO_ROOT / "config" / "joint_zeros.json"
 
 
