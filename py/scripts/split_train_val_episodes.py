@@ -35,11 +35,13 @@ from pick_and_place.cli.dataset import (
     add_val_fraction_argument,
     add_write_argument,
 )
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.data.dataset_subset import load_all_episodes, write_subset_dataset
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the train/validation split."""
+    parser = SuggestingArgumentParser(description=__doc__)
     add_source_dataset_argument(parser)
     parser.add_argument(
         "--train-dst",
@@ -60,8 +62,11 @@ def main() -> None:
         help="seed for the deterministic shuffle that assigns episodes to train/val (default: 0)",
     )
     add_write_argument(parser, help="perform the split")
-    args = parser.parse_args()
+    return parser
 
+
+def run(args: argparse.Namespace) -> None:
+    """Write the train and validation datasets, or report the split."""
     train_dst = args.train_dst if args.train_dst is not None else args.src.with_name(f"{args.src.name}-train")
     val_dst = args.val_dst if args.val_dst is not None else args.src.with_name(f"{args.src.name}-val")
     if args.write:
@@ -93,6 +98,10 @@ def main() -> None:
 
     write_subset_dataset(args.src, val_dst, f"{args.src.name}-val", val_indices, episodes=episodes)
     print(f"Wrote {len(val_indices)} episode(s) to {val_dst}")
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":

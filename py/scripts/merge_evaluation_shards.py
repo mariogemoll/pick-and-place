@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from pick_and_place.cli.common import add_output_argument
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.policies.policy_evaluation import (
     EpisodeResult,
     FailureFlags,
@@ -43,11 +44,12 @@ from pick_and_place.policies.policy_evaluation import (
 )
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the shard merger."""
+    parser = SuggestingArgumentParser(description=__doc__)
     parser.add_argument("shards", type=Path, nargs="+", help="shard result directories")
     add_output_argument(parser, required=True, help="merged result directory")
-    return parser.parse_args()
+    return parser
 
 
 def resolve_manifest(recorded: str) -> Path:
@@ -84,9 +86,8 @@ def episode_from_dict(payload: dict[str, Any]) -> EpisodeResult:
     return EpisodeResult(**values)
 
 
-def main() -> None:
-    args = parse_args()
-
+def run(args: argparse.Namespace) -> None:
+    """Merge the shards and write the combined result."""
     runs: list[dict[str, Any]] = []
     results: list[EpisodeResult] = []
     seen: dict[str, Path] = {}
@@ -151,6 +152,10 @@ def main() -> None:
         f"{summary['success_count']}/{summary['episode_count']} successes "
         f"({summary['success_rate']:.1%})."
     )
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":

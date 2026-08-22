@@ -36,6 +36,7 @@ import cv2
 import numpy as np
 
 from pick_and_place.cli.rig import add_capture_size_arguments
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 
 BOUNDARY = "frameboundary"
 BY_PATH = Path("/dev/v4l/by-path")
@@ -422,8 +423,9 @@ def lan_address() -> str:
         sock.close()
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the camera preview server."""
+    parser = SuggestingArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument(
         "--match", default="", help="only nodes whose device name contains this (default: all)"
@@ -432,8 +434,11 @@ def main() -> None:
     parser.add_argument("--frames", type=int, default=8, help="frames to inspect per camera")
     parser.add_argument("--identify-only", action="store_true")
     parser.add_argument("--bind", default="0.0.0.0")
-    args = parser.parse_args()
+    return parser
 
+
+def run(args: argparse.Namespace) -> None:
+    """Serve the preview."""
     print("Video nodes on this box:")
     nodes = inventory(args.match)
     if not nodes:
@@ -485,6 +490,10 @@ def main() -> None:
         for camera in cameras.values():
             camera.stop()
         server.server_close()
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":

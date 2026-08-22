@@ -33,6 +33,7 @@ import numpy as np
 
 from pick_and_place.cli.common import add_output_argument
 from pick_and_place.cli.rig import add_follower_arguments, add_rig_camera_arguments
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.sim.model import build_model
 from pick_and_place.core.joint_frames import action_to_joints, real_frame_to_sim
 from pick_and_place.hardware.follower import make_so101_follower
@@ -114,8 +115,9 @@ def _persist(output: Path, day: str, result, config: CalibrationConfig) -> None:
     print(f"Wrote {output}")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the joint-zero calibration."""
+    parser = SuggestingArgumentParser(description=__doc__)
     add_rig_camera_arguments(parser, wrist_intrinsics=True)
     add_follower_arguments(parser)
     parser.add_argument(
@@ -137,8 +139,11 @@ def main() -> None:
         default=DEFAULT_OUTPUT,
         help="solved joint zeros JSON (default: config/joint_zeros.json)",
     )
-    args = parser.parse_args()
+    return parser
 
+
+def run(args: argparse.Namespace) -> None:
+    """Run the calibration loop and write the solved zeros."""
     from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
     from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
     from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR
@@ -274,6 +279,10 @@ def main() -> None:
         overhead_cap.release()
         wrist.release()
         follower.disconnect()
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":

@@ -27,12 +27,14 @@ from pick_and_place.analysis.scene_visibility import (
 )
 from pick_and_place.cli.common import add_output_argument
 from pick_and_place.cli.dataset import add_episodes_root_argument, add_max_episodes_argument
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.plant.overhead import SimOverheadPerception
 from pick_and_place.rollout.sim import OVERHEAD_CAMERA
 
 
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the episode-visibility measurement."""
+    parser = SuggestingArgumentParser(description=__doc__)
     add_episodes_root_argument(parser, help="staged episodes directory containing ep*/")
     add_output_argument(parser, required=True, help="visibility report JSON")
     add_max_episodes_argument(parser, help="read only the first N episodes")
@@ -48,12 +50,15 @@ def _parse_args() -> argparse.Namespace:
         default=0,
         help="also run the detector at the start and first tick of each phase",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def validate(parser: SuggestingArgumentParser, args: argparse.Namespace) -> None:
+    """Reject the strides and counts argparse's own types cannot check."""
     if args.frame_stride < 1:
         parser.error("--frame-stride must be positive")
     if args.detector_episodes < 0:
         parser.error("--detector-episodes must be nonnegative")
-    return args
 
 
 def _distribution(values: list[float]) -> dict[str, float] | None:
@@ -187,8 +192,8 @@ def _summarize(rows: list[dict[str, Any]], episodes: list[str]) -> dict[str, Any
     }
 
 
-def main() -> None:
-    args = _parse_args()
+def run(args: argparse.Namespace) -> None:
+    """Measure visibility across the staged episodes and write the report."""
     roots = sorted(
         path for path in args.episodes_root.iterdir() if (path / "meta" / "info.json").is_file()
     )
@@ -255,6 +260,13 @@ def main() -> None:
             f"{phase}: plate visible {stats['plate']['visible_fraction']:.1%}, "
             f"center ray {stats['plate']['center_ray_visible_fraction']:.1%}"
         )
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    validate(parser, args)
+    run(args)
 
 
 if __name__ == "__main__":

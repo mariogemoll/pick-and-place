@@ -21,6 +21,7 @@ import numpy as np
 from generate_apriltags import TAG_41H12_BITS
 
 from pick_and_place.cli.common import add_out_dir_argument
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR = REPO_ROOT / "assets" / "apriltags" / "textures"
@@ -109,8 +110,9 @@ def render_specs(specs: tuple[TextureSpec, ...], out_dir: Path, px_per_cell: int
         print(f"{spec.name}: wrote {len(spec.ids)} PNG textures to {out_dir}")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the texture renderer."""
+    parser = SuggestingArgumentParser(description=__doc__)
     add_out_dir_argument(
         parser, default=OUT_DIR, help="directory for the rendered sticker PNGs"
     )
@@ -123,8 +125,11 @@ def main() -> None:
         action="store_true",
         help="render cube, drop-box, and workspace-frame texture presets",
     )
-    args = parser.parse_args()
+    return parser
 
+
+def run(args: argparse.Namespace) -> None:
+    """Render the requested textures."""
     if args.all_defaults:
         specs = DEFAULT_SPECS
     else:
@@ -132,6 +137,10 @@ def main() -> None:
         specs = (TextureSpec("custom", ids, args.sticker_mm, args.tag_mm),)
 
     render_specs(specs, args.out_dir.resolve(), args.px_per_cell)
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":

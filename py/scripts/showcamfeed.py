@@ -1,37 +1,60 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-import sys
+"""Show one camera's live feed in a window."""
+
+from __future__ import annotations
+
+import argparse
 
 import cv2
 
-# Usage:
-# python showcamfeed.py 0
-# python showcamfeed.py 1
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 
-camera_id = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 
-cap = cv2.VideoCapture(camera_id)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the single-camera viewer."""
+    parser = SuggestingArgumentParser(description=__doc__)
+    parser.add_argument(
+        "camera",
+        type=int,
+        nargs="?",
+        default=0,
+        help="OpenCV camera index (default: 0)",
+    )
+    return parser
 
-if not cap.isOpened():
-    print(f"Failed to open camera {camera_id}")
-    sys.exit(1)
 
-print(f"Showing camera {camera_id}")
-print("Press 'q' to quit")
+def run(args: argparse.Namespace) -> None:
+    """Show the feed until q is pressed."""
+    camera_id = args.camera
+    cap = cv2.VideoCapture(camera_id)
 
-while True:
-    ret, frame = cap.read()
+    if not cap.isOpened():
+        raise SystemExit(f"Failed to open camera {camera_id}")
 
-    if not ret:
-        print("Failed to read frame")
-        break
+    print(f"Showing camera {camera_id}")
+    print("Press 'q' to quit")
 
-    cv2.imshow(f"Camera {camera_id}", frame)
+    while True:
+        ret, frame = cap.read()
 
-    if cv2.waitKey(1) & 0xFF == ord("q"):
-        break
+        if not ret:
+            print("Failed to read frame")
+            break
 
-cap.release()
+        cv2.imshow(f"Camera {camera_id}", frame)
 
-cv2.destroyAllWindows()
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
+
+    cap.release()
+
+    cv2.destroyAllWindows()
+
+def main() -> None:
+    run(build_parser().parse_args())
+
+
+if __name__ == "__main__":
+    main()

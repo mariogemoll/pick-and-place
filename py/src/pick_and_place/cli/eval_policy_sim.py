@@ -33,11 +33,12 @@ from pick_and_place.cli.evaluation import (
     add_shard_arguments,
 )
 from pick_and_place.cli.scene import add_render_size_arguments, add_scene_appearance_arguments
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 
 DEFAULT_MANIFEST = EVALUATION_DIR / "smoke_v1.json"
 
 
-def build_parser(description: str | None = None) -> argparse.ArgumentParser:
+def build_parser(description: str | None = None) -> SuggestingArgumentParser:
     """Return the evaluator's parser: a shared world, three controller leaves."""
     # The manifest, the output and the world the scenarios run in: shared, so a
     # flow number and a SmolVLA number are produced under one declaration.
@@ -68,7 +69,9 @@ def build_parser(description: str | None = None) -> argparse.ArgumentParser:
             "viewer replays; a few kilobytes an episode against megabytes of video"
         ),
     )
-    parser = argparse.ArgumentParser(description=description)
+    # Suggesting rather than plain: two levels is two places to mistype, and
+    # add_subparsers hands the class down, so every leaf below suggests too.
+    parser = SuggestingArgumentParser(description=description)
     leaves = parser.add_subparsers(dest="controller", required=True, metavar="CONTROLLER")
 
     lerobot = leaves.add_parser(

@@ -34,6 +34,7 @@ from pick_and_place.cli.dataset import (
     add_success_tolerance_argument,
     add_write_argument,
 )
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.data.dataset_subset import (
     SUCCESS_XY_TOLERANCE_M,
     load_all_episodes,
@@ -42,8 +43,9 @@ from pick_and_place.data.dataset_subset import (
 )
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the success filter."""
+    parser = SuggestingArgumentParser(description=__doc__)
     add_source_dataset_argument(parser)
     add_destination_dataset_argument(
         parser, help="output dataset root (default: <src>-success alongside the source)"
@@ -56,8 +58,11 @@ def main() -> None:
         help=f"success placement-XY tolerance in metres (default: {SUCCESS_XY_TOLERANCE_M})",
     )
     add_write_argument(parser, help="perform the filtering")
-    args = parser.parse_args()
+    return parser
 
+
+def run(args: argparse.Namespace) -> None:
+    """Write the filtered dataset, or report what would be kept."""
     dst_root = args.dst if args.dst is not None else args.src.with_name(f"{args.src.name}-success")
     if args.write and dst_root.exists():
         raise SystemExit(f"output {dst_root} already exists; remove it or pick another --dst")
@@ -83,6 +88,10 @@ def main() -> None:
     write_subset_dataset(args.src, dst_root, repo_id, kept_indices, episodes=episodes)
 
     print(f"\nWrote {len(kept_indices)} episode(s) to {dst_root}")
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":

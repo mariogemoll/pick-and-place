@@ -32,6 +32,7 @@ import cv2
 import numpy as np
 
 from pick_and_place.cli.common import add_output_argument
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
 from pick_and_place.perception.cube_detection import (
     cube_pose_to_world,
@@ -125,8 +126,9 @@ def _measure_episode(
     return deltas, pixel_deltas, per_frame
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the hand-eye measurement."""
+    parser = SuggestingArgumentParser(description=__doc__)
     parser.add_argument(
         "pairs_roots",
         type=Path,
@@ -134,9 +136,13 @@ def main() -> None:
         help="pair export root(s), dataset dirs, or single episode dirs",
     )
     add_output_argument(parser, help="write the summary JSON here")
-    args = parser.parse_args()
+    return parser
 
+
+def run(args: argparse.Namespace) -> None:
+    """Measure the wrist camera's offset over the given pair exports."""
     episode_dirs: list[Path] = []
+    roots = ", ".join(str(root) for root in args.pairs_roots)
     for root in args.pairs_roots:
         if (root / "pairs.json").is_file():
             episode_dirs.append(root)
@@ -144,7 +150,7 @@ def main() -> None:
             episode_dirs.extend(sorted(root.glob("**/episode_*/")))
     episode_dirs = [d for d in episode_dirs if (d / "pairs.json").is_file()]
     if not episode_dirs:
-        parser.error("no episode directories with pairs.json found")
+        raise SystemExit(f"no episode directories with pairs.json under: {roots}")
 
     with (episode_dirs[0] / "pairs.json").open() as f:
         first_index = json.load(f)
@@ -184,6 +190,10 @@ def main() -> None:
         with args.output.open("w") as f:
             json.dump({"overall": overall, "episodes": episode_summaries}, f, indent=1)
         print(f"wrote {args.output}")
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":

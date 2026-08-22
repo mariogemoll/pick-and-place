@@ -18,6 +18,7 @@ from pathlib import Path
 import mujoco
 import mujoco.viewer
 
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.sim.scene import build_scene, export_scene
 from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
 from pick_and_place.sim.camera_extrinsics import (
@@ -27,8 +28,9 @@ from pick_and_place.sim.camera_extrinsics import (
 from pick_and_place.core.rotations import pose_delta_mm_deg
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the scene viewer."""
+    parser = SuggestingArgumentParser(description=__doc__)
     parser.add_argument(
         "--no-wrist-camera",
         action="store_true",
@@ -69,11 +71,17 @@ def main() -> None:
             "the viewer (key '5') to hide them"
         ),
     )
-    args = parser.parse_args()
+    return parser
 
+
+def validate(parser: SuggestingArgumentParser, args: argparse.Namespace) -> None:
+    """Reject the one combination the parser cannot express."""
     if args.export_only and args.export is None:
         parser.error("--export-only requires --export")
 
+
+def run(args: argparse.Namespace) -> None:
+    """Compose the scene and show or export it."""
     wrist_camera = not args.no_wrist_camera
     if args.export is not None:
         output = export_scene(
@@ -113,6 +121,13 @@ def main() -> None:
         data.actuator("wrist_roll").ctrl = wrist_roll
 
         mujoco.viewer.launch(model, data)
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    validate(parser, args)
+    run(args)
 
 
 if __name__ == "__main__":

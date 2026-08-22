@@ -4,14 +4,8 @@
 
 """Train an image-conditioned flow-matching policy on a Diffusion Policy export.
 
-The flow objective is the state policy's, unchanged: a Gaussian conditional
-optimal-transport path, a velocity target, a 16-step chunk of which 8 are
-executed. Only the conditioning differs -- two camera streams and the robot's
-own joints, instead of the simulator's privileged cube and target poses.
-
-The schedule follows the state policy's selected recipe, whose 100,000-update
-continuation established that this configuration overfits past roughly 30,000:
-warmup, then cosine decay reaching its minimum at the final update.
+The flags and what they mean live with the parser, in
+``pick_and_place.cli.train_flow_image_policy``; this is the training loop.
 """
 
 from __future__ import annotations
@@ -24,11 +18,8 @@ import numpy as np
 import torch
 
 from pick_and_place.data.flow_image_dataset import FlowImageExport
-from pick_and_place.cli.training import (
-    ImageTrainingRun,
-    config_to_json,
-    parse_training_config,
-)
+from pick_and_place.cli.train_flow_image_policy import parse_arguments
+from pick_and_place.cli.training import ImageTrainingRun, config_to_json
 from pick_and_place.policies.flow_image_encoder import FlowImageUnet1D, model_config
 from pick_and_place.policies.learning_schedule import learning_rate_at_step
 from pick_and_place.policies.image_augmentation import (
@@ -80,8 +71,8 @@ def augment(
     return images
 
 
-def main() -> None:
-    args = parse_training_config(ImageTrainingRun, description=__doc__)
+def run(args: ImageTrainingRun) -> None:
+    """Train the policy and write the checkpoints."""
 
     args.output.mkdir(parents=True, exist_ok=True)
     device = torch.device(args.device)
@@ -277,6 +268,10 @@ def main() -> None:
     finally:
         if wandb_run is not None:
             wandb_run.finish()
+
+
+def main() -> None:
+    run(parse_arguments())
 
 
 if __name__ == "__main__":

@@ -38,6 +38,7 @@ from pick_and_place.cli.evaluation import (
     add_shard_arguments,
 )
 from pick_and_place.cli.scene import add_render_size_arguments
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.core.paths import REPO_ROOT
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -110,8 +111,9 @@ def _shards(indices: list[int], jobs: int) -> list[list[int]]:
     return [bucket for bucket in buckets if bucket]
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the parallel scripted evaluation."""
+    parser = SuggestingArgumentParser(description=__doc__)
     add_manifest_argument(parser, default=DEFAULT_MANIFEST)
     add_output_argument(parser, required=True, help="new evaluation run directory")
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 1, 12))
@@ -129,7 +131,11 @@ def main() -> None:
             "localization costs the demonstrator."
         ),
     )
-    args = parser.parse_args()
+    return parser
+
+
+def validate(parser: SuggestingArgumentParser, args: argparse.Namespace) -> None:
+    """Reject an output that exists and a shard slice that cannot be cut."""
     if args.output.exists():
         parser.error(f"--output already exists: {args.output}")
     if args.limit is not None and args.limit < 1:
@@ -137,6 +143,9 @@ def main() -> None:
     if args.offset < 0:
         parser.error("--offset must not be negative")
 
+
+def run(args: argparse.Namespace) -> None:
+    """Shard the suite over workers and merge the result."""
     os.environ["MUJOCO_GL"] = args.backend
     if args.backend == "osmesa":
         os.environ.setdefault("LP_NUM_THREADS", "1")
@@ -262,6 +271,13 @@ def main() -> None:
         f"Wrote {args.output}: {summary['success_count']}/{summary['episode_count']} "
         f"successes ({summary['success_rate']:.1%})."
     )
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    validate(parser, args)
+    run(args)
 
 
 if __name__ == "__main__":

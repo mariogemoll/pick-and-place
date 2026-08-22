@@ -49,6 +49,7 @@ import mujoco
 import numpy as np
 
 from pick_and_place.cli.common import add_out_dir_argument, add_seed_argument
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.scripted.episode_sampling import (
     pickup_yaw_from_azimuth,
     sample_cube,
@@ -363,8 +364,9 @@ def chain_pose(index: int) -> CubePose:
     return source_from_preset(*DEFAULT_GRIP_PRESETS[index])
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the episode-roll exporter."""
+    parser = SuggestingArgumentParser(description=__doc__)
     parser.add_argument("-n", "--num-episodes", type=int, default=len(DEFAULT_GRIP_PRESETS))
     parser.add_argument("--fps", type=float, default=DEFAULT_FPS)
     add_seed_argument(parser, default=0, help="base RNG seed")
@@ -429,8 +431,11 @@ def main() -> None:
         action="store_true",
         help="do not write the top-down source/target/final cube dot PNG",
     )
-    args = parser.parse_args()
+    return parser
 
+
+def validate(parser: SuggestingArgumentParser, args: argparse.Namespace) -> None:
+    """Reject the flag combinations the parser cannot express."""
     if args.continuous_chain and args.random_grip:
         parser.error("--continuous-chain already samples random chain poses; do not combine it with --random-grip")
     if args.end_settle_seconds < 0:
@@ -447,6 +452,9 @@ def main() -> None:
             "built-in grip presets; pass --random-grip for more"
         )
 
+
+def run(args: argparse.Namespace) -> None:
+    """Sample the episodes and write the rolls."""
     written = 0
     seed = args.seed
     layout_episodes: list[tuple[CubePose, CubePose, CubePose]] = []
@@ -568,6 +576,13 @@ def main() -> None:
         print(f"Wrote layout plot -> {layout_path}")
 
     print(f"\nWrote {written} episodes to {args.out_dir}")
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    validate(parser, args)
+    run(args)
 
 
 if __name__ == "__main__":

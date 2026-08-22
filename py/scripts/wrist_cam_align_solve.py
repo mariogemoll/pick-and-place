@@ -38,6 +38,7 @@ from pick_and_place.cli.rig import (
     add_follower_arguments,
     add_leader_arguments,
 )
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.scripted.motion import smoothstep
 from pick_and_place.core.camera_calibration import LOCAL_CAMERA_EXTRINSICS_DIR
 from pick_and_place.sim.camera_extrinsics import save_camera_extrinsics
@@ -171,8 +172,9 @@ def _teleop_thread_func(state: TeleopState, leader, follower, follower_start_joi
             time.sleep(dt - elapsed)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the wrist-camera alignment solve."""
+    parser = SuggestingArgumentParser(description=__doc__)
     add_leader_arguments(parser)
     add_follower_arguments(parser, port_required=False)
     add_camera_device_argument(parser, required=True)
@@ -191,10 +193,17 @@ def main() -> None:
         default=0,
         help="number of solved live-camera frames to average before reporting/saving (0 = endless until 's' or Ctrl+C, default: 0)",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def validate(parser: SuggestingArgumentParser, args: argparse.Namespace) -> None:
+    """Reject the counts and windows argparse's own types cannot check."""
     if args.samples < 0:
         parser.error("--samples cannot be negative")
 
+
+def run(args: argparse.Namespace) -> None:
+    """Drive the arm, solve the alignment, and report or save it."""
     try:
         import cv2
         from pupil_apriltags import Detector
@@ -482,6 +491,13 @@ def main() -> None:
     }
     path = save_camera_extrinsics(model, args.camera_name, path=output, meta=meta)
     print(f"Saved       : {path}")
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    validate(parser, args)
+    run(args)
 
 if __name__ == "__main__":
     main()

@@ -37,6 +37,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.data.lerobot_dataset import (
     read_episode_rows,
     read_episode_states,
@@ -153,13 +154,17 @@ def _report(label: str, samples: list[JointZeroSample]) -> None:
     print(f"  {offsets}")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the joint-zero fit."""
+    parser = SuggestingArgumentParser(description=__doc__)
     parser.add_argument(
         "measurements", type=Path, nargs="+", help="measure_hand_eye_offset --output JSON(s)"
     )
-    args = parser.parse_args()
+    return parser
 
+
+def run(args: argparse.Namespace) -> None:
+    """Fit and report the joint zeros."""
     samples = load_samples(args.measurements)
     if not samples:
         raise SystemExit("no usable frames found")
@@ -169,6 +174,10 @@ def main() -> None:
         _report(day, [s for s in samples if s.group == day])
     if len(days) > 1:
         _report("ALL", samples)
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":

@@ -14,6 +14,7 @@ import numpy as np
 from fpdf import FPDF
 
 from pick_and_place.cli.common import add_out_dir_argument
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.core.paths import outputs_root
 
 # Paper sizes in mm
@@ -148,8 +149,9 @@ def create_pdf(tag_data, tag_size_mm, gap_mm, output_dir, paper_format):
     pdf.output(pdf_path)
     print(f"PDF generated: {pdf_path}")
 
-def main():
-    parser = argparse.ArgumentParser(description="Generate AprilTag 41h12 PDFs.")
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the AprilTag generator."""
+    parser = SuggestingArgumentParser(description="Generate AprilTag 41h12 PDFs.")
     parser.add_argument("--preset", type=str, choices=list(PRESETS.keys()),
                         help="Robotics presets: workspace_frame (40mm, IDs 12-15), cube (20mm, IDs 0-5), drop_box (60mm, IDs 8-11)")
 
@@ -157,9 +159,11 @@ def main():
     parser.add_argument("--tag-size-mm", type=float, default=40.0, help="Manual tag size in mm")
     add_out_dir_argument(parser, help="directory for the generated PDFs")
     parser.add_argument("--paper", type=str, default="A4", choices=PAPER_SIZES.keys(), help="Paper format")
-    
-    args = parser.parse_args()
-    
+    return parser
+
+
+def run(args: argparse.Namespace) -> None:
+    """Generate the tag PDFs."""
     tag_size = args.tag_size_mm
     
     if args.preset:
@@ -175,6 +179,10 @@ def main():
 
     output_dir = str(args.out_dir or outputs_root() / "apriltags")
     generate_tags(tag_ids, output_dir, tag_size, 10.0, args.paper)
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 if __name__ == "__main__":
     main()

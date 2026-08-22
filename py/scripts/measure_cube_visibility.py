@@ -41,6 +41,7 @@ from pick_and_place.cli.dataset import (
     add_image_size_argument,
     add_max_episodes_argument,
 )
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.rollout.sim import OVERHEAD_CAMERA, WRIST_CAMERA
 from pick_and_place.core.task_phases import PHASES
 
@@ -48,8 +49,9 @@ FRAME_STRIDE = 3  # 30 Hz source frames per 10 Hz policy tick
 CAMERAS = {"overhead": OVERHEAD_CAMERA, "wrist": WRIST_CAMERA}
 
 
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the cube-visibility measurement."""
+    parser = SuggestingArgumentParser(description=__doc__)
     add_episodes_root_argument(
         parser, help="staged episodes directory containing ep*/ with per-frame ground truth"
     )
@@ -62,12 +64,15 @@ def _parse_args() -> argparse.Namespace:
         default=12,
         help="overlay panels to save, spread across phases (default: 12)",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def validate(parser: SuggestingArgumentParser, args: argparse.Namespace) -> None:
+    """Reject the sizes and counts argparse's own types cannot check."""
     if args.image_size < 8:
         parser.error("--image-size must be at least 8")
     if args.panels < 0:
         parser.error("--panels must be nonnegative")
-    return args
 
 
 def _distribution(values: list[float]) -> dict[str, float] | None:
@@ -101,8 +106,8 @@ def _save_panel(
     plt.close(figure)
 
 
-def main() -> None:
-    args = _parse_args()
+def run(args: argparse.Namespace) -> None:
+    """Measure visibility over the staged episodes and write the report."""
     output = args.output.resolve()
     building = output.with_name(f"{output.name}.building")
     if output.exists():
@@ -241,6 +246,13 @@ def main() -> None:
                 f" (invisible {stats['cube_invisible_fraction']:.0%}),"
                 f" plate median {plate['median']:.1f} px, {stats['ticks']} ticks"
             )
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    validate(parser, args)
+    run(args)
 
 
 if __name__ == "__main__":

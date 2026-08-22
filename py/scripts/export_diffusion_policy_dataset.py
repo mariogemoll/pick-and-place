@@ -16,6 +16,7 @@ from pick_and_place.cli.dataset import (
     add_max_episodes_argument,
     add_source_dataset_argument,
 )
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.data.diffusion_policy_dataset import (
     DEFAULT_POLICY_HZ,
     export_diffusion_policy_dataset,
@@ -23,8 +24,9 @@ from pick_and_place.data.diffusion_policy_dataset import (
 from pick_and_place.spec.action_encoding import ActionEncoding, parse_action_encoding
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the dataset exporter."""
+    parser = SuggestingArgumentParser(description=__doc__)
     add_source_dataset_argument(parser)
     add_output_argument(parser, required=True, help="new Diffusion Policy dataset directory")
     add_image_size_argument(parser)
@@ -64,8 +66,11 @@ def main() -> None:
             "rescaling rather than what it set out to measure"
         ),
     )
-    args = parser.parse_args()
+    return parser
 
+
+def run(args: argparse.Namespace) -> None:
+    """Write the export the image flow policy trains on."""
     manifest = export_diffusion_policy_dataset(
         args.src,
         args.output,
@@ -77,6 +82,10 @@ def main() -> None:
         bounds_from=args.bounds_from,
     )
     print(json.dumps(manifest, indent=2, sort_keys=True))
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":

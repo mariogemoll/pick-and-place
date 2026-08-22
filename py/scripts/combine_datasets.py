@@ -27,6 +27,7 @@ import pandas as pd
 
 from pick_and_place.cli.common import add_out_dir_argument
 from pick_and_place.cli.dataset import add_write_argument
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 
 
 def source_episode_count(root: Path) -> int:
@@ -41,8 +42,9 @@ def discover_dataset_roots(parent: Path) -> list[Path]:
     return sorted(p.parent.parent for p in parent.glob("*/meta/info.json"))
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the dataset combiner."""
+    parser = SuggestingArgumentParser(description=__doc__)
     parser.add_argument(
         "sources",
         nargs="*",
@@ -61,8 +63,11 @@ def main() -> None:
     )
     add_out_dir_argument(parser, help="output dataset root (default: <--parent>/combined)")
     add_write_argument(parser, help="perform the merge")
-    args = parser.parse_args()
+    return parser
 
+
+def run(args: argparse.Namespace) -> None:
+    """Merge the source datasets, or report what the merge would do."""
     sources = args.sources if args.sources else discover_dataset_roots(args.parent)
     if not sources:
         raise SystemExit(f"No dataset roots found under {args.parent}")
@@ -102,6 +107,10 @@ def main() -> None:
             f"{merged_total} merged. Merged output left at {out_dir} for inspection."
         )
     print(f"\nWrote {merged_total} episode(s) to {out_dir}")
+
+
+def main() -> None:
+    run(build_parser().parse_args())
 
 
 if __name__ == "__main__":

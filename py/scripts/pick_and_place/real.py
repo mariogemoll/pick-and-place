@@ -23,6 +23,7 @@ from typing import Any
 import mujoco
 import numpy as np
 
+from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
 from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_model
 from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR, load_camera_intrinsics
@@ -232,8 +233,9 @@ class _ReportingCubeTracker(CubeTracker):
         return estimate
 
 
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+def build_parser() -> SuggestingArgumentParser:
+    """Return the parser for the rig runner."""
+    parser = SuggestingArgumentParser(description=__doc__)
     add_follower_arguments(parser)
     add_joint_zeros_argument(
         parser,
@@ -296,7 +298,11 @@ def _parse_args() -> argparse.Namespace:
         default=30.0,
         help="maximum arm-joint speed while parking, in degrees/s",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def validate(parser: SuggestingArgumentParser, args: argparse.Namespace) -> None:
+    """Reject the ranges argparse's own types cannot check."""
     if args.episodes < 0:
         parser.error("--episodes must be non-negative")
     if args.rest_every < 0:
@@ -327,11 +333,10 @@ def _parse_args() -> argparse.Namespace:
         parser.error("--park-speed must be positive")
     if args.cube_recovery_attempts < 1:
         parser.error("--cube-recovery-attempts must be at least 1")
-    return args
 
 
-def main() -> None:
-    args = _parse_args()
+def run(args: argparse.Namespace) -> None:
+    """Run the scripted expert on the rig."""
     import cv2
 
     from pick_and_place.calibration.cam_align_solve import (
@@ -975,6 +980,13 @@ def main() -> None:
                 wrist.close()
             if workspace is not None:
                 workspace.close()
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    validate(parser, args)
+    run(args)
 
 
 if __name__ == "__main__":
