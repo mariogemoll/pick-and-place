@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
@@ -33,6 +32,7 @@ from typing import Any
 import numpy as np
 
 from pick_and_place.cli.suggest import SuggestingArgumentParser
+from pick_and_place.core.paths import REPO_ROOT
 from pick_and_place.core import transforms as tf
 from pick_and_place.core.joint_frames import (
     gripper_angle_to_position,
@@ -60,7 +60,7 @@ from pick_and_place.spec.workspace import CUBE_HALF_SIZE
 
 
 #: Where the committed fixtures live, relative to the repository root.
-FIXTURE_DIR = Path(__file__).resolve().parents[2] / "fixtures" / "parity"
+FIXTURE_DIR = REPO_ROOT / "fixtures" / "parity"
 
 #: Significant digits kept when writing a float. Well below any tolerance the
 #: consumers assert at, and short enough to keep every fixture inside the

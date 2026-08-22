@@ -342,7 +342,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="generate-parity-fixtures",
         summary="Regenerate the cross-language parity fixtures.",
-        script="generate_parity_fixtures.py",
+        module="pick_and_place.cli.generate_parity_fixtures",
         group="Web and print assets",
     ),
     # Viewers and probes

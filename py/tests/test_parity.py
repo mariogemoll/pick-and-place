@@ -12,33 +12,17 @@ notice that the TypeScript side now has to follow.
 
 from __future__ import annotations
 
-import importlib.util
 import json
-import sys
-from pathlib import Path
 from typing import Any
 
 import pytest
 
-
-SCRIPT = Path(__file__).parents[1] / "scripts" / "generate_parity_fixtures.py"
+from pick_and_place.cli import generate_parity_fixtures as generate
 
 #: Absolute tolerance on every number in a fixture. The fixtures are written at
 #: twelve significant digits; this leaves room for the last-place wobble a
 #: different CPU or BLAS can introduce without letting a real change through.
 TOLERANCE = 1e-9
-
-
-def _module() -> Any:
-    spec = importlib.util.spec_from_file_location("generate_parity_fixtures", SCRIPT)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-generate = _module()
 
 
 @pytest.fixture(scope="module")
