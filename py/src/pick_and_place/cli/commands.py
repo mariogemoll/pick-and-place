@@ -256,7 +256,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="fit-pan-zero",
         summary="Fit the shoulder-pan zero from a hand-eye measurement.",
-        script="fit_pan_zero.py",
+        module="pick_and_place.cli.fit_pan_zero",
         group="Calibrate the rig",
     ),
     Command(
