@@ -35,6 +35,12 @@ from pick_and_place.analysis.scene_visibility import (
     load_episode_truth,
     video_render_hw,
 )
+from pick_and_place.cli.common import add_output_argument
+from pick_and_place.cli.dataset import (
+    add_episodes_root_argument,
+    add_image_size_argument,
+    add_max_episodes_argument,
+)
 from pick_and_place.rollout.sim import OVERHEAD_CAMERA, WRIST_CAMERA
 from pick_and_place.core.task_phases import PHASES
 
@@ -44,15 +50,12 @@ CAMERAS = {"overhead": OVERHEAD_CAMERA, "wrist": WRIST_CAMERA}
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--episodes-root",
-        type=Path,
-        required=True,
-        help="staged episodes directory containing ep*/ with per-frame ground truth",
+    add_episodes_root_argument(
+        parser, help="staged episodes directory containing ep*/ with per-frame ground truth"
     )
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--max-episodes", type=int, default=None)
-    parser.add_argument("--image-size", type=int, default=96)
+    add_output_argument(parser, required=True, help="visibility report directory")
+    add_max_episodes_argument(parser, help="read only the first N episodes")
+    add_image_size_argument(parser)
     parser.add_argument(
         "--panels",
         type=int,

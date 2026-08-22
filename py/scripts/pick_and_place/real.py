@@ -35,11 +35,17 @@ from pick_and_place.spec.robot import CONTROL_HZ
 from pick_and_place.cli.rig import (
     add_drop_zone_arguments,
     add_follower_arguments,
+    add_joint_zeros_argument,
     add_operator_alert_arguments,
     add_overhead_recalibration_arguments,
     add_rig_camera_arguments,
 )
-from pick_and_place.cli.scene import add_preflight_debug_arguments, preflight_debug_from_args
+from pick_and_place.cli.scene import (
+    add_preflight_debug_arguments,
+    add_speed_argument,
+    add_viewer_argument,
+    preflight_debug_from_args,
+)
 from pick_and_place.runtime.frame_reader import FrameReader, open_frame_reader
 from pick_and_place.runtime.wrist_servo import draw_cube, draw_tags, project_cube
 from pick_and_place.runtime.ramp import ramp_follower
@@ -229,10 +235,11 @@ class _ReportingCubeTracker(CubeTracker):
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     add_follower_arguments(parser)
-    parser.add_argument(
-        "--joint-zeros",
-        type=Path,
+    add_joint_zeros_argument(
+        parser,
         default=REPO_ROOT / "config" / "joint_zeros.json",
+        help="session joint-zero calibration mapping servo readback into the model frame "
+        "(default: config/joint_zeros.json)",
     )
     parser.add_argument(
         "--allow-uncalibrated-debug",
@@ -255,7 +262,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--target-change-min-distance", type=float, default=0.03)
     parser.add_argument("--target-change-alert-min-seconds", type=float, default=10.0)
     parser.add_argument("--target-change-alert-max-seconds", type=float, default=120.0)
-    parser.add_argument("--speed", type=float, default=1.0)
+    add_speed_argument(parser)
     parser.add_argument(
         "--recording-format", choices=("video", "dataset", "none"), default="video"
     )
@@ -278,11 +285,7 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="open the wrist servo window and log what it saw, frame by frame",
     )
-    parser.add_argument(
-        "--viewer",
-        action="store_true",
-        help="show the measured arm and localized objects in MuJoCo",
-    )
+    add_viewer_argument(parser, help="show the measured arm and localized objects in MuJoCo")
     parser.add_argument("--rng-seed", type=int, default=0)
     add_overhead_recalibration_arguments(parser, drift_checks=True)
     parser.add_argument("--recalibrate-check-min-cooldown", type=float, default=15.0)

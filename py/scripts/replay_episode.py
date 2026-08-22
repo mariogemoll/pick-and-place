@@ -20,6 +20,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
+from pick_and_place.cli.common import add_output_size_arguments
 from pick_and_place.sim.scene import build_scene
 from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
 from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_spec
@@ -186,8 +187,7 @@ def main() -> None:
         help="render to this mp4 instead of opening the viewer",
     )
     parser.add_argument("--camera", default="wrist_camera", help="camera to render (for --video)")
-    parser.add_argument("--width", type=int, default=640)
-    parser.add_argument("--height", type=int, default=480)
+    add_output_size_arguments(parser, width=640, height=480, noun="rendered video")
     parser.add_argument(
         "--fps",
         type=float,

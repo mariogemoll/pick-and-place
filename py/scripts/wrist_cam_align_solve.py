@@ -31,6 +31,13 @@ from typing import Optional, Any
 import mujoco
 import numpy as np
 
+from pick_and_place.cli.common import add_output_argument
+from pick_and_place.cli.rig import (
+    add_camera_device_argument,
+    add_capture_size_arguments,
+    add_follower_arguments,
+    add_leader_arguments,
+)
 from pick_and_place.scripted.motion import smoothstep
 from pick_and_place.core.camera_calibration import LOCAL_CAMERA_EXTRINSICS_DIR
 from pick_and_place.sim.camera_extrinsics import save_camera_extrinsics
@@ -166,16 +173,13 @@ def _teleop_thread_func(state: TeleopState, leader, follower, follower_start_joi
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--leader-port", required=True, help="Serial port of the SO-101 leader")
-    parser.add_argument("--leader-id", default="liddy", help="Leader ID (default: liddy)")
-    parser.add_argument("--follower-port", help="Optional serial port of the SO-101 follower")
-    parser.add_argument("--follower-id", default="folly", help="follower calibration id")
-    parser.add_argument("--camera", required=True, help="OpenCV camera index or device path")
+    add_leader_arguments(parser)
+    add_follower_arguments(parser, port_required=False)
+    add_camera_device_argument(parser, required=True)
     parser.add_argument("--camera-name", default="wrist_camera")
     parser.add_argument("--intrinsics", type=Path, default=None)
-    parser.add_argument("--output", type=Path, default=None)
-    parser.add_argument("--width", type=int, default=1280)
-    parser.add_argument("--height", type=int, default=720)
+    add_output_argument(parser, help="destination JSON for the solved wrist-camera alignment")
+    add_capture_size_arguments(parser, width=1280, height=720)
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--teleop-fps", type=float, default=50.0, help="Teleop loop rate (Hz)")
     parser.add_argument("--show", action="store_true", help="show a live camera window while solving")

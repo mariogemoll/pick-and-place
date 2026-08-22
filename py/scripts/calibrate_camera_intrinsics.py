@@ -31,13 +31,10 @@ from pathlib import Path
 
 import numpy as np
 
-from generate_charuco_board import (
-    DEFAULT_MARKER_MM,
-    DEFAULT_SQUARE_MM,
-    DEFAULT_SQUARES_X,
-    DEFAULT_SQUARES_Y,
-    make_board,
-)
+from pick_and_place.calibration.charuco_board import make_board
+from pick_and_place.cli.calibration import add_charuco_board_arguments
+from pick_and_place.cli.common import add_output_argument
+from pick_and_place.cli.rig import add_camera_device_argument, add_capture_size_arguments
 
 
 @dataclass
@@ -279,19 +276,12 @@ def draw_status(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--camera", default="0", help="OpenCV camera index or device path")
-    parser.add_argument(
-        "--output",
-        type=Path,
-        required=True,
-        help="destination JSON path for the calibrated intrinsics",
+    add_camera_device_argument(parser)
+    add_output_argument(
+        parser, required=True, help="destination JSON path for the calibrated intrinsics"
     )
-    parser.add_argument("--width", type=int, default=1920)
-    parser.add_argument("--height", type=int, default=1080)
-    parser.add_argument("--squares-x", type=int, default=DEFAULT_SQUARES_X)
-    parser.add_argument("--squares-y", type=int, default=DEFAULT_SQUARES_Y)
-    parser.add_argument("--square-mm", type=float, default=DEFAULT_SQUARE_MM)
-    parser.add_argument("--marker-mm", type=float, default=DEFAULT_MARKER_MM)
+    add_capture_size_arguments(parser, width=1920, height=1080)
+    add_charuco_board_arguments(parser)
     parser.add_argument("--stable-seconds", type=float, default=0.8)
     parser.add_argument("--max-views", type=int, default=30)
     parser.add_argument(

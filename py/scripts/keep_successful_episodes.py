@@ -26,8 +26,14 @@ Example:
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
+from pick_and_place.cli.dataset import (
+    add_destination_dataset_argument,
+    add_repo_id_argument,
+    add_source_dataset_argument,
+    add_success_tolerance_argument,
+    add_write_argument,
+)
 from pick_and_place.data.dataset_subset import (
     SUCCESS_XY_TOLERANCE_M,
     load_all_episodes,
@@ -38,25 +44,18 @@ from pick_and_place.data.dataset_subset import (
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--src", type=Path, required=True, help="source LeRobotDataset root")
-    parser.add_argument(
-        "--dst",
-        type=Path,
-        default=None,
-        help="output dataset root (default: <src>-success alongside the source)",
+    add_source_dataset_argument(parser)
+    add_destination_dataset_argument(
+        parser, help="output dataset root (default: <src>-success alongside the source)"
     )
-    parser.add_argument(
-        "--repo-id",
-        default=None,
-        help="repo id for the output dataset (default: <src dir name>-success)",
+    add_repo_id_argument(
+        parser, help="repo id for the output dataset (default: <src dir name>-success)"
     )
-    parser.add_argument(
-        "--xy-tolerance",
-        type=float,
-        default=SUCCESS_XY_TOLERANCE_M,
+    add_success_tolerance_argument(
+        parser,
         help=f"success placement-XY tolerance in metres (default: {SUCCESS_XY_TOLERANCE_M})",
     )
-    parser.add_argument("--write", action="store_true", help="perform the filtering")
+    add_write_argument(parser, help="perform the filtering")
     args = parser.parse_args()
 
     dst_root = args.dst if args.dst is not None else args.src.with_name(f"{args.src.name}-success")

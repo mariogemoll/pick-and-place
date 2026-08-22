@@ -25,6 +25,9 @@ from pathlib import Path
 
 import pandas as pd
 
+from pick_and_place.cli.common import add_out_dir_argument
+from pick_and_place.cli.dataset import add_write_argument
+
 
 def source_episode_count(root: Path) -> int:
     total = 0
@@ -56,13 +59,8 @@ def main() -> None:
         default=Path(__file__).resolve().parents[2] / "datasets-512",
         help="where to look for sources when none are given explicitly (default: datasets-512/)",
     )
-    parser.add_argument(
-        "--out-dir",
-        type=Path,
-        default=None,
-        help="output dataset root (default: <--parent>/combined)",
-    )
-    parser.add_argument("--write", action="store_true", help="perform the merge")
+    add_out_dir_argument(parser, help="output dataset root (default: <--parent>/combined)")
+    add_write_argument(parser, help="perform the merge")
     args = parser.parse_args()
 
     sources = args.sources if args.sources else discover_dataset_roots(args.parent)

@@ -68,16 +68,23 @@ def add_render_size_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def add_scene_appearance_arguments(parser: argparse.ArgumentParser) -> None:
-    """Add the recolouring that matches a re-rendered dataset's look."""
+def add_scene_appearance_arguments(
+    parser: argparse.ArgumentParser, *, default: str | None = None
+) -> None:
+    """Add the recolouring that matches a re-rendered dataset's look.
+
+    ``default`` names the palette a command renders in when it is not told
+    otherwise; ``None`` leaves the scene as compiled.
+    """
     parser.add_argument(
         "--scene-appearance",
         type=str,
-        default=None,
+        default=default,
         metavar="NAME",
         help="recolour the scene the way a re-rendered dataset was rendered, either a "
         f"preset ({', '.join(sorted(APPEARANCE_PRESETS))}) or an ad-hoc spec such as "
-        "'cube=blue,floor=dark-gray' (default: the scene as compiled)",
+        "'cube=blue,floor=dark-gray' (default: "
+        + (f"{default})" if default is not None else "the scene as compiled)"),
     )
 
 
@@ -131,4 +138,98 @@ def preflight_debug_from_args(args: argparse.Namespace) -> PreflightDebug:
         contact_limit=args.preflight_debug_limit,
         trajectory_dir=args.save_failed_trajectories,
         trajectory_limit=args.failed_trajectory_limit,
+    )
+
+
+def add_viewer_argument(parser: argparse.ArgumentParser, *, help: str) -> None:
+    """Add ``--viewer``: run the MuJoCo viewer alongside whatever else is happening.
+
+    Every command that offers it is headless by default, because a viewer needs a
+    display and ``mjpython`` on macOS. ``help`` says what the viewer would show,
+    which is the part that differs.
+    """
+    parser.add_argument("--viewer", action="store_true", help=help)
+
+
+def add_seed_base_argument(parser: argparse.ArgumentParser, *, default: int) -> None:
+    """Add ``--seed-base``, the head of a scene stream rather than a single draw.
+
+    Scene *i* is drawn from ``seed-base + i``, which is what makes a stream of
+    scenes reproducible without pinning each one. Distinct from ``--seed``: that
+    seeds one draw, this seeds a sequence.
+    """
+    parser.add_argument(
+        "--seed-base",
+        type=int,
+        default=default,
+        help=f"scene stream seed; scene i is drawn from seed-base + i (default: {default})",
+    )
+
+
+def add_physics_randomization_argument(parser: argparse.ArgumentParser) -> None:
+    """Add ``--physics-randomization``: how far a drawn arm may differ from the nominal one.
+
+    The manifest generator and the sim recorder draw from the same stream, so a
+    suite generated at one amount and recorded at another is not the comparison
+    it looks like.
+    """
+    parser.add_argument(
+        "--physics-randomization",
+        type=float,
+        default=0.0,
+        metavar="AMOUNT",
+        help="how far each episode's arm may differ from the nominal one: servo gain and time "
+        "constant, link mass, surface friction, joint damping, stiction standing in for "
+        "backlash, and how far a joint droops from its command. One dial over all of them, "
+        "0 for the nominal arm every demonstration has shared so far, 1 for the authored "
+        "spread. The spread is a judgment rather than a measurement -- there is one fitted "
+        "dynamics config, so there is no observed day-to-day variation to draw from. Expect "
+        "yield to fall as it goes up: the planner assumes the nominal arm, which is why the "
+        "dial exists",
+    )
+
+
+def add_miscalibration_argument(parser: argparse.ArgumentParser, *, extra_help: str = "") -> None:
+    """Add ``--miscalibration``, the measured real-robot calibration error, injected.
+
+    What the draw *is* is shared -- joint-zero offsets and a believed cube/target
+    pose error, with the plan running in the believed frame and physics in the
+    true one. ``extra_help`` is where a command says what its own loop then does
+    about it, which is the part that differs between recording an expert episode
+    and driving a learned policy.
+    """
+    parser.add_argument(
+        "--miscalibration",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="inject per-episode draws of the measured real-robot miscalibration (joint-zero "
+        "offsets, believed cube/target pose error): the plan runs in the believed frame and "
+        "physics in the true frame" + extra_help,
+    )
+
+
+def add_domain_randomization_argument(parser: argparse.ArgumentParser) -> None:
+    """Add ``--domain-randomization``, the preset that draws a whole scene per episode."""
+    parser.add_argument(
+        "--domain-randomization",
+        type=Path,
+        default=None,
+        help="strict per-episode sim randomization preset; includes measured miscalibration, "
+        "cameras, lighting, materials, cube orientation and appearance",
+    )
+
+
+def add_speed_argument(parser: argparse.ArgumentParser) -> None:
+    """Add ``--speed``, the multiplier on the expert's nominal trajectory pace.
+
+    The rig runner and the sim recorder drive the same planned trajectory through
+    the same easing, so a dataset recorded at one pace and a rig run at another
+    are the same motion at different speeds -- which is only true while both mean
+    the multiplier the same way.
+    """
+    parser.add_argument(
+        "--speed",
+        type=float,
+        default=1.0,
+        help="playback speed multiplier of the nominal trajectory pace (1.0 = nominal)",
     )

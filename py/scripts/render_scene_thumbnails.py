@@ -21,6 +21,9 @@ from pathlib import Path
 
 import numpy as np
 
+from pick_and_place.cli.common import add_out_dir_argument, add_output_size_arguments
+from pick_and_place.cli.scene import add_scene_appearance_arguments
+
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -28,10 +31,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--count", type=int, default=6, help="scenes to render from each end"
     )
-    parser.add_argument("--height", type=int, default=360)
-    parser.add_argument("--width", type=int, default=480)
-    parser.add_argument("--scene-appearance", default="blue-cube")
-    parser.add_argument("--out-dir", type=Path, required=True)
+    add_output_size_arguments(parser, width=480, height=360, noun="thumbnail")
+    add_scene_appearance_arguments(parser, default="blue-cube")
+    add_out_dir_argument(parser, required=True, help="directory for the rendered thumbnails")
     return parser.parse_args()
 
 

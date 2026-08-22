@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -26,15 +25,17 @@ from pick_and_place.analysis.scene_visibility import (
     load_episode_truth,
     video_render_hw,
 )
+from pick_and_place.cli.common import add_output_argument
+from pick_and_place.cli.dataset import add_episodes_root_argument, add_max_episodes_argument
 from pick_and_place.plant.overhead import SimOverheadPerception
 from pick_and_place.rollout.sim import OVERHEAD_CAMERA
 
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--episodes-root", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--max-episodes", type=int, default=None)
+    add_episodes_root_argument(parser, help="staged episodes directory containing ep*/")
+    add_output_argument(parser, required=True, help="visibility report JSON")
+    add_max_episodes_argument(parser, help="read only the first N episodes")
     parser.add_argument(
         "--frame-stride",
         type=int,

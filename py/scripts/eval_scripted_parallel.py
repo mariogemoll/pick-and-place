@@ -31,12 +31,20 @@ from pathlib import Path
 
 from tqdm import tqdm
 
+from pick_and_place.cli.common import add_output_argument
+from pick_and_place.cli.evaluation import (
+    EVALUATION_DIR,
+    add_manifest_argument,
+    add_shard_arguments,
+)
+from pick_and_place.cli.scene import add_render_size_arguments
+from pick_and_place.core.paths import REPO_ROOT
+
 SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MANIFEST = REPOSITORY_ROOT / "config" / "evaluation" / "canonical_100_v1.json.xz"
+DEFAULT_MANIFEST = EVALUATION_DIR / "canonical_100_v1.json.xz"
 
 SYSTEM = platform.system()
 BACKENDS_BY_SYSTEM = {
@@ -104,28 +112,12 @@ def _shards(indices: list[int], jobs: int) -> list[list[int]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
-    parser.add_argument("--output", type=Path, required=True)
+    add_manifest_argument(parser, default=DEFAULT_MANIFEST)
+    add_output_argument(parser, required=True, help="new evaluation run directory")
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 1, 12))
     parser.add_argument("--backend", choices=BACKENDS, default=DEFAULT_BACKEND)
-    parser.add_argument("--render-height", type=int, default=1080)
-    parser.add_argument("--render-width", type=int, default=1920)
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="evaluate at most N scenarios",
-    )
-    parser.add_argument(
-        "--offset",
-        type=int,
-        default=0,
-        help=(
-            "skip the first N scenarios, applied before --limit. Together the two shard one "
-            "suite across runs that compare_policy_evaluations.py can reassemble, which also "
-            "means a crashed shard costs only its own slice."
-        ),
-    )
+    add_render_size_arguments(parser)
+    add_shard_arguments(parser)
     parser.add_argument(
         "--drop-target",
         choices=("detected", "ground-truth"),
@@ -260,7 +252,7 @@ def main() -> None:
             "action_frame": "hardware (arm degrees, gripper position 0-100)",
         },
         "device": None,
-        "code": git_provenance(REPOSITORY_ROOT),
+        "code": git_provenance(REPO_ROOT),
         "package_versions": package_versions(["gymnasium", "mujoco", "numpy"]),
         "videos_saved": False,
         "parallel_workers": jobs,

@@ -88,12 +88,17 @@ from pick_and_place.runtime.policy_sim import PolicySimEnv, live_scenario
 # One policy query and one camera render happen per control tick; the sim steps
 # at the model timestep in between. The rate matches the real rig's control loop
 # (and the dataset fps), so a chunked policy's action spacing plays back true.
+from pick_and_place.cli.common import add_seed_argument
 from pick_and_place.cli.policy import (
     add_lerobot_arguments,
     add_policy_image_arguments,
+    add_save_video_argument,
+    add_step_limit_argument,
 )
 from pick_and_place.cli.scene import (
     add_cube_pose_arguments,
+    add_domain_randomization_argument,
+    add_miscalibration_argument,
     add_preflight_debug_arguments,
     add_render_size_arguments,
     add_scene_appearance_arguments,
@@ -148,33 +153,17 @@ def main() -> None:
         action="store_true",
         help="use raw upstream MuJoCo actuators instead of fitted actuator time constants",
     )
-    parser.add_argument("--seed", type=int, default=None, help="RNG seed for random target sampling")
-    parser.add_argument(
-        "--miscalibration",
-        action="store_true",
-        help=(
-            "inject a fresh measured joint-zero miscalibration draw for the initial "
-            "scene and every Enter resample; observations use servo-style readback "
-            "and actions are shifted into the true physical joint frame"
-        ),
+    add_seed_argument(parser, default=None, help="RNG seed for random target sampling")
+    add_miscalibration_argument(
+        parser,
+        extra_help=". A fresh draw is taken for the initial scene and every Enter resample; "
+        "observations use servo-style readback, and actions are shifted into the true "
+        "physical joint frame",
     )
-    parser.add_argument(
-        "--domain-randomization",
-        type=Path,
-        default=None,
-        help=(
-            "strict per-episode sim randomization preset; includes measured "
-            "miscalibration, cameras, lighting, materials, cube orientation, and appearance"
-        ),
-    )
+    add_domain_randomization_argument(parser)
     add_scene_texture_arguments(parser)
     add_scene_appearance_arguments(parser)
-    parser.add_argument(
-        "--steps",
-        type=int,
-        default=0,
-        help="stop after this many control ticks (0 = run until the viewer is closed)",
-    )
+    add_step_limit_argument(parser, forever="the viewer is closed")
     parser.add_argument("--headless", action="store_true", help="no viewer; render only for the policy")
     parser.add_argument(
         "--resample-every",
@@ -194,14 +183,10 @@ def main() -> None:
             "path, for offline analysis of where the arm aims"
         ),
     )
-    parser.add_argument(
-        "--save-video",
-        type=Path,
-        default=None,
-        help=(
-            "directory to write <dir>/wrist.mp4 and <dir>/overhead.mp4 with the exact "
-            "frames fed to the policy each tick"
-        ),
+    add_save_video_argument(
+        parser,
+        help="directory to write <dir>/wrist.mp4 and <dir>/overhead.mp4 with the exact "
+        "frames fed to the policy each tick",
     )
     parser.add_argument(
         "--show",

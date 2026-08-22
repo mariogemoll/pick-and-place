@@ -102,10 +102,14 @@ from pick_and_place.cli.policy import (
     add_flow_image_arguments,
     add_lerobot_arguments,
     add_policy_image_arguments,
+    add_save_video_argument,
+    add_step_limit_argument,
 )
 from pick_and_place.cli.rig import (
     add_drop_zone_arguments,
     add_follower_arguments,
+    add_joint_zeros_argument,
+    add_max_joint_speed_argument,
     add_operator_alert_arguments,
     add_overhead_recalibration_arguments,
     add_rig_camera_arguments,
@@ -211,15 +215,9 @@ def main() -> None:
     add_policy_image_arguments(parser)
     add_follower_arguments(parser)
     add_rig_camera_arguments(parser, workspace_camera=True)
-    parser.add_argument(
-        "--steps",
-        type=int,
-        default=0,
-        help="stop after this many control ticks (0 = run until Ctrl-C)",
-    )
-    parser.add_argument(
-        "--joint-zeros",
-        type=Path,
+    add_step_limit_argument(parser, forever="Ctrl-C")
+    add_joint_zeros_argument(
+        parser,
         default=None,
         help=(
             "session joint-zero calibration (config/joint_zeros.json) to map the "
@@ -239,24 +237,18 @@ def main() -> None:
             "it; 1.0 is the measured arm, 0 sends the policy's action verbatim"
         ),
     )
-    parser.add_argument(
-        "--max-joint-speed",
-        type=float,
+    add_max_joint_speed_argument(
+        parser,
         default=10.0,
-        help=(
-            "hard per-joint velocity cap in deg/s. Each tick the command may move "
-            "at most this far from the arm's measured pose, so a wild prediction "
-            "can only ever crawl. Lower it (e.g. 3) to go really slow; <=0 disables"
+        extra_help=(
+            ". Each tick the command may move at most this far from the arm's measured "
+            "pose, so a wild prediction can only ever crawl; lower it (e.g. 3) to go really slow"
         ),
     )
-    parser.add_argument(
-        "--save-video",
-        type=Path,
-        default=None,
-        help=(
-            "directory to write <dir>/wrist.mp4 and <dir>/overhead.mp4 with the exact "
-            "frames fed to the policy each tick"
-        ),
+    add_save_video_argument(
+        parser,
+        help="directory to write <dir>/wrist.mp4 and <dir>/overhead.mp4 with the exact "
+        "frames fed to the policy each tick",
     )
     parser.add_argument(
         "--record-video",

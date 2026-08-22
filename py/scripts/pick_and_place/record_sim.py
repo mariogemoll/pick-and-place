@@ -86,10 +86,16 @@ from pick_and_place.data.recording_config import (
     SAVED_IMAGE_WIDTH,
     SceneDraw,
 )
+from pick_and_place.cli.common import add_seed_argument
 from pick_and_place.cli.scene import (
     add_cube_pose_arguments,
+    add_domain_randomization_argument,
+    add_miscalibration_argument,
+    add_physics_randomization_argument,
     add_render_size_arguments,
     add_scene_texture_arguments,
+    add_speed_argument,
+    add_viewer_argument,
 )
 from pick_and_place.spec.robot import CONTROL_HZ
 from pick_and_place.core.miscalibration import MiscalibrationModel, OverheadCameraModel
@@ -600,13 +606,8 @@ def main() -> None:
         ),
     )
     add_cube_pose_arguments(parser, source_yaw=False)
-    parser.add_argument(
-        "--speed",
-        type=float,
-        default=1.0,
-        help="playback speed multiplier of the nominal trajectory pace (1.0 = nominal)",
-    )
-    parser.add_argument("--viewer", action="store_true", help="open the 3D MuJoCo viewer")
+    add_speed_argument(parser)
+    add_viewer_argument(parser, help="open the 3D MuJoCo viewer")
     parser.add_argument(
         "--ground-truth-drop-target",
         action="store_true",
@@ -659,16 +660,9 @@ def main() -> None:
             "salted perturbation draws remain unchanged for paired dataset arms"
         ),
     )
-    parser.add_argument(
-        "--miscalibration",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help=(
-            "inject per-episode draws of the measured real-robot miscalibration "
-            "(joint-zero offsets, believed cube/target pose error): the plan runs "
-            "in the believed frame, physics in the true frame, and the descent "
-            "runs the wrist-camera visual servo like the real arm"
-        ),
+    add_miscalibration_argument(
+        parser,
+        extra_help=", and the descent runs the wrist-camera visual servo like the real arm",
     )
     parser.add_argument(
         "--sim-perception",
@@ -680,29 +674,8 @@ def main() -> None:
             "real optical pipeline for robustness testing (default: geometric)"
         ),
     )
-    parser.add_argument(
-        "--physics-randomization",
-        type=float,
-        default=0.0,
-        metavar="AMOUNT",
-        help=(
-            "how far each episode's arm may differ from the nominal one: servo "
-            "gain and time constant, link mass, surface friction, joint damping, "
-            "stiction standing in for backlash, and how far a joint droops from "
-            "its command. One dial over all of them, 0 for the nominal arm every "
-            "demonstration has shared so far, 1 for the authored spread. The "
-            "spread is a judgment rather than a measurement -- there is one "
-            "fitted dynamics config, so there is no observed day-to-day variation "
-            "to draw from. Expect yield to fall as it goes up: the planner "
-            "assumes the nominal arm, which is why the dial exists"
-        ),
-    )
-    parser.add_argument(
-        "--domain-randomization",
-        type=Path,
-        default=None,
-        help="strict visual domain-randomization preset; includes measured miscalibration",
-    )
+    add_physics_randomization_argument(parser)
+    add_domain_randomization_argument(parser)
     parser.add_argument(
         "--frozen-rig",
         type=Path,
@@ -719,7 +692,7 @@ def main() -> None:
             "sidecar already names the arm"
         ),
     )
-    parser.add_argument("--seed", type=int, default=None, help="RNG seed for pose sampling")
+    add_seed_argument(parser, default=None, help="RNG seed for pose sampling")
     parser.add_argument(
         "--max-attempts",
         type=int,

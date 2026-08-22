@@ -29,6 +29,18 @@ import numpy as np
 import torch
 
 from pick_and_place.analysis.flow_trace_recording import FlowTraceRecording, encode
+from pick_and_place.cli.common import add_output_argument
+from pick_and_place.cli.policy import (
+    add_device_argument,
+    add_flow_export_arguments,
+    add_integration_steps_argument,
+    add_save_video_argument,
+)
+from pick_and_place.cli.scene import (
+    add_scene_appearance_arguments,
+    add_seed_base_argument,
+    add_viewer_argument,
+)
 from pick_and_place.policies.flow_image_policy import (
     FlowImagePolicyController,
     summarize_smoothness,
@@ -107,8 +119,7 @@ def observation_frame(observation: dict[str, np.ndarray]) -> np.ndarray:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--export", type=Path, required=True, help="matching image export")
+    add_flow_export_arguments(parser)
     parser.add_argument(
         "--scenarios",
         type=int,
@@ -116,14 +127,11 @@ def main() -> None:
         help="how many scenes of the seed stream to run (0 = keep going until the viewer "
         "is closed or Ctrl-C)",
     )
+    add_seed_base_argument(parser, default=6_000_000)
     parser.add_argument(
-        "--seed-base",
-        type=int,
-        default=6_000_000,
-        help="scene stream seed; scene i is drawn from seed-base + i",
+        "--act-steps", type=int, default=8, help="executed actions per policy query (default: 8)"
     )
-    parser.add_argument("--act-steps", type=int, default=8)
-    parser.add_argument("--integration-steps", type=int, default=10)
+    add_integration_steps_argument(parser)
     parser.add_argument("--policy-seed", type=int, default=0)
     parser.add_argument(
         "--noise-correlation",
@@ -133,9 +141,9 @@ def main() -> None:
         "(independent draws) to 1 (reused wherever the horizons overlap). Correlating "
         "the draws keeps consecutive chunks in the same mode (default: 0)",
     )
-    parser.add_argument("--device", default="cuda")
-    parser.add_argument("--scene-appearance", default=None)
-    parser.add_argument("--output", type=Path, default=None)
+    add_device_argument(parser, default="cuda")
+    add_scene_appearance_arguments(parser)
+    add_output_argument(parser, help="directory for the per-scenario rollout JSON")
     parser.add_argument(
         "--record-trace",
         type=Path,
@@ -143,17 +151,13 @@ def main() -> None:
         help="directory to write one .bin per scenario holding the replay state and the "
         "flow integration path behind every generated horizon, for the web viewer",
     )
-    parser.add_argument(
-        "--viewer",
-        action="store_true",
+    add_viewer_argument(
+        parser,
         help="watch the rollouts in the MuJoCo viewer, throttled to the control rate "
         "(run under mjpython)",
     )
-    parser.add_argument(
-        "--save-video",
-        type=Path,
-        default=None,
-        help="directory to write one mp4 per scenario of the frames the policy sees",
+    add_save_video_argument(
+        parser, help="directory to write one mp4 per scenario of the frames the policy sees"
     )
     args = parser.parse_args()
 

@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 from functools import partial
 
+from pick_and_place.cli.common import add_seed_argument
 from pick_and_place.core.miscalibration import OverheadCameraModel
 from pick_and_place.plant.overhead import DETECTION_HEIGHT, DETECTION_WIDTH
 from pick_and_place.plant.overhead_check import measure
@@ -42,7 +43,7 @@ def main() -> None:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--episodes", type=int, default=60, help="scenes to localize")
-    parser.add_argument("--seed", type=int, default=7, help="root seed for the draws")
+    add_seed_argument(parser, default=7, help="root seed for the draws")
     parser.add_argument(
         "--no-calibration-error",
         action="store_true",

@@ -16,11 +16,80 @@ from pathlib import Path
 from pick_and_place.runtime.overhead_detection import DEFAULT_ALERT_SOUND
 
 
-def add_follower_arguments(parser: argparse.ArgumentParser) -> None:
-    """Add the serial port and calibration id of the SO-101 follower."""
-    parser.add_argument("--follower-port", required=True, help="serial port of the SO-101 follower")
+def add_follower_arguments(
+    parser: argparse.ArgumentParser, *, port: bool = True, port_required: bool = True
+) -> None:
+    """Add the serial port and calibration id of the SO-101 follower.
+
+    ``port`` is false for a command that names an arm without opening it -- the
+    calibration comparison reads the stored file and never touches the serial
+    line, so offering it a port would be offering a flag it must then ignore.
+    ``port_required`` keeps the flag but makes it optional, for the wrist-camera
+    solve, which drives the leader and moves the follower only if it is there.
+    """
+    if port:
+        parser.add_argument(
+            "--follower-port",
+            required=port_required,
+            help="serial port of the SO-101 follower"
+            + ("" if port_required else " (optional; omit to run without it)"),
+        )
     parser.add_argument(
         "--follower-id", default="folly", help="follower calibration id (default: folly)"
+    )
+
+
+def add_leader_arguments(parser: argparse.ArgumentParser, *, port: bool = True) -> None:
+    """Add the serial port and calibration id of the SO-101 leader.
+
+    ``port`` follows the same rule as :func:`add_follower_arguments`.
+    """
+    if port:
+        parser.add_argument(
+            "--leader-port", required=True, help="serial port of the SO-101 leader"
+        )
+    parser.add_argument(
+        "--leader-id", default="liddy", help="leader calibration id (default: liddy)"
+    )
+
+
+def add_capture_size_arguments(parser: argparse.ArgumentParser, *, width: int, height: int) -> None:
+    """Add the resolution a command asks a camera device for.
+
+    Distinct from the size of what a command *produces*
+    (:func:`pick_and_place.cli.common.add_output_size_arguments`): a driver may
+    refuse the resolution asked for and hand back another, which is what
+    camera_fps_probe.py exists to find out.
+    """
+    parser.add_argument(
+        "--width",
+        type=int,
+        default=width,
+        help=f"capture width to request from the camera (default: {width})",
+    )
+    parser.add_argument(
+        "--height",
+        type=int,
+        default=height,
+        help=f"capture height to request from the camera (default: {height})",
+    )
+
+
+def add_camera_device_argument(
+    parser: argparse.ArgumentParser, *, required: bool = False, default: str | None = "0"
+) -> None:
+    """Add ``--camera`` for a command that opens exactly one camera.
+
+    The rig commands take :func:`add_rig_camera_arguments` instead, which names
+    the overhead and wrist cameras together. This is for the two calibration
+    commands that point at a single device: what the string may be -- an OpenCV
+    index or a device path -- is the same either way.
+    """
+    parser.add_argument(
+        "--camera",
+        required=required,
+        default=None if required else default,
+        help="OpenCV camera index or device path",
     )
 
 
@@ -135,4 +204,40 @@ def add_drop_zone_arguments(parser: argparse.ArgumentParser) -> None:
         choices=("black", "white"),
         default="black",
         help="color of the drop-zone square to detect as the target (default: black)",
+    )
+
+
+def add_joint_zeros_argument(
+    parser: argparse.ArgumentParser, *, default: Path | None, help: str
+) -> None:
+    """Add ``--joint-zeros``, the session calibration the servo readback is mapped through.
+
+    ``default`` differs by command on purpose: the scripted runner reads the
+    committed sidecar, while the policy runner requires the file to be named,
+    because a learned policy fed uncorrected readback is being shown a different
+    arm than the one it was trained on.
+    """
+    parser.add_argument("--joint-zeros", type=Path, default=default, help=help)
+
+
+def add_max_joint_speed_argument(
+    parser: argparse.ArgumentParser, *, default: float, extra_help: str = ""
+) -> None:
+    """Add ``--max-joint-speed``, the per-joint velocity cap in deg/s.
+
+    Both commands that take it feed ``runtime.ramp``, so the units and the
+    "``<=0`` means no cap" convention are shared -- that convention is the part
+    worth declaring once, since a command reading a non-positive value as an
+    error rather than as "uncapped" would be wrong in a way nothing catches.
+
+    ``default`` is not shared: parking an arm that may be anywhere ramps at its
+    own pace unless told otherwise, while a policy run caps every tick by
+    default. ``extra_help`` is where a command adds what else it does with it.
+    """
+    parser.add_argument(
+        "--max-joint-speed",
+        type=float,
+        default=default,
+        help=f"hard per-joint velocity cap in deg/s; <=0 disables the cap (default: {default:g})"
+        + extra_help,
     )

@@ -22,7 +22,7 @@ import argparse
 
 import numpy as np
 
-from pick_and_place.cli.rig import add_follower_arguments
+from pick_and_place.cli.rig import add_follower_arguments, add_max_joint_speed_argument
 from pick_and_place.core.joint_frames import follower_clamp_limits, sim_frame_to_real
 from pick_and_place.hardware.follower import make_so101_follower
 from pick_and_place.runtime.ramp import ramp_follower
@@ -39,15 +39,10 @@ from pick_and_place.spec.robot import (
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     add_follower_arguments(parser)
-    parser.add_argument(
-        "--max-joint-speed",
-        type=float,
+    add_max_joint_speed_argument(
+        parser,
         default=0.0,
-        help=(
-            "hard per-joint velocity cap in deg/s for the parking ramp; <=0 disables the "
-            "cap and the arm ramps at its own pace (default: 0, matching the policy runner "
-            "when it is given the same). Pass e.g. 3 to crawl"
-        ),
+        extra_help=". Uncapped, the parking ramp runs at its own pace; pass e.g. 3 to crawl",
     )
     parser.add_argument(
         "--skip-neutral",

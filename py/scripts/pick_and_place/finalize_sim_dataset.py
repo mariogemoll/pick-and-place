@@ -28,6 +28,12 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from pick_and_place.cli.dataset import (
+    add_dataset_root_argument,
+    add_repo_id_argument,
+    add_success_tolerance_argument,
+    add_write_argument,
+)
 from pick_and_place.data.dataset_subset import SUCCESS_XY_TOLERANCE_M
 from pick_and_place.data.sim_dataset_staging import (
     episode_staging_root,
@@ -40,9 +46,8 @@ from pick_and_place.data.sim_dataset_staging import (
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--dataset-root",
-        type=Path,
+    add_dataset_root_argument(
+        parser,
         required=True,
         help="final dataset destination; staged episodes live at <root>_episodes",
     )
@@ -52,15 +57,13 @@ def main() -> None:
         required=True,
         help="exact number of successful episodes to merge",
     )
-    parser.add_argument(
-        "--repo-id",
+    add_repo_id_argument(
+        parser,
         default="local/pick-and-place-so101-sim",
         help="repository id stored in the finalized dataset",
     )
-    parser.add_argument(
-        "--xy-tolerance",
-        type=float,
-        default=SUCCESS_XY_TOLERANCE_M,
+    add_success_tolerance_argument(
+        parser,
         help=f"maximum successful placement XY error in metres (default: {SUCCESS_XY_TOLERANCE_M})",
     )
     parser.add_argument(
@@ -84,7 +87,7 @@ def main() -> None:
         default=None,
         help="repository id for the --attempts-root dataset (default: <repo-id>-attempts)",
     )
-    parser.add_argument("--write", action="store_true", help="perform the final merge")
+    add_write_argument(parser, help="perform the final merge")
     args = parser.parse_args()
 
     if args.episodes < 1:
