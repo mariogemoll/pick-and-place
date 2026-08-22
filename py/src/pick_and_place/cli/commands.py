@@ -195,7 +195,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="keep-successful-episodes",
         summary="Copy a dataset keeping only its successful episodes.",
-        script="keep_successful_episodes.py",
+        module="pick_and_place.cli.keep_successful_episodes",
         group="Record and shape datasets",
     ),
     Command(
