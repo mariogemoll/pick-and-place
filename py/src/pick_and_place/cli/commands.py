@@ -244,7 +244,7 @@ COMMANDS: tuple[Command, ...] = (
     Command(
         name="export-camera-calibrations",
         summary="Export generic camera calibration JSON for recorded datasets.",
-        script="export_camera_calibrations.py",
+        module="pick_and_place.cli.export_camera_calibrations",
         group="Calibrate the rig",
     ),
     Command(
