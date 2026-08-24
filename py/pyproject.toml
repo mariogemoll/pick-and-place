@@ -80,3 +80,10 @@ dev = [
     "pytest-xdist",
     "ruff>=0.9.0",
 ]
+# What `notebooks/` needs on top of the package. `pandas` arrives transitively
+# under lerobot, but the notebooks import it themselves, so it is declared here
+# rather than borrowed. Nothing in `pick_and_place` imports either of these.
+notebooks = [
+    "jupyterlab",
+    "pandas",
+]
