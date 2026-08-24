@@ -221,8 +221,8 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
 - **`spec/`** — the physical facts and the contracts every branch agrees on:
   the cube's size and face tag ids, the drop-zone and corner plate sizes, the
   workspace frame pose, the joint names and their order, the rig's control rate
-  (`CONTROL_HZ`), the camera modules' nominal optics, and the `PolicyController`
-  boundary. This is what lets the simulator and the detector agree by
+  (`CONTROL_HZ`), the camera modules' nominal optics, the projector's panel size
+  and the larger mode its EDID claims, and the `PolicyController` boundary. This is what lets the simulator and the detector agree by
   construction rather than by importing into each other's internals.
 - **`core/`** — pure computation over the spec: `geometry`, `transforms`,
   `rotations`, `ik`, `kinematics`, `workspace_bounds`, `joint_frames` (sim↔real
@@ -263,7 +263,10 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   the hand-tuned box model; `python -m pick_and_place.sim.export` writes
   standalone MJCF plus a web manifest.
 - **`hardware/`** — the physical arm: `follower`, `physical_rig`,
-  `physical_collection`, `joint_zero_fit`.
+  `physical_collection`, `joint_zero_fit`. Also `projector`, which puts a frame
+  on the optional workspace projector by writing the kernel framebuffer — no X
+  server and no root, and it refuses to scale, because what it projects is
+  usually a pattern whose pixel positions are a measurement.
 - **`data/`** — recording and datasets: `recording`, `recorder`,
   `recording_config` (what one recording run is: the scene it draws, its frame
   sizes, where it lands), `dataset_metadata`, `dataset_subset`,
@@ -364,7 +367,10 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
   domain randomization.
 - **`calibration/`** — solving the rig by rendering the scene and comparing it
   to a real image: `cam_align_solve`, `camera_compare`,
-  `camera_calibration_export`, `session_calibration`.
+  `camera_calibration_export`, `session_calibration`. The projector is solved
+  here too — `gray_code` (structured light, since an obliquely aimed projector
+  cannot hold a marker board in focus across the table), `projector_solve` (the
+  projector-pixel to workspace-metre homography) and `projector_pattern`.
 - **`analysis/`** — reports about recorded runs and about the scene:
   `episode_video`, `policy_recording`, `scene_visibility`,
   `flow_trace_recording`.
@@ -377,7 +383,7 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
 
 ### The command tree
 
-The 49 commands are what the project is driven by, and they reach the terminal
+The 53 commands are what the project is driven by, and they reach the terminal
 through one entry point:
 
 ```sh
@@ -422,6 +428,7 @@ Gitignored, machine-local, and sometimes very large:
 | `outputs/`, `output/` | Training runs, checkpoints, diagnostics. |
 | `intermediary-glb/`, `dist_assets/` | Mesh pipeline intermediates. |
 | `config/camera_{intrinsics,extrinsics}/*.json` | Measured per-rig calibration. |
+| `config/projector/*.json` | The solved projector homography, per placement. |
 
 **Working notes, research write-ups, and dev-process material do not belong in
 this repository.** Do not add code comments that reference an external
