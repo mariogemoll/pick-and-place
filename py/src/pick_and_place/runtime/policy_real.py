@@ -16,7 +16,7 @@ import numpy as np
 
 from pick_and_place.spec.robot import ARM_JOINT_NAMES, JOINT_NAMES
 from pick_and_place.core.joint_frames import action_to_joints, joints_to_action
-from pick_and_place.spec.controller import ControllerFailure, OVERHEAD_FEATURE, PolicyController, PolicyObservation, STATE_FEATURE, WRIST_FEATURE
+from pick_and_place.spec.controller import ControllerFailure, GOAL_FEATURE, OVERHEAD_FEATURE, PolicyController, PolicyObservation, STATE_FEATURE, WRIST_FEATURE
 
 
 class PhysicalEpisodeOutcome(str, Enum):
@@ -122,6 +122,42 @@ def classify_physical_outcome(
     return PhysicalEpisodeOutcome.SUCCESS
 
 
+def goal_vector(goal_xy: Any | None) -> np.ndarray | None:
+    """Check a caller's target point once, before the timed loop starts.
+
+    ``None`` means the controller was not trained on a goal and the observation
+    simply carries no goal key — the state a controller predating the goal slot
+    is driven in.
+    """
+    if goal_xy is None:
+        return None
+    goal = np.asarray(goal_xy, dtype=np.float32).reshape(-1)
+    if goal.shape != (2,):
+        raise ValueError(f"goal_xy must be an (x, y) point, got {goal.shape[0]} values")
+    if not np.all(np.isfinite(goal)):
+        raise ValueError("goal_xy must be finite")
+    return goal
+
+
+def policy_observation(
+    state: np.ndarray,
+    overhead_rgb: Callable[[], np.ndarray],
+    wrist_rgb: Callable[[], np.ndarray],
+    goal: np.ndarray | None,
+) -> PolicyObservation:
+    """One tick's observation, with the goal key present only when there is one."""
+    observation: PolicyObservation = {
+        STATE_FEATURE: state,
+        OVERHEAD_FEATURE: np.asarray(overhead_rgb()),
+        WRIST_FEATURE: np.asarray(wrist_rgb()),
+    }
+    if goal is not None:
+        # Copied per tick: a recorded observation is kept, and every tick of an
+        # episode would otherwise share one array a later attempt could rewrite.
+        observation[GOAL_FEATURE] = goal.copy()
+    return observation
+
+
 def prepare_physical_policy_episode(
     controller: PolicyController,
     *,
@@ -131,6 +167,7 @@ def prepare_physical_policy_episode(
     clamp_low: np.ndarray,
     clamp_high: np.ndarray,
     joint_zero_offsets: Mapping[str, float] | None = None,
+    goal_xy: Any | None = None,
     max_steps: int,
     sleep: Callable[[float], None] = time.sleep,
 ) -> PhysicalPolicyEpisodeResult | None:
@@ -140,6 +177,7 @@ def prepare_physical_policy_episode(
     does not consume execution ticks or shift the execution schedule.
     """
     offsets = joint_zero_offsets or {}
+    goal = goal_vector(goal_xy)
     low = np.asarray(clamp_low, dtype=float)
     high = np.asarray(clamp_high, dtype=float)
     controller.reset()
@@ -148,11 +186,7 @@ def prepare_physical_policy_episode(
         state = calibrated_state(
             action_to_joints(follower.get_observation(), previous_raw), offsets
         ).astype(np.float32)
-        observation = {
-            STATE_FEATURE: state,
-            OVERHEAD_FEATURE: np.asarray(overhead_rgb()),
-            WRIST_FEATURE: np.asarray(wrist_rgb()),
-        }
+        observation = policy_observation(state, overhead_rgb, wrist_rgb, goal)
         action = np.asarray(controller.act(observation), dtype=float).reshape(-1)
         command = np.clip(action, low, high)
         follower.send_action(joints_to_action(raw_command(command, offsets)))
@@ -182,6 +216,7 @@ def run_physical_policy_episode(
     control_hz: float,
     max_steps: int,
     joint_zero_offsets: Mapping[str, float] | None = None,
+    goal_xy: Any | None = None,
     max_slew_per_second: float | np.ndarray | None = None,
     pickup_verifier: Callable[[PhysicalPolicyTick], bool | None] | None = None,
     placement_verifier: Callable[[], bool] | None = None,
@@ -211,6 +246,7 @@ def run_physical_policy_episode(
         raise ValueError("each lower joint limit must not exceed its upper limit")
 
     offsets = joint_zero_offsets or {}
+    goal = goal_vector(goal_xy)
     if reset_controller:
         controller.reset()
     period = 1.0 / control_hz
@@ -226,11 +262,7 @@ def run_physical_policy_episode(
             observed_at = clock()
             raw_state = action_to_joints(follower.get_observation(), raw_previous)
             state = calibrated_state(raw_state, offsets).astype(np.float32)
-            observation = {
-                STATE_FEATURE: state,
-                OVERHEAD_FEATURE: np.asarray(overhead_rgb()),
-                WRIST_FEATURE: np.asarray(wrist_rgb()),
-            }
+            observation = policy_observation(state, overhead_rgb, wrist_rgb, goal)
             if observation_callback is not None:
                 observation_callback(observation)
             action = np.asarray(controller.act(observation), dtype=float).reshape(-1)

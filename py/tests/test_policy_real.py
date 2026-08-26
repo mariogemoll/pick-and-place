@@ -7,6 +7,7 @@ import pytest
 from pick_and_place.spec.robot import JOINT_NAMES
 from pick_and_place.spec.controller import (
     ControllerFailure,
+    GOAL_FEATURE,
     OVERHEAD_FEATURE,
     STATE_FEATURE,
     WRIST_FEATURE,
@@ -15,6 +16,7 @@ from pick_and_place.runtime.policy_real import (
     PhysicalEpisodeOutcome,
     calibrated_state,
     classify_physical_outcome,
+    prepare_physical_policy_episode,
     raw_command,
     run_physical_policy_episode,
 )
@@ -244,3 +246,71 @@ def test_outcome_classifier_preserves_controller_failure():
         placement_verified=None,
     )
     assert outcome is PhysicalEpisodeOutcome.CONTROLLER_FAILURE
+
+
+def _episode(controller, **kwargs):
+    return run_physical_policy_episode(
+        controller,
+        follower=StubFollower(np.zeros(len(JOINT_NAMES))),
+        overhead_rgb=lambda: np.zeros((1, 1, 3), dtype=np.uint8),
+        wrist_rgb=lambda: np.zeros((1, 1, 3), dtype=np.uint8),
+        clamp_low=np.full(len(JOINT_NAMES), -100.0),
+        clamp_high=np.full(len(JOINT_NAMES), 100.0),
+        control_hz=30.0,
+        max_steps=3,
+        clock=lambda: 0.0,
+        sleep=lambda _: None,
+        **kwargs,
+    )
+
+
+def test_the_target_reaches_the_controller_on_every_tick_when_one_is_given():
+    controller = StubController(np.zeros(len(JOINT_NAMES)), terminal_after=3)
+
+    _episode(controller, goal_xy=(0.25, -0.10))
+
+    for observation in controller.observations:
+        np.testing.assert_allclose(observation[GOAL_FEATURE], [0.25, -0.10])
+    # Not one shared array: a recorded tick keeps its observation.
+    assert controller.observations[0][GOAL_FEATURE] is not controller.observations[1][GOAL_FEATURE]
+
+
+def test_a_malformed_target_is_refused_before_the_arm_is_commanded():
+    follower = StubFollower(np.zeros(len(JOINT_NAMES)))
+    controller = StubController(np.zeros(len(JOINT_NAMES)))
+
+    with pytest.raises(ValueError, match="goal_xy"):
+        run_physical_policy_episode(
+            controller,
+            follower=follower,
+            overhead_rgb=lambda: np.zeros((1, 1, 3), dtype=np.uint8),
+            wrist_rgb=lambda: np.zeros((1, 1, 3), dtype=np.uint8),
+            clamp_low=np.full(len(JOINT_NAMES), -100.0),
+            clamp_high=np.full(len(JOINT_NAMES), 100.0),
+            control_hz=30.0,
+            max_steps=3,
+            goal_xy=(0.25, -0.10, 0.0125),
+            clock=lambda: 0.0,
+            sleep=lambda _: None,
+        )
+
+    assert follower.commands == []
+
+
+def test_the_search_pose_loop_carries_the_target_too():
+    """Planning ticks drive the same controller, so they need the same observation."""
+    controller = StubController(np.zeros(len(JOINT_NAMES)), terminal_after=1)
+
+    prepare_physical_policy_episode(
+        controller,
+        follower=StubFollower(np.zeros(len(JOINT_NAMES))),
+        overhead_rgb=lambda: np.zeros((1, 1, 3), dtype=np.uint8),
+        wrist_rgb=lambda: np.zeros((1, 1, 3), dtype=np.uint8),
+        clamp_low=np.full(len(JOINT_NAMES), -100.0),
+        clamp_high=np.full(len(JOINT_NAMES), 100.0),
+        max_steps=1,
+        goal_xy=(0.25, -0.10),
+        sleep=lambda _: None,
+    )
+
+    np.testing.assert_allclose(controller.observations[0][GOAL_FEATURE], [0.25, -0.10])

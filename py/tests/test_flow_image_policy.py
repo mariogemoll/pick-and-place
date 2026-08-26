@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 import torch
 
+from pick_and_place.policies import flow_image_policy
 from pick_and_place.policies.dataset_export import (
     load_bounds,
     load_manifest,
@@ -20,7 +21,12 @@ from pick_and_place.policies.flow_image_policy import (
     stack_cameras,
     summarize_smoothness,
 )
-from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
+from pick_and_place.spec.controller import (
+    GOAL_FEATURE,
+    OVERHEAD_FEATURE,
+    STATE_FEATURE,
+    WRIST_FEATURE,
+)
 
 ACTION_DIM = 6
 STATE_DIM = 6
@@ -52,9 +58,14 @@ class StubUnet:
 class StubModel:
     """Stands in for FlowImageUnet1D without loading a vision backbone."""
 
-    def __init__(self, target: float = 0.0, integration_steps: int = INTEGRATION_STEPS) -> None:
+    def __init__(
+        self,
+        target: float = 0.0,
+        integration_steps: int = INTEGRATION_STEPS,
+        state_dim: int = STATE_DIM,
+    ) -> None:
         self.action_dim = ACTION_DIM
-        self.state_dim = STATE_DIM
+        self.state_dim = state_dim
         self.prediction_steps = PREDICTION_STEPS
         self.observation_steps = OBSERVATION_STEPS
         self.unet = StubUnet(target, integration_steps)
@@ -65,10 +76,10 @@ class StubModel:
         return torch.zeros(1, 1)
 
 
-def make_bounds() -> dict[str, np.ndarray]:
+def make_bounds(state_dim: int = STATE_DIM) -> dict[str, np.ndarray]:
     return {
-        "obs_min": np.zeros(STATE_DIM, dtype=np.float32),
-        "obs_max": np.full(STATE_DIM, 100.0, dtype=np.float32),
+        "obs_min": np.zeros(state_dim, dtype=np.float32),
+        "obs_max": np.full(state_dim, 100.0, dtype=np.float32),
         "action_min": np.zeros(ACTION_DIM, dtype=np.float32),
         "action_max": np.full(ACTION_DIM, 10.0, dtype=np.float32),
     }
@@ -296,3 +307,128 @@ def test_smoothness_separates_seam_steps_from_interior_steps():
     assert summary["interior_step_deg"] == 0.0
     assert summary["boundary_step_deg"] == 10.0
     assert summary["max_step_deg"] == 10.0
+
+
+GOAL_DIM = 2
+GOAL_XY = np.array([0.25, -0.10], dtype=np.float32)
+
+
+def make_goal_controller(*, goal_dim: int = GOAL_DIM) -> FlowImagePolicyController:
+    return FlowImagePolicyController(
+        StubModel(state_dim=STATE_DIM + goal_dim),
+        make_bounds(STATE_DIM + goal_dim),
+        act_steps=2,
+        integration_steps=INTEGRATION_STEPS,
+        device=torch.device("cpu"),
+        seed=0,
+        policy_hz=10.0,
+        image_hw=IMAGE_HW,
+        goal_dim=goal_dim,
+    )
+
+
+def write_export(path, *, state_dim: int, goal_dim: int | None) -> str:
+    """A minimal export directory: the manifest and the bounds, no arrays."""
+    path.mkdir(parents=True, exist_ok=True)
+    manifest = {"image_size": list(IMAGE_HW), "fps": 10.0, "state_dim": state_dim}
+    if goal_dim is not None:
+        manifest["goal_dim"] = goal_dim
+    (path / "export.json").write_text(json.dumps(manifest))
+    np.savez(path / "normalization.npz", **make_bounds(state_dim))
+    return str(path)
+
+
+def test_the_goal_is_appended_to_the_state_and_normalized_with_it():
+    controller = make_goal_controller()
+    observation = make_observation()
+    observation[GOAL_FEATURE] = GOAL_XY
+
+    controller.act(observation)
+
+    # The bounds run 0..100 on every dimension, so a state of 50 lands at zero
+    # and the goal, tiny beside them, sits just off the bottom of the range.
+    state = controller.states[-1]
+    assert state.shape == (STATE_DIM + GOAL_DIM,)
+    np.testing.assert_allclose(state[:STATE_DIM], 0.0, atol=1e-6)
+    np.testing.assert_allclose(
+        state[STATE_DIM:], normalize(GOAL_XY, np.zeros(2, np.float32), np.full(2, 100.0, np.float32))
+    )
+
+
+def test_a_goal_conditioned_policy_refuses_an_observation_that_carries_no_goal():
+    controller = make_goal_controller()
+
+    with pytest.raises(KeyError, match="observation.goal"):
+        controller.act(make_observation())
+
+
+def test_a_goal_of_the_wrong_width_is_refused():
+    controller = make_goal_controller()
+    observation = make_observation()
+    observation[GOAL_FEATURE] = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+
+    with pytest.raises(ValueError, match="must have 2 values"):
+        controller.act(observation)
+
+
+def test_a_policy_trained_without_a_goal_ignores_one_in_the_observation():
+    """An unconditioned checkpoint must see exactly the state it was trained on."""
+    controller = make_controller()
+    observation = make_observation()
+    observation[GOAL_FEATURE] = GOAL_XY
+
+    controller.act(observation)
+
+    assert controller.states[-1].shape == (STATE_DIM,)
+
+
+def test_a_checkpoint_and_export_that_disagree_about_the_goal_are_refused():
+    with pytest.raises(ValueError, match="disagree about the conditioning"):
+        FlowImagePolicyController(
+            StubModel(),  # six state inputs: trained without a goal
+            make_bounds(STATE_DIM + GOAL_DIM),
+            act_steps=2,
+            integration_steps=INTEGRATION_STEPS,
+            device=torch.device("cpu"),
+            seed=0,
+            policy_hz=10.0,
+            image_hw=IMAGE_HW,
+            goal_dim=GOAL_DIM,
+        )
+
+
+def test_from_export_takes_the_goal_width_from_the_manifest(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        flow_image_policy,
+        "load_model",
+        lambda checkpoint, device: StubModel(state_dim=STATE_DIM + GOAL_DIM),
+    )
+    export = write_export(tmp_path / "export", state_dim=STATE_DIM + GOAL_DIM, goal_dim=GOAL_DIM)
+
+    controller = FlowImagePolicyController.from_export(
+        tmp_path / "model.pt",
+        export,
+        act_steps=1,
+        integration_steps=INTEGRATION_STEPS,
+        device=torch.device("cpu"),
+    )
+
+    assert controller.goal_dim == GOAL_DIM
+
+
+def test_an_export_written_before_the_goal_slot_loads_as_unconditioned(tmp_path, monkeypatch):
+    """A missing ``goal_dim`` is a value, not an error: it means zero."""
+    monkeypatch.setattr(
+        flow_image_policy, "load_model", lambda checkpoint, device: StubModel()
+    )
+    export = write_export(tmp_path / "export", state_dim=STATE_DIM, goal_dim=None)
+
+    controller = FlowImagePolicyController.from_export(
+        tmp_path / "model.pt",
+        export,
+        act_steps=1,
+        integration_steps=INTEGRATION_STEPS,
+        device=torch.device("cpu"),
+    )
+
+    assert controller.goal_dim == 0

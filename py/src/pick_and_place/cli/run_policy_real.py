@@ -128,7 +128,8 @@ from pick_and_place.policies.policy import (
     resolve_checkpoint_cameras,
     select_device,
 )
-from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
+from pick_and_place.runtime.policy_real import goal_vector
+from pick_and_place.spec.controller import GOAL_FEATURE, OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
 from pick_and_place.spec.robot import (
     NEUTRAL_ARM_JOINTS,
     NEUTRAL_GRIPPER,
@@ -426,6 +427,14 @@ def run(args: argparse.Namespace) -> None:
     # what decides this is the cube in the scene, not which policy is driving. A plain
     # blue cube has no measurable pose and has to be scored by the operator.
     measure_scene = args.measure_scene
+    # A goal-conditioned checkpoint is handed the target rather than reading it
+    # off the plate, so there is nothing to hand it without the overhead solve.
+    goal_dim = 0 if chunked_controller is None else chunked_controller.goal_dim
+    if goal_dim and not measure_scene:
+        raise SystemExit(
+            "this checkpoint is conditioned on the drop target, which comes from the "
+            "overhead solve; --measure-scene is required to run it"
+        )
     rng = np.random.default_rng()
     from pick_and_place.calibration.camera_compare import load_intrinsics
     from pick_and_place.calibration.cam_align_solve import (
@@ -567,8 +576,9 @@ def run(args: argparse.Namespace) -> None:
             action_log.start_attempt()
         outcome = "error"
         try:
-            outcome = _control_loop(attempt_start, next_tick,
-                                    report_time, report_tick, infer_seconds, placement)
+            outcome = _control_loop(attempt_start, next_tick, report_time, report_tick,
+                                    infer_seconds, placement,
+                                    goal_vector(target_xy) if goal_dim else None)
             return outcome
         finally:
             stop_scan.set()
@@ -578,7 +588,7 @@ def run(args: argparse.Namespace) -> None:
                 action_log.end_attempt(outcome)
 
     def _control_loop(attempt_start, next_tick,
-                      report_time, report_tick, infer_seconds, placement) -> str:
+                      report_time, report_tick, infer_seconds, placement, goal) -> str:
         nonlocal tick
         # Placement confirmation and arm slow-down run concurrently from the moment
         # the cube is first seen placed (``placement.since``): the policy keeps
@@ -610,6 +620,10 @@ def run(args: argparse.Namespace) -> None:
                 OVERHEAD_FEATURE: overhead_rgb,
                 WRIST_FEATURE: wrist_rgb,
             }
+            if goal is not None:
+                # Still the detected plate today: step 1 changes how the target
+                # reaches the policy, not where the operator gets it from.
+                observation[GOAL_FEATURE] = goal
             if wrist_writer is not None:
                 wrist_writer.append_data(wrist_rgb)
                 overhead_writer.append_data(overhead_rgb)

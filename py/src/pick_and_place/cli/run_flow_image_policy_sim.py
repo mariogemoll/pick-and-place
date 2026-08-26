@@ -125,6 +125,7 @@ def run(args: argparse.Namespace) -> None:
         image_hw=policy.image_hw,
         render_hw=(1080, 1920),
         scene_appearance=appearance,
+        include_goal=policy.goal_dim > 0,
     )
 
     if args.save_video is not None:

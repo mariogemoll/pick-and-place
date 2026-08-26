@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pick_and_place.spec.controller import ControllerFailure, OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
+from pick_and_place.spec.controller import ControllerFailure, GOAL_FEATURE, OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
 from pick_and_place.policies.policy_controllers import NoOpPolicyController
 from pick_and_place.policies.policy_evaluation import ScenarioManifest
 from pick_and_place.runtime.policy_sim import (
@@ -309,5 +309,71 @@ def test_controller_failure_stops_episode_and_is_reported():
             "message": "camera frame is invalid",
         }
         assert not result.failures.timeout
+    finally:
+        env.close()
+
+
+def test_the_goal_is_absent_unless_the_env_was_built_with_one():
+    """An unconditioned policy must see exactly the observation it was trained on."""
+    env = PolicySimEnv(image_hw=(16, 16), render_hw=(32, 32), renderer_factory=DummyRenderer)
+    try:
+        observation, _ = env.reset(options={"scenario": _scenario()})
+        assert GOAL_FEATURE not in observation
+    finally:
+        env.close()
+
+
+def test_a_goal_env_hands_over_the_scenario_target_rather_than_a_reading_of_it():
+    env = PolicySimEnv(
+        image_hw=(16, 16),
+        render_hw=(32, 32),
+        renderer_factory=DummyRenderer,
+        include_goal=True,
+    )
+    scenario = _scenario()
+    try:
+        observation, _ = env.reset(options={"scenario": scenario})
+
+        assert set(observation) == {GOAL_FEATURE, STATE_FEATURE, OVERHEAD_FEATURE, WRIST_FEATURE}
+        assert env.observation_space.contains(observation)
+        np.testing.assert_allclose(observation[GOAL_FEATURE], scenario.target_position_m[:2])
+        # Every tick of the episode carries it, as every frame of the export does.
+        stepped, *_ = env.step(observation[STATE_FEATURE])
+        np.testing.assert_allclose(stepped[GOAL_FEATURE], scenario.target_position_m[:2])
+    finally:
+        env.close()
+
+
+def test_a_goal_observation_does_not_alias_the_env_between_episodes():
+    env = PolicySimEnv(
+        image_hw=(16, 16),
+        render_hw=(32, 32),
+        renderer_factory=DummyRenderer,
+        include_goal=True,
+    )
+    first = _scenario()
+    second = replace(first, scenario_id="moved", target_position_m=(0.05, -0.05, 0.0125))
+    try:
+        observation, _ = env.reset(options={"scenario": first})
+        held = observation[GOAL_FEATURE]
+        env.reset(options={"scenario": second})
+
+        np.testing.assert_allclose(held, first.target_position_m[:2])
+    finally:
+        env.close()
+
+
+def test_a_state_only_env_still_carries_the_goal():
+    env = PolicySimEnv(
+        image_hw=(16, 16),
+        render_hw=(32, 32),
+        renderer_factory=DummyRenderer,
+        include_images=False,
+        include_goal=True,
+    )
+    try:
+        observation, _ = env.reset(options={"scenario": _scenario()})
+        assert set(observation) == {STATE_FEATURE, GOAL_FEATURE}
+        assert env.observation_space.contains(observation)
     finally:
         env.close()

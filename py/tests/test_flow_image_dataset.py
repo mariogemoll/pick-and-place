@@ -5,10 +5,18 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pytest
 
-from pick_and_place.data.flow_image_dataset import split_episodes, window_indices
+from pick_and_place.data.flow_image_dataset import (
+    FlowImageExport,
+    split_episodes,
+    window_indices,
+)
+from pick_and_place.spec.robot import JOINT_NAMES
 
 
 def test_history_repeats_the_first_frame_of_its_own_episode() -> None:
@@ -83,3 +91,61 @@ def test_invalid_shapes_are_rejected(
         window_indices(
             lengths, observation_steps=observation_steps, prediction_steps=prediction_steps
         )
+
+
+GOAL_DIM = 2
+
+
+def write_goal_export(root: Path, *, prediction_steps: int = 2) -> FlowImageExport:
+    """Two three-frame episodes whose states are joints plus a goal slot."""
+    frames, state_dim = 6, len(JOINT_NAMES) + GOAL_DIM
+    states = np.arange(frames * state_dim, dtype=np.float32).reshape(frames, state_dim)
+    root.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        root / "train.npz",
+        images=np.zeros((frames, 6, 4, 4), dtype=np.uint8),
+        states=states,
+        actions=np.zeros((frames, len(JOINT_NAMES)), dtype=np.float32),
+        traj_lengths=np.array([3, 3], dtype=np.int64),
+    )
+    (root / "export.json").write_text(
+        json.dumps({"goal_dim": GOAL_DIM, "goal_source": "episode_target_xy"})
+    )
+    return FlowImageExport(
+        root, observation_steps=2, prediction_steps=prediction_steps, mmap=False
+    )
+
+
+def test_training_reads_the_wider_state_off_the_export_and_passes_it_through(tmp_path):
+    """A goal-conditioned export needs no training change; this is that check."""
+    export = write_goal_export(tmp_path / "export")
+
+    assert export.state_dim == len(JOINT_NAMES) + GOAL_DIM
+    assert export.action_dim == len(JOINT_NAMES)
+
+    _, states, _ = export.batch(np.array([0, 4]))
+
+    assert states.shape == (2, 2, len(JOINT_NAMES) + GOAL_DIM)
+    # Frame 0 has no history, so it repeats itself; frame 4 pairs 3 with 4.
+    np.testing.assert_array_equal(states[0, 0], states[0, 1])
+    np.testing.assert_array_equal(states[0, 0], export.states[0])
+    np.testing.assert_array_equal(states[1], export.states[[3, 4]])
+
+
+def test_a_goal_conditioned_export_builds_a_model_with_the_matching_state_width(tmp_path):
+    pytest.importorskip("torch")
+    pytest.importorskip("torchvision")
+    from pick_and_place.policies.flow_image_encoder import FlowImageUnet1D
+
+    export = write_goal_export(tmp_path / "export", prediction_steps=4)
+    # Exactly how cli/train_flow_image_policy.py builds it.
+    model = FlowImageUnet1D(
+        action_dim=export.action_dim,
+        state_dim=export.state_dim,
+        prediction_steps=export.prediction_steps,
+        observation_steps=export.observation_steps,
+        cameras=export.cameras,
+        keypoints=8,
+    )
+
+    assert model.state_dim == len(JOINT_NAMES) + GOAL_DIM
