@@ -11,7 +11,7 @@ import pick_and_place.runtime.episodes as episodes
 from pick_and_place.scripted.episode_sampling import sample_recovery_cube
 from pick_and_place.runtime.episodes import EpisodeSamplingError, prepare_episode
 from pick_and_place.sim.model import build_model, placement_error, set_cube_pose
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE, CUBE_REST_Z
 from pick_and_place.core.geometry import CANONICAL_PREGRASP_DISTANCE, CubePose
 from pick_and_place.core.ik import solve_simple_grasp_ik
 from pick_and_place.sim.derive_kinematics import derive_kinematics
@@ -122,8 +122,9 @@ def test_fixed_target_must_be_in_allowed_drop_zone():
 
 
 def test_placement_error_reports_cube_center_offset():
-    source = CubePose(x=0.20, y=-0.12, z=CUBE_HALF_SIZE)
-    target = CubePose(x=0.21, y=-0.10, z=CUBE_HALF_SIZE)
+    # Both cubes stand on the foam: the error is the xy offset and nothing else.
+    source = CubePose(x=0.20, y=-0.12, z=CUBE_REST_Z)
+    target = CubePose(x=0.21, y=-0.10, z=CUBE_REST_Z)
     model, data = build_model(source)
     set_cube_pose(model, data, source)
 

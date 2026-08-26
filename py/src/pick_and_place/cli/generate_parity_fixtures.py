@@ -72,8 +72,11 @@ _LICENSE = {
     "SPDX-License-Identifier": "0BSD",
 }
 
-#: Cube z for a cube resting on the floor.
-_GROUND_Z = CUBE_HALF_SIZE
+#: Cube z the fixtures are generated at. These pin frame algebra, kinematics and
+#: the grasp search, none of which know what the cube is standing on, so it stays
+#: at the bare-table height rather than tracking ``CUBE_REST_Z`` and churning the
+#: oracle — and the TypeScript side with it — for a change it does not test.
+_FIXTURE_CUBE_Z = CUBE_HALF_SIZE
 
 _ALL_FACES: tuple[CubeFace, ...] = ("+x", "-x", "+y", "-y", "+z", "-z")
 
@@ -135,19 +138,19 @@ def _cube_poses() -> tuple[CubePose, ...]:
         CubePose(
             x=0.0388353 + radius * math.cos(math.radians(azimuth)),
             y=radius * math.sin(math.radians(azimuth)),
-            z=_GROUND_Z,
+            z=_FIXTURE_CUBE_Z,
             yaw=math.radians(yaw),
         )
         for radius, azimuth, yaw in zip(radii, azimuths, yaws)
     ]
     # Outside the sector: too close, too far, and past the azimuth limit.
     poses += [
-        CubePose(x=0.0388353 + 0.05, y=0.0, z=_GROUND_Z),
-        CubePose(x=0.0388353 + 0.60, y=0.0, z=_GROUND_Z),
+        CubePose(x=0.0388353 + 0.05, y=0.0, z=_FIXTURE_CUBE_Z),
+        CubePose(x=0.0388353 + 0.60, y=0.0, z=_FIXTURE_CUBE_Z),
         CubePose(
             x=0.0388353 + 0.25 * math.cos(math.radians(140.0)),
             y=0.25 * math.sin(math.radians(140.0)),
-            z=_GROUND_Z,
+            z=_FIXTURE_CUBE_Z,
             yaw=math.radians(20.0),
         ),
     ]
@@ -204,9 +207,9 @@ def build_geometry_fixture() -> dict[str, Any]:
     conventions from one in the arm measurement or the IK.
     """
     poses = (
-        CubePose(x=0.22, y=0.0, z=_GROUND_Z),
-        CubePose(x=0.18, y=-0.13, z=_GROUND_Z, yaw=math.radians(31.0)),
-        CubePose(x=-0.05, y=0.26, z=_GROUND_Z, yaw=math.radians(-77.0)),
+        CubePose(x=0.22, y=0.0, z=_FIXTURE_CUBE_Z),
+        CubePose(x=0.18, y=-0.13, z=_FIXTURE_CUBE_Z, yaw=math.radians(31.0)),
+        CubePose(x=-0.05, y=0.26, z=_FIXTURE_CUBE_Z, yaw=math.radians(-77.0)),
         CubePose(x=0.30, y=0.10, z=0.08, roll=math.radians(9.0), yaw=math.radians(12.0)),
     )
     contacts = [
@@ -296,7 +299,7 @@ def _ik_pose_matrices() -> Iterator[tuple[str, tf.Mat4]]:
             )
 
     # Out of reach: far beyond the annulus, and buried under the floor.
-    far = grasp_matrix("+x", CubePose(x=0.95, y=0.0, z=_GROUND_Z))
+    far = grasp_matrix("+x", CubePose(x=0.95, y=0.0, z=_FIXTURE_CUBE_Z))
     assert far is not None
     yield "out of reach (radius 0.95)", far
     under = grasp_matrix("+x", CubePose(x=0.22, y=0.0, z=-0.30))
@@ -307,7 +310,7 @@ def _ik_pose_matrices() -> Iterator[tuple[str, tf.Mat4]]:
     # axis. The larger tilts are well within the 2R annulus and the joint
     # limits, so nothing but an explicit out-of-plane check rejects them — which
     # is the point, since a 5-DOF arm cannot actually strike these poses.
-    base = grasp_matrix("+x", CubePose(x=0.0388353 + 0.18, y=0.0, z=_GROUND_Z))
+    base = grasp_matrix("+x", CubePose(x=0.0388353 + 0.18, y=0.0, z=_FIXTURE_CUBE_Z))
     assert base is not None
     for tilt_deg in (2.0, 10.0, 45.0, 60.0):
         tilted = base.copy()
@@ -493,7 +496,7 @@ def build_fixtures(k: So101Kinematics) -> dict[str, dict[str, Any]]:
 
 def kinematics() -> So101Kinematics:
     """The arm measured off a freshly compiled, unrandomized scene."""
-    model, _ = build_model(CubePose(x=0.22, y=0.0, z=_GROUND_Z))
+    model, _ = build_model(CubePose(x=0.22, y=0.0, z=_FIXTURE_CUBE_Z))
     return derive_kinematics(model)
 
 

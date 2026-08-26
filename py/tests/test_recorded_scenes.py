@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 
 import numpy as np
+
+from pick_and_place.spec.workspace import CUBE_REST_Z
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -61,7 +63,7 @@ def test_recorded_episode_scenario_uses_first_recorded_state(tmp_path: Path) -> 
 
     np.testing.assert_allclose(scenario.source_position_m, [0.4, 0.0, 0.015])
     np.testing.assert_allclose(scenario.source_orientation_wxyz, [1.0, 0.0, 0.0, 0.0])
-    np.testing.assert_allclose(scenario.target_position_m, [0.2, 0.1, 0.015])
+    np.testing.assert_allclose(scenario.target_position_m, [0.2, 0.1, CUBE_REST_Z])
     np.testing.assert_allclose(scenario.initial_robot_state_real, [1, 2, 3, 4, 5, 6])
     assert scenario.max_steps == 2
     assert scenario.target_plate_yaw_rad == 0.3

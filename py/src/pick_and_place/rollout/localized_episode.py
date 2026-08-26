@@ -37,7 +37,7 @@ from pick_and_place.runtime.episodes import Episode, EpisodeSamplingError, prepa
 from pick_and_place.scripted.episode_sampling import sample_cube, sample_hunt_pose, sample_target
 from pick_and_place.sim.model import set_cube_pose, set_joint
 from pick_and_place.sim.paper_target_marker import place_paper_target_marker
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z, DROP_ZONE_HALF_SIZE
 
 #: Search poses to try before giving up on a scene and resampling it. The rig
 #: pans until it sees; a generator cannot pan forever, and a scene that stays
@@ -158,7 +158,7 @@ def prepare_localized_episode(
                     ep_target
                     if ground_truth_drop_target
                     else CubePose(
-                        x=reading.target.xy[0], y=reading.target.xy[1], z=CUBE_HALF_SIZE
+                        x=reading.target.xy[0], y=reading.target.xy[1], z=CUBE_REST_Z
                     )
                 ),
                 max_attempts=plan_attempts,

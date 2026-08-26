@@ -22,12 +22,14 @@ from pick_and_place.policies.policy_evaluation import (
     write_evaluation_artifacts,
 )
 
+from pick_and_place.spec.workspace import CUBE_REST_Z
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _state(**changes) -> TaskState:
     state = TaskState(
-        cube_position_m=(0.04, 0.0, 0.015),
+        cube_position_m=(0.04, 0.0, CUBE_REST_Z),
         cube_linear_velocity_m_s=(0.0, 0.0, 0.0),
         cube_angular_velocity_rad_s=(0.0, 0.0, 0.0),
         target_xy_m=(0.0, 0.0),
@@ -65,7 +67,7 @@ def test_smoke_manifest_is_frozen_and_hashable():
     assert len(manifest.scenarios) == 8
     assert {scenario.control_hz for scenario in manifest.scenarios} == {30.0}
     assert {scenario.max_steps / scenario.control_hz for scenario in manifest.scenarios} == {15.0}
-    assert manifest.scenarios[0].source_position_m == (0.21288, -0.160946, 0.015)
+    assert manifest.scenarios[0].source_position_m == (0.21288, -0.160946, CUBE_REST_Z)
     assert len(manifest.sha256()) == 64
     assert json.loads(manifest.canonical_json()) == json.loads(json.dumps(manifest.to_dict()))
 
@@ -108,7 +110,10 @@ def test_randomized_selection_suite_matches_geometry_and_randomized_dataset_axes
     )
 
     assert len(randomized.scenarios) == 200
-    assert randomized.sha256() == "6654876e59b627fbdfc81bdbae9809c7a0eb83d95154b349c03ba1d39b534a3b"
+    # Re-pinned when the foam floor lifted every scenario's cube from the table to
+    # the sheet: the xy of all 200 (asserted below against the canonical suite they
+    # were drawn from) are untouched, only z moved 15 mm -> 18 mm.
+    assert randomized.sha256() == "bc3dd470069ce51836df9eb4d52f6a523281585f510ca53f34085177e2e8e40f"
     assert [scenario.source_position_m for scenario in randomized.scenarios] == [
         scenario.source_position_m for scenario in canonical.scenarios[:200]
     ]
@@ -156,7 +161,7 @@ def test_scripted_perturbation_smoke_manifest_has_frozen_joint_and_camera_offset
 def test_initial_resting_state_is_not_a_settled_placement_milestone():
     oracle = TaskSuccessOracle()
 
-    oracle.update(_state(cube_position_m=(0.1, 0.0, 0.015)), 0.02)
+    oracle.update(_state(cube_position_m=(0.1, 0.0, CUBE_REST_Z)), 0.02)
 
     assert not oracle.milestones.cube_settled
     assert not oracle.failure_flags(timed_out=True).off_target_placement
@@ -184,7 +189,7 @@ def test_settled_on_target_is_instantaneous_where_success_latches():
 
     # Knocked off target after the placement was confirmed. Success is a
     # milestone and stays; being on target right now does not.
-    oracle.update(_state(cube_position_m=(0.4, 0.0, 0.015)), 0.05)
+    oracle.update(_state(cube_position_m=(0.4, 0.0, CUBE_REST_Z)), 0.05)
     assert oracle.success
     assert not oracle.settled_on_target
     # And it comes back if the cube does, which is what the dense reward pays
@@ -196,8 +201,8 @@ def test_settled_on_target_is_instantaneous_where_success_latches():
 @pytest.mark.parametrize(
     "state",
     [
-        _state(cube_position_m=(0.040001, 0.0, 0.015)),
-        _state(cube_position_m=(0.04, 0.0, 0.025001)),
+        _state(cube_position_m=(0.040001, 0.0, CUBE_REST_Z)),
+        _state(cube_position_m=(0.04, 0.0, CUBE_REST_Z + 0.010001)),
         _state(cube_linear_velocity_m_s=(0.02, 0.0, 0.0)),
         _state(cube_angular_velocity_rad_s=(0.2, 0.0, 0.0)),
     ],

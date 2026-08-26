@@ -28,7 +28,7 @@ from scipy.spatial.transform import Rotation
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.perception.cube_detection import CubeTracker
 from pick_and_place.sim.model import set_joint
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z
 
 #: What a controller asks for: an image, where it thinks its joints are, and its
 #: prior on the cube; back comes a world pose, or nothing.
@@ -98,7 +98,7 @@ class WristCameraLocalizer:
         return CubePose(
             x=float(estimate.position[0]),
             y=float(estimate.position[1]),
-            z=CUBE_HALF_SIZE,
+            z=CUBE_REST_Z,
             roll=float(roll) if self.free_grasp else 0.0,
             pitch=float(pitch) if self.free_grasp else 0.0,
             yaw=float(yaw),

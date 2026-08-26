@@ -55,7 +55,7 @@ from pick_and_place.core.miscalibration import MiscalibrationDraw
 from pick_and_place.core.physics import NOMINAL, PhysicsDraw
 from pick_and_place.core.task_phases import PhaseSpan, phase_spans_from_json, phase_spans_json
 from pick_and_place.spec.robot import JOINT_NAMES
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z
 
 #: Bumped whenever the stored fields change meaning. A reader refuses anything
 #: it was not written against rather than silently misinterpreting a column.
@@ -320,7 +320,7 @@ class TrajectoryArtifact:
             raise ValueError("an episode with no frames has no placement error")
         cube = self.frames.true_cube_pose[-1]
         cube_xyz = (float(cube[0]), float(cube[1]), float(cube[2]))
-        target_xyz = (*self.facts.target_xy, float(CUBE_HALF_SIZE))
+        target_xyz = (*self.facts.target_xy, float(CUBE_REST_Z))
         dx = cube_xyz[0] - target_xyz[0]
         dy = cube_xyz[1] - target_xyz[1]
         dz = cube_xyz[2] - target_xyz[2]

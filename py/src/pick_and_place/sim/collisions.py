@@ -19,25 +19,32 @@ from collections.abc import Callable
 import mujoco
 import numpy as np
 
+from pick_and_place.sim.foam_floor import FOAM_FLOOR_BODY_NAME
 from pick_and_place.spec.robot import ARM_JOINT_NAMES
+from pick_and_place.spec.workspace import WORKSPACE_FLOOR_Z
 
 
 def build_geom_sets(model: mujoco.MjModel) -> tuple[set[int], set[int]]:
     """Return (robot_geom_ids, env_geom_ids).
 
-    Robot geoms: all geoms on bodies other than the worldbody and the pick_cube.
-    Environment geoms: floor and pick_cube — the things we check the robot against.
+    Robot geoms: all geoms on bodies other than the worldbody, the foam floor and
+    the pick_cube. Environment geoms: the floor, the foam sheet lying on it, and
+    the pick_cube — the things we check the robot against.
     """
     world_body_id = 0
     cube_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pick_cube")
+    foam_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, FOAM_FLOOR_BODY_NAME)
     robot_geom_ids = {
         gid
         for gid in range(model.ngeom)
-        if model.geom_bodyid[gid] not in (world_body_id, cube_body_id)
+        if model.geom_bodyid[gid] not in (world_body_id, cube_body_id, foam_body_id)
     }
     cube_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "pick_cube")
     floor_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "floor")
-    return robot_geom_ids, {cube_geom_id, floor_geom_id}
+    foam_geom_ids = {
+        gid for gid in range(model.ngeom) if model.geom_bodyid[gid] == foam_body_id
+    }
+    return robot_geom_ids, {cube_geom_id, floor_geom_id} | foam_geom_ids
 
 
 def scan_contacts(
@@ -155,11 +162,15 @@ def jaw_floor_clearance(
     """Height of the lowest gripper-jaw corner above the floor for the current
     (already forward-kinematics'd) configuration. The jaws are oriented boxes, so
     each box's lowest corner is its center minus the world-z extent of its half
-    sizes; the minimum over all jaw geoms is the clearance."""
+    sizes; the minimum over all jaw geoms is the clearance.
+
+    The floor is the foam sheet's top face, which is the surface inside the
+    workspace square. Outside the square the sheet is not there and the reading is
+    3 mm pessimistic, which is the safe direction for a clearance."""
     clearance = math.inf
     for gid in jaw_ids:
         half_sizes = model.geom_size[gid]
         world_z_row = data.geom_xmat[gid].reshape(3, 3)[2]
         half_height = float(np.abs(world_z_row) @ half_sizes)
         clearance = min(clearance, float(data.geom_xpos[gid][2]) - half_height)
-    return clearance
+    return clearance - WORKSPACE_FLOOR_Z

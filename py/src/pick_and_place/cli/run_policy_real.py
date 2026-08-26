@@ -114,7 +114,7 @@ from pick_and_place.core.joint_frames import (
     sim_frame_to_real,
 )
 from pick_and_place.hardware.follower import make_so101_follower
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z
 from pick_and_place.perception.image_rectify import (
     build_undistort_map,
     center_crop_and_resize,
@@ -555,7 +555,7 @@ def run(args: argparse.Namespace) -> None:
                     continue
                 x, y, z = pose
                 dist = float(np.hypot(x - target_xy[0], y - target_xy[1]))
-                above = z - CUBE_HALF_SIZE
+                above = z - CUBE_REST_Z
                 at_target = dist <= args.success_tolerance
                 set_down = abs(above) <= args.place_height_tolerance
                 print(

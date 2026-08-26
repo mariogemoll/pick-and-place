@@ -56,7 +56,7 @@ from pick_and_place.spec.controller import (
 )
 from pick_and_place.spec.drop_zone import PaperTarget
 from pick_and_place.spec.robot import GRIPPER_GRASP, GRIPPER_OPEN, JOINT_NAMES, NEUTRAL_ARM_JOINTS
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z
 
 
 class PlannedEpisode(Protocol):
@@ -391,7 +391,7 @@ class ScriptedPolicy:
             target = CubePose(
                 x=float(target_xy[0]),
                 y=float(target_xy[1]),
-                z=CUBE_HALF_SIZE,
+                z=CUBE_REST_Z,
             )
         elif self.target_sampler is None:
             # Pickup geometry does not depend on the eventual drop target. Use a
@@ -707,7 +707,7 @@ class ScriptedPolicy:
                 return hold
             if self.drop_target is None:
                 return self._search_action(hold, carrying=True)
-            target = CubePose(*self.drop_target.xy, CUBE_HALF_SIZE)
+            target = CubePose(*self.drop_target.xy, CUBE_REST_Z)
             assert self.episode is not None
             self.episode.target = target
             measured_joints, measured_gripper = real_frame_to_sim(hold)

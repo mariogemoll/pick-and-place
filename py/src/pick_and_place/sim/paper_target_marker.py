@@ -14,6 +14,8 @@ import math
 
 import mujoco
 
+from pick_and_place.spec.workspace import WORKSPACE_FLOOR_Z
+
 PAPER_TARGET_MARKER_NAME = "paper_target_marker"
 
 
@@ -23,7 +25,7 @@ def add_paper_target_marker(spec: mujoco.MjSpec) -> None:
     body.add_geom(
         name=PAPER_TARGET_MARKER_NAME + "_geom",
         type=mujoco.mjtGeom.mjGEOM_BOX,
-        pos=(0.0, 0.0, 0.002),
+        pos=(0.0, 0.0, WORKSPACE_FLOOR_Z + 0.002),
         size=(0.05, 0.05, 0.001),
         rgba=(1.0, 1.0, 1.0, 0.0),
         contype=0,

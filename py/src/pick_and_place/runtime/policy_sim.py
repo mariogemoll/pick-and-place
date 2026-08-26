@@ -36,7 +36,7 @@ from pick_and_place.core.miscalibration import (
 )
 from pick_and_place.core.physics import PhysicsDraw
 from pick_and_place.sim.physics import PhysicsRandomizer, tracking_bias_offsets
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z, DROP_ZONE_HALF_SIZE
 from pick_and_place.sim.paper_target_marker import add_paper_target_marker, place_paper_target_marker
 from pick_and_place.spec.controller import GOAL_FEATURE, OVERHEAD_FEATURE, PolicyController, PolicyObservation, STATE_FEATURE, WRIST_FEATURE
 from pick_and_place.policies.policy_evaluation import (
@@ -225,7 +225,7 @@ def live_scenario(
         seed=0 if seed is None else int(seed),
         source_position_m=(source.x, source.y, source.z),
         source_orientation_wxyz=tuple(float(v) for v in cube_quat_from_pose(source)),
-        target_position_m=(float(target_xy[0]), float(target_xy[1]), CUBE_HALF_SIZE),
+        target_position_m=(float(target_xy[0]), float(target_xy[1]), CUBE_REST_Z),
         initial_robot_state_real=tuple(float(v) for v in initial_robot_state_real),
         domain_randomization_preset=domain_preset_name,
         domain_randomization_sample=domain_randomization_sample,

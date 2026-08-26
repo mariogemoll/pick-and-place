@@ -46,7 +46,7 @@ from pick_and_place.core.joint_frames import (
     sim_frame_to_real,
 )
 from pick_and_place.hardware.follower import make_so101_follower
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.perception.cube_detection import (
     CubeTracker,
@@ -303,7 +303,7 @@ def run(args: argparse.Namespace) -> None:
             f"wrist {wrist_size[0]}x{wrist_size[1]}"
         )
 
-        dummy_source = CubePose(PAN_AXIS[0] + 0.1, PAN_AXIS[1], CUBE_HALF_SIZE)
+        dummy_source = CubePose(PAN_AXIS[0] + 0.1, PAN_AXIS[1], CUBE_REST_Z)
         model, data = build_model(
             dummy_source,
             include_environment=True,
@@ -457,7 +457,7 @@ def run(args: argparse.Namespace) -> None:
                     {
                         **cube_pose_metadata(
                             controller.cube_pose,
-                            CubePose(*controller.placement_target_xy, CUBE_HALF_SIZE),
+                            CubePose(*controller.placement_target_xy, CUBE_REST_Z),
                         ),
                         **driver_metadata("scripted"),
                     }
@@ -613,7 +613,7 @@ def run(args: argparse.Namespace) -> None:
             )
             if target is None:
                 return None
-            return CubePose(float(target.xy[0]), float(target.xy[1]), CUBE_HALF_SIZE)
+            return CubePose(float(target.xy[0]), float(target.xy[1]), CUBE_REST_Z)
 
         def cooldown() -> None:
             print("Cooldown: moving to REST and releasing torque...")
@@ -830,7 +830,7 @@ def run(args: argparse.Namespace) -> None:
                 print(f"Episode completed in {result.control_steps} control ticks.")
                 if controller.placement_target_xy is not None:
                     cooldown_reference_target = CubePose(
-                        *controller.placement_target_xy, CUBE_HALF_SIZE
+                        *controller.placement_target_xy, CUBE_REST_Z
                     )
                 ep.complete()
                 is_last = args.episodes != 0 and ep.index >= args.episodes

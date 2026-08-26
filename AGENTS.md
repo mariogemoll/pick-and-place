@@ -220,10 +220,18 @@ reaches sideways for a *fact* or a *contract*, that fact belongs in `spec`.
 
 - **`spec/`** — the physical facts and the contracts every branch agrees on:
   the cube's size and face tag ids, the drop-zone and corner plate sizes, the
-  workspace frame pose, the joint names and their order, the rig's control rate
+  workspace frame pose, the foam sheet inside it and how it is cut, the joint
+  names and their order, the rig's control rate
   (`CONTROL_HZ`), the camera modules' nominal optics, the projector's panel size
   and the larger mode its EDID claims, and the `PolicyController` boundary. This is what lets the simulator and the detector agree by
   construction rather than by importing into each other's internals.
+
+  **The floor inside the workspace square is not world Z=0.** A 3 mm EVA foam
+  sheet covers it, so a cube on the table rests at `CUBE_REST_Z`
+  (`WORKSPACE_FLOOR_Z + CUBE_HALF_SIZE` = 18 mm), and heights meant as clearances
+  over that surface are written as `WORKSPACE_FLOOR_Z + ...`. Never write
+  `CUBE_HALF_SIZE` as a cube's z: that is the bare table, which the cube only
+  touches in the cut-outs it is never placed in.
 - **`core/`** — pure computation over the spec: `geometry`, `transforms`,
   `rotations`, `ik`, `kinematics`, `workspace_bounds`, `joint_frames` (sim↔real
   conversions and the joint-limit clamp), `image_ops`, `miscalibration`,

@@ -51,3 +51,34 @@ WORKSPACE_FRAME_APRILTAG_PLATES: tuple[tuple[int, str, tuple[float, float, float
     (14, "sw", (-0.230, -0.230, 0.0025)),
     (15, "se", (0.230, -0.230, 0.0025)),
 )
+
+# A sheet of 3 mm grey EVA foam covers the table inside the square the frame
+# rails enclose. It is laid on the table, so its top face is 3 mm above world
+# Z=0.
+FOAM_FLOOR_THICKNESS = 0.003
+
+# The sheet is cut around everything else that stands on the table inside the
+# square. At each corner that is the AprilTag plate: the cut runs from the
+# plate's inner edge (230 mm - 30 mm) straight out to the rail, taking the
+# 2.6 mm of foam that would otherwise be left between plate and rail with it.
+FOAM_FLOOR_CORNER_CUTOUT_INNER = 0.200
+
+# At the north edge it is the robot: the printed camera-arm base plate the arm
+# is bolted to, which is what stands on the table there and reaches 52.2 mm into
+# the square. It is a wedge, not a box — its edges run out at 30 degrees from
+# north, from 68.8 mm across at its south tip to 129.0 mm where it crosses the
+# rail — and the sheet is cut to that outline. The plate's two feet have a
+# V-shaped gap between them; the cut spans it rather than following it in.
+FOAM_FLOOR_BASE_CUTOUT_TIP_Y = 0.2104
+FOAM_FLOOR_BASE_CUTOUT_TIP_HALF_WIDTH = 0.034379
+FOAM_FLOOR_BASE_CUTOUT_FLARE = 0.57735
+
+# Height of the surface anything on the table inside the square rests on. The
+# foam covers all of it the cube may be placed on — the cut-outs are excluded
+# from the placement bounds — so this is one number and not a function of xy.
+WORKSPACE_FLOOR_Z = FOAM_FLOOR_THICKNESS
+
+# Centre height of a cube resting on that surface. Everything that reasons about
+# a cube on the table — the sampler, the planner, both localizers, the evaluation
+# oracle — takes its z from here rather than assuming the table.
+CUBE_REST_Z = WORKSPACE_FLOOR_Z + CUBE_HALF_SIZE

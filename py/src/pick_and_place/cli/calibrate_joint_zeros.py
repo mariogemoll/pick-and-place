@@ -37,7 +37,7 @@ from pick_and_place.sim.model import build_model
 from pick_and_place.core.paths import REPO_ROOT
 from pick_and_place.core.joint_frames import action_to_joints, real_frame_to_sim
 from pick_and_place.hardware.follower import make_so101_follower
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.sim.derive_kinematics import derive_kinematics
 from pick_and_place.calibration.cam_align_solve import parse_index_or_path
@@ -152,7 +152,7 @@ def run(args: argparse.Namespace) -> None:
         raise SystemExit(f"Missing wrist intrinsics at {wrist_intrinsics}.")
 
     print("Building scene...")
-    dummy = CubePose(x=PAN_AXIS[0] + 0.24, y=PAN_AXIS[1], z=CUBE_HALF_SIZE)
+    dummy = CubePose(x=PAN_AXIS[0] + 0.24, y=PAN_AXIS[1], z=CUBE_REST_Z)
     model, data = build_model(dummy, include_environment=True)
     # The autonomous-relocation fallback runs the hardware executor, whose 30 Hz
     # control loop requires a timestep that divides evenly into it. The stock

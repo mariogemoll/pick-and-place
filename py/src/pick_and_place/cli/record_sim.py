@@ -105,7 +105,7 @@ from pick_and_place.core.grasp_perturbation import (
 from pick_and_place.data.recording import RecordingSession
 from pick_and_place.variants.scene import AppearanceRandomizer
 from pick_and_place.data.trajectory_artifact import render_environment_fingerprint
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.core.paths import datasets_root
 from pick_and_place.rollout.records import episode_metadata, save_episode_artifact
@@ -138,7 +138,7 @@ class _MockViewer:
 
 
 def _to_cube(xy: tuple[float, float] | None) -> CubePose | None:
-    return CubePose(x=xy[0], y=xy[1], z=CUBE_HALF_SIZE) if xy is not None else None
+    return CubePose(x=xy[0], y=xy[1], z=CUBE_REST_Z) if xy is not None else None
 
 
 def _configured_file(path: Path | None) -> dict[str, str] | None:

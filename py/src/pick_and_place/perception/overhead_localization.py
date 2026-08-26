@@ -16,7 +16,7 @@ from pick_and_place.perception.cube_detection import (
     estimate_cube_pose,
     make_cube_detector,
 )
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.perception.paper_detection import PaperTracker, detect_paper_target
 from pick_and_place.spec.drop_zone import PaperTarget
@@ -105,7 +105,7 @@ def localize_cube(
     return CubePose(
         x=float(position[0]),
         y=float(position[1]),
-        z=CUBE_HALF_SIZE,
+        z=CUBE_REST_Z,
         roll=float(roll) if free_grasp else 0.0,
         pitch=float(pitch) if free_grasp else 0.0,
         yaw=float(yaw),

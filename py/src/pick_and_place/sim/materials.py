@@ -7,6 +7,7 @@ Two canonical materials cover the whole robot:
   - ``plastic``   — 3-D-printed robot parts, default grey
   - ``environment_plastic`` — 3-D-printed workspace/camera-mount parts
   - ``motor``     — STS-3215 servo bodies, default near-black
+  - ``foam``      — the EVA foam sheet on the table, default mid grey
 
 A fixed ``collision`` material (debug green, semi-transparent) is always
 created for group-3 geoms and is not user-configurable.
@@ -31,6 +32,8 @@ ENVIRONMENT_PLASTIC_RGBA: tuple[float, float, float, float] = (0.62, 0.62, 0.62,
 MOTOR_RGBA: tuple[float, float, float, float] = (0.11, 0.11, 0.12, 1.0)
 CAMERA_RGBA: tuple[float, float, float, float] = (0.05, 0.05, 0.05, 1.0)
 MDF_RGBA: tuple[float, float, float, float] = (0.72, 0.66, 0.54, 1.0)
+# The EVA foam sheet on the table inside the frame: neutral mid grey.
+FOAM_RGBA: tuple[float, float, float, float] = (0.5, 0.5, 0.51, 1.0)
 _COLLISION_RGBA: tuple[float, float, float, float] = (0.2, 0.8, 0.2, 0.5)
 
 _MOTOR_THRESHOLD = 0.3  # all RGB channels below this → classify as motor
@@ -55,6 +58,8 @@ _FINISHES: dict[str, Finish] = {
     "motor": Finish(specular=0.5, shininess=0.6),
     "camera": Finish(specular=0.6, shininess=0.7),
     "mdf": Finish(specular=0.05, shininess=0.15),
+    # Foam is the least reflective surface in the scene: no highlight at all.
+    "foam": Finish(),
     "collision": Finish(),
 }
 
@@ -73,6 +78,7 @@ class MaterialConfig:
     motor: tuple[float, float, float, float] = MOTOR_RGBA
     camera: tuple[float, float, float, float] = CAMERA_RGBA
     mdf: tuple[float, float, float, float] = MDF_RGBA
+    foam: tuple[float, float, float, float] = FOAM_RGBA
     custom: dict[str, tuple[float, float, float, float]] = field(default_factory=dict)
     # mesh name (no extension) → material name ('plastic', 'environment_plastic',
     # 'motor', 'mdf', 'camera', or key in custom)
@@ -89,6 +95,8 @@ class MaterialConfig:
             return self.camera
         if name == "mdf":
             return self.mdf
+        if name == "foam":
+            return self.foam
         if name == "collision":
             return _COLLISION_RGBA
         return self.custom[name]
@@ -139,6 +147,7 @@ def apply_materials(spec: mujoco.MjSpec, config: MaterialConfig) -> None:
             "motor",
             "mdf",
             "camera",
+            "foam",
         ):
             # Respect explicit assignments already in the spec.
             mat_name = geom.material
@@ -166,7 +175,7 @@ def apply_materials(spec: mujoco.MjSpec, config: MaterialConfig) -> None:
         spec.delete(mat)
 
     # Create only the materials that are actually referenced, in stable order.
-    for name in ("plastic", "environment_plastic", "motor", "camera", "mdf", "collision"):
+    for name in ("plastic", "environment_plastic", "motor", "camera", "mdf", "foam", "collision"):
         if name in needed:
             mat = spec.add_material()
             mat.name = name

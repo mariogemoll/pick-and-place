@@ -23,6 +23,7 @@ from pick_and_place.core.geometry import CubePose, WORLD_UP
 from pick_and_place.core.ik import solve_simple_grasp_ik
 from pick_and_place.core.kinematics import So101Kinematics
 from pick_and_place.core.transforms import Mat4, Vec3
+from pick_and_place.spec.workspace import CUBE_REST_Z, WORKSPACE_FLOOR_Z
 from pick_and_place.core.workspace_bounds import (
     CUBE_PLACEMENT_SECTOR,
     PAN_AXIS,
@@ -34,8 +35,9 @@ from pick_and_place.scripted.motion import _lerp_joints
 
 # Cube-center height of the level cruise. Above the predrop hover so the cube
 # genuinely rises then descends; clears the cube top with room to spare
-# mid-traverse.
-CARRY_CRUISE_Z = 0.10
+# mid-traverse. Measured from the surface the cube rests on, so the foam floor
+# carries it up with the cube rather than eating into the clearance.
+CARRY_CRUISE_Z = WORKSPACE_FLOOR_Z + 0.10
 
 
 # Cube-center height at release. Kept higher than the low simulated drop so
@@ -46,10 +48,10 @@ CARRY_CRUISE_Z = 0.10
 # rises. Near the placement zone's inner radius it drops 3 cm below this (down to
 # the cube's resting height, i.e. a set-down), and at the outer radius it sits
 # 1 cm above.
-DROP_CUBE_CENTER_Z = 0.045
+DROP_CUBE_CENTER_Z = CUBE_REST_Z + 0.03
 
 
-NEAR_DROP_CUBE_CENTER_Z = DROP_CUBE_CENTER_Z - 0.03
+NEAR_DROP_CUBE_CENTER_Z = DROP_CUBE_CENTER_Z - 0.03  # i.e. CUBE_REST_Z
 
 
 FAR_DROP_CUBE_CENTER_Z = DROP_CUBE_CENTER_Z + 0.01

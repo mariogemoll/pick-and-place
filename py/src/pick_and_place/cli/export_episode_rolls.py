@@ -60,7 +60,7 @@ from pick_and_place.runtime.episodes import EpisodeSamplingError, prepare_episod
 from pick_and_place.runtime.replay_rollout import write_rollout
 from pick_and_place.sim.collisions import is_unexpected, scan_contacts
 from pick_and_place.spec.robot import ARM_JOINT_NAMES
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.core.workspace_bounds import (
     CUBE_PLACEMENT_BOUNDS,
@@ -95,7 +95,7 @@ def source_from_preset(radius: float, azimuth_deg: float) -> CubePose:
     return CubePose(
         x=PAN_AXIS[0] + radius * math.cos(azimuth),
         y=PAN_AXIS[1] + radius * math.sin(azimuth),
-        z=CUBE_HALF_SIZE,
+        z=CUBE_REST_Z,
         yaw=pickup_yaw_from_azimuth(azimuth),
     )
 
@@ -130,7 +130,7 @@ def sample_chain_pose(rng: np.random.Generator) -> CubePose:
 def target_pose_for_xy(x: float, y: float) -> CubePose:
     """Return a target pose at a pinned center if some plate yaw can fit there."""
     if is_target_plate_position_allowed(x, y):
-        return CubePose(x=x, y=y, z=CUBE_HALF_SIZE)
+        return CubePose(x=x, y=y, z=CUBE_REST_Z)
     raise EpisodeSamplingError(
         f"target plate at ({x:.4f}, {y:.4f}) cannot clear the workspace frame and AprilTags"
     )
@@ -240,7 +240,7 @@ def run_and_sample(
     cube_start_pose = pose_from_qpos(qpos[0], cube_qpos_adr)
     cube_end = data.qpos[cube_qpos_adr : cube_qpos_adr + 3]
     xy_err = math.hypot(cube_end[0] - episode.target.x, cube_end[1] - episode.target.y)
-    z_err = abs(cube_end[2] - CUBE_HALF_SIZE)
+    z_err = abs(cube_end[2] - CUBE_REST_Z)
     success = xy_err <= SUCCESS_XY_TOLERANCE_M and z_err <= SUCCESS_Z_TOLERANCE_M and collisions == 0
     cube_final_pose = pose_from_qpos(qpos[-1], cube_qpos_adr)
     robot_final_joints, robot_final_gripper = robot_pose_from_qpos(model, qpos[-1])

@@ -30,7 +30,7 @@ from pick_and_place.scripted.scenario_sampling import (
     comfortably_interior,
     sample_target_chain,
 )
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z
 
 
 def is_chainable_target(x: float, y: float) -> bool:
@@ -62,7 +62,7 @@ def load_target_chain(path: Path) -> tuple[CubePose, ...]:
                 "the cube could be placed there but not reliably picked up again, "
                 "which strands an unattended run"
             )
-        chain.append(CubePose(x=x, y=y, z=CUBE_HALF_SIZE))
+        chain.append(CubePose(x=x, y=y, z=CUBE_REST_Z))
     return tuple(chain)
 
 

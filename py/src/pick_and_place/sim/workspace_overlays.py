@@ -4,7 +4,8 @@
 """Draw the workspace sectors into a MuJoCo scene as thin floor decals.
 
 One mesh per sector from :mod:`pick_and_place.core.workspace_bounds`, plus a box over
-each corner AprilTag plate marking the cube exclusion zone. Everything added here
+each corner AprilTag plate marking the cube exclusion zone. A sector's own ``z`` is
+the order it draws in; the foam's thickness lifts all of them onto its top face. Everything added here
 is non-colliding and lives in its own visual group, so a viewer can toggle it and
 physics never sees it.
 """
@@ -16,7 +17,10 @@ import math
 import mujoco
 import numpy as np
 
-from pick_and_place.spec.workspace import WORKSPACE_FRAME_APRILTAG_PLATES
+from pick_and_place.spec.workspace import (
+    WORKSPACE_FLOOR_Z,
+    WORKSPACE_FRAME_APRILTAG_PLATES,
+)
 from pick_and_place.core.workspace_bounds import (
     CANONICAL_PICKUP_SECTOR,
     CUBE_APRILTAG_EXCLUSION_HALF_EXTENT,
@@ -58,7 +62,7 @@ def add_workspace_overlays(
             name=name,
             type=mujoco.mjtGeom.mjGEOM_MESH,
             meshname=mesh.name,
-            pos=(*PAN_AXIS, sector.z),
+            pos=(*PAN_AXIS, WORKSPACE_FLOOR_Z + sector.z),
             rgba=_RGBA,
             contype=0,
             conaffinity=0,
@@ -83,7 +87,7 @@ def add_workspace_overlays(
             name=sector.name,
             type=mujoco.mjtGeom.mjGEOM_MESH,
             meshname=mesh.name,
-            pos=(*PAN_AXIS, sector.z),
+            pos=(*PAN_AXIS, WORKSPACE_FLOOR_Z + sector.z),
             rgba=rgba,
             contype=0,
             conaffinity=0,
@@ -100,7 +104,7 @@ def add_workspace_overlays(
                 CUBE_APRILTAG_EXCLUSION_HALF_EXTENT,
                 _HALF_THICKNESS,
             ),
-            pos=(tag_x, tag_y, CUBE_PLACEMENT_SECTOR.z + 0.00004),
+            pos=(tag_x, tag_y, WORKSPACE_FLOOR_Z + CUBE_PLACEMENT_SECTOR.z + 0.00004),
             rgba=_CUBE_EXCLUSION_RGBA,
             contype=0,
             conaffinity=0,

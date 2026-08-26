@@ -19,7 +19,7 @@ from pick_and_place.core.geometry import CubePose
 from pick_and_place.core.physics import NOMINAL
 from pick_and_place.scripted.scenario_sampling import workspace_region
 from pick_and_place.policies.policy_evaluation import EvaluationScenario
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z
 
 STATE_FEATURE = "observation.state"
 ENVIRONMENT_FEATURE = "observation.environment_state"
@@ -91,7 +91,7 @@ def recorded_episode_scenario(
         seed=episode_index,
         source_position_m=source_position,
         source_orientation_wxyz=source_orientation,
-        target_position_m=(float(row["target_x"]), float(row["target_y"]), CUBE_HALF_SIZE),
+        target_position_m=(float(row["target_x"]), float(row["target_y"]), CUBE_REST_Z),
         initial_robot_state_real=robot_state,
         domain_randomization_preset=None,
         domain_randomization_sample={"enabled": False},

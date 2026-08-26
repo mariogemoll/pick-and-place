@@ -64,7 +64,7 @@ from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.scripted.episode_sampling import sample_cube, sample_target
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.core.joint_frames import sim_frame_to_real
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z, DROP_ZONE_HALF_SIZE
 from pick_and_place.sim.domain_randomization import (
     DomainRandomizationPreset,
     domain_seed,
@@ -332,7 +332,7 @@ def run(args: argparse.Namespace) -> None:
     source_pose = CubePose(
         x=float(args.source[0]),
         y=float(args.source[1]),
-        z=CUBE_HALF_SIZE,
+        z=CUBE_REST_Z,
         yaw=math.radians(args.source_yaw),
     )
     if active_sample is not None:
