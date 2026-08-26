@@ -17,6 +17,18 @@ corner tags visible wins.
     python3 camstream.py                 # identify, then serve on :8080
     python3 camstream.py --identify-only # just print the mapping and exit
 
+Each identified camera is served twice: the raw frame, and the frame put
+through the same rectification the solvers use. Both are overlaid with the tags
+a detector finds in that view, and a count of the corner plates among them, so
+the two panes answer "which plates can the solvers actually use?" directly. Those are not the same field
+of view, and the difference is not cosmetic -- undistorting with the principal
+point forced to the frame centre pushes the periphery outward and off the edge,
+so a marker can sit plainly inside the raw view and be *gone* from every
+rectified one. On this rig's overhead camera that costs ~90 px at the bottom
+centre and ~250 px at the bottom corners, which is exactly where the workspace
+frame's corner plates sit. A preview that showed only the raw frame would
+therefore look healthy while the projector solve failed for want of a plate.
+
 Stop it (Ctrl-C) before running a policy, so the cameras are free.
 """
 
@@ -28,6 +40,7 @@ import re
 import socket
 import threading
 import time
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -36,6 +49,11 @@ import numpy as np
 
 from pick_and_place.cli.rig import add_capture_size_arguments
 from pick_and_place.cli.suggest import SuggestingArgumentParser
+from pick_and_place.core.camera_calibration import (
+    LOCAL_CAMERA_INTRINSICS_DIR,
+    load_camera_intrinsics,
+)
+from pick_and_place.perception.image_rectify import build_undistort_map
 
 BOUNDARY = "frameboundary"
 BY_PATH = Path("/dev/v4l/by-path")
@@ -238,20 +256,118 @@ def identify(nodes: list[Node], width: int, height: int, frames: int) -> None:
 # streaming
 
 
+#: Role as identified above -> the intrinsics file that rectifies that camera.
+ROLE_INTRINSICS = {
+    "overhead": "overhead_camera.json",
+    "wrist": "wrist_camera.json",
+}
+
+
+def undistort_map_for(role: str, width: int, height: int):
+    """Rectification map for a camera in ``role``, or None with the reason why.
+
+    Keyed on the role rather than the device index because the index is a USB
+    enumeration accident, while the role is what the intrinsics were measured
+    for. An unidentified camera gets no map: rectifying it with the wrong
+    camera's coefficients would produce a confident, wrong picture, which is
+    worse here than no picture at all.
+    """
+    filename = ROLE_INTRINSICS.get(role)
+    if filename is None:
+        return None, "camera not identified"
+    path = LOCAL_CAMERA_INTRINSICS_DIR / filename
+    if not path.exists():
+        return None, f"no intrinsics at {path.name}"
+    try:
+        return build_undistort_map(load_camera_intrinsics(path), width, height, cv2), ""
+    except (OSError, ValueError, KeyError) as error:
+        return None, f"unusable intrinsics: {error}"
+
+
+#: How often the detector runs, in Hz. Detection costs far more than a JPEG
+#: encode, and the markers are bolted to a stationary frame, so running it at
+#: capture rate would burn cores to redraw the same quads.
+OVERLAY_HZ = 5.0
+
+PLATE_COLOUR = (120, 220, 120)  # BGR: the corner plates the solvers need
+OTHER_COLOUR = (0, 180, 255)  # any other tag in view, e.g. the cube
+
+
+def detect_markers(bgr, detector) -> list[tuple[int, np.ndarray]]:
+    """Tag ids and their corner quads, as plain arrays.
+
+    Returns copies rather than ``pupil_apriltags`` detections because these are
+    handed to another thread and outlive the detector call that made them.
+    """
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    return [(int(d.tag_id), np.array(d.corners, dtype=np.int32)) for d in detector.detect(gray)]
+
+
+def draw_markers(bgr, markers: list[tuple[int, np.ndarray]]):
+    """Outline each detected tag and count how many corner plates were found.
+
+    The count is the number worth reading: a solve needs all four plates, and
+    which frame they were found in is the whole question when one view is
+    cropped tighter than the other.
+    """
+    found = sorted(tag_id for tag_id, _ in markers if tag_id in WORKSPACE_FRAME_TAG_IDS)
+    for tag_id, corners in markers:
+        plate = tag_id in WORKSPACE_FRAME_TAG_IDS
+        colour = PLATE_COLOUR if plate else OTHER_COLOUR
+        cv2.polylines(bgr, [corners], True, colour, 2, cv2.LINE_AA)
+        centre = corners.mean(axis=0).astype(int)
+        cv2.circle(bgr, tuple(centre), 4, colour, -1, cv2.LINE_AA)
+        label = str(tag_id)
+        origin = (int(corners[:, 0].min()), max(14, int(corners[:, 1].min()) - 6))
+        cv2.putText(bgr, label, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.putText(bgr, label, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.6, colour, 1, cv2.LINE_AA)
+
+    badge = f"{len(found)}/4 plates" + (f"  [{', '.join(str(i) for i in found)}]" if found else "")
+    colour = PLATE_COLOUR if len(found) == len(WORKSPACE_FRAME_TAG_IDS) else OTHER_COLOUR
+    cv2.putText(bgr, badge, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 5, cv2.LINE_AA)
+    cv2.putText(bgr, badge, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, colour, 2, cv2.LINE_AA)
+    return bgr
+
+
 class Camera:
     """One capture device, grabbed continuously into a latest-frame slot."""
 
-    def __init__(self, node: Node, width: int, height: int) -> None:
+    def __init__(self, node: Node, width: int, height: int, overlay: bool = True) -> None:
         self.index = node.index
         self.role = node.role
         self.port = node.port
         self.tags = node.tags
         self.width = width
         self.height = height
+        self.overlay = overlay
         self.frame: bytes | None = None
+        self.rectified: bytes | None = None
+        self.undistort_map, self.rectify_note = undistort_map_for(node.role, width, height)
+        # Rectifying costs a remap and a second JPEG encode per frame, and the
+        # overlay costs a detector run, so both happen only while someone is
+        # actually watching the stream that needs them.
+        self.raw_viewers = 0
+        self.rectified_viewers = 0
+        self._markers: dict[bool, list[tuple[int, np.ndarray]]] = {False: [], True: []}
+        self._detected_at: dict[bool, float] = {False: 0.0, True: 0.0}
+        self._detector = None
         self.lock = threading.Lock()
         self.running = True
         self.thread = threading.Thread(target=self._loop, daemon=True)
+
+    def _annotate(self, bgr, rectified: bool):
+        """Draw the last known markers, refreshing them at ``OVERLAY_HZ``."""
+        if not self.overlay:
+            return bgr
+        if self._detector is None:
+            from pupil_apriltags import Detector
+
+            self._detector = Detector(families=TAG_FAMILY, nthreads=2, refine_edges=True)
+        now = time.monotonic()
+        if now - self._detected_at[rectified] >= 1.0 / OVERLAY_HZ:
+            self._markers[rectified] = detect_markers(bgr, self._detector)
+            self._detected_at[rectified] = now
+        return draw_markers(bgr.copy(), self._markers[rectified])
 
     def start(self) -> None:
         self.thread.start()
@@ -269,16 +385,51 @@ class Camera:
                 if not ok or frame is None:
                     time.sleep(0.05)
                     continue
-                ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                with self.lock:
+                    watching_raw = self.raw_viewers > 0
+                    watching_rectified = self.rectified_viewers > 0
+                # The raw frame is encoded even with nobody watching, so a
+                # viewer that connects has a picture immediately; only the
+                # detector overlay waits for an audience.
+                shown = self._annotate(frame, False) if watching_raw else frame
+                ok, buf = cv2.imencode(".jpg", shown, [cv2.IMWRITE_JPEG_QUALITY, 80])
                 if ok:
                     with self.lock:
                         self.frame = buf.tobytes()
+                if self.undistort_map is None or not watching_rectified:
+                    continue
+                warped = cv2.remap(frame, *self.undistort_map, cv2.INTER_LINEAR)
+                warped = self._annotate(warped, True)
+                ok, buf = cv2.imencode(".jpg", warped, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                if ok:
+                    with self.lock:
+                        self.rectified = buf.tobytes()
         finally:
             cap.release()
 
-    def latest(self) -> bytes | None:
+    def latest(self, rectified: bool = False) -> bytes | None:
         with self.lock:
-            return self.frame
+            return self.rectified if rectified else self.frame
+
+    @contextmanager
+    def viewer(self, rectified: bool):
+        """Count one viewer of a stream for the life of the block."""
+        with self.lock:
+            if rectified:
+                self.rectified_viewers += 1
+            else:
+                self.raw_viewers += 1
+        try:
+            yield
+        finally:
+            with self.lock:
+                if rectified:
+                    self.rectified_viewers -= 1
+                    if self.rectified_viewers == 0:
+                        # Do not serve a stale frame to the next viewer.
+                        self.rectified = None
+                else:
+                    self.raw_viewers -= 1
 
     def stop(self) -> None:
         self.running = False
@@ -294,6 +445,11 @@ PAGE = """<!doctype html>
   p.sub {{ margin:0 0 1.25rem; color:#9aa; }}
   .grid {{ display:flex; flex-wrap:wrap; gap:1.5rem; }}
   figure {{ margin:0; }}
+  .pair {{ display:flex; gap:.75rem; flex-wrap:wrap; }}
+  .tag {{ display:block; margin-top:.3rem; font-size:12px; color:#9aa; }}
+  .absent {{ display:flex; align-items:center; justify-content:center;
+             width:min(46vw,640px); min-height:12rem; border:1px dashed #333;
+             border-radius:6px; color:#9aa; text-align:center; padding:1rem; }}
   img {{ display:block; width:min(46vw,640px); height:auto;
          background:#000; border:1px solid #333; border-radius:6px; }}
   figcaption {{ margin-top:.5rem; font-weight:600; }}
@@ -312,6 +468,10 @@ PAGE = """<!doctype html>
 <h1>Rig cameras</h1>
 <p class="sub">Identified by workspace-frame AprilTags (ids 12-15).
 Run flags: <code>{flags}</code></p>
+<p class="sub">Each camera is shown raw and rectified, with every detected tag
+outlined and the corner-plate count in the top-left. The solvers measure on the
+<em>rectified</em> frame, which is a narrower field of view — a plate outlined on
+the left and missing on the right is one the solvers cannot use.</p>
 <div class="grid">{cards}</div>
 <h2>All video nodes</h2>
 <div class="wrap"><table>
@@ -326,10 +486,18 @@ ROW = """<tr><td>/dev/video{index}</td><td class="{cls}">{status}</td><td>{kind}
 <td>{port}</td><td>{role}</td><td>{tags}</td><td>{resolution}</td><td>{name}</td></tr>"""
 
 CARD = """<figure>
-  <img src="/stream/{index}" alt="camera {index}">
+  <div class="pair">
+    <div><img src="/stream/{index}" alt="camera {index} raw"><span class="tag">raw</span></div>
+    {rectified}
+  </div>
   <figcaption><span class="role">{role}</span>
     <span class="hint">— index {index}, usb {port}, {tags}</span></figcaption>
 </figure>"""
+
+RECTIFIED_PANE = """<div><img src="/rectified/{index}" alt="camera {index} rectified">
+      <span class="tag">rectified</span></div>"""
+
+RECTIFIED_MISSING = """<div class="absent"><span class="tag">no rectified view — {note}</span></div>"""
 
 
 def build_handler(cameras: dict[int, Camera], nodes: list[Node], flags: str):
@@ -347,6 +515,11 @@ def build_handler(cameras: dict[int, Camera], nodes: list[Node], flags: str):
                         role=(cameras[i].role or "unidentified").upper(),
                         port=cameras[i].port,
                         tags=f"tags {cameras[i].tags}" if cameras[i].tags else "",
+                        rectified=(
+                            RECTIFIED_PANE.format(index=i)
+                            if cameras[i].undistort_map is not None
+                            else RECTIFIED_MISSING.format(note=cameras[i].rectify_note)
+                        ),
                     )
                     for i in sorted(cameras)
                 )
@@ -372,7 +545,8 @@ def build_handler(cameras: dict[int, Camera], nodes: list[Node], flags: str):
                 self.wfile.write(body)
                 return
 
-            if self.path.startswith("/stream/"):
+            if self.path.startswith(("/stream/", "/rectified/")):
+                rectified = self.path.startswith("/rectified/")
                 try:
                     index = int(self.path.rsplit("/", 1)[1])
                 except ValueError:
@@ -382,6 +556,9 @@ def build_handler(cameras: dict[int, Camera], nodes: list[Node], flags: str):
                 if camera is None:
                     self.send_error(404)
                     return
+                if rectified and camera.undistort_map is None:
+                    self.send_error(404, camera.rectify_note or "no intrinsics")
+                    return
                 self.send_response(200)
                 self.send_header("Age", "0")
                 self.send_header("Cache-Control", "no-cache, private")
@@ -390,22 +567,27 @@ def build_handler(cameras: dict[int, Camera], nodes: list[Node], flags: str):
                 )
                 self.end_headers()
                 try:
-                    while True:
-                        frame = camera.latest()
-                        if frame is None:
-                            time.sleep(0.05)
-                            continue
-                        self.wfile.write(f"--{BOUNDARY}\r\n".encode())
-                        self.wfile.write(b"Content-Type: image/jpeg\r\n")
-                        self.wfile.write(f"Content-Length: {len(frame)}\r\n\r\n".encode())
-                        self.wfile.write(frame)
-                        self.wfile.write(b"\r\n")
-                        time.sleep(1 / 30)
+                    with camera.viewer(rectified):
+                        self._pump(camera, rectified)
                 except (BrokenPipeError, ConnectionResetError):
                     return  # viewer closed the tab
                 return
 
             self.send_error(404)
+
+        def _pump(self, camera: Camera, rectified: bool) -> None:
+            """Write frames as a multipart stream until the viewer goes away."""
+            while True:
+                frame = camera.latest(rectified)
+                if frame is None:
+                    time.sleep(0.05)
+                    continue
+                self.wfile.write(f"--{BOUNDARY}\r\n".encode())
+                self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                self.wfile.write(f"Content-Length: {len(frame)}\r\n\r\n".encode())
+                self.wfile.write(frame)
+                self.wfile.write(b"\r\n")
+                time.sleep(1 / 30)
 
     return Handler
 
@@ -432,6 +614,12 @@ def build_parser() -> SuggestingArgumentParser:
     add_capture_size_arguments(parser, width=1280, height=720)
     parser.add_argument("--frames", type=int, default=8, help="frames to inspect per camera")
     parser.add_argument("--identify-only", action="store_true")
+    parser.add_argument(
+        "--no-overlay",
+        dest="overlay",
+        action="store_false",
+        help="do not run the detector on the streams or draw the tags it finds",
+    )
     parser.add_argument("--bind", default="0.0.0.0")
     return parser
 
@@ -471,7 +659,10 @@ def run(args: argparse.Namespace) -> None:
     if args.identify_only:
         return
 
-    cameras = {node.index: Camera(node, args.width, args.height) for node in usable}
+    cameras = {
+        node.index: Camera(node, args.width, args.height, overlay=args.overlay)
+        for node in usable
+    }
     for camera in cameras.values():
         camera.start()
 

@@ -38,6 +38,9 @@ CAMERA_FEATURES = (
 )
 FORMAT_VERSION = "diffusion-policy-stitched-v1"
 DEFAULT_POLICY_HZ = 10
+#: ``goal_source`` value for the goal slot fed by each episode's target point.
+GOAL_TARGET_XY = "episode_target_xy"
+_GOAL_TARGET_XY_COLUMNS = ("target_x", "target_y")
 _CAMERA_PROGRESS_BATCH = 128
 _camera_progress_counter: Any | None = None
 
@@ -119,6 +122,48 @@ def _load_low_dimensional_arrays(
     states = np.asarray(table[STATE_FEATURE].to_pylist(), dtype=np.float32)
     actions = np.asarray(table[ACTION_FEATURE].to_pylist(), dtype=np.float32)
     return states, actions
+
+
+def episode_goal_vectors(
+    rows: list[dict[str, Any]], source_lengths: list[int]
+) -> np.ndarray:
+    """Per-frame goal slot, repeated from each episode's recorded target point.
+
+    The goal is an episode-level fact, so every frame of an episode carries the
+    same value. It is appended to the state vector *before* normalization on
+    purpose: the goal then gets min-max bounds fitted alongside every other
+    state dimension, and a rollout normalizes a live target through the same
+    ``normalization.npz`` it already loads rather than through a second path
+    that could drift out of sync with it.
+    """
+    missing = [name for name in _GOAL_TARGET_XY_COLUMNS if name not in rows[0]]
+    if missing:
+        raise ValueError(
+            f"episode metadata has no {missing[0]!r}; this dataset was recorded "
+            f"without a target point, so it cannot be exported with goal={GOAL_TARGET_XY!r}"
+        )
+    goals = np.asarray(
+        [[float(row[name]) for name in _GOAL_TARGET_XY_COLUMNS] for row in rows],
+        dtype=np.float32,
+    )
+    if not np.isfinite(goals).all():
+        raise ValueError("episode target points contain non-finite values")
+    return np.repeat(goals, source_lengths, axis=0)
+
+
+def _check_goal_varies(goals: np.ndarray) -> None:
+    """Refuse a goal slot that is constant across the whole export.
+
+    A constant column min-max normalizes to a constant, so the policy would be
+    conditioned on a dimension carrying no information, and a rollout asking for
+    any other target would be extrapolating off the fitted bounds. Both failures
+    are silent at training time, which is why this is an error and not a warning.
+    """
+    if len(goals) and np.allclose(goals.min(axis=0), goals.max(axis=0)):
+        raise ValueError(
+            "every episode shares one target point, so the goal slot would carry "
+            "no information; export a dataset whose targets vary, or pass goal=None"
+        )
 
 
 def normalize_min_max(
@@ -511,6 +556,7 @@ def export_diffusion_policy_dataset(
     workers: int = 1,
     action_encoding: ActionEncoding = ActionEncoding.ABSOLUTE,
     bounds_from: Path | None = None,
+    goal: str | None = None,
 ) -> dict[str, Any]:
     """Export Diffusion Policy arrays without modifying the LeRobot source.
 
@@ -539,6 +585,8 @@ def export_diffusion_policy_dataset(
         raise ValueError("max_episodes must be positive")
     if workers < 1:
         raise ValueError("workers must be positive")
+    if goal is not None and goal != GOAL_TARGET_XY:
+        raise ValueError(f"unknown goal source {goal!r}; expected {GOAL_TARGET_XY!r} or None")
 
     info_path = dataset_root / "meta" / "info.json"
     info = _read_json(info_path)
@@ -583,14 +631,25 @@ def export_diffusion_policy_dataset(
     keep = _decimated_indices(source_lengths, frame_stride)
     if len(keep) != total_frames:
         raise ValueError("decimated index count does not match trajectory lengths")
-    states_raw = states_raw[keep]
+    joints_raw = states_raw[keep]
     actions_raw = actions_raw[keep]
+    goal_dim = 0
+    observation_raw = joints_raw
+    if goal is not None:
+        goals = episode_goal_vectors(rows, source_lengths)[keep]
+        _check_goal_varies(goals)
+        goal_dim = int(goals.shape[1])
+        # Appended, never prepended: the leading columns stay the joints an
+        # older export put there, so a state vector remains readable by index.
+        observation_raw = np.hstack((joints_raw, goals))
     supplied = _supplied_bounds(bounds_from, action_encoding)
     states, obs_min, obs_max = normalize_min_max(
-        states_raw, None if supplied is None else (supplied["obs_min"], supplied["obs_max"])
+        observation_raw, None if supplied is None else (supplied["obs_min"], supplied["obs_max"])
     )
+    # Deltas are defined against the measured *joints*, so the goal columns must
+    # not reach this: a command minus a target point is not a quantity.
     actions, action_min, action_max = normalize_min_max(
-        encode_actions(action_encoding, actions_raw, states_raw),
+        encode_actions(action_encoding, actions_raw, joints_raw),
         None if supplied is None else (supplied["action_min"], supplied["action_max"]),
     )
 
@@ -672,6 +731,8 @@ def export_diffusion_policy_dataset(
         ),
         "state_dim": int(states.shape[1]),
         "action_dim": int(actions.shape[1]),
+        "goal_dim": goal_dim,
+        "goal_source": goal,
     }
     with (building_dir / "export.json").open("w") as file:
         json.dump(manifest, file, indent=2, sort_keys=True)

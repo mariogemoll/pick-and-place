@@ -38,7 +38,7 @@ from pick_and_place.core.physics import PhysicsDraw
 from pick_and_place.sim.physics import PhysicsRandomizer, tracking_bias_offsets
 from pick_and_place.spec.workspace import CUBE_HALF_SIZE, DROP_ZONE_HALF_SIZE
 from pick_and_place.sim.paper_target_marker import add_paper_target_marker, place_paper_target_marker
-from pick_and_place.spec.controller import OVERHEAD_FEATURE, PolicyController, PolicyObservation, STATE_FEATURE, WRIST_FEATURE
+from pick_and_place.spec.controller import GOAL_FEATURE, OVERHEAD_FEATURE, PolicyController, PolicyObservation, STATE_FEATURE, WRIST_FEATURE
 from pick_and_place.policies.policy_evaluation import (
     EpisodeResult,
     EvaluationScenario,
@@ -252,6 +252,7 @@ class PolicySimEnv(gym.Env):
         scene_appearance: SceneAppearance | None = None,
         terminate_on_success: bool = True,
         include_images: bool = True,
+        include_goal: bool = False,
         background_panorama=None,
         table_texture=None,
         robot_dynamics: bool = True,
@@ -286,6 +287,10 @@ class PolicySimEnv(gym.Env):
         self._renderer_factory = renderer_factory
         self._renderer: Any | None = None
         self.include_images = include_images
+        # Off by default: a policy that reads the target off the drop plate must
+        # see exactly the observation it was trained on, and an extra key is a
+        # difference. Runners turn it on for a goal-conditioned checkpoint.
+        self.include_goal = include_goal
         # The draw splits: the wrist mount is something the policy has to cope
         # with, the rest is only pixels.
         self._wrist_mount = WristMountRandomizer(self.model)
@@ -329,6 +334,13 @@ class PolicySimEnv(gym.Env):
                 dtype=np.float32,
             ),
         }
+        if include_goal:
+            observation_spaces[GOAL_FEATURE] = spaces.Box(
+                low=-np.inf,
+                high=np.inf,
+                shape=(2,),
+                dtype=np.float32,
+            )
         if include_images:
             observation_spaces[OVERHEAD_FEATURE] = spaces.Box(
                 low=0,
@@ -512,6 +524,12 @@ class PolicySimEnv(gym.Env):
                 self.data.qpos[self._joint_qpos_adr], self._joint_offsets_rad()
             ),
         }
+        if self.include_goal:
+            # The scenario's own target, not a reading of the plate: that is the
+            # whole point of conditioning, and it is what the export appended to
+            # each frame of the training set. Copied so a controller holding on
+            # to the observation cannot see it change under the next reset.
+            observation[GOAL_FEATURE] = np.array(self._target_xy, dtype=np.float32)
         if not self.include_images:
             return observation
         # Preserve the existing interactive runner's render order so deterministic

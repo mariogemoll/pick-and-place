@@ -12,6 +12,7 @@ import pytest
 from pick_and_place.data import diffusion_policy_dataset
 from pick_and_place.data.diffusion_policy_dataset import (
     CAMERA_FEATURES,
+    GOAL_TARGET_XY,
     _decimated_indices,
     decimated_length,
     export_diffusion_policy_dataset,
@@ -36,7 +37,9 @@ def test_decimation_restarts_at_each_episode_boundary():
     np.testing.assert_array_equal(_decimated_indices([5, 4], 3), [0, 3, 5, 8])
 
 
-def _write_tiny_dataset(root: Path) -> None:
+def _write_tiny_dataset(root: Path, targets: list[tuple[float, float]] | None = None) -> None:
+    """Write a two-frame-per-episode dataset; ``targets`` adds goal metadata."""
+    episode_count = 1 if targets is None else len(targets)
     (root / "meta" / "episodes" / "chunk-000").mkdir(parents=True)
     (root / "data" / "chunk-000").mkdir(parents=True)
     for feature in CAMERA_FEATURES:
@@ -57,35 +60,35 @@ def _write_tiny_dataset(root: Path) -> None:
     (root / "meta" / "info.json").write_text(json.dumps(info))
 
     episode = {
-        "episode_index": [0],
-        "length": [4],
-        "data/chunk_index": [0],
-        "data/file_index": [0],
+        "episode_index": list(range(episode_count)),
+        "length": [4] * episode_count,
+        "data/chunk_index": [0] * episode_count,
+        "data/file_index": [0] * episode_count,
     }
+    if targets is not None:
+        episode["target_x"] = [float(x) for x, _ in targets]
+        episode["target_y"] = [float(y) for _, y in targets]
     for feature in CAMERA_FEATURES:
         episode.update(
             {
-                f"videos/{feature}/chunk_index": [0],
-                f"videos/{feature}/file_index": [0],
-                f"videos/{feature}/from_timestamp": [0.0],
+                f"videos/{feature}/chunk_index": [0] * episode_count,
+                f"videos/{feature}/file_index": [0] * episode_count,
+                f"videos/{feature}/from_timestamp": [0.0] * episode_count,
             }
         )
     pq.write_table(
         pa.table(episode),
         root / "meta" / "episodes" / "chunk-000" / "file-000.parquet",
     )
+    states = [[0.0, 10.0], [100.0, 100.0], [200.0, 200.0], [2.0, 14.0]]
+    actions = [[-2.0, 1.0], [100.0, 100.0], [200.0, 200.0], [2.0, 5.0]]
     pq.write_table(
         pa.table(
             {
-                "index": [0, 1, 2, 3],
-                "episode_index": [0, 0, 0, 0],
-                "observation.state": [
-                    [0.0, 10.0],
-                    [100.0, 100.0],
-                    [200.0, 200.0],
-                    [2.0, 14.0],
-                ],
-                "action": [[-2.0, 1.0], [100.0, 100.0], [200.0, 200.0], [2.0, 5.0]],
+                "index": list(range(4 * episode_count)),
+                "episode_index": [index for index in range(episode_count) for _ in range(4)],
+                "observation.state": states * episode_count,
+                "action": actions * episode_count,
             }
         ),
         root / "data" / "chunk-000" / "file-000.parquet",
@@ -240,3 +243,102 @@ def test_reusing_bounds_across_action_encodings_is_refused(tmp_path):
     with pytest.raises(ValueError, match="different quantity"):
         _supplied_bounds(path, ActionEncoding.ABSOLUTE)
     assert _supplied_bounds(path, ActionEncoding.DELTA) is not None
+
+
+def _stub_images(monkeypatch, source: Path):
+    """Fill the image array without decoding video, as the export tests do."""
+
+    def fake_write_images(destination, *, channel_offset, rows, frame_stride, **kwargs):
+        del kwargs, rows, frame_stride
+        destination[:, channel_offset : channel_offset + 3] = 20
+        feature = CAMERA_FEATURES[channel_offset // 3]
+        return [source / "videos" / feature / "chunk-000" / "file-000.mp4"]
+
+    monkeypatch.setattr(diffusion_policy_dataset, "_write_camera_images", fake_write_images)
+
+
+def test_export_without_a_goal_records_a_zero_width_slot(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    _write_tiny_dataset(source)
+    _stub_images(monkeypatch, source)
+
+    manifest = export_diffusion_policy_dataset(source, tmp_path / "out", image_size=8)
+
+    assert manifest["goal_dim"] == 0
+    assert manifest["goal_source"] is None
+    assert manifest["state_dim"] == 2
+
+
+def test_goal_export_appends_each_episode_target_and_records_its_width(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    _write_tiny_dataset(source, targets=[(0.10, -0.20), (0.30, 0.20)])
+    _stub_images(monkeypatch, source)
+
+    manifest = export_diffusion_policy_dataset(
+        source, tmp_path / "out", image_size=8, goal=GOAL_TARGET_XY
+    )
+
+    assert manifest["goal_dim"] == 2
+    assert manifest["goal_source"] == GOAL_TARGET_XY
+    assert manifest["state_dim"] == 4
+    with np.load(tmp_path / "out" / "train.npz", allow_pickle=False) as dataset:
+        states = dataset["states"]
+    # Two episodes, two kept frames each; every frame of an episode carries that
+    # episode's target, and the two targets land on the ends of the fitted range.
+    assert states.shape == (4, 4)
+    np.testing.assert_allclose(states[:2, 2:], [[-1.0, -1.0], [-1.0, -1.0]], atol=2e-5)
+    np.testing.assert_allclose(states[2:, 2:], [[1.0, 1.0], [1.0, 1.0]], atol=2e-5)
+    with np.load(tmp_path / "out" / "normalization.npz", allow_pickle=False) as normalization:
+        np.testing.assert_allclose(normalization["obs_min"], [0.0, 10.0, 0.10, -0.20], atol=1e-6)
+        np.testing.assert_allclose(normalization["obs_max"], [2.0, 14.0, 0.30, 0.20], atol=1e-6)
+
+
+def test_delta_actions_are_encoded_against_the_joints_not_the_goal(tmp_path, monkeypatch):
+    """A delta is a command minus measured joints; the goal must not reach it."""
+    source = tmp_path / "source"
+    _write_tiny_dataset(source, targets=[(0.10, -0.20), (0.30, 0.20)])
+    _stub_images(monkeypatch, source)
+
+    manifest = export_diffusion_policy_dataset(
+        source,
+        tmp_path / "out",
+        image_size=8,
+        goal=GOAL_TARGET_XY,
+        action_encoding=ActionEncoding.DELTA,
+    )
+
+    assert manifest["state_dim"] == 4
+    assert manifest["action_dim"] == 2
+    with np.load(tmp_path / "out" / "normalization.npz", allow_pickle=False) as normalization:
+        # states[0] = [0, 10], actions[0] = [-2, 1]; states[3] = [2, 14], actions[3] = [2, 5].
+        np.testing.assert_allclose(normalization["action_min"], [-2.0, -9.0], atol=1e-6)
+        np.testing.assert_allclose(normalization["action_max"], [0.0, -9.0], atol=1e-6)
+
+
+def test_goal_export_refuses_a_dataset_whose_targets_never_vary(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    _write_tiny_dataset(source, targets=[(0.2, 0.1), (0.2, 0.1)])
+    _stub_images(monkeypatch, source)
+
+    with pytest.raises(ValueError, match="no information"):
+        export_diffusion_policy_dataset(
+            source, tmp_path / "out", image_size=8, goal=GOAL_TARGET_XY
+        )
+
+
+def test_goal_export_refuses_a_dataset_recorded_without_a_target(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    _write_tiny_dataset(source)
+    _stub_images(monkeypatch, source)
+
+    with pytest.raises(ValueError, match="recorded without a target point"):
+        export_diffusion_policy_dataset(
+            source, tmp_path / "out", image_size=8, goal=GOAL_TARGET_XY
+        )
+
+
+def test_export_rejects_an_unknown_goal_source(tmp_path):
+    with pytest.raises(ValueError, match="unknown goal source"):
+        export_diffusion_policy_dataset(
+            tmp_path / "source", tmp_path / "out", image_size=8, goal="plate-pixels"
+        )

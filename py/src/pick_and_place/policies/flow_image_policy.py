@@ -33,11 +33,13 @@ from pick_and_place.policies.dataset_export import (
 )
 from pick_and_place.policies.flow_image_encoder import FlowImageUnet1D
 from pick_and_place.spec.controller import (
+    GOAL_FEATURE,
     OVERHEAD_FEATURE,
     PolicyObservation,
     STATE_FEATURE,
     WRIST_FEATURE,
 )
+from pick_and_place.spec.robot import JOINT_NAMES
 
 # ImageNet statistics, which the camera encoder's backbone was trained under.
 IMAGE_MEAN = (0.485, 0.456, 0.406)
@@ -170,6 +172,7 @@ class FlowImagePolicyController:
         policy_hz: float,
         image_hw: tuple[int, int],
         noise_correlation: float = 0.0,
+        goal_dim: int = 0,
     ) -> None:
         if act_steps < 1 or act_steps > model.prediction_steps:
             raise ValueError(
@@ -180,6 +183,19 @@ class FlowImagePolicyController:
             raise ValueError("integration_steps must be positive")
         if not 0.0 <= noise_correlation <= 1.0:
             raise ValueError(f"noise_correlation must be in [0, 1], got {noise_correlation}")
+        if goal_dim < 0:
+            raise ValueError(f"goal_dim must not be negative, got {goal_dim}")
+        # The checkpoint and the export have to agree about what the policy was
+        # conditioned on. They are separate files and are routinely paired by
+        # hand, so a checkpoint trained without a goal loaded against a
+        # goal-conditioned export would otherwise run with the target quietly
+        # occupying two columns the weights read as joints.
+        if model.state_dim != len(JOINT_NAMES) + goal_dim:
+            raise ValueError(
+                f"the model takes a {model.state_dim}-dimensional state, but the export "
+                f"describes {len(JOINT_NAMES)} joints plus a goal of width {goal_dim}; "
+                "the checkpoint and the export disagree about the conditioning"
+            )
         self.model = model
         self.device = device
         self.act_steps = act_steps
@@ -187,6 +203,7 @@ class FlowImagePolicyController:
         self.seed = seed
         self.policy_hz = policy_hz
         self.image_hw = image_hw
+        self.goal_dim = goal_dim
         self.observation_min = bounds["obs_min"]
         self.observation_max = bounds["obs_max"]
         self.action_min = bounds["action_min"]
@@ -217,9 +234,9 @@ class FlowImagePolicyController:
     ) -> FlowImagePolicyController:
         """Load a checkpoint together with the dataset export it was trained on.
 
-        The export carries the normalization bounds, the control rate and the
-        input resolution — all part of the model contract, none of them
-        recoverable from the weights alone.
+        The export carries the normalization bounds, the control rate, the
+        input resolution and the width of the goal slot — all part of the model
+        contract, none of them recoverable from the weights alone.
         """
         manifest = load_manifest(export)
         height, width = (int(value) for value in manifest["image_size"])
@@ -233,6 +250,9 @@ class FlowImagePolicyController:
             policy_hz=float(manifest["fps"]),
             image_hw=(height, width),
             noise_correlation=noise_correlation,
+            # Exports predating the goal slot have no such key; absence is a
+            # value here, as it is for ``action_encoding``, not an error.
+            goal_dim=int(manifest.get("goal_dim", 0)),
         )
 
     @property
@@ -274,6 +294,30 @@ class FlowImagePolicyController:
         states = torch.from_numpy(np.stack(self.states)[None]).to(self.device)
         return floats, states
 
+    def _state_vector(self, observation: PolicyObservation) -> np.ndarray:
+        """The joints, followed by the goal when the export was fitted with one.
+
+        Concatenated here rather than by the runner so there is one normalization:
+        ``observation_min``/``observation_max`` were fitted at this full width, so
+        a live target is squashed through exactly the bounds the training targets
+        were, with no second path to drift out of step with them.
+        """
+        state = np.asarray(observation[STATE_FEATURE], dtype=np.float32).reshape(-1)
+        if self.goal_dim == 0:
+            return state
+        if GOAL_FEATURE not in observation:
+            raise KeyError(
+                f"this policy was trained on a goal of width {self.goal_dim}, so its "
+                f"observations must carry {GOAL_FEATURE!r}; the runner supplied only "
+                f"{sorted(observation)}"
+            )
+        goal = np.asarray(observation[GOAL_FEATURE], dtype=np.float32).reshape(-1)
+        if goal.shape != (self.goal_dim,):
+            raise ValueError(
+                f"{GOAL_FEATURE!r} must have {self.goal_dim} values, got {goal.shape[0]}"
+            )
+        return np.concatenate((state, goal))
+
     def act(self, observation: PolicyObservation) -> np.ndarray:
         # Only the tick that generates a horizon reports one, so a caller logging
         # predictions records each horizon once rather than on every tick.
@@ -282,7 +326,7 @@ class FlowImagePolicyController:
         self.images.append(stack_cameras(observation))
         self.states.append(
             normalize(
-                np.asarray(observation[STATE_FEATURE], dtype=np.float32),
+                self._state_vector(observation),
                 self.observation_min,
                 self.observation_max,
             )

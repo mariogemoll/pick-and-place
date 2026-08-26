@@ -19,6 +19,14 @@ import numpy as np
 STATE_FEATURE = "observation.state"
 OVERHEAD_FEATURE = "observation.images.overhead"
 WRIST_FEATURE = "observation.images.wrist"
+#: Where the task wants the cube put, when the policy is told rather than shown.
+#:
+#: Its own key rather than extra columns on :data:`STATE_FEATURE`, because that
+#: name is also a LeRobot dataset feature: widening it to mean "joints plus
+#: goal" would redefine one contract for every consumer of it, and would make a
+#: missing goal indistinguishable from a short state vector. A separate key is
+#: simply absent when there is no goal, which fails loudly.
+GOAL_FEATURE = "observation.goal"
 
 PolicyObservation = dict[str, np.ndarray]
 

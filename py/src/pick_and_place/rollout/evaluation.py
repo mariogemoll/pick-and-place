@@ -185,6 +185,9 @@ def _flow_image_metadata(controller: FlowImagePolicyController, cfg: EvaluationR
             "wrist": WRIST_FEATURE,
         },
         "observation_steps": controller.observation_steps,
+        # Zero for a policy that had to read the target off the drop plate, so a
+        # scored run says which side of the conditioning comparison it is.
+        "goal_dim": controller.goal_dim,
         "action_horizon": controller.prediction_steps,
         "executed_action_steps": controller.act_steps,
         "policy_hz": controller.policy_hz,
@@ -249,6 +252,10 @@ def run_evaluation(cfg: EvaluationRun, *, report: Callable[[str], None] = print)
     appearance_name, scene_appearance = (
         parse_appearance(cfg.scene_appearance) if cfg.scene_appearance is not None else (None, None)
     )
+    # Only a goal-conditioned flow checkpoint is told the target; the scripted
+    # expert plans against the scenario directly, and the LeRobot policies read
+    # it off the drop plate as they were trained to.
+    goal_dim = 0
     if cfg.controller == "lerobot":
         image_hw, _ = resolve_checkpoint_cameras(cfg.checkpoint, override_hw=override_hw)
     elif cfg.controller == "flow-image":
@@ -269,6 +276,7 @@ def run_evaluation(cfg: EvaluationRun, *, report: Callable[[str], None] = print)
                 f"model's trained image size {flow_image_controller.image_hw}"
             )
         image_hw = flow_image_controller.image_hw
+        goal_dim = flow_image_controller.goal_dim
         scenarios = tuple(
             replace(
                 scenario,
@@ -303,6 +311,7 @@ def run_evaluation(cfg: EvaluationRun, *, report: Callable[[str], None] = print)
         image_hw=image_hw,
         render_hw=cfg.render_hw,
         scene_appearance=scene_appearance,
+        include_goal=goal_dim > 0,
     )
 
     control_hz_values = {scenario.control_hz for scenario in scenarios}

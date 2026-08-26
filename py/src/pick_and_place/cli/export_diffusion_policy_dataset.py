@@ -18,6 +18,7 @@ from pick_and_place.cli.dataset import (
 from pick_and_place.cli.suggest import SuggestingArgumentParser
 from pick_and_place.data.diffusion_policy_dataset import (
     DEFAULT_POLICY_HZ,
+    GOAL_TARGET_XY,
     export_diffusion_policy_dataset,
 )
 from pick_and_place.spec.action_encoding import ActionEncoding, parse_action_encoding
@@ -52,6 +53,20 @@ def build_parser() -> SuggestingArgumentParser:
         ),
     )
     parser.add_argument(
+        "--goal",
+        choices=["none", "target-xy"],
+        default="none",
+        help=(
+            "append a goal slot to the state vector. 'none' leaves the state as the "
+            "source recorded it, which is every export written before this flag "
+            "existed. 'target-xy' appends the episode's target point, so the policy "
+            "is told where to place instead of having to read it off the drop plate. "
+            "The slot is normalized with the same min-max bounds as every other state "
+            "dimension, and its width is recorded in export.json as goal_dim "
+            "(default: none)"
+        ),
+    )
+    parser.add_argument(
         "--bounds-from",
         type=Path,
         default=None,
@@ -78,6 +93,7 @@ def run(args: argparse.Namespace) -> None:
         max_episodes=args.max_episodes,
         workers=args.workers,
         action_encoding=parse_action_encoding(args.action_encoding),
+        goal=None if args.goal == "none" else GOAL_TARGET_XY,
         bounds_from=args.bounds_from,
     )
     print(json.dumps(manifest, indent=2, sort_keys=True))
