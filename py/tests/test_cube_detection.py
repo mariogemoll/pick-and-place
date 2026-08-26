@@ -333,3 +333,50 @@ def test_no_cube_tags_returns_none():
     frame = np.full((240, 320, 3), 128, dtype=np.uint8)
     camera_matrix = np.array([[100, 0, 160], [0, 100, 120], [0, 0, 1]], dtype=float)
     assert estimate_cube_pose(frame, make_cube_detector(), camera_matrix) is None
+
+
+def test_detector_teardown_destroys_the_detector_before_its_families():
+    """pupil-apriltags frees the families first, which is a use-after-free.
+
+    ``apriltag_detector_destroy`` still refers to the family list, so destroying
+    the families ahead of it segfaults once the allocator has reused those
+    chunks — reliably, for instance, in a process that has compiled a MuJoCo
+    model. Assert the installed ``__del__`` frees in libapriltag's order.
+    """
+    pytest.importorskip("pupil_apriltags")
+    from pupil_apriltags import Detector
+
+    cube_detection._install_safe_teardown()
+
+    calls: list[str] = []
+
+    class FakeFunction:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.restype = object()
+
+        def __call__(self, *args: object) -> None:
+            calls.append(self.name)
+
+    class FakeLibc:
+        def __init__(self) -> None:
+            self._functions: dict[str, FakeFunction] = {}
+
+        def __getattr__(self, name: str) -> FakeFunction:
+            return self._functions.setdefault(name, FakeFunction(name))
+
+    class FakeDetector:
+        def __init__(self) -> None:
+            self.libc = FakeLibc()
+            self.tag_detector_ptr = object()
+            self.tag_families = {"tagStandard41h12": object()}
+
+    detector = FakeDetector()
+    Detector.__del__(detector)
+
+    assert calls == ["apriltag_detector_destroy", "tagStandard41h12_destroy"]
+    # Nothing is left for a second collection to free twice.
+    assert detector.tag_detector_ptr is None
+    assert detector.tag_families == {}
+    Detector.__del__(detector)
+    assert calls == ["apriltag_detector_destroy", "tagStandard41h12_destroy"]

@@ -174,9 +174,9 @@ def _detect_plates(*frames_gray: np.ndarray) -> dict[int, np.ndarray]:
     bright part is found only on the dark reference. Taking the better read of
     each plate gets all four in conditions where neither frame alone would.
     """
-    from pupil_apriltags import Detector
+    from pick_and_place.perception.cube_detection import make_tag_detector
 
-    detector = Detector(families="tagStandard41h12", nthreads=4, refine_edges=True)
+    detector = make_tag_detector()
     wanted = set(workspace_plate_centers())
     best: dict[int, tuple[float, np.ndarray]] = {}
     for gray in frames_gray:

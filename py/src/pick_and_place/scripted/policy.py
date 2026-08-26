@@ -239,6 +239,23 @@ class ScriptedPolicy:
         return self.state in (ScriptedPolicyState.SUCCEEDED, ScriptedPolicyState.FAILED)
 
     @property
+    def placement_target_xy(self) -> tuple[float, float] | None:
+        """Where this episode is placing, however the target was obtained.
+
+        A pinned target and a localized plate are different fields, and
+        :meth:`_plan` prefers the pinned one. Anything downstream that scores
+        or records the placement wants that same answer rather than reaching
+        for whichever field it happens to know about — a chained run pins the
+        target and never localizes a plate, so reading ``drop_target`` alone
+        reports every placement as a failure.
+        """
+        if self.drop_target_xy is not None:
+            return (float(self.drop_target_xy[0]), float(self.drop_target_xy[1]))
+        if self.drop_target is not None:
+            return (float(self.drop_target.xy[0]), float(self.drop_target.xy[1]))
+        return None
+
+    @property
     def succeeded(self) -> bool:
         return self.state is ScriptedPolicyState.SUCCEEDED
 

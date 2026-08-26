@@ -207,6 +207,33 @@ def add_drop_zone_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_target_chain_arguments(parser: argparse.ArgumentParser) -> None:
+    """Add the two ways to run chained onto scripted targets instead of a plate.
+
+    A chained run places onto a supplied sequence and never resets the scene:
+    each placement is where the next episode picks the cube up from, which is
+    what lets a hundred episodes run with nobody in the room. Both runners want
+    this, so it is declared once here.
+    """
+    chain = parser.add_mutually_exclusive_group()
+    chain.add_argument(
+        "--target-chain-seed",
+        type=int,
+        default=None,
+        help="run chained and unattended: draw the run's targets from the chainable "
+        "distribution with this seed and place onto them in order, instead of "
+        "localizing a physical drop plate between episodes",
+    )
+    chain.add_argument(
+        "--target-sequence",
+        type=Path,
+        default=None,
+        help="run chained onto a pre-drawn sequence: a JSON list of [x, y] points in "
+        "workspace metres, checked against the chainable region before the arm "
+        "moves because a target that cannot be picked up from strands the run",
+    )
+
+
 def add_joint_zeros_argument(
     parser: argparse.ArgumentParser, *, default: Path | None, help: str
 ) -> None:

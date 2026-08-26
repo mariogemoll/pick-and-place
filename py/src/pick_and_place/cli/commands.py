@@ -90,6 +90,7 @@ COMMANDS: tuple[Command, ...] = (
         name="run-scripted-real",
         summary="Run the scripted expert on the rig.",
         module="pick_and_place.cli.run_scripted_real",
+        parser="pick_and_place.cli.run_scripted_real_parser",
         group="Run a policy",
     ),
     # Score a policy
