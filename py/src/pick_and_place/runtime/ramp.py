@@ -94,3 +94,35 @@ def ramp_follower(
         if remaining > 0.0:
             time.sleep(remaining)
     return True
+
+
+def release_and_home(
+    follower,
+    home_real: np.ndarray,
+    low: np.ndarray,
+    high: np.ndarray,
+    warned: set[str],
+    *,
+    open_gripper_real: float,
+    max_joint_speed: float | None = None,
+) -> None:
+    """Open the gripper where the arm stands, then ease it onto ``home_real``.
+
+    Homing in one move looks equivalent and is not. The neutral pose closes the
+    gripper (``NEUTRAL_GRIPPER`` is 0), so an arm that is still holding the cube
+    when an episode is abandoned carries it along and sets it down wherever the
+    home pose happens to put it. That matters most in a chained run, where the
+    cube is not reset between episodes and wherever it lands *is* the next
+    episode's start pose — so a rehome that transports it has quietly chosen a
+    start nothing screened for reachability.
+
+    Opening in place puts the cube down where it already was, which is a pose
+    the run has at least seen.
+    """
+    measured = action_to_joints(follower.get_observation(), home_real)
+    released = np.asarray(measured, dtype=float).copy()
+    # The caller's calibrated open position, not ``high``: the clamp limit is the
+    # servo's full 0-100 travel, which is further than the planner ever opens.
+    released[GRIPPER_INDEX] = open_gripper_real
+    ramp_follower(follower, released, low, high, warned, max_joint_speed=max_joint_speed)
+    ramp_follower(follower, home_real, low, high, warned, max_joint_speed=max_joint_speed)

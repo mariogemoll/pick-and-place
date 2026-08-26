@@ -28,12 +28,14 @@ from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_mode
 from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR, load_camera_intrinsics
 from pick_and_place.data.dataset_metadata import cube_pose_metadata, driver_metadata
 from pick_and_place.runtime.episode_loop import episode_loop
+from pick_and_place.runtime.target_chain import pin_episode_target, resolve_target_chain
 from pick_and_place.scripted.episode_sampling import sample_recovery_cube
 from pick_and_place.sim.model import build_model, set_cube_pose, set_joint
 from pick_and_place.core.joint_frames import follower_clamp_limits
 from pick_and_place.spec.robot import CONTROL_HZ
 from pick_and_place.cli.rig import (
     add_drop_zone_arguments,
+    add_target_chain_arguments,
     add_follower_arguments,
     add_joint_zeros_argument,
     add_operator_alert_arguments,
@@ -48,7 +50,7 @@ from pick_and_place.cli.scene import (
 )
 from pick_and_place.runtime.frame_reader import FrameReader, open_frame_reader
 from pick_and_place.runtime.wrist_servo import draw_cube, draw_tags, project_cube
-from pick_and_place.runtime.ramp import ramp_follower
+from pick_and_place.runtime.ramp import ramp_follower, release_and_home
 from pick_and_place.spec.robot import GRIPPER_INDEX
 from pick_and_place.core.joint_frames import (
     GRIPPER_READBACK_CLOSED,
@@ -94,6 +96,7 @@ from pick_and_place.plant.wrist_localizer import AsyncWristLocalization, WristCa
 from pick_and_place.rollout.scripted import scripted_policy
 from pick_and_place.scripted.policy import ScriptedPolicy
 from pick_and_place.spec.robot import (
+    GRIPPER_OPEN,
     NEUTRAL_ARM_JOINTS,
     NEUTRAL_GRIPPER,
     REST_ARM_JOINTS,
@@ -251,6 +254,7 @@ def build_parser() -> SuggestingArgumentParser:
         parser, wrist_intrinsics=True, workspace_camera=True, workspace_intrinsics=True
     )
     add_drop_zone_arguments(parser)
+    add_target_chain_arguments(parser)
     parser.add_argument("--episodes", type=int, default=1, help="episodes to run; 0 means continuous")
     parser.add_argument(
         "--rest-every",
@@ -343,6 +347,12 @@ def run(args: argparse.Namespace) -> None:
         apply_solve_result,
         check_solve_plausible,
         solve_overhead_extrinsics,
+    )
+    # Before the arm, the cameras or the recording: see runtime/target_chain.py.
+    target_chain = resolve_target_chain(
+        chain_seed=args.target_chain_seed,
+        sequence_path=args.target_sequence,
+        episodes=args.episodes,
     )
     notifier = OperatorNotifier(enabled=args.operator_alerts, sound_path=args.alert_sound)
     try:
@@ -562,16 +572,12 @@ def run(args: argparse.Namespace) -> None:
                     {
                         **cube_pose_metadata(
                             controller.cube_pose,
-                            CubePose(
-                                float(controller.drop_target.xy[0]),
-                                float(controller.drop_target.xy[1]),
-                                CUBE_HALF_SIZE,
-                            ),
+                            CubePose(*controller.placement_target_xy, CUBE_HALF_SIZE),
                         ),
                         **driver_metadata("scripted"),
                     }
                     if controller.cube_pose is not None
-                    and controller.drop_target is not None
+                    and controller.placement_target_xy is not None
                     else None
                 ),
             )
@@ -586,15 +592,15 @@ def run(args: argparse.Namespace) -> None:
         limits = follower_clamp_limits(derive_kinematics(model))
         clamp_low, clamp_high = limits
         clip_warned: set[str] = set()
+        neutral_real = sim_frame_to_real(NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER, joint_zero_offsets)
+        neutral_open = sim_frame_to_real(NEUTRAL_ARM_JOINTS, GRIPPER_OPEN, joint_zero_offsets)
 
         def park_action() -> None:
             print("Parking at NEUTRAL, then REST...")
             follower.bus.enable_torque()
             ramp_follower(
                 follower,
-                sim_frame_to_real(
-                    NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER, joint_zero_offsets
-                ),
+                neutral_real,
                 clamp_low,
                 clamp_high,
                 clip_warned,
@@ -625,9 +631,7 @@ def run(args: argparse.Namespace) -> None:
         print("Moving to NEUTRAL before localization and planning...")
         ramp_follower(
             follower,
-            sim_frame_to_real(
-                NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER, joint_zero_offsets
-            ),
+            neutral_real,
             clamp_low,
             clamp_high,
             clip_warned,
@@ -728,7 +732,8 @@ def run(args: argparse.Namespace) -> None:
 
         def cooldown() -> None:
             print("Cooldown: moving to REST and releasing torque...")
-            notifier.alert("Cooldown started. Move the target plate before the next episode.")
+            if target_chain is None:
+                notifier.alert("Cooldown started. Move the target plate before the next episode.")
             ramp_follower(
                 follower,
                 sim_frame_to_real(REST_ARM_JOINTS, REST_GRIPPER, joint_zero_offsets),
@@ -740,20 +745,25 @@ def run(args: argparse.Namespace) -> None:
             follower.bus.disable_torque()
             target_localizer.reset()
             try:
-                wait_for_target_movement(
-                    cooldown_reference_target,
-                    minimum_distance=args.target_change_min_distance,
-                    minimum_rest_until=time.monotonic() + args.rest_duration,
-                    detect_target=detect_target,
-                    alert=notifier.alert,
-                    alert_min_seconds=args.target_change_alert_min_seconds,
-                    alert_max_seconds=args.target_change_alert_max_seconds,
-                )
+                # A chained run has no plate and no operator, so the cooldown is
+                # only the rest the servos need.
+                if target_chain is not None:
+                    time.sleep(args.rest_duration)
+                else:
+                    wait_for_target_movement(
+                        cooldown_reference_target,
+                        minimum_distance=args.target_change_min_distance,
+                        minimum_rest_until=time.monotonic() + args.rest_duration,
+                        detect_target=detect_target,
+                        alert=notifier.alert,
+                        alert_min_seconds=args.target_change_alert_min_seconds,
+                        alert_max_seconds=args.target_change_alert_max_seconds,
+                    )
             finally:
                 follower.bus.enable_torque()
             ramp_follower(
                 follower,
-                sim_frame_to_real(NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER, joint_zero_offsets),
+                neutral_real,
                 clamp_low,
                 clamp_high,
                 clip_warned,
@@ -787,12 +797,13 @@ def run(args: argparse.Namespace) -> None:
 
         def rehome() -> None:
             print("Opening and re-homing before retry...")
-            ramp_follower(
+            release_and_home(
                 follower,
-                sim_frame_to_real(NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER, joint_zero_offsets),
+                neutral_real,
                 clamp_low,
                 clamp_high,
                 clip_warned,
+                open_gripper_real=float(neutral_open[GRIPPER_INDEX]),
                 max_joint_speed=args.park_speed,
             )
 
@@ -871,6 +882,8 @@ def run(args: argparse.Namespace) -> None:
             cooldown=cooldown,
         ):
             label = "continuous" if args.episodes == 0 else str(args.episodes)
+            if target_chain is not None:
+                print(pin_episode_target(controller, target_chain, ep.index))
             print(f"Attempt {ep.attempt}, completed {ep.index - 1}/{label}: preflight")
             preflight_result = prepare_physical_policy_episode(
                 controller,
@@ -886,9 +899,7 @@ def run(args: argparse.Namespace) -> None:
                 print(f"Preflight failed: {preflight_result.outcome.value}")
                 ramp_follower(
                     follower,
-                    sim_frame_to_real(
-                        NEUTRAL_ARM_JOINTS, NEUTRAL_GRIPPER, joint_zero_offsets
-                    ),
+                    neutral_real,
                     clamp_low,
                     clamp_high,
                     clip_warned,
@@ -898,9 +909,10 @@ def run(args: argparse.Namespace) -> None:
 
             def verify_placement() -> bool:
                 cube = controller.localizer.localize_cube(overhead_rgb())
-                if cube is None or controller.drop_target is None:
+                placing_on = controller.placement_target_xy
+                if cube is None or placing_on is None:
                     return False
-                error = np.linalg.norm(np.asarray((cube.x, cube.y)) - controller.drop_target.xy)
+                error = np.linalg.norm(np.asarray((cube.x, cube.y)) - np.asarray(placing_on))
                 print(f"Final overhead placement error: {error * 100.0:.1f} cm")
                 return bool(error <= 0.04)
 
@@ -929,15 +941,16 @@ def run(args: argparse.Namespace) -> None:
             )
             if result.succeeded:
                 print(f"Episode completed in {result.control_steps} control ticks.")
-                if controller.drop_target is not None:
+                if controller.placement_target_xy is not None:
                     cooldown_reference_target = CubePose(
-                        float(controller.drop_target.xy[0]),
-                        float(controller.drop_target.xy[1]),
-                        CUBE_HALF_SIZE,
+                        *controller.placement_target_xy, CUBE_HALF_SIZE
                     )
                 ep.complete()
                 is_last = args.episodes != 0 and ep.index >= args.episodes
-                if not is_last and not run_cube_recovery():
+                # Chained: the cube is on a target drawn to be pickable, which is
+                # exactly where the next episode wants it. Relocating would undo
+                # the chain.
+                if not is_last and target_chain is None and not run_cube_recovery():
                     break
                 continue
             if result.outcome is PhysicalEpisodeOutcome.OPERATOR_ABORT:

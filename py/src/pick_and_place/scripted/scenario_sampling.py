@@ -27,6 +27,7 @@ from pick_and_place.core.workspace_bounds import (
     CANONICAL_PICKUP_SECTOR,
     is_cube_drop_allowed,
     is_cube_pickup_allowed,
+    is_cube_recovery_target_allowed,
     PAN_AXIS,
     sample_target_plate_yaw,
 )
@@ -120,3 +121,73 @@ def workspace_region(source: CubePose) -> str:
     if radius < inner + 2.0 * third:
         return "mid"
     return "far"
+
+
+#: Consecutive targets in a chain must be at least this far apart. The same
+#: 0.10 m as :data:`MIN_TARGET_SEPARATION_M` and for the same reason — in a
+#: chain the previous target *is* the next cube position, so the constraint
+#: that separates cube from target is the constraint that separates one target
+#: from the next.
+MIN_CHAIN_STEP_M = MIN_TARGET_SEPARATION_M
+MAX_CHAIN_ATTEMPTS = 20000
+
+
+def sample_target_chain(
+    rng: np.random.Generator,
+    count: int,
+    *,
+    minimum_step_m: float = MIN_CHAIN_STEP_M,
+    start_after: CubePose | None = None,
+) -> tuple[CubePose, ...]:
+    """Draw a sequence of targets where each is a legal start for the next.
+
+    A chained run never resets the scene: episode *n* places the cube on target
+    *n*, and episode *n+1* picks it up from there. So every target has to be
+    somewhere the cube can be **picked up from**, not merely dropped — and the
+    pickup sector is narrower than the drop sector, being azimuth-limited where
+    the drop sector is not. Drawing a chain from :func:`sample_target`'s
+    distribution would strand the cube outside the pickup sector roughly one
+    placement in eighteen, which unattended means the run dies there.
+
+    Every target is therefore screened with
+    :func:`is_cube_recovery_target_allowed` — pickup-allowed *and* clear of the
+    workspace frame border, the same predicate the cube-recovery controller
+    drops onto — with the interior margin that keeps localisation drift from
+    pushing a pose across the boundary. That is a strict subset of the drop
+    sector and costs about 5% of its area.
+
+    Consecutive targets are kept ``minimum_step_m`` apart so every episode is a
+    real transport rather than a nudge. ``start_after`` continues an existing
+    chain: the first target drawn is held that far from it too, so a chain
+    extended a piece at a time is indistinguishable from one drawn at once.
+    """
+    if count < 0:
+        raise ValueError("count must not be negative")
+    if minimum_step_m < 0.0:
+        raise ValueError("minimum_step_m must not be negative")
+    chain: list[CubePose] = []
+    previous = start_after
+    for index in range(count):
+        for _ in range(MAX_CHAIN_ATTEMPTS):
+            candidate = sample_target(rng)
+            if not comfortably_interior(
+                candidate.x,
+                candidate.y,
+                TARGET_INTERIOR_MARGIN_M,
+                is_cube_recovery_target_allowed,
+            ):
+                continue
+            if previous is not None and (
+                math.hypot(candidate.x - previous.x, candidate.y - previous.y)
+                < minimum_step_m
+            ):
+                continue
+            chain.append(candidate)
+            previous = candidate
+            break
+        else:
+            raise RuntimeError(
+                f"no chainable target {minimum_step_m} m from the previous one after "
+                f"{MAX_CHAIN_ATTEMPTS} attempts (drew {index} of {count})"
+            )
+    return tuple(chain)
