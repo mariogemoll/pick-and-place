@@ -104,6 +104,13 @@ def dispatch(command: Command, arguments: list[str]) -> None:
 
 
 def main() -> None:
+    # A command whose output is redirected to a log gets a block-buffered
+    # stdout, and a native crash in a C dependency takes the process down
+    # without flushing it. That loses every line since the last explicit flush,
+    # so the traceback appears to point at whatever printed last rather than at
+    # where the run actually got to. Line buffering costs nothing at these
+    # print rates and keeps a log truthful up to the moment of the crash.
+    sys.stdout.reconfigure(line_buffering=True)
     parser = build_parser()
     args = parser.parse_args()
     dispatch(COMMANDS_BY_NAME[args.command], args.arguments)
