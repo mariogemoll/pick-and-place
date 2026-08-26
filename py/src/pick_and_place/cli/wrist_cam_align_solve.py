@@ -205,7 +205,7 @@ def run(args: argparse.Namespace) -> None:
     """Drive the arm, solve the alignment, and report or save it."""
     try:
         import cv2
-        from pupil_apriltags import Detector
+        from pick_and_place.perception.cube_detection import make_tag_detector
     except ImportError as exc:
         raise SystemExit(
             "camera extrinsic solving requires opencv-python and pupil-apriltags"
@@ -300,7 +300,7 @@ def run(args: argparse.Namespace) -> None:
 
     renderer = mujoco.Renderer(model, width=render_width, height=render_height)
 
-    detector = Detector(families="tagStandard41h12", nthreads=4, refine_edges=True)
+    detector = make_tag_detector()
 
     cap = None
     result: SolveResult | None = None

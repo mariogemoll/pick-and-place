@@ -37,6 +37,7 @@ import mujoco
 import numpy as np
 
 from pick_and_place.core.camera_calibration import LOCAL_CAMERA_EXTRINSICS_DIR
+from pick_and_place.perception.cube_detection import make_tag_detector
 from pick_and_place.sim.camera_extrinsics import save_camera_extrinsics
 from pick_and_place.core.camera_calibration import LOCAL_CAMERA_INTRINSICS_DIR
 from pick_and_place.sim.frame_tags import TAG_GEOMS, tag_world_corners, tag_world_points
@@ -394,7 +395,7 @@ def solve_overhead_extrinsics(
     if cv2_module is None:
         import cv2 as cv2_module  # type: ignore[no-redef]
     try:
-        from pupil_apriltags import Detector
+        import pupil_apriltags  # noqa: F401  -- imported only to check it is installed
     except ImportError as exc:
         raise ExtrinsicsSolveError(
             "solving overhead extrinsics requires opencv-python and pupil-apriltags"
@@ -418,7 +419,7 @@ def solve_overhead_extrinsics(
     for _ in range(flush_frames):
         cap.read()
 
-    detector = Detector(families="tagStandard41h12", nthreads=4, refine_edges=True)
+    detector = make_tag_detector()
     return solve_averaged_from_camera(
         cap,
         model=model,
@@ -510,7 +511,7 @@ def main() -> None:
 
     try:
         import cv2
-        from pupil_apriltags import Detector
+        import pupil_apriltags  # noqa: F401  -- imported only to check it is installed
     except ImportError as exc:
         raise SystemExit(
             "camera extrinsic solving requires opencv-python and pupil-apriltags"
@@ -542,7 +543,7 @@ def main() -> None:
         )
         print("Intrinsics  : nominal MuJoCo fovy (calibrated JSON recommended)")
 
-    detector = Detector(families="tagStandard41h12", nthreads=4, refine_edges=True)
+    detector = make_tag_detector()
 
     renderer = None
     cap = None

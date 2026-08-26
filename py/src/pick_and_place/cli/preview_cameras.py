@@ -210,9 +210,9 @@ def count_corner_tags(frames: list[np.ndarray]) -> tuple[int, set[int]]:
     Per frame rather than pooled across frames: a camera that catches one
     corner now and a different one later is not looking at the workspace.
     """
-    from pupil_apriltags import Detector
+    from pick_and_place.perception.cube_detection import make_tag_detector
 
-    detector = Detector(families=TAG_FAMILY, nthreads=4, refine_edges=True)
+    detector = make_tag_detector(TAG_FAMILY)
     best: set[int] = set()
     for frame in frames:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -360,9 +360,9 @@ class Camera:
         if not self.overlay:
             return bgr
         if self._detector is None:
-            from pupil_apriltags import Detector
+            from pick_and_place.perception.cube_detection import make_tag_detector
 
-            self._detector = Detector(families=TAG_FAMILY, nthreads=2, refine_edges=True)
+            self._detector = make_tag_detector(TAG_FAMILY, nthreads=2)
         now = time.monotonic()
         if now - self._detected_at[rectified] >= 1.0 / OVERLAY_HZ:
             self._markers[rectified] = detect_markers(bgr, self._detector)

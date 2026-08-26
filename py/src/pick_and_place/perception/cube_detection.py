@@ -107,6 +107,73 @@ class CubePoseEstimate:
         return transform
 
 
+TAG_FAMILY = "tagStandard41h12"
+
+_safe_teardown_installed = False
+
+
+def _install_safe_teardown() -> None:
+    """Make ``Detector.__del__`` free in the order ``libapriltag`` requires.
+
+    pupil-apriltags 1.0.4 destroys the tag families first and the detector
+    second. ``libapriltag``'s own teardown is the other way round, and the
+    shipped order is a use-after-free: with the families already returned to the
+    allocator, ``apriltag_detector_destroy`` still walks the family list it was
+    handed. Whether that faults depends on what the allocator did with those
+    chunks in between, which is why it presents as an intermittent crash with no
+    obvious trigger -- dropping a detector in a small script is almost always
+    survivable, while doing it in a process that has compiled a MuJoCo model
+    segfaults on every run.
+
+    Both halves are safe on their own, and so is the reverse order; only the
+    shipped order ever crashes, and reversing it is clean under
+    ``MALLOC_CHECK_=3``. Patching the class rather than each call site is
+    deliberate: the bug is in teardown, so it bites whenever a detector is
+    collected, including detectors this package never constructed.
+    """
+    global _safe_teardown_installed
+    if _safe_teardown_installed:
+        return
+    from pupil_apriltags import Detector
+
+    def __del__(self) -> None:  # noqa: N807
+        pointer = self.tag_detector_ptr
+        if pointer is None:
+            return
+        libc, families = self.libc, dict(self.tag_families)
+        # Drop our references first, so a second collection cannot free twice.
+        self.tag_detector_ptr = None
+        self.tag_families = {}
+        libc.apriltag_detector_destroy.restype = None
+        libc.apriltag_detector_destroy(pointer)
+        for family, handle in families.items():
+            destroy = getattr(libc, f"{family}_destroy")
+            destroy.restype = None
+            destroy(handle)
+
+    Detector.__del__ = __del__
+    _safe_teardown_installed = True
+
+
+def make_tag_detector(
+    families: str = TAG_FAMILY, quad_decimate: float = 1.0, nthreads: int = 4
+):
+    """Create a pupil-apriltags detector that can be dropped without crashing.
+
+    Every detector in this package comes from here, so that
+    :func:`_install_safe_teardown` has run before any of them is collected.
+    """
+    _install_safe_teardown()
+    from pupil_apriltags import Detector
+
+    return Detector(
+        families=families,
+        nthreads=nthreads,
+        quad_decimate=float(quad_decimate),
+        refine_edges=True,
+    )
+
+
 def make_cube_detector(quad_decimate: float = 1.0, nthreads: int = 4):
     """Create a pupil-apriltags detector tuned for the cube tags.
 
@@ -125,15 +192,10 @@ def make_cube_detector(quad_decimate: float = 1.0, nthreads: int = 4):
     segfault — that crash reproduces under strictly single-threaded detection,
     so it is not a data race however tempting that reading is. Crash
     containment is :mod:`pick_and_place.perception.detector_process`, not this parameter.
+    That one happens inside ``detect()``; the unrelated teardown crash
+    :func:`_install_safe_teardown` fixes happens when a detector is dropped.
     """
-    from pupil_apriltags import Detector
-
-    return Detector(
-        families="tagStandard41h12",
-        nthreads=nthreads,
-        quad_decimate=float(quad_decimate),
-        refine_edges=True,
-    )
+    return make_tag_detector(quad_decimate=quad_decimate, nthreads=nthreads)
 
 
 def detect_tags(frame_rgb: NDArray, detector) -> list:
