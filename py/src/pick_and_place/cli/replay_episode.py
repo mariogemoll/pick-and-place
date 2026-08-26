@@ -25,7 +25,7 @@ from pick_and_place.sim.scene import build_scene
 from pick_and_place.core.camera_calibration import load_local_camera_extrinsics
 from pick_and_place.sim.camera_extrinsics import apply_camera_extrinsics_to_spec
 from pick_and_place.core.camera_calibration import load_local_camera_intrinsics
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE, WORKSPACE_FLOOR_Z
 from pick_and_place.core.workspace_bounds import is_cube_drop_allowed, is_cube_pickup_allowed
 
 
@@ -35,7 +35,7 @@ def _add_target_marker(spec: mujoco.MjSpec, target: np.ndarray | None) -> None:
         return
 
     x, y = float(target[0]), float(target[1])
-    body = spec.worldbody.add_body(name="replay_target_marker", pos=(x, y, 0.0))
+    body = spec.worldbody.add_body(name="replay_target_marker", pos=(x, y, WORKSPACE_FLOOR_Z))
     body.add_geom(
         name="replay_target_marker_square",
         type=mujoco.mjtGeom.mjGEOM_BOX,

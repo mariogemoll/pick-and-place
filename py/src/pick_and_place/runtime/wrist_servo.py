@@ -33,7 +33,7 @@ import numpy as np
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.scripted.visual_servo import WristServoEstimate, WristServoPreview
 from pick_and_place.runtime.frame_reader import FrameReader, open_capture
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE, CUBE_REST_Z
 
 #: The wrist module is opened at its native size and the undistort map is built
 #: for it, so intrinsics and frames agree regardless of what the loop displays.
@@ -231,7 +231,7 @@ class WristServo:
                 source = CubePose(
                     x=float(estimate.position[0]),
                     y=float(estimate.position[1]),
-                    z=CUBE_HALF_SIZE,
+                    z=CUBE_REST_Z,
                     roll=0.0,
                     pitch=0.0,
                     yaw=float(yaw),

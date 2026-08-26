@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z
 from pick_and_place.perception.overhead_localization import (
     OverheadLocalizer,
     localize_cube,
@@ -56,7 +56,7 @@ def test_localize_cube_maps_detection_to_world_pose(monkeypatch):
     assert pose is not None
     assert pose.x == 0.2
     assert pose.y == -0.1
-    assert pose.z == CUBE_HALF_SIZE
+    assert pose.z == CUBE_REST_Z
     assert pose.roll == 0.0
     assert pose.pitch == 0.0
     np.testing.assert_allclose(pose.yaw, np.pi / 2.0)

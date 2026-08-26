@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Mario Gemoll
 # SPDX-License-Identifier: 0BSD
 
-"""Compose the SO-101 robot with a floor, workspace overlays, soft light, and cube."""
+"""Compose the SO-101 robot with a floor, the foam sheet, overlays, soft light, and cube."""
 
 from __future__ import annotations
 
@@ -13,8 +13,14 @@ import numpy as np
 
 from pick_and_place.sim.background_panorama import add_background_panorama
 from pick_and_place.sim.builder import STOCK_ASSETS_DIR, build_robot
-from pick_and_place.spec.workspace import CUBE_APRILTAG_IDS, CUBE_HALF_SIZE, WORKSPACE_FRAME_POS
+from pick_and_place.spec.workspace import (
+    CUBE_APRILTAG_IDS,
+    CUBE_HALF_SIZE,
+    CUBE_REST_Z,
+    WORKSPACE_FRAME_POS,
+)
 from pick_and_place.sim.environment import APRILTAG_TEXTURE_DIR, add_overhead_camera_mount, add_workspace_frame, add_workspace_frame_apriltags
+from pick_and_place.sim.foam_floor import add_foam_floor
 from pick_and_place.sim.materials import MaterialConfig, apply_materials
 from pick_and_place.sim.workspace_overlays import add_workspace_overlays
 
@@ -83,12 +89,13 @@ def build_scene(
     base = spec.body("base")
     base.pos = (0.0, 0.0, ROBOT_BASE_Z_OFFSET)
 
-    # Attach overlays to worldbody so they stay on the floor.
+    collision_default = spec.find_default("collision")
+    # Attach overlays and the foam sheet to worldbody so they stay on the floor.
     add_workspace_overlays(spec, spec.worldbody)
+    add_foam_floor(spec, spec.worldbody, collision_default=collision_default)
     _add_pick_cube(spec, apriltag=apriltag_cube)
 
     if include_environment:
-        collision_default = spec.find_default("collision")
         add_workspace_frame(spec, collision_default=collision_default)
         add_overhead_camera_mount(spec, collision_default=collision_default)
 
@@ -132,6 +139,7 @@ def build_environment(
     if tabletop:
         _add_scene_lighting(spec)
     _add_pick_cube(spec, apriltag=apriltag_cube)
+    add_foam_floor(spec, spec.worldbody)
     add_workspace_frame(spec)
     add_overhead_camera_mount(spec)
     apply_materials(spec, materials or MaterialConfig())
@@ -348,7 +356,7 @@ def export_scene(
 
 
 def _add_pick_cube(spec: mujoco.MjSpec, *, apriltag: bool) -> None:
-    cube = spec.worldbody.add_body(name="pick_cube", pos=(0.2, -0.12, CUBE_HALF_SIZE))
+    cube = spec.worldbody.add_body(name="pick_cube", pos=(0.2, -0.12, CUBE_REST_Z))
     half = CUBE_HALF_SIZE
     # The AprilTag stickers are white-backed; the material (added after
     # apply_materials) carries the per-face textures and tints them with this

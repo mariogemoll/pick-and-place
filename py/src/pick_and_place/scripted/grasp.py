@@ -45,6 +45,11 @@ _N_DESCENT_CHECKS = 8
 
 # Recovery grasps may approach along an arbitrary tool axis. After closing, lift
 # the held cube vertically to this world height before folding into the carry.
+# A world height, not a clearance over the floor: the lift is taken as
+# ``RECOVERY_LIFT_CUBE_Z - source.z``, so a cube standing on the foam already
+# starts 3 mm of it. Raising the constant with the floor instead would move the
+# lift IK enough to change which canonical grasp is selected, for 3 mm of
+# clearance the lift does not need.
 RECOVERY_LIFT_CUBE_Z = 0.08
 
 

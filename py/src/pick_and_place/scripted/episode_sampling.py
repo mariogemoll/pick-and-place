@@ -17,7 +17,7 @@ import math
 import numpy as np
 
 from pick_and_place.core.geometry import CubePose
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z
 from pick_and_place.spec.robot import GRIPPER_GRASP, GRIPPER_OPEN, NEUTRAL_ARM_JOINTS
 from pick_and_place.core.workspace_bounds import (
     AZIMUTH_MAX,
@@ -80,7 +80,7 @@ def sample_cube(rng: np.random.Generator) -> CubePose:
     return CubePose(
         x=x,
         y=y,
-        z=CUBE_HALF_SIZE,
+        z=CUBE_REST_Z,
         yaw=yaw,
     )
 
@@ -103,7 +103,7 @@ def sample_target(rng: np.random.Generator) -> CubePose:
         x = PAN_AXIS[0] + r * math.cos(theta)
         y = PAN_AXIS[1] + r * math.sin(theta)
         if is_cube_drop_allowed(x, y) and is_target_plate_position_allowed(x, y):
-            return CubePose(x=x, y=y, z=CUBE_HALF_SIZE)
+            return CubePose(x=x, y=y, z=CUBE_REST_Z)
 
 
 def sample_near_neutral(rng: np.random.Generator) -> tuple[dict[str, float], float]:

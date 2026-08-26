@@ -74,7 +74,7 @@ from pick_and_place.sim.domain_randomization import reload_renderer_textures
 from pick_and_place.policies.policy_evaluation import TaskOracleConfig
 from pick_and_place.sim.model import build_model, get_cube_pose, placement_error
 from pick_and_place.spec.robot import CONTROL_HZ, HARDWARE_SIMULATION_HZ
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z
 
 WRIST_CAMERA = "wrist_camera"
 OVERHEAD_CAMERA = "overhead_camera"
@@ -222,7 +222,7 @@ def build_recording_scene(
     from the same distribution as one made here, and a published dataset is one
     the code can regenerate.
     """
-    placeholder = CubePose(x=PAN_AXIS[0] + 0.1, y=PAN_AXIS[1], z=CUBE_HALF_SIZE)
+    placeholder = CubePose(x=PAN_AXIS[0] + 0.1, y=PAN_AXIS[1], z=CUBE_REST_Z)
     model, data = build_model(
         placeholder,
         include_environment=True,
@@ -644,7 +644,7 @@ def record_episode(
                     if ground_truth_drop_target
                     else plate_reading.xy
                 )
-                episode.believed_target = CubePose(*target_xy, CUBE_HALF_SIZE)
+                episode.believed_target = CubePose(*target_xy, CUBE_REST_Z)
             if verbose:
                 print(f"Replanning remaining trajectory after {completed}...")
             measured_joints, measured_gripper = plant.measured()

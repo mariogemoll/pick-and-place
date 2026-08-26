@@ -53,7 +53,7 @@ from pick_and_place.core.joint_frames import (
     real_frame_to_sim,
     sim_frame_to_real,
 )
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE, CUBE_REST_Z
 from pick_and_place.core.geometry import CubePose, canonical_grasp_matrix, canonical_pregrasp_matrix
 from pick_and_place.core.ik import solve_simple_grasp_ik
 from pick_and_place.hardware.joint_zero_fit import (
@@ -378,7 +378,7 @@ def _bin_center_pose(kinematics: So101Kinematics, bin_: tuple[int, int]) -> Cube
     y = kinematics.pan_axis[1] + r * math.sin(a)
     if not is_cube_pickup_allowed(x, y):
         return None
-    return CubePose(x=x, y=y, z=CUBE_HALF_SIZE)
+    return CubePose(x=x, y=y, z=CUBE_REST_Z)
 
 
 def _draw_operator_cue(
@@ -480,7 +480,7 @@ def _make_overhead_tracker(
         if estimate is None:
             return None
         _, position = cube_pose_to_world(estimate, cam_pos, cam_rot)
-        return CubePose(x=float(position[0]), y=float(position[1]), z=CUBE_HALF_SIZE)
+        return CubePose(x=float(position[0]), y=float(position[1]), z=CUBE_REST_Z)
 
     return track
 

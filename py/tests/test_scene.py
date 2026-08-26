@@ -6,7 +6,7 @@ import numpy as np
 
 from pick_and_place.sim.scene import build_environment, build_scene, export_scene
 from pick_and_place.sim.scene import BACKDROP_WALL_DISTANCE, BACKDROP_WALL_THICKNESS, TABLE_BACKGROUND_RGBA, TABLE_EAST_EDGE_Y, TABLE_HEIGHT, TABLE_LENGTH, TABLE_NORTH_EDGE_X, TABLE_THICKNESS, TABLE_WEST_EDGE_Y, TABLE_WIDTH
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE, WORKSPACE_FRAME_APRILTAG_PLATES
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE, WORKSPACE_FLOOR_Z, WORKSPACE_FRAME_APRILTAG_PLATES
 from pick_and_place.sim.model import build_model
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.sim.paper_target_marker import PAPER_TARGET_MARKER_NAME
@@ -125,7 +125,9 @@ def test_workspace_overlays_stay_on_worldbody_floor():
     for overlay in REACH_SECTORS:
         geom = model.geom(overlay.name).id
         assert model.geom_bodyid[geom] == 0
-        np.testing.assert_allclose(data.geom_xpos[geom][2], overlay.z, atol=1e-7)
+        np.testing.assert_allclose(
+            data.geom_xpos[geom][2], WORKSPACE_FLOOR_Z + overlay.z, atol=1e-7
+        )
 
 
 def test_environment_contains_textured_workspace_frame_apriltags():

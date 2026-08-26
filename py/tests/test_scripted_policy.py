@@ -10,7 +10,7 @@ import pytest
 
 from pick_and_place.spec.robot import ARM_JOINT_NAMES
 from pick_and_place.core.joint_frames import real_frame_to_sim, sim_frame_to_real
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE, CUBE_REST_Z
 from pick_and_place.core.geometry import CubePose
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
 from pick_and_place.runtime.preflight import PreflightDebug
@@ -268,7 +268,7 @@ def test_scripted_policy_pins_a_known_drop_target_without_localizing_the_plate()
     assert args[1] is cube
     # Pinned, not sampled: planning takes the same fixed-target path a detection
     # would have produced, so the only difference is where the xy came from.
-    assert args[2] == CubePose(0.25, -0.15, CUBE_HALF_SIZE)
+    assert args[2] == CubePose(0.25, -0.15, CUBE_REST_Z)
     assert kwargs["target_sampler"] is None
     assert not hasattr(localizer, "target_kwargs")
 

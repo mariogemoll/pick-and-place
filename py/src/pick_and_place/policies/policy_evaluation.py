@@ -23,7 +23,7 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z
 
 # v3 requires every simulator input, including physics, to be materialized.
 SCENARIO_MANIFEST_VERSION = 3
@@ -206,7 +206,7 @@ class TaskOracleConfig:
     """Centralized full-task thresholds, in meters, seconds, and radians."""
 
     success_xy_tolerance_m: float = 0.04
-    resting_height_m: float = CUBE_HALF_SIZE
+    resting_height_m: float = CUBE_REST_Z
     resting_height_tolerance_m: float = 0.01
     settled_linear_speed_m_s: float = 0.02
     settled_angular_speed_rad_s: float = 0.2

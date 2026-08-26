@@ -52,7 +52,7 @@ from pick_and_place.hardware.joint_zero_fit import (
     fit_robust,
     joint_ids,
 )
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z
 
 
 def _sim_joint_vector(real_joints: np.ndarray) -> np.ndarray:
@@ -124,7 +124,7 @@ def load_samples(measurement_paths: list[Path]) -> list[JointZeroSample]:
                     data.qpos[qpos_addrs[name]] = sim_joints[i]
                 mujoco.mj_forward(model, data)
                 cube = np.array(
-                    [pair["cube"]["x"], pair["cube"]["y"], CUBE_HALF_SIZE], dtype=float
+                    [pair["cube"]["x"], pair["cube"]["y"], CUBE_REST_Z], dtype=float
                 )
                 samples.append(
                     JointZeroSample(

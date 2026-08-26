@@ -41,7 +41,7 @@ from pick_and_place.perception.cube_detection import CubeTracker, detect_cube_fa
 from pick_and_place.perception.detector_process import DetectorProcess
 from pick_and_place.runtime.believed_frame import BelievedFrame
 from pick_and_place.sim.model import get_joint, set_cube_pose, set_joint
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z
 
 #: The working resolution the real servo detects at. The render is capped to the
 #: model's offscreen buffer, which is what actually limits it.
@@ -195,7 +195,7 @@ class SimWristServo:
         pose = CubePose(
             x=float(estimate.position[0]),
             y=float(estimate.position[1]),
-            z=CUBE_HALF_SIZE,
+            z=CUBE_REST_Z,
             yaw=float(yaw),
         )
         return CubeSighting(detections, pose, estimate)
@@ -228,7 +228,7 @@ class SimWristServo:
         pose = CubePose(
             x=float(estimate_position[0]),
             y=float(estimate_position[1]),
-            z=CUBE_HALF_SIZE,
+            z=CUBE_REST_Z,
             yaw=float(yaw),
         )
         return CubeSighting([], pose, None)

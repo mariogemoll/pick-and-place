@@ -22,7 +22,7 @@ import numpy as np
 from pick_and_place.core.geometry import CubePose, PlacementError, cube_quat_from_pose
 from pick_and_place.sim.paper_target_marker import add_paper_target_marker
 from pick_and_place.sim.scene import build_scene
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_REST_Z
 
 
 def set_joint(model: mujoco.MjModel, data: mujoco.MjData, name: str, value: float) -> None:
@@ -97,7 +97,7 @@ def placement_error(
     mujoco.mj_forward(model, data)
     cube_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pick_cube")
     cube_xyz = tuple(float(v) for v in data.xpos[cube_body_id])
-    target_xyz = (float(target.x), float(target.y), float(CUBE_HALF_SIZE))
+    target_xyz = (float(target.x), float(target.y), float(CUBE_REST_Z))
     dx = cube_xyz[0] - target_xyz[0]
     dy = cube_xyz[1] - target_xyz[1]
     dz = cube_xyz[2] - target_xyz[2]

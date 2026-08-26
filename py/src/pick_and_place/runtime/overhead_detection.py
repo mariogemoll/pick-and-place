@@ -25,7 +25,7 @@ import numpy as np
 
 from pick_and_place.data.dataset_metadata import placement_error_metadata
 from pick_and_place.core.geometry import CubePose, PlacementError
-from pick_and_place.spec.workspace import CUBE_HALF_SIZE
+from pick_and_place.spec.workspace import CUBE_HALF_SIZE, CUBE_REST_Z
 from pick_and_place.core.camera_projection import project_to_pixel
 from pick_and_place.sim.paper_target_marker import place_paper_target_marker
 from pick_and_place.perception.paper_detection import PaperTracker
@@ -395,14 +395,14 @@ def track_drop_zone_square(
             debug.camera_position = cam_pos.copy()
             debug.camera_rotation = cam_rot.copy()
             debug.target = target
-        return CubePose(x=target.xy[0], y=target.xy[1], z=CUBE_HALF_SIZE)
+        return CubePose(x=target.xy[0], y=target.xy[1], z=CUBE_REST_Z)
 
     return None
 
 
 def final_placement_metadata(cube: CubePose | None, target: CubePose) -> dict[str, Any]:
     """Episode metadata for the physical cube's final overhead-camera pose."""
-    target_xyz = (float(target.x), float(target.y), float(CUBE_HALF_SIZE))
+    target_xyz = (float(target.x), float(target.y), float(CUBE_REST_Z))
     if cube is None:
         print("placement error: cube not detected after release")
         return placement_error_metadata(None, detected=False)
