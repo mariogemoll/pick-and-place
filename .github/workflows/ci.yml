@@ -29,6 +29,9 @@ jobs:
         run: scripts/check_files_in_repo.sh
       - name: "Check license headers"
         run: scripts/check-license-headers.sh
+      - name: "Check notebooks"
+        working-directory: scripts
+        run: for nb in ../py/notebooks/*.ipynb; do pnpm exec check-notebook "$nb"; done
 
   ts:
     runs-on: ubuntu-latest
