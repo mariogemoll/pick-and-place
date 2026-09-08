@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
@@ -84,19 +85,37 @@ def draw_paper_target(bgr: NDArray, target: PaperTarget, scale_x: float, scale_y
     cv2.line(bgr, tuple(center), tuple(mid_first), (0, 0, 255), 2, cv2.LINE_AA)
 
 
-def detect_paper_target(
+MIN_TARGET_AREA_FRACTION = 0.008
+MAX_TARGET_AREA_FRACTION = 0.15
+MAX_TARGET_ASPECT = 1.35
+MIN_TARGET_RECTANGULARITY = 0.82
+
+
+@dataclass(frozen=True)
+class TargetCandidate:
+    """One mask contour, measured against the drop-zone square filter."""
+
+    center_px: NDArray
+    box_px: NDArray
+    area_px: float
+    area_fraction: float
+    corner_count: int
+    convex: bool
+    aspect: float
+    rectangularity: float
+    rejection: str | None
+
+
+def target_mask(
     frame_rgb: NDArray,
     camera_matrix: NDArray,
     camera_position: NDArray,
     camera_rotation: NDArray,
     *,
-    plane_z: float = 0.0,
-    min_area_fraction: float = 0.008,
-    max_area_fraction: float = 0.15,
     target_color: str = "black",
     workspace_corners_world: NDArray | None = None,
-) -> PaperTarget | None:
-    """Find the strongest black or white drop-zone square contour.
+) -> NDArray:
+    """Mark the pixels that could belong to a black or white drop-zone square.
 
     When ``workspace_corners_world`` is given, the search is restricted to that
     world-space quad projected into the image, so off-table clutter cannot be
@@ -142,65 +161,161 @@ def detect_paper_target(
     # Open to sever thin bridges to neighbouring blobs, then close to fill
     # speckle and glare holes inside the target.
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), dtype=np.uint8))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((9, 9), dtype=np.uint8))
+    return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((9, 9), dtype=np.uint8))
 
-    image_area = float(image.shape[0] * image.shape[1])
-    min_area = min_area_fraction * image_area
-    max_area = max_area_fraction * image_area
-    candidates: list[tuple[float, PaperTarget]] = []
+
+def target_rejection(
+    *,
+    area_fraction: float,
+    corner_count: int,
+    convex: bool,
+    aspect: float,
+    rectangularity: float,
+    min_area_fraction: float = MIN_TARGET_AREA_FRACTION,
+    max_area_fraction: float = MAX_TARGET_AREA_FRACTION,
+) -> str | None:
+    """Name the filter a measured contour fails, or ``None`` if it is a target."""
+    if area_fraction < min_area_fraction:
+        return "too small"
+    if area_fraction > max_area_fraction:
+        return "too large"
+    if corner_count != 4 or not convex:
+        return f"not a convex quadrilateral ({corner_count} corners)"
+    if not np.isfinite(aspect):
+        return "degenerate"
+    if aspect > MAX_TARGET_ASPECT:
+        return "not square enough"
+    if rectangularity < MIN_TARGET_RECTANGULARITY:
+        return "too ragged"
+    return None
+
+
+def target_candidates(
+    mask: NDArray,
+    *,
+    min_area_fraction: float = MIN_TARGET_AREA_FRACTION,
+    max_area_fraction: float = MAX_TARGET_AREA_FRACTION,
+) -> list[TargetCandidate]:
+    """Measure every contour in the mask and say why each is not the target."""
+    image_area = float(mask.shape[0] * mask.shape[1])
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    measured: list[TargetCandidate] = []
     for contour in contours:
         area = float(cv2.contourArea(contour))
-        if not min_area <= area <= max_area:
-            continue
-
-        perimeter = cv2.arcLength(contour, True)
-        corners = cv2.approxPolyDP(contour, 0.025 * perimeter, True)
-        if len(corners) != 4 or not cv2.isContourConvex(corners):
-            continue
-
+        corners = cv2.approxPolyDP(contour, 0.025 * cv2.arcLength(contour, True), True)
+        convex = bool(cv2.isContourConvex(corners))
         rect = cv2.minAreaRect(contour)
-        width, height = rect[1]
-        if min(width, height) <= 0.0:
-            continue
-        aspect = max(width, height) / min(width, height)
-        rectangularity = area / (width * height)
-        if aspect > 1.35 or rectangularity < 0.82:
-            continue
+        side_a, side_b = rect[1]
+        degenerate = min(side_a, side_b) <= 0.0
+        aspect = np.inf if degenerate else max(side_a, side_b) / min(side_a, side_b)
+        rectangularity = 0.0 if degenerate else area / (side_a * side_b)
+        area_fraction = area / image_area
+        measured.append(
+            TargetCandidate(
+                center_px=np.asarray(rect[0], dtype=float),
+                box_px=cv2.boxPoints(rect).astype(float),
+                area_px=area,
+                area_fraction=area_fraction,
+                corner_count=len(corners),
+                convex=convex,
+                aspect=float(aspect),
+                rectangularity=float(rectangularity),
+                rejection=target_rejection(
+                    area_fraction=area_fraction,
+                    corner_count=len(corners),
+                    convex=convex,
+                    aspect=float(aspect),
+                    rectangularity=float(rectangularity),
+                    min_area_fraction=min_area_fraction,
+                    max_area_fraction=max_area_fraction,
+                ),
+            )
+        )
+    return measured
 
-        center_px = np.asarray(rect[0], dtype=float)
-        center_world = pixel_to_world_plane(
-            center_px,
+
+def _candidate_target(
+    candidate: TargetCandidate,
+    camera_matrix: NDArray,
+    camera_position: NDArray,
+    camera_rotation: NDArray,
+    *,
+    plane_z: float,
+) -> PaperTarget | None:
+    """Lift an accepted contour onto the table plane, or drop it if it misses."""
+    center_world = pixel_to_world_plane(
+        candidate.center_px,
+        camera_matrix,
+        camera_position,
+        camera_rotation,
+        plane_z=plane_z,
+    )
+    if center_world is None:
+        return None
+
+    world_corners = [
+        pixel_to_world_plane(
+            corner,
             camera_matrix,
             camera_position,
             camera_rotation,
             plane_z=plane_z,
         )
-        if center_world is None:
-            continue
+        for corner in candidate.box_px
+    ]
+    if any(corner is None for corner in world_corners):
+        return None
 
-        box_corners = cv2.boxPoints(rect).astype(float)
-        world_corners = [
-            pixel_to_world_plane(
-                corner,
-                camera_matrix,
-                camera_position,
-                camera_rotation,
-                plane_z=plane_z,
-            )
-            for corner in box_corners
-        ]
-        if any(corner is None for corner in world_corners):
-            continue
+    return PaperTarget(
+        center_px=candidate.center_px,
+        corners_px=candidate.box_px,
+        center_world=center_world,
+        corners_world=np.asarray(world_corners, dtype=float),
+        area_px=candidate.area_px,
+        rectangularity=candidate.rectangularity,
+    )
 
-        target = PaperTarget(
-            center_px=center_px,
-            corners_px=box_corners,
-            center_world=center_world,
-            corners_world=np.asarray(world_corners, dtype=float),
-            area_px=area,
-            rectangularity=float(rectangularity),
+
+def detect_paper_target(
+    frame_rgb: NDArray,
+    camera_matrix: NDArray,
+    camera_position: NDArray,
+    camera_rotation: NDArray,
+    *,
+    plane_z: float = 0.0,
+    min_area_fraction: float = MIN_TARGET_AREA_FRACTION,
+    max_area_fraction: float = MAX_TARGET_AREA_FRACTION,
+    target_color: str = "black",
+    workspace_corners_world: NDArray | None = None,
+) -> PaperTarget | None:
+    """Find the strongest black or white drop-zone square contour."""
+    mask = target_mask(
+        frame_rgb,
+        camera_matrix,
+        camera_position,
+        camera_rotation,
+        target_color=target_color,
+        workspace_corners_world=workspace_corners_world,
+    )
+    scored: list[tuple[float, PaperTarget]] = []
+    for candidate in target_candidates(
+        mask,
+        min_area_fraction=min_area_fraction,
+        max_area_fraction=max_area_fraction,
+    ):
+        if candidate.rejection is not None:
+            continue
+        target = _candidate_target(
+            candidate,
+            camera_matrix,
+            camera_position,
+            camera_rotation,
+            plane_z=plane_z,
         )
-        candidates.append((area * rectangularity / aspect, target))
+        if target is None:
+            continue
+        scored.append(
+            (candidate.area_px * candidate.rectangularity / candidate.aspect, target)
+        )
 
-    return max(candidates, key=lambda item: item[0])[1] if candidates else None
+    return max(scored, key=lambda item: item[0])[1] if scored else None

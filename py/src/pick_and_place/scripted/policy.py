@@ -335,11 +335,11 @@ class ScriptedPolicy:
         self.state = ScriptedPolicyState.FAILED
         self.failure = ControllerFailure(code=code, message=message)
 
-    def _begin_search_motion(self, hold: np.ndarray, *, carrying: bool) -> None:
+    def _begin_search_motion(self, hold: np.ndarray, *, carrying: bool, subject: str) -> None:
         if self._search_poses >= self.max_search_poses:
             self._fail(
                 "search_budget_exhausted",
-                f"could not make the object visible in {self.max_search_poses} search poses",
+                f"could not make the {subject} visible in {self.max_search_poses} search poses",
             )
             return
         if carrying:
@@ -355,9 +355,14 @@ class ScriptedPolicy:
         self._search_progress = 0
         self._search_poses += 1
 
-    def _search_action(self, hold: np.ndarray, *, carrying: bool) -> np.ndarray:
+    def _search_action(self, hold: np.ndarray, *, carrying: bool, subject: str) -> np.ndarray:
+        """Sweep toward one more hunting pose, or fail once the budget is gone.
+
+        ``subject`` names what is being hunted, so an exhausted budget says
+        which of the three searches ran out.
+        """
         if self._search_target is None:
-            self._begin_search_motion(hold, carrying=carrying)
+            self._begin_search_motion(hold, carrying=carrying, subject=subject)
             if self.terminal:
                 return hold
         assert self._search_start is not None and self._search_target is not None
@@ -706,7 +711,7 @@ class ScriptedPolicy:
                 self._fail("localization_error", str(exc))
                 return hold
             if self.drop_target is None:
-                return self._search_action(hold, carrying=True)
+                return self._search_action(hold, carrying=True, subject="plate")
             target = CubePose(*self.drop_target.xy, CUBE_REST_Z)
             assert self.episode is not None
             self.episode.target = target
@@ -742,7 +747,7 @@ class ScriptedPolicy:
             if visible_cube:
                 self.state = ScriptedPolicyState.SUCCEEDED
                 return hold
-            return self._search_action(hold, carrying=False)
+            return self._search_action(hold, carrying=False, subject="placed cube")
 
         try:
             overhead = self._image(observation, OVERHEAD_FEATURE)
@@ -779,5 +784,5 @@ class ScriptedPolicy:
         if self._search_target is not None or (
             self._localization_steps % self.localization_steps_per_search == 0
         ):
-            return self._search_action(hold, carrying=False)
+            return self._search_action(hold, carrying=False, subject="cube")
         return hold

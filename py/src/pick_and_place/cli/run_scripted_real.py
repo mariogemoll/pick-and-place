@@ -61,6 +61,7 @@ from pick_and_place.perception.image_rectify import (
 from pick_and_place.sim.derive_kinematics import derive_kinematics
 from pick_and_place.perception.overhead_localization import OverheadLocalizer
 from pick_and_place.runtime.overhead_detection import OperatorNotifier
+from pick_and_place.runtime.plate_debug import plate_search_debugger
 from pick_and_place.sim.paper_target_marker import place_paper_target_marker
 from pick_and_place.policies.policy import DEFAULT_IMAGE_HW
 from pick_and_place.spec.controller import OVERHEAD_FEATURE, STATE_FEATURE, WRIST_FEATURE
@@ -570,6 +571,19 @@ def run(args: argparse.Namespace) -> None:
             mujoco.mj_forward(model, data)
             debug_viewer.sync()
 
+        plate_debug = plate_search_debugger(
+            args.recording_root / "plate-debug",
+            overhead_matrix,
+            data.cam_xpos[overhead_id],
+            data.cam_xmat[overhead_id].reshape(3, 3),
+            target_color=args.drop_zone_color,
+            workspace_corners_world=workspace_interior_corners_world(),
+        )
+
+        def on_tick(tick: PhysicalPolicyTick) -> None:
+            plate_debug(controller, tick.observation[OVERHEAD_FEATURE])
+            sync_viewer(tick)
+
         cooldown_reference_target: CubePose | None = None
 
         def check_overhead_drift() -> None:
@@ -822,7 +836,7 @@ def run(args: argparse.Namespace) -> None:
                     if args.show_camera_feeds or args.debug_servo
                     else None
                 ),
-                tick_callback=sync_viewer if debug_viewer is not None else None,
+                tick_callback=on_tick,
                 reset_controller=False,
             )
             if result.succeeded:

@@ -188,6 +188,46 @@ def test_scripted_policy_moves_smoothly_toward_each_search_pose():
     assert not np.array_equal(second_search, retained_search)
 
 
+def _exhaust_search(policy):
+    for _ in range(20):
+        if policy.terminal:
+            break
+        policy.act(_observation())
+    return policy.failure
+
+
+def test_an_exhausted_cube_search_says_it_was_hunting_the_cube():
+    policy = scripted_policy(
+        StubLocalizer(),
+        np.ones((4, 3)),
+        max_localization_steps=50,
+        localization_steps_per_search=1,
+        max_search_poses=1,
+    )
+
+    failure = _exhaust_search(policy)
+
+    assert failure is not None
+    assert failure.code == "search_budget_exhausted"
+    assert "cube" in failure.message
+
+
+def test_an_exhausted_plate_search_says_it_was_hunting_the_plate():
+    policy = scripted_policy(
+        StubLocalizer(),
+        np.ones((4, 3)),
+        localization_steps_per_search=1,
+        max_search_poses=1,
+    )
+    policy.state = ScriptedPolicyState.FINDING_PLATE
+
+    failure = _exhaust_search(policy)
+
+    assert failure is not None
+    assert failure.code == "search_budget_exhausted"
+    assert "plate" in failure.message
+
+
 def test_scripted_policy_plans_from_localized_poses_and_latest_reported_joints():
     cube = CubePose(0.1, 0.2, CUBE_HALF_SIZE)
     target = SimpleNamespace(xy=(0.25, -0.15))
