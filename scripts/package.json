@@ -10,5 +10,10 @@
     "@types/node": "^25.2.2",
     "check-notebook": "github:mariogemoll/check-notebook#7060ff647a73a61e3c1dfab1e1d5c69f92dc5b37",
     "typescript": "^5.9.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "check-notebook@https://codeload.github.com/mariogemoll/check-notebook/tar.gz/7060ff647a73a61e3c1dfab1e1d5c69f92dc5b37"
+    ]
   }
 }
