@@ -17,6 +17,11 @@ by FACTOR), e.g. to keep an emblem crisp::
     python scripts/simplify_generic_meshes.py panda_mj_description \\
         --detail 'link6_*=4'
 
+A local MJCF file works in place of a robot_descriptions module; its file
+stem names the output::
+
+    python scripts/simplify_generic_meshes.py path/to/robot.xml
+
 An end effector's meshes can be simplified alongside the base robot's, into
 the same output file, prefixed to match the mesh names produced by
 ``export_generic_robot.py --gripper``::
@@ -53,8 +58,18 @@ GLB_ROOT = ROOT / "intermediary-glb-generic"
 
 
 def mjcf_path_for(robot: str) -> Path:
+    """MJCF of a robot_descriptions module, or `robot` itself when it is an .xml path."""
+    if robot.endswith(".xml"):
+        return Path(robot).resolve()
     module = importlib.import_module(f"robot_descriptions.{robot}")
     return Path(module.MJCF_PATH)
+
+
+def robot_name(robot: str) -> str:
+    """Web-facing name: the MJCF file stem, or the module name without "_mj_description"."""
+    if robot.endswith(".xml"):
+        return Path(robot).stem
+    return robot.removesuffix("_mj_description")
 
 
 def visual_mesh_names(spec: mujoco.MjSpec) -> frozenset[str]:
@@ -110,7 +125,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "robot",
-        help="robot_descriptions module name, e.g. ur5e_mj_description",
+        help="robot_descriptions module name, e.g. ur5e_mj_description, or an MJCF .xml path",
     )
     parser.add_argument(
         "--gripper",
@@ -133,9 +148,9 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    glb_dir = GLB_ROOT / args.robot
+    name = robot_name(args.robot)
+    glb_dir = GLB_ROOT / (name if args.robot.endswith(".xml") else args.robot)
     glb_dir.mkdir(parents=True, exist_ok=True)
-    name = args.robot.removesuffix("_mj_description")
 
     meshes = load_meshes(args.robot)
     if args.gripper:

@@ -10,7 +10,8 @@
 #
 # Usage: convert_meshes_generic.sh ROBOT [--gripper GRIPPER] [--target-kb KB]
 #          [--detail GLOB=FACTOR]... [dst_dir]
-#   ROBOT: robot_descriptions module name, e.g. ur5e_mj_description
+#   ROBOT: robot_descriptions module name, e.g. ur5e_mj_description, or an
+#     MJCF .xml path (its file stem names the output)
 #   GRIPPER: robot_descriptions module name for an end effector to attach at
 #     the robot's "attachment_site", e.g. robotiq_2f85_mj_description
 #   KB: size budget for the meshopt-compressed GLB (default 200)
@@ -53,8 +54,16 @@ while [[ "$1" == --* ]]; do
     esac
 done
 
-# Web-facing name: strip the "_mj_description" suffix, e.g. ur5e_mj_description -> ur5e
-NAME="${ROBOT%_mj_description}"
+# Web-facing name: the MJCF file stem, or the module name without the
+# "_mj_description" suffix, e.g. ur5e_mj_description -> ur5e
+if [[ "$ROBOT" == *.xml ]]; then
+    ROBOT="$(cd "$(dirname "$ROBOT")" && pwd)/$(basename "$ROBOT")"
+    NAME="$(basename "$ROBOT" .xml)"
+    GLB_KEY="$NAME"
+else
+    NAME="${ROBOT%_mj_description}"
+    GLB_KEY="$ROBOT"
+fi
 
 DST_DIR="${1:-$PICK_AND_PLACE_DIR/ts/public}"
 
@@ -69,15 +78,15 @@ fi
 # 2. Optimize GLBs
 cd "$PICK_AND_PLACE_DIR/ts"
 pnpm exec bash scripts/optimize-glbs.sh \
-    "$PICK_AND_PLACE_DIR/intermediary-glb-generic/$ROBOT" \
+    "$PICK_AND_PLACE_DIR/intermediary-glb-generic/$GLB_KEY" \
     "$DST_DIR/${NAME}_assets"
 
 # 3. Generate the web model manifest directly from the robot's stock MJCF
 cd "$PICK_AND_PLACE_DIR/py"
 if [[ -n "$GRIPPER" ]]; then
-    python scripts/export_generic_robot.py "$ROBOT" --gripper "$GRIPPER" -o "$DST_DIR/$NAME.json"
+    python -m pick_and_place.cli.pap export-generic-robot "$ROBOT" --gripper "$GRIPPER" -o "$DST_DIR/$NAME.json"
 else
-    python scripts/export_generic_robot.py "$ROBOT" -o "$DST_DIR/$NAME.json"
+    python -m pick_and_place.cli.pap export-generic-robot "$ROBOT" -o "$DST_DIR/$NAME.json"
 fi
 
 echo "Successfully converted $ROBOT into $DST_DIR/$NAME.json + $DST_DIR/${NAME}_assets"
