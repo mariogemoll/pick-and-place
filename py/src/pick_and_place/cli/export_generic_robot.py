@@ -11,6 +11,11 @@ Usage::
 
     pap export-generic-robot ur5e_mj_description -o public/ur5e.json
 
+A local MJCF file works in place of a robot_descriptions module; its file stem
+names the mesh bundle::
+
+    pap export-generic-robot path/to/robot.xml -o public/robot.json
+
 An end effector can be attached to a named site on the base robot::
 
     pap export-generic-robot ur5e_mj_description \\
@@ -22,6 +27,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+from pathlib import Path
 from typing import Any
 
 import mujoco
@@ -80,6 +86,47 @@ def _joints_in_subtree(model: mujoco.MjModel, root_body_id: int) -> list[int]:
     ]
 
 
+def equality_joint_mimics(model: mujoco.MjModel) -> dict[str, dict[str, Any]]:
+    """Read linear mimic relations stated directly as joint equality constraints.
+
+    A joint equality with polycoef (c0, c1, 0, 0, 0) means joint1 = c0 + c1 * joint2,
+    which is exactly a mimic. Models converted from URDF <mimic> tags state every
+    coupling this way, and the exact coefficients beat a fitted approximation.
+    Chains (a follower of a follower) are folded into one relation on the chain's
+    root joint, since the viewer applies a single level of mimics. Only relations
+    from a passive joint to an actuated root are kept: an equality between two
+    driven joints (e.g. a gripper's two driver joints) is not a mimic.
+    """
+    actuated = {
+        model.joint(joint_id).name
+        for act_id in range(model.nu)
+        for joint_id in _actuator_joint_ids(model, act_id)
+    }
+    direct: dict[str, tuple[str, float, float]] = {}
+    for eq_id in range(model.neq):
+        if mujoco.mjtEq(int(model.eq_type[eq_id])) != mujoco.mjtEq.mjEQ_JOINT:
+            continue
+        follower_id, leader_id = int(model.eq_obj1id[eq_id]), int(model.eq_obj2id[eq_id])
+        offset, multiplier, *higher = (float(v) for v in model.eq_data[eq_id, :5])
+        if leader_id < 0 or any(higher):
+            continue
+        direct[model.joint(follower_id).name] = (model.joint(leader_id).name, multiplier, offset)
+
+    mimics: dict[str, dict[str, Any]] = {}
+    for follower in direct:
+        leader, multiplier, offset = direct[follower]
+        seen = {follower}
+        while leader in direct and leader not in seen:
+            seen.add(leader)
+            next_leader, next_multiplier, next_offset = direct[leader]
+            leader, multiplier, offset = (
+                next_leader, multiplier * next_multiplier, offset + multiplier * next_offset
+            )
+        if follower not in actuated and leader in actuated:
+            mimics[follower] = {"joint": leader, "multiplier": multiplier, "offset": offset}
+    return mimics
+
+
 def derive_joint_mimics(model: mujoco.MjModel) -> dict[str, dict[str, Any]]:
     """Derive linear mimic relations for underactuated joint groups.
 
@@ -95,14 +142,20 @@ def derive_joint_mimics(model: mujoco.MjModel) -> dict[str, dict[str, Any]]:
     several setpoints and fits each non-primary joint's position as a linear
     function of the directly driven ("primary") joint, to be replayed as a
     simple multiply-and-add in the browser.
+
+    Joints coupled to an actuated joint by an explicit linear joint equality
+    take its exact coefficients (see ``equality_joint_mimics``) and are left out
+    of the fit, which in a multi-actuator hand also keeps each finger from being
+    fitted against the other fingers' actuators.
     """
+    explicit = equality_joint_mimics(model)
+    mimics = dict(explicit)
     actuated_joint_ids = {
         joint_id
         for act_id in range(model.nu)
         for joint_id in _actuator_joint_ids(model, act_id)
     }
 
-    mimics: dict[str, dict[str, Any]] = {}
     for act_id in range(model.nu):
         transmitted = [
             joint_id for joint_id in _actuator_joint_ids(model, act_id)
@@ -120,7 +173,7 @@ def derive_joint_mimics(model: mujoco.MjModel) -> dict[str, dict[str, Any]]:
         )
         passive_ids = [
             joint_id for joint_id in _joints_in_subtree(model, ancestor)
-            if joint_id not in actuated_joint_ids
+            if joint_id not in actuated_joint_ids and model.joint(joint_id).name not in explicit
         ]
         joint_ids = transmitted + passive_ids
         if len(joint_ids) < 2:
@@ -155,7 +208,10 @@ def derive_joint_mimics(model: mujoco.MjModel) -> dict[str, dict[str, Any]]:
 def build_parser() -> SuggestingArgumentParser:
     """Return the parser for the generic robot exporter."""
     parser = SuggestingArgumentParser(description=__doc__)
-    parser.add_argument("robot", help="robot_descriptions module name, e.g. ur5e_mj_description")
+    parser.add_argument(
+        "robot",
+        help="robot_descriptions module name, e.g. ur5e_mj_description, or an MJCF .xml path",
+    )
     add_output_argument(parser, required=True, short=True, help="output JSON path")
     parser.add_argument(
         "--gripper",
@@ -169,10 +225,23 @@ def build_parser() -> SuggestingArgumentParser:
     return parser
 
 
+def _mjcf_path(robot: str) -> Path:
+    """MJCF of a robot_descriptions module, or `robot` itself when it is an .xml path."""
+    if robot.endswith(".xml"):
+        return Path(robot).resolve()
+    return Path(importlib.import_module(f"robot_descriptions.{robot}").MJCF_PATH)
+
+
+def _robot_name(robot: str) -> str:
+    """Web-facing name: the MJCF file stem, or the module name without "_mj_description"."""
+    if robot.endswith(".xml"):
+        return Path(robot).stem
+    return robot.removesuffix("_mj_description")
+
+
 def run(args: argparse.Namespace) -> None:
     """Write the web manifest for the named robot."""
-    module = importlib.import_module(f"robot_descriptions.{args.robot}")
-    spec = mujoco.MjSpec.from_file(str(module.MJCF_PATH))
+    spec = mujoco.MjSpec.from_file(str(_mjcf_path(args.robot)))
 
     if args.gripper:
         gripper_module = importlib.import_module(f"robot_descriptions.{args.gripper}")
@@ -184,7 +253,7 @@ def run(args: argparse.Namespace) -> None:
     manifest = web_manifest(spec, model)
     # The mesh pipeline packs all of this robot's meshes into one GLB as named
     # nodes; point every mesh geometry at it.
-    mesh_file = f"{args.robot.removesuffix('_mj_description')}.glb"
+    mesh_file = f"{_robot_name(args.robot)}.glb"
     for body in manifest["bodies"]:
         for geom in body["geometries"]:
             if geom.get("mesh") is not None:
